@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { App, Page, Navbar, Block, List, ListItem, Searchbar } from 'konsta/react';
 import { FeedItem } from './components/FeedItem';
 import { GestureView } from './components/GestureView';
+import { Emoji } from './components/Emoji';
 import { hybridSearch } from './search';
 import { paperDB } from './db';
 
@@ -96,7 +97,7 @@ const PaperApp: React.FC = () => {
                 </div>
               </div>
               <p className="text-xl leading-relaxed dark:text-zinc-200">
-                {selectedPost.content}
+                <Emoji>{selectedPost.content}</Emoji>
               </p>
             </Block>
             <Block className="text-center text-zinc-400 text-sm mt-20">
