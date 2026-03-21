@@ -1,80 +1,80 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
 import PostCard from '../components/PostCard';
 import { MOCK_POSTS } from '../data/mockData';
-import type { StoryEntry, EntityEntry } from '../App';
+import type { StoryEntry } from '../App';
 
-const FEED_MODES = ['Following', 'Discover', 'Quiet'] as const;
-type FeedMode = typeof FEED_MODES[number];
-
-interface HomeTabProps {
-  onOpenStory: (entry: StoryEntry) => void;
-  onOpenEntity: (entry: EntityEntry) => void;
+interface Props {
+  onOpenStory: (e: StoryEntry) => void;
 }
 
-export default function HomeTab({ onOpenStory, onOpenEntity }: HomeTabProps) {
-  const [feedMode, setFeedMode] = useState<FeedMode>('Following');
+const MODES = ['Following', 'Discover', 'Feeds'];
+
+export default function HomeTab({ onOpenStory }: Props) {
+  const [mode, setMode] = useState(0);
 
   return (
-    <div className="min-h-full">
-      {/* Feed mode segmented control */}
-      <div
-        className="sticky top-0 z-10 px-4 py-2"
-        style={{ background: 'var(--surface-secondary)' }}
-      >
-        <div
-          className="flex rounded-xl p-1 gap-1"
-          style={{ background: 'var(--fill-tertiary)' }}
-          role="tablist"
-          aria-label="Feed mode"
-        >
-          {FEED_MODES.map(mode => (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
+      {/* Nav bar */}
+      <div style={{
+        flexShrink: 0,
+        paddingTop: 'calc(var(--safe-top) + 12px)',
+        background: 'var(--chrome-bg)',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        borderBottom: '0.5px solid var(--sep)',
+      }}>
+        {/* Top row */}
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: '50%',
+            background: 'var(--blue)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontSize: 13, fontWeight: 700, flexShrink: 0,
+          }}>Y</div>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+            <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.5 }}>Glimpse</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--label-2)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <button aria-label="Search" style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--fill-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Mode pills */}
+        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 12px', gap: 8 }}>
+          {MODES.map((m, i) => (
             <button
-              key={mode}
-              role="tab"
-              aria-selected={feedMode === mode}
-              onClick={() => setFeedMode(mode)}
-              className="flex-1 rounded-lg py-1.5 text-sm font-medium transition-all relative"
+              key={m}
+              onClick={() => setMode(i)}
               style={{
-                color: feedMode === mode ? 'var(--label-primary)' : 'var(--label-secondary)',
-                letterSpacing: '-0.2px',
+                padding: '6px 14px', borderRadius: 100,
+                fontSize: 14, fontWeight: mode === i ? 600 : 400,
+                color: mode === i ? '#fff' : 'var(--label-2)',
+                background: mode === i ? 'var(--blue)' : 'var(--fill-2)',
+                border: 'none', cursor: 'pointer',
               }}
-            >
-              {feedMode === mode && (
-                <motion.div
-                  layoutId="feed-mode-indicator"
-                  className="absolute inset-0 rounded-lg"
-                  style={{ background: 'var(--surface-card)', boxShadow: '0 1px 4px rgba(0,0,0,0.12)' }}
-                  transition={{ type: 'spring', stiffness: 500, damping: 40 }}
-                />
-              )}
-              <span className="relative z-10">{mode}</span>
-            </button>
+            >{m}</button>
           ))}
         </div>
       </div>
 
-      {/* Post cards */}
-      <div className="pt-1 pb-4">
+      {/* Feed scroll */}
+      <div
+        className="scroll-y"
+        style={{ flex: 1, padding: '12px 12px 0' }}
+      >
         {MOCK_POSTS.map((post, i) => (
-          <PostCard
-            key={post.id}
-            post={post}
-            onOpenStory={onOpenStory}
-            onOpenEntity={onOpenEntity}
-            style={{ animationDelay: `${i * 40}ms` }}
-          />
+          <PostCard key={post.id} post={post} onOpenStory={onOpenStory} index={i} />
         ))}
-
-        {/* End of feed indicator */}
-        <div className="flex flex-col items-center py-8 gap-2">
-          <div
-            className="w-8 h-8 rounded-full flex items-center justify-center"
-            style={{ background: 'var(--fill-secondary)' }}
-          >
-            <span style={{ fontSize: '16px' }}>✦</span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 0 32px', gap: 8 }}>
+          <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--fill-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 14 }}>✦</span>
           </div>
-          <p className="text-sm" style={{ color: 'var(--label-tertiary)' }}>You're all caught up</p>
+          <p style={{ fontSize: 13, color: 'var(--label-3)' }}>You're all caught up</p>
         </div>
       </div>
     </div>

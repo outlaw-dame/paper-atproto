@@ -1,276 +1,202 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
-import { X, ChevronLeft, ChevronRight, Bookmark, Share2, User, MessageCircle, Layers } from 'lucide-react';
-import type { StoryEntry, EntityEntry } from '../App';
+import type { StoryEntry } from '../App';
 import { MOCK_POSTS } from '../data/mockData';
 
-interface StoryModeProps {
+interface Props {
   entry: StoryEntry;
   onClose: () => void;
-  onOpenEntity: (entry: EntityEntry) => void;
 }
 
-interface StoryCard {
-  id: string;
-  type: 'overview' | 'source' | 'conversation' | 'graph' | 'dive';
-  title: string;
-  content: React.ReactNode;
-}
+const CARDS = ['Overview', 'Source', 'Conversation', 'Entity Graph'];
 
-export default function StoryMode({ entry, onClose, onOpenEntity }: StoryModeProps) {
+export default function StoryMode({ entry, onClose }: Props) {
   const [cardIndex, setCardIndex] = useState(0);
-  const [direction, setDirection] = useState(0);
+  const [dir, setDir] = useState(0);
 
   const y = useMotionValue(0);
   const opacity = useTransform(y, [0, 200], [1, 0]);
   const scale = useTransform(y, [0, 200], [1, 0.95]);
 
-  const bind = useDrag(
-    ({ down, movement: [, my], velocity: [, vy], direction: [, dy] }) => {
-      if (!down) {
-        if (my > 120 || (vy > 0.5 && dy > 0)) {
-          onClose();
-        } else {
-          y.set(0);
-        }
-      } else {
-        if (my > 0) y.set(my);
-      }
-    },
-    { axis: 'y', filterTaps: true }
-  );
+  const bind = useDrag(({ down, movement: [, my], velocity: [, vy], direction: [, dy] }) => {
+    if (!down) {
+      if (my > 120 || (vy > 0.5 && dy > 0)) onClose();
+      else y.set(0);
+    } else {
+      if (my > 0) y.set(my);
+    }
+  }, { axis: 'y', filterTaps: true });
 
-  // Build story cards based on entry type
   const post = MOCK_POSTS.find(p => p.id === entry.id) || MOCK_POSTS[0];
 
-  const cards: StoryCard[] = [
-    {
-      id: 'overview',
-      type: 'overview',
-      title: 'Overview',
-      content: <OverviewCard post={post} entry={entry} />,
-    },
-    {
-      id: 'source',
-      type: 'source',
-      title: 'Source',
-      content: <SourceCard post={post} />,
-    },
-    {
-      id: 'conversation',
-      type: 'conversation',
-      title: 'Conversation',
-      content: <ConversationCard post={post} />,
-    },
-    {
-      id: 'graph',
-      type: 'graph',
-      title: 'Entity Graph',
-      content: <GraphCard post={post} onOpenEntity={onOpenEntity} />,
-    },
-  ];
-
   const goNext = useCallback(() => {
-    if (cardIndex < cards.length - 1) {
-      setDirection(1);
-      setCardIndex(i => i + 1);
-    }
-  }, [cardIndex, cards.length]);
+    if (cardIndex < CARDS.length - 1) { setDir(1); setCardIndex(i => i + 1); }
+  }, [cardIndex]);
 
   const goPrev = useCallback(() => {
-    if (cardIndex > 0) {
-      setDirection(-1);
-      setCardIndex(i => i - 1);
-    }
+    if (cardIndex > 0) { setDir(-1); setCardIndex(i => i - 1); }
   }, [cardIndex]);
 
   return (
     <motion.div
-      className="fixed inset-0 z-50 flex flex-col"
-      style={{ background: 'var(--surface-primary)', y, opacity, scale }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 300,
+        display: 'flex', flexDirection: 'column',
+        background: 'var(--bg)',
+        y, opacity, scale,
+      }}
       initial={{ y: '100%' }}
       animate={{ y: 0 }}
       exit={{ y: '100%' }}
-      transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+      transition={{ type: 'spring', stiffness: 380, damping: 40 }}
     >
-      {/* Drag handle */}
+      {/* Handle */}
       <div
         {...bind()}
-        className="flex justify-center pt-3 pb-1 cursor-grab active:cursor-grabbing"
-        style={{ touchAction: 'none' }}
-        aria-label="Drag down to close"
+        style={{ display: 'flex', justifyContent: 'center', paddingTop: 10, paddingBottom: 4, touchAction: 'none', cursor: 'grab' }}
       >
-        <div className="w-10 h-1 rounded-full" style={{ background: 'var(--fill-primary)' }} />
+        <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--fill-3)' }} />
       </div>
 
       {/* Header */}
-      <div
-        className="flex items-center justify-between px-4 py-2"
-        style={{ paddingTop: 'calc(var(--safe-top) + 8px)' }}
-      >
-        <button
-          className="touch-target rounded-full"
-          onClick={onClose}
-          aria-label="Close story"
-          style={{ color: 'var(--label-secondary)' }}
-        >
-          <X size={22} strokeWidth={2} />
+      <div style={{
+        display: 'flex', flexDirection: 'row', alignItems: 'center',
+        padding: 'calc(var(--safe-top) + 4px) 16px 8px',
+      }}>
+        <button onClick={onClose} aria-label="Close" style={{ padding: 6, color: 'var(--label-2)' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
         </button>
 
-        {/* Progress indicators */}
-        <div className="flex items-center gap-1.5 flex-1 mx-4">
-          {cards.map((_, i) => (
-            <div
-              key={i}
-              className="flex-1 story-progress"
-              style={{ height: 2 }}
-            >
-              <div
-                className="story-progress-fill"
-                style={{
-                  width: i < cardIndex ? '100%' : i === cardIndex ? '50%' : '0%',
-                  background: 'var(--glimpse-blue)',
-                }}
-              />
+        {/* Progress bars */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', gap: 4, margin: '0 12px' }}>
+          {CARDS.map((_, i) => (
+            <div key={i} style={{ flex: 1, height: 2, borderRadius: 1, background: 'var(--fill-3)', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 1,
+                background: 'var(--blue)',
+                width: i < cardIndex ? '100%' : i === cardIndex ? '50%' : '0%',
+                transition: 'width 0.3s',
+              }} />
             </div>
           ))}
         </div>
 
-        <div className="flex items-center gap-1">
-          <button className="touch-target" aria-label="Save" style={{ color: 'var(--label-secondary)' }}>
-            <Bookmark size={20} strokeWidth={1.75} />
+        <div style={{ display: 'flex', flexDirection: 'row', gap: 4 }}>
+          <button aria-label="Save" style={{ padding: 6, color: 'var(--label-2)' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
+            </svg>
           </button>
-          <button className="touch-target" aria-label="Share" style={{ color: 'var(--label-secondary)' }}>
-            <Share2 size={20} strokeWidth={1.75} />
+          <button aria-label="Share" style={{ padding: 6, color: 'var(--label-2)' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
           </button>
         </div>
       </div>
 
       {/* Card type label */}
-      <div className="px-4 pb-2">
-        <span
-          className="text-xs font-semibold uppercase"
-          style={{ color: 'var(--glimpse-blue)', letterSpacing: '0.5px' }}
-        >
-          {cards[cardIndex].title}
+      <div style={{ padding: '0 16px 8px' }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+          {CARDS[cardIndex]}
         </span>
       </div>
 
       {/* Card content */}
-      <div className="flex-1 overflow-hidden relative">
-        <AnimatePresence mode="wait" custom={direction}>
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <AnimatePresence mode="wait" custom={dir}>
           <motion.div
             key={cardIndex}
-            custom={direction}
-            className="absolute inset-0 overflow-y-auto"
-            initial={{ x: direction * 60, opacity: 0 }}
+            custom={dir}
+            style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}
+            initial={{ x: dir * 60, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: direction * -60, opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+            exit={{ x: dir * -60, opacity: 0 }}
+            transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
           >
-            <div className="px-4 pb-8">
-              {cards[cardIndex].content}
+            <div style={{ padding: '0 16px 32px' }}>
+              {cardIndex === 0 && <OverviewCard post={post} />}
+              {cardIndex === 1 && <SourceCard post={post} />}
+              {cardIndex === 2 && <ConversationCard post={post} />}
+              {cardIndex === 3 && <GraphCard post={post} />}
             </div>
           </motion.div>
         </AnimatePresence>
       </div>
 
       {/* Navigation */}
-      <div
-        className="flex items-center justify-between px-4 py-3"
-        style={{
-          paddingBottom: 'calc(var(--safe-bottom) + 12px)',
-          borderTop: '1px solid var(--separator)',
-        }}
-      >
+      <div style={{
+        display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        padding: '12px 16px', paddingBottom: 'calc(var(--safe-bottom) + 12px)',
+        borderTop: '0.5px solid var(--sep)',
+      }}>
         <button
-          className="flex items-center gap-1.5 touch-target"
           onClick={goPrev}
           disabled={cardIndex === 0}
-          aria-label="Previous card"
-          style={{ color: cardIndex === 0 ? 'var(--label-quaternary)' : 'var(--glimpse-blue)' }}
+          style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, fontSize: 14, fontWeight: 500, color: cardIndex === 0 ? 'var(--label-4)' : 'var(--blue)' }}
         >
-          <ChevronLeft size={20} strokeWidth={2} />
-          <span className="text-sm font-medium">
-            {cardIndex > 0 ? cards[cardIndex - 1].title : 'Back'}
-          </span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+          {cardIndex > 0 ? CARDS[cardIndex - 1] : 'Back'}
         </button>
 
-        <span className="text-sm" style={{ color: 'var(--label-tertiary)' }}>
-          {cardIndex + 1} / {cards.length}
-        </span>
+        <span style={{ fontSize: 13, color: 'var(--label-3)' }}>{cardIndex + 1} / {CARDS.length}</span>
 
         <button
-          className="flex items-center gap-1.5 touch-target"
           onClick={goNext}
-          disabled={cardIndex === cards.length - 1}
-          aria-label="Next card"
-          style={{ color: cardIndex === cards.length - 1 ? 'var(--label-quaternary)' : 'var(--glimpse-blue)' }}
+          disabled={cardIndex === CARDS.length - 1}
+          style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, fontSize: 14, fontWeight: 500, color: cardIndex === CARDS.length - 1 ? 'var(--label-4)' : 'var(--blue)' }}
         >
-          <span className="text-sm font-medium">
-            {cardIndex < cards.length - 1 ? cards[cardIndex + 1].title : 'Done'}
-          </span>
-          <ChevronRight size={20} strokeWidth={2} />
+          {cardIndex < CARDS.length - 1 ? CARDS[cardIndex + 1] : 'Done'}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
         </button>
       </div>
     </motion.div>
   );
 }
 
-// ── Card content components ──
-
-function OverviewCard({ post, entry }: { post: typeof MOCK_POSTS[0]; entry: StoryEntry }) {
+function OverviewCard({ post }: { post: typeof MOCK_POSTS[0] }) {
   return (
     <div>
-      {/* Gist summary */}
-      <div
-        className="rounded-story p-5 mb-4"
-        style={{
-          background: 'linear-gradient(135deg, rgba(10,132,255,0.08) 0%, rgba(94,92,230,0.08) 100%)',
-          border: '1px solid rgba(10,132,255,0.15)',
-        }}
-      >
-        <div className="flex items-center gap-2 mb-3">
-          <div
-            className="w-6 h-6 rounded-full flex items-center justify-center"
-            style={{ background: 'var(--glimpse-blue)' }}
-          >
-            <span style={{ fontSize: '12px' }}>✦</span>
-          </div>
-          <span className="text-xs font-semibold uppercase" style={{ color: 'var(--glimpse-blue)', letterSpacing: '0.5px' }}>
-            The Gist
-          </span>
+      {/* Gist card */}
+      <div style={{
+        background: 'linear-gradient(135deg, rgba(10,132,255,0.08), rgba(94,92,230,0.08))',
+        border: '1px solid rgba(10,132,255,0.15)',
+        borderRadius: 20, padding: '18px 16px', marginBottom: 16,
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12 }}>✦</div>
+          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--blue)', letterSpacing: 0.5, textTransform: 'uppercase' }}>The Gist</span>
         </div>
-        <p className="text-base font-medium leading-relaxed" style={{ color: 'var(--label-primary)', letterSpacing: '-0.3px' }}>
-          {post.author.displayName} is discussing the significance of ATProto's open social graph and portable identity — a thread gaining significant traction in the decentralized web community.
+        <p style={{ fontSize: 16, fontWeight: 500, lineHeight: 1.5, color: 'var(--label-1)', letterSpacing: -0.3 }}>
+          {post.author.displayName} is discussing the significance of ATProto's open social graph and portable identity — a thread gaining traction in the decentralized web community.
         </p>
       </div>
 
       {/* Why it matters */}
-      <div className="mb-4">
-        <h3 className="text-xs font-semibold uppercase mb-2" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-          Why it matters
-        </h3>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--label-primary)', letterSpacing: '-0.1px' }}>
-          This post is part of a growing conversation about the future of social media infrastructure. The author has {post.likeCount.toLocaleString()} likes and {post.replyCount} replies, indicating strong community engagement.
-        </p>
-      </div>
+      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>Why it matters</p>
+      <p style={{ fontSize: 15, color: 'var(--label-1)', lineHeight: 1.5, letterSpacing: -0.2, marginBottom: 20 }}>
+        This post is part of a growing conversation about the future of social media infrastructure. The author has {post.likeCount.toLocaleString()} likes and {post.replyCount} replies, indicating strong community engagement.
+      </p>
 
-      {/* Quick stats */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
         {[
-          { label: 'Likes', value: post.likeCount.toLocaleString(), color: 'var(--glimpse-red)' },
-          { label: 'Replies', value: post.replyCount.toString(), color: 'var(--glimpse-blue)' },
-          { label: 'Reposts', value: post.repostCount.toString(), color: 'var(--glimpse-green)' },
-        ].map(stat => (
-          <div
-            key={stat.label}
-            className="rounded-xl p-3 text-center"
-            style={{ background: 'var(--surface-secondary)' }}
-          >
-            <p className="text-lg font-bold" style={{ color: stat.color, letterSpacing: '-0.5px' }}>{stat.value}</p>
-            <p className="text-xs" style={{ color: 'var(--label-secondary)' }}>{stat.label}</p>
+          { label: 'Likes', value: post.likeCount.toLocaleString(), color: 'var(--red)' },
+          { label: 'Replies', value: String(post.replyCount), color: 'var(--blue)' },
+          { label: 'Reposts', value: String(post.repostCount), color: 'var(--green)' },
+        ].map(s => (
+          <div key={s.label} style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 8px', textAlign: 'center' }}>
+            <p style={{ fontSize: 20, fontWeight: 700, color: s.color, letterSpacing: -0.5, marginBottom: 2 }}>{s.value}</p>
+            <p style={{ fontSize: 12, color: 'var(--label-3)' }}>{s.label}</p>
           </div>
         ))}
       </div>
@@ -281,35 +207,28 @@ function OverviewCard({ post, entry }: { post: typeof MOCK_POSTS[0]; entry: Stor
 function SourceCard({ post }: { post: typeof MOCK_POSTS[0] }) {
   return (
     <div>
-      <div className="glimpse-card p-4 mb-4">
-        <div className="flex items-center gap-3 mb-3">
-          <div
-            className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
-            style={{ background: 'var(--glimpse-indigo)' }}
-          >
-            {post.author.avatar && (
-              <img src={post.author.avatar} alt={post.author.displayName} className="w-full h-full object-cover" />
-            )}
+      <div style={{ background: 'var(--surface)', borderRadius: 16, padding: '14px 16px', marginBottom: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <div style={{ width: 38, height: 38, borderRadius: '50%', overflow: 'hidden', background: 'var(--indigo)', flexShrink: 0 }}>
+            {post.author.avatar && <img src={post.author.avatar} alt={post.author.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
           </div>
           <div>
-            <p className="font-semibold text-sm" style={{ color: 'var(--label-primary)' }}>{post.author.displayName}</p>
-            <p className="text-xs" style={{ color: 'var(--label-secondary)' }}>@{post.author.handle}</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)' }}>{post.author.displayName}</p>
+            <p style={{ fontSize: 12, color: 'var(--label-3)' }}>@{post.author.handle}</p>
           </div>
         </div>
-        <p className="text-base leading-relaxed" style={{ color: 'var(--label-primary)', letterSpacing: '-0.3px' }}>
-          {post.content}
-        </p>
+        <p style={{ fontSize: 15, lineHeight: 1.45, color: 'var(--label-1)', letterSpacing: -0.2 }}>{post.content}</p>
       </div>
 
-      {post.media && post.media.length > 0 && (
-        <div className="rounded-xl overflow-hidden mb-4">
-          <img src={post.media[0].url} alt={post.media[0].alt || ''} className="w-full object-cover" style={{ maxHeight: 240 }} />
+      {post.media?.[0] && (
+        <div style={{ borderRadius: 14, overflow: 'hidden', marginBottom: 14, maxHeight: 240 }}>
+          <img src={post.media[0].url} alt={post.media[0].alt || ''} style={{ width: '100%', objectFit: 'cover', maxHeight: 240 }} />
         </div>
       )}
 
-      <div className="rounded-xl p-3" style={{ background: 'var(--surface-secondary)' }}>
-        <p className="text-xs font-medium mb-1" style={{ color: 'var(--label-secondary)' }}>AT URI</p>
-        <p className="text-xs font-mono" style={{ color: 'var(--label-tertiary)' }}>
+      <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '10px 14px' }}>
+        <p style={{ fontSize: 11, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>AT URI</p>
+        <p style={{ fontSize: 12, color: 'var(--blue)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
           at://{post.author.did}/app.bsky.feed.post/{post.id}
         </p>
       </div>
@@ -318,84 +237,54 @@ function SourceCard({ post }: { post: typeof MOCK_POSTS[0] }) {
 }
 
 function ConversationCard({ post }: { post: typeof MOCK_POSTS[0] }) {
-  const replies = [
-    { handle: 'bob.bsky.social', name: 'Bob Nakamura', content: 'This is exactly right. The portable identity piece is what changes everything.', likes: 234 },
-    { handle: 'carol.bsky.social', name: 'Carol Williams', content: 'Agreed — and the custom feeds make it so much more than just another Twitter clone.', likes: 189 },
-    { handle: 'dave.bsky.social', name: 'Dave Okonkwo', content: 'The key insight here is that the graph itself becomes a first-class object.', likes: 445 },
-  ];
-
+  const replies = MOCK_POSTS.filter(p => p.id !== post.id).slice(0, 3);
   return (
     <div>
-      <p className="text-xs font-semibold uppercase mb-3" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-        Top Replies · {post.replyCount}
-      </p>
-      <div className="flex flex-col gap-3">
-        {replies.map((reply, i) => (
-          <div
-            key={i}
-            className="glimpse-card p-3"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold"
-                style={{ background: ['#0A84FF', '#5E5CE6', '#30D158'][i] }}
-              >
-                {reply.name[0]}
-              </div>
-              <div>
-                <span className="text-xs font-semibold" style={{ color: 'var(--label-primary)' }}>{reply.name}</span>
-                <span className="text-xs ml-1.5" style={{ color: 'var(--label-secondary)' }}>@{reply.handle}</span>
-              </div>
+      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10 }}>Top Replies</p>
+      {replies.map((r, i) => (
+        <div key={r.id} style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', marginBottom: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+              {r.author.displayName[0]}
             </div>
-            <p className="text-sm leading-relaxed" style={{ color: 'var(--label-primary)' }}>{reply.content}</p>
-            <div className="flex items-center gap-1 mt-2">
-              <span style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>♥ {reply.likes}</span>
-            </div>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-1)' }}>{r.author.displayName}</span>
+            <span style={{ fontSize: 12, color: 'var(--label-3)', marginLeft: 'auto' }}>♥ {r.likeCount}</span>
           </div>
-        ))}
-      </div>
+          <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {r.content}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
 
-function GraphCard({ post, onOpenEntity }: { post: typeof MOCK_POSTS[0]; onOpenEntity: (e: EntityEntry) => void }) {
-  const entities: { type: EntityEntry['type']; name: string; reason: string; color: string; icon: string }[] = [
-    { type: 'person', name: post.author.displayName, reason: 'Post author', color: 'var(--glimpse-blue)', icon: '👤' },
-    { type: 'topic', name: 'ATProto', reason: 'Mentioned 3 times', color: 'var(--glimpse-purple)', icon: '✦' },
-    { type: 'topic', name: 'Open Web', reason: 'Related topic cluster', color: 'var(--glimpse-indigo)', icon: '🌐' },
-    { type: 'feed', name: 'Tech & Open Web', reason: 'Post appears in this feed', color: 'var(--glimpse-teal)', icon: '📡' },
-    { type: 'pack', name: 'ATProto Builders', reason: 'Author is a member', color: 'var(--glimpse-orange)', icon: '🛠️' },
+function GraphCard({ post }: { post: typeof MOCK_POSTS[0] }) {
+  const entities = [
+    { label: 'ATProto', type: 'Protocol', color: 'var(--blue)' },
+    { label: 'Bluesky', type: 'Platform', color: 'var(--indigo)' },
+    { label: 'Decentralization', type: 'Topic', color: 'var(--purple)' },
+    { label: post.author.displayName, type: 'Person', color: 'var(--teal)' },
+    { label: 'Open Source', type: 'Topic', color: 'var(--green)' },
   ];
 
   return (
     <div>
-      <p className="text-xs font-semibold uppercase mb-3" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-        Connected Entities
-      </p>
-      <div className="flex flex-col gap-2">
-        {entities.map((e, i) => (
-          <button
-            key={i}
-            className="flex items-center gap-3 p-3 rounded-xl text-left w-full"
-            style={{ background: 'var(--surface-secondary)' }}
-            onClick={() => onOpenEntity({ type: e.type, id: `entity-${i}`, name: e.name, reason: e.reason })}
-          >
-            <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-base"
-              style={{ background: `${e.color}18` }}
-            >
-              {e.icon}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium" style={{ color: 'var(--label-primary)' }}>{e.name}</p>
-              <p className="text-xs" style={{ color: 'var(--label-secondary)' }}>{e.reason}</p>
-            </div>
-            <ChevronRight size={16} strokeWidth={2} style={{ color: 'var(--label-tertiary)', flexShrink: 0 }} />
+      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10 }}>Detected Entities</p>
+      {entities.map((e, i) => (
+        <div key={i} style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', marginBottom: 8, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: e.color + '20', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: e.color }}>{e.label[0]}</span>
+          </div>
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', marginBottom: 2 }}>{e.label}</p>
+            <p style={{ fontSize: 12, color: 'var(--label-3)' }}>{e.type}</p>
+          </div>
+          <button style={{ padding: '5px 12px', borderRadius: 100, background: e.color + '15', color: e.color, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer' }}>
+            Explore
           </button>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }
-
-

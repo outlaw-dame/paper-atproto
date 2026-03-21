@@ -1,302 +1,178 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Heart, MessageCircle, Repeat2, Share, BookmarkPlus, MessageSquareText, Layers, Rss, Package, Sparkles } from 'lucide-react';
 import type { MockPost, ChipType } from '../data/mockData';
 import { formatCount, formatTime } from '../data/mockData';
-import type { StoryEntry, EntityEntry } from '../App';
+import type { StoryEntry } from '../App';
 
-interface PostCardProps {
+interface Props {
   post: MockPost;
-  onOpenStory: (entry: StoryEntry) => void;
-  onOpenEntity: (entry: EntityEntry) => void;
-  style?: React.CSSProperties;
+  onOpenStory: (e: StoryEntry) => void;
+  index?: number;
 }
 
-const CHIP_CONFIG: Record<ChipType, { label: string; color: string; Icon: React.FC<{ size?: number }> }> = {
-  thread:  { label: 'Thread',       color: 'blue',   Icon: ({ size }) => <MessageSquareText size={size} /> },
-  topic:   { label: 'Topic',        color: 'purple', Icon: ({ size }) => <Sparkles size={size} /> },
-  feed:    { label: 'Feed',         color: 'teal',   Icon: ({ size }) => <Rss size={size} /> },
-  pack:    { label: 'Starter Pack', color: 'orange', Icon: ({ size }) => <Package size={size} /> },
-  related: { label: 'Related',      color: 'green',  Icon: ({ size }) => <Layers size={size} /> },
-  story:   { label: 'Open Story',   color: 'blue',   Icon: ({ size }) => <Sparkles size={size} /> },
+const CHIP: Record<ChipType, { label: string; bg: string; color: string }> = {
+  thread:  { label: 'Thread',     bg: 'rgba(0,122,255,0.1)',   color: 'var(--blue)'   },
+  topic:   { label: 'Topic',      bg: 'rgba(175,82,222,0.1)',  color: 'var(--purple)' },
+  feed:    { label: 'Feed',       bg: 'rgba(90,200,250,0.12)', color: 'var(--teal)'   },
+  pack:    { label: 'Pack',       bg: 'rgba(52,199,89,0.1)',   color: 'var(--green)'  },
+  related: { label: 'Related',    bg: 'rgba(255,149,0,0.1)',   color: 'var(--orange)' },
+  story:   { label: 'Open Story', bg: 'rgba(0,122,255,0.1)',   color: 'var(--blue)'   },
 };
 
-export default function PostCard({ post, onOpenStory, onOpenEntity, style }: PostCardProps) {
+export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
   const [liked, setLiked] = useState(false);
-  const [likeCount, setLikeCount] = useState(post.likeCount);
-
-  const handleLike = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setLiked(prev => !prev);
-    setLikeCount(prev => prev + (liked ? -1 : 1));
-  }, [liked]);
-
-  const handleCardTap = useCallback(() => {
-    onOpenStory({ type: 'post', id: post.id, title: post.author.displayName, data: post as unknown as Record<string, unknown> });
-  }, [post, onOpenStory]);
-
-  const handleChipTap = useCallback((chip: ChipType, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (chip === 'story') {
-      onOpenStory({ type: 'post', id: post.id, title: post.author.displayName });
-    } else if (chip === 'topic') {
-      onOpenEntity({ type: 'topic', id: `topic-${post.id}`, name: 'ATProto', reason: 'Frequently mentioned in this post' });
-    } else if (chip === 'feed') {
-      onOpenEntity({ type: 'feed', id: `feed-${post.id}`, name: 'Tech & Open Web', reason: 'This post appears in this feed' });
-    } else if (chip === 'pack') {
-      onOpenEntity({ type: 'pack', id: `pack-${post.id}`, name: 'ATProto Builders', reason: 'Author is in this starter pack' });
-    }
-  }, [post, onOpenStory, onOpenEntity]);
-
-  const handleAuthorTap = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    onOpenEntity({ type: 'person', id: post.author.did, name: post.author.displayName, reason: 'Post author' });
-  }, [post, onOpenEntity]);
+  const [saved, setSaved] = useState(false);
 
   return (
     <motion.article
-      className="glimpse-card mx-4 mb-3 cursor-pointer"
-      style={style}
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
-      whileTap={{ scale: 0.98 }}
-      onClick={handleCardTap}
-      role="article"
-      aria-label={`Post by ${post.author.displayName}`}
+      transition={{ delay: index * 0.05, duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
+      style={{ background: 'var(--surface)', borderRadius: 20, overflow: 'hidden', marginBottom: 10 }}
     >
-      {/* Media (if any) — shown above content for media-first layout */}
+      {/* Media first */}
       {post.media && post.media.length > 0 && (
-        <MediaBlock media={post.media} />
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: post.media.length === 1 ? '1fr' : '1fr 1fr',
+          gap: 2,
+        }}>
+          {post.media.map((m, i) => (
+            <div key={i} style={{
+              position: 'relative',
+              paddingTop: post.media!.length === 1 ? `${100 / (m.aspectRatio || 1.5)}%` : '75%',
+              background: 'var(--fill-3)', overflow: 'hidden',
+            }}>
+              <img src={m.url} alt={m.alt || ''} loading="lazy" style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
+              }} />
+            </div>
+          ))}
+        </div>
       )}
 
-      <div className="p-4">
+      {/* Body */}
+      <div style={{ padding: '14px 16px 0' }}>
         {/* Author row */}
-        <button
-          className="flex items-center gap-3 mb-3 w-full text-left"
-          onClick={handleAuthorTap}
-          aria-label={`View ${post.author.displayName}'s profile`}
-        >
-          <Avatar
-            src={post.author.avatar}
-            name={post.author.displayName}
-            size={36}
-          />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-semibold text-sm truncate" style={{ color: 'var(--label-primary)', letterSpacing: '-0.2px' }}>
-                {post.author.displayName}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs truncate" style={{ color: 'var(--label-secondary)' }}>
-                @{post.author.handle}
-              </span>
-              <span style={{ color: 'var(--label-quaternary)', fontSize: '10px' }}>·</span>
-              <span className="text-xs" style={{ color: 'var(--label-secondary)' }}>
-                {formatTime(post.createdAt)}
-              </span>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <div style={{ width: 38, height: 38, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: 'var(--fill-2)' }}>
+            {post.author.avatar
+              ? <img src={post.author.avatar} alt={post.author.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--blue)', color: '#fff', fontSize: 15, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+            }
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 5, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.3 }}>{post.author.displayName}</span>
+              <span style={{ fontSize: 13, color: 'var(--label-3)' }}>@{post.author.handle.replace('.bsky.social', '')}</span>
+              <span style={{ fontSize: 12, color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
             </div>
           </div>
-        </button>
+          <button aria-label="More" style={{ padding: 4, color: 'var(--label-3)' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+          </button>
+        </div>
 
-        {/* Post content */}
-        <p
-          className="mb-3 leading-relaxed"
-          style={{
-            color: 'var(--label-primary)',
-            fontSize: '15px',
-            letterSpacing: '-0.2px',
-            lineHeight: '1.45',
-          }}
-        >
+        {/* Text */}
+        <p style={{ fontSize: 15, lineHeight: 1.45, letterSpacing: -0.2, color: 'var(--label-1)', marginBottom: 12 }}>
           {post.content}
         </p>
 
-        {/* External embed */}
+        {/* External link */}
         {post.embed?.type === 'external' && (
-          <ExternalEmbed embed={post.embed} />
+          <div style={{ border: '1px solid var(--sep)', borderRadius: 14, overflow: 'hidden', marginBottom: 12, background: 'var(--bg)' }}>
+            {post.embed.thumb && (
+              <div style={{ height: 130, overflow: 'hidden' }}>
+                <img src={post.embed.thumb} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+            )}
+            <div style={{ padding: '10px 12px 12px' }}>
+              <p style={{ fontSize: 11, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>{post.embed.domain}</p>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2, lineHeight: 1.3, marginBottom: 4 }}>{post.embed.title}</p>
+              <p style={{ fontSize: 13, color: 'var(--label-2)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{post.embed.description}</p>
+            </div>
+          </div>
         )}
 
         {/* Quote post */}
         {post.embed?.type === 'quote' && (
-          <QuotePost post={post.embed.post} />
+          <div style={{ border: '1px solid var(--sep)', borderRadius: 14, padding: '12px 14px', marginBottom: 12, background: 'var(--bg)' }}>
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{post.embed.post.author.displayName[0]}</div>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-1)' }}>{post.embed.post.author.displayName}</span>
+              <span style={{ fontSize: 12, color: 'var(--label-3)' }}>@{post.embed.post.author.handle.replace('.bsky.social', '')}</span>
+            </div>
+            <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.4, letterSpacing: -0.2 }}>{post.embed.post.content}</p>
+          </div>
         )}
 
-        {/* Action row */}
-        <div className="flex items-center justify-between mt-3 pt-3" style={{ borderTop: '1px solid var(--separator)' }}>
-          <ActionButton
-            icon={<MessageCircle size={18} strokeWidth={1.75} />}
-            count={post.replyCount}
-            label="Reply"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <ActionButton
-            icon={<Repeat2 size={18} strokeWidth={1.75} />}
-            count={post.repostCount}
-            label="Repost"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <ActionButton
-            icon={
-              <Heart
-                size={18}
-                strokeWidth={1.75}
-                fill={liked ? 'var(--glimpse-red)' : 'none'}
-                style={{ color: liked ? 'var(--glimpse-red)' : undefined }}
-              />
-            }
-            count={likeCount}
-            label="Like"
-            onClick={handleLike}
-            active={liked}
-            activeColor="var(--glimpse-red)"
-          />
-          <ActionButton
-            icon={<BookmarkPlus size={18} strokeWidth={1.75} />}
-            label="Save"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <ActionButton
-            icon={<Share size={18} strokeWidth={1.75} />}
-            label="Share"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-
-        {/* Context chips */}
+        {/* Chips */}
         {post.chips.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-3">
+          <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
             {post.chips.map(chip => {
-              const cfg = CHIP_CONFIG[chip];
+              const c = CHIP[chip];
               return (
-                <button
-                  key={chip}
-                  className={`glimpse-chip ${cfg.color}`}
-                  onClick={(e) => handleChipTap(chip, e)}
-                  aria-label={cfg.label}
+                <button key={chip}
+                  onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+                  style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 10px', borderRadius: 100, background: c.bg, color: c.color, fontSize: 12, fontWeight: 500, letterSpacing: -0.1, border: 'none', cursor: 'pointer' }}
                 >
-                  <cfg.Icon size={10} />
-                  {cfg.label}
-                  {chip === 'thread' && post.threadCount && ` · ${post.threadCount}`}
+                  {c.label}{chip === 'thread' && post.threadCount ? ` · ${post.threadCount}` : ''}
                 </button>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* Action bar */}
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '8px 8px 14px', borderTop: '0.5px solid var(--sep)' }}>
+        <Btn icon={<ReplyIcon />} count={post.replyCount} label="Reply" />
+        <Btn icon={<RepostIcon />} count={post.repostCount} label="Repost" />
+        <Btn icon={<HeartIcon filled={liked} />} count={post.likeCount + (liked ? 1 : 0)} label="Like" color={liked ? 'var(--red)' : undefined} onPress={() => setLiked(v => !v)} />
+        <div style={{ flex: 1 }} />
+        <Btn icon={<SaveIcon filled={saved} />} label="Save" color={saved ? 'var(--blue)' : undefined} onPress={() => setSaved(v => !v)} />
+        <Btn icon={<ShareIcon />} label="Share" />
+      </div>
     </motion.article>
   );
 }
 
-// ── Sub-components ──
-
-function Avatar({ src, name, size }: { src?: string; name: string; size: number }) {
-  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  const colors = ['#0A84FF', '#5E5CE6', '#32ADE6', '#30D158', '#FF9F0A', '#BF5AF2'];
-  const color = colors[name.charCodeAt(0) % colors.length];
-
-  return (
-    <div
-      className="rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center"
-      style={{ width: size, height: size, background: src ? 'transparent' : color }}
-    >
-      {src
-        ? <img src={src} alt={name} className="w-full h-full object-cover" loading="lazy" />
-        : <span className="text-white font-semibold" style={{ fontSize: size * 0.38 }}>{initials}</span>
-      }
-    </div>
-  );
-}
-
-function MediaBlock({ media }: { media: NonNullable<MockPost['media']> }) {
-  if (media.length === 1) {
-    const m = media[0];
-    return (
-      <div className="w-full overflow-hidden" style={{ maxHeight: 320, background: 'var(--surface-tertiary)' }}>
-        <img
-          src={m.url}
-          alt={m.alt || ''}
-          className="w-full object-cover"
-          style={{ maxHeight: 320 }}
-          loading="lazy"
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-2 gap-0.5" style={{ maxHeight: 280 }}>
-      {media.slice(0, 4).map((m, i) => (
-        <div key={i} className="overflow-hidden" style={{ background: 'var(--surface-tertiary)', height: 138 }}>
-          <img src={m.url} alt={m.alt || ''} className="w-full h-full object-cover" loading="lazy" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ExternalEmbed({ embed }: { embed: Extract<MockPost['embed'], { type: 'external' }> }) {
-  return (
-    <div
-      className="rounded-xl overflow-hidden border mt-1"
-      style={{ borderColor: 'var(--separator)' }}
-    >
-      {embed.thumb && (
-        <img src={embed.thumb} alt="" className="w-full object-cover" style={{ maxHeight: 160 }} loading="lazy" />
-      )}
-      <div className="p-3" style={{ background: 'var(--surface-secondary)' }}>
-        <p className="text-xs mb-0.5" style={{ color: 'var(--label-secondary)' }}>{embed.domain}</p>
-        <p className="font-semibold text-sm leading-snug" style={{ color: 'var(--label-primary)', letterSpacing: '-0.2px' }}>
-          {embed.title}
-        </p>
-        <p className="text-xs mt-0.5 line-clamp-2" style={{ color: 'var(--label-secondary)' }}>
-          {embed.description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function QuotePost({ post }: { post: Omit<MockPost, 'embed'> }) {
-  return (
-    <div
-      className="rounded-xl p-3 mt-1 border"
-      style={{ borderColor: 'var(--separator)', background: 'var(--surface-secondary)' }}
-    >
-      <div className="flex items-center gap-2 mb-1.5">
-        <Avatar src={post.author.avatar} name={post.author.displayName} size={20} />
-        <span className="font-semibold text-xs" style={{ color: 'var(--label-primary)' }}>{post.author.displayName}</span>
-        <span className="text-xs" style={{ color: 'var(--label-secondary)' }}>@{post.author.handle}</span>
-      </div>
-      <p className="text-sm leading-relaxed" style={{ color: 'var(--label-primary)', letterSpacing: '-0.1px' }}>
-        {post.content}
-      </p>
-    </div>
-  );
-}
-
-function ActionButton({
-  icon, count, label, onClick, active, activeColor
-}: {
-  icon: React.ReactNode;
-  count?: number;
-  label: string;
-  onClick: (e: React.MouseEvent) => void;
-  active?: boolean;
-  activeColor?: string;
+function Btn({ icon, count, label, color, onPress }: {
+  icon: React.ReactNode; count?: number; label: string; color?: string; onPress?: () => void;
 }) {
   return (
-    <button
-      className="flex items-center gap-1 touch-target"
-      aria-label={label}
-      onClick={onClick}
-      style={{ color: active ? activeColor : 'var(--label-secondary)', minHeight: 32, minWidth: 32 }}
-    >
+    <button onClick={onPress} aria-label={label} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5, padding: '6px 10px', color: color || 'var(--label-2)', fontSize: 13, fontWeight: 400 }}>
       {icon}
-      {count !== undefined && (
-        <span style={{ fontSize: '13px', fontWeight: 400 }}>{formatCount(count)}</span>
-      )}
+      {count !== undefined && <span>{formatCount(count)}</span>}
     </button>
   );
 }
+
+const ReplyIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+  </svg>
+);
+const RepostIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
+    <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+  </svg>
+);
+const HeartIcon = ({ filled }: { filled: boolean }) => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+  </svg>
+);
+const SaveIcon = ({ filled }: { filled: boolean }) => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
+  </svg>
+);
+const ShareIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+  </svg>
+);

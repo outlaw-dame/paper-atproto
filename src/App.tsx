@@ -1,175 +1,195 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Home, Compass, PlusCircle, Bell, BookMarked, Search, SlidersHorizontal, ChevronDown } from 'lucide-react';
 import HomeTab from './tabs/HomeTab';
 import ExploreTab from './tabs/ExploreTab';
 import InboxTab from './tabs/InboxTab';
 import LibraryTab from './tabs/LibraryTab';
 import ComposeSheet from './components/ComposeSheet';
 import StoryMode from './components/StoryMode';
-import EntitySheet from './components/EntitySheet';
+import { MOCK_NOTIFICATIONS } from './data/mockData';
 
-export type TabId = 'home' | 'explore' | 'inbox' | 'library';
+export type TabId = 'home' | 'explore' | 'compose' | 'inbox' | 'library';
+export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
+export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; name: string; reason: string }
 
-export interface StoryEntry {
-  type: 'post' | 'topic' | 'feed' | 'person' | 'domain';
-  id: string;
-  title?: string;
-  data?: Record<string, unknown>;
-}
-
-export interface EntityEntry {
-  type: 'person' | 'topic' | 'feed' | 'pack' | 'domain';
-  id: string;
-  name: string;
-  reason?: string;
-}
-
-const TABS: { id: TabId; label: string; Icon: React.FC<{ size?: number; strokeWidth?: number }> }[] = [
-  { id: 'home',    label: 'Home',    Icon: Home },
-  { id: 'explore', label: 'Explore', Icon: Compass },
-  { id: 'inbox',   label: 'Inbox',   Icon: Bell },
-  { id: 'library', label: 'Library', Icon: BookMarked },
-];
-
-const FEED_NAMES: Record<TabId, string> = {
-  home:    'Following',
-  explore: 'Explore',
-  inbox:   'Inbox',
-  library: 'Library',
+const S = {
+  root: {
+    display: 'flex', flexDirection: 'column' as const,
+    width: '100%', height: '100%', background: 'var(--bg)',
+    overflow: 'hidden',
+  },
+  main: {
+    flex: 1, overflow: 'hidden', position: 'relative' as const,
+  },
+  tabContent: {
+    position: 'absolute' as const, inset: 0,
+    display: 'flex', flexDirection: 'column' as const,
+  },
+  tabBar: {
+    flexShrink: 0,
+    display: 'flex', flexDirection: 'row' as const,
+    alignItems: 'stretch',
+    background: 'var(--chrome-bg)',
+    backdropFilter: 'blur(20px) saturate(180%)',
+    WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+    borderTop: '0.5px solid var(--sep)',
+    paddingBottom: 'var(--safe-bottom)',
+  },
+  tabBtn: {
+    flex: 1, display: 'flex', flexDirection: 'column' as const,
+    alignItems: 'center', justifyContent: 'center',
+    paddingTop: 10, paddingBottom: 6,
+    gap: 3, minHeight: 50, cursor: 'pointer',
+    border: 'none', background: 'none',
+    WebkitTapHighlightColor: 'transparent',
+  },
+  tabLabel: {
+    fontSize: 10, fontWeight: 500, letterSpacing: 0.1,
+  },
+  composeFab: {
+    width: 52, height: 52, borderRadius: '50%',
+    background: 'var(--blue)', display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    boxShadow: '0 4px 16px rgba(0,122,255,0.4)',
+    marginTop: -8,
+  },
 };
 
+const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNode }[] = [
+  {
+    id: 'home', label: 'Home',
+    icon: (a) => (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill={a ? 'var(--blue)' : 'none'} stroke={a ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={a ? 2.5 : 1.75} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/>
+        <path d="M9 21V12h6v9"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'explore', label: 'Explore',
+    icon: (a) => (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={a ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={a ? 2.5 : 1.75} strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'compose', label: '',
+    icon: () => null,
+  },
+  {
+    id: 'inbox', label: 'Inbox',
+    icon: (a) => (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={a ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={a ? 2.5 : 1.75} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+        <path d="M13.73 21a2 2 0 01-3.46 0"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'library', label: 'Library',
+    icon: (a) => (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={a ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={a ? 2.5 : 1.75} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
+      </svg>
+    ),
+  },
+];
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('home');
-  const [composeOpen, setComposeOpen] = useState(false);
+  const [tab, setTab] = useState<TabId>('home');
+  const [prevTab, setPrevTab] = useState<TabId>('home');
+  const [showCompose, setShowCompose] = useState(false);
   const [story, setStory] = useState<StoryEntry | null>(null);
-  const [entity, setEntity] = useState<EntityEntry | null>(null);
-  const [feedName, setFeedName] = useState('Following');
 
-  const openStory = useCallback((entry: StoryEntry) => setStory(entry), []);
-  const closeStory = useCallback(() => setStory(null), []);
-  const openEntity = useCallback((entry: EntityEntry) => setEntity(entry), []);
-  const closeEntity = useCallback(() => setEntity(null), []);
+  const unread = MOCK_NOTIFICATIONS.filter(n => !n.read).length;
 
-  const handleTabChange = (id: TabId) => {
-    if (id === activeTab) return;
-    setActiveTab(id);
-    setFeedName(FEED_NAMES[id]);
+  const handleTabPress = (id: TabId) => {
+    if (id === 'compose') { setShowCompose(true); return; }
+    setPrevTab(tab);
+    setTab(id);
   };
 
+  const activeTab = tab;
+
   return (
-    <div className="relative flex flex-col h-full overflow-hidden" style={{ background: 'var(--surface-secondary)' }}>
-      {/* Top Navigation Bar */}
-      <header
-        className="chrome-blur fixed top-0 left-0 right-0 z-30 flex items-center justify-between border-b"
-        style={{
-          height: 'calc(var(--nav-bar-height) + var(--safe-top))',
-          paddingTop: 'var(--safe-top)',
-          paddingLeft: 'max(16px, var(--safe-left))',
-          paddingRight: 'max(16px, var(--safe-right))',
-          borderColor: 'var(--separator)',
-        }}
-      >
-        <button className="touch-target rounded-full" aria-label="Profile" style={{ width: 32, height: 32 }}>
-          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold" style={{ background: 'var(--glimpse-indigo)' }}>
-            G
-          </div>
-        </button>
-
-        <button className="flex items-center gap-1 touch-target" aria-label="Change feed" style={{ color: 'var(--label-primary)' }}>
-          <span style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '-0.4px' }}>{feedName}</span>
-          {activeTab === 'home' && <ChevronDown size={14} strokeWidth={2.5} style={{ color: 'var(--label-secondary)' }} />}
-        </button>
-
-        <div className="flex items-center">
-          {activeTab === 'explore'
-            ? <button className="touch-target" aria-label="Filter" style={{ color: 'var(--glimpse-blue)' }}><SlidersHorizontal size={20} strokeWidth={2} /></button>
-            : <button className="touch-target" aria-label="Search" style={{ color: 'var(--glimpse-blue)' }}><Search size={20} strokeWidth={2} /></button>
-          }
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main
-        className="flex-1 overflow-hidden"
-        style={{
-          paddingTop: 'calc(var(--nav-bar-height) + var(--safe-top))',
-          paddingBottom: 'calc(var(--tab-bar-height) + var(--safe-bottom))',
-        }}
-      >
-        <AnimatePresence mode="wait" initial={false}>
-          {activeTab === 'home' && (
-            <motion.div key="home" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-              <HomeTab onOpenStory={openStory} onOpenEntity={openEntity} />
-            </motion.div>
-          )}
-          {activeTab === 'explore' && (
-            <motion.div key="explore" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-              <ExploreTab onOpenStory={openStory} onOpenEntity={openEntity} />
-            </motion.div>
-          )}
-          {activeTab === 'inbox' && (
-            <motion.div key="inbox" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-              <InboxTab />
-            </motion.div>
-          )}
-          {activeTab === 'library' && (
-            <motion.div key="library" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-              <LibraryTab onOpenStory={openStory} />
-            </motion.div>
-          )}
+    <div style={S.root}>
+      {/* Main content area */}
+      <div style={S.main}>
+        <AnimatePresence initial={false} mode="popLayout">
+          <motion.div
+            key={activeTab}
+            style={S.tabContent}
+            initial={{ opacity: 0, x: activeTab > prevTab ? 20 : -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: activeTab > prevTab ? -20 : 20 }}
+            transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+          >
+            {activeTab === 'home'    && <HomeTab onOpenStory={setStory} />}
+            {activeTab === 'explore' && <ExploreTab onOpenStory={setStory} />}
+            {activeTab === 'inbox'   && <InboxTab />}
+            {activeTab === 'library' && <LibraryTab onOpenStory={setStory} />}
+          </motion.div>
         </AnimatePresence>
-      </main>
+      </div>
 
-      {/* Tab Bar */}
-      <nav
-        className="chrome-blur fixed bottom-0 left-0 right-0 z-30 flex items-start justify-around border-t"
-        style={{
-          height: 'calc(var(--tab-bar-height) + var(--safe-bottom))',
-          paddingBottom: 'var(--safe-bottom)',
-          paddingLeft: 'var(--safe-left)',
-          paddingRight: 'var(--safe-right)',
-          borderColor: 'var(--separator)',
-        }}
-        aria-label="Main navigation"
-      >
-        {TABS.map(({ id, label, Icon }, i) => {
-          const isActive = activeTab === id;
-          const items: React.ReactNode[] = [];
-
-          if (i === 2) {
-            items.push(
-              <button key="compose" className="flex flex-col items-center justify-start pt-2" aria-label="Compose" onClick={() => setComposeOpen(true)} style={{ flex: 1 }}>
-                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'var(--glimpse-blue)' }}>
-                  <PlusCircle size={22} strokeWidth={2} color="white" />
+      {/* Tab bar */}
+      <nav style={S.tabBar} role="tablist" aria-label="Main navigation">
+        {TABS.map(({ id, label, icon }) => {
+          const active = id === activeTab;
+          if (id === 'compose') {
+            return (
+              <button
+                key="compose"
+                style={S.tabBtn}
+                onClick={() => handleTabPress('compose')}
+                aria-label="Compose"
+              >
+                <div style={S.composeFab}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
                 </div>
               </button>
             );
           }
-
-          items.push(
+          return (
             <button
               key={id}
-              className="flex flex-col items-center justify-start gap-0.5 pt-2"
+              style={S.tabBtn}
+              onClick={() => handleTabPress(id)}
+              role="tab"
+              aria-selected={active}
               aria-label={label}
-              aria-current={isActive ? 'page' : undefined}
-              onClick={() => handleTabChange(id)}
-              style={{ flex: 1, color: isActive ? 'var(--glimpse-blue)' : 'var(--label-tertiary)', minHeight: 44 }}
             >
-              <Icon size={24} strokeWidth={isActive ? 2 : 1.75} />
-              <span style={{ fontSize: '10px', fontWeight: 500, letterSpacing: '0.1px' }}>{label}</span>
+              <div style={{ position: 'relative' }}>
+                {icon(active)}
+                {id === 'inbox' && unread > 0 && (
+                  <div style={{
+                    position: 'absolute', top: -2, right: -2,
+                    width: 8, height: 8, borderRadius: '50%',
+                    background: 'var(--red)',
+                    border: '1.5px solid var(--chrome-bg)',
+                  }} />
+                )}
+              </div>
+              <span style={{ ...S.tabLabel, color: active ? 'var(--blue)' : 'var(--label-2)' }}>
+                {label}
+              </span>
             </button>
           );
-
-          return items;
         })}
       </nav>
 
-      {/* Overlays */}
+      {/* Compose sheet */}
       <AnimatePresence>
-        {composeOpen && <ComposeSheet key="compose" onClose={() => setComposeOpen(false)} />}
-        {story && <StoryMode key="story" entry={story} onClose={closeStory} onOpenEntity={openEntity} />}
-        {entity && <EntitySheet key="entity" entry={entity} onClose={closeEntity} onOpenStory={openStory} />}
+        {showCompose && <ComposeSheet onClose={() => setShowCompose(false)} />}
+      </AnimatePresence>
+
+      {/* Story mode */}
+      <AnimatePresence>
+        {story && <StoryMode entry={story} onClose={() => setStory(null)} />}
       </AnimatePresence>
     </div>
   );

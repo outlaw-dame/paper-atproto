@@ -1,156 +1,107 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { X, Image, Link, Hash, AtSign, Smile, Globe, ChevronDown } from 'lucide-react';
 
-interface ComposeSheetProps {
+interface Props {
   onClose: () => void;
 }
 
-const VISIBILITY_OPTIONS = [
-  { id: 'everyone', label: 'Everyone', icon: Globe },
-  { id: 'following', label: 'Following', icon: AtSign },
-];
+const MAX = 300;
 
-export default function ComposeSheet({ onClose }: ComposeSheetProps) {
+export default function ComposeSheet({ onClose }: Props) {
   const [text, setText] = useState('');
-  const [visibility, setVisibility] = useState('everyone');
-  const [charCount, setCharCount] = useState(0);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const remaining = MAX - text.length;
+  const pct = Math.min(text.length / MAX, 1);
+  const r = 10;
+  const circ = 2 * Math.PI * r;
 
-  const MAX_CHARS = 300;
-  const remaining = MAX_CHARS - charCount;
-  const isOverLimit = remaining < 0;
-  const isNearLimit = remaining <= 20 && remaining >= 0;
+  useEffect(() => { taRef.current?.focus(); }, []);
 
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
-
-  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
-    setCharCount(e.target.value.length);
-    // Auto-resize
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setText(e.target.value.slice(0, MAX + 10));
     const ta = e.target;
     ta.style.height = 'auto';
-    ta.style.height = `${ta.scrollHeight}px`;
+    ta.style.height = ta.scrollHeight + 'px';
   };
 
-  const canPost = text.trim().length > 0 && !isOverLimit;
+  const canPost = text.trim().length > 0 && remaining >= 0;
 
   return (
     <>
       {/* Backdrop */}
       <motion.div
-        className="fixed inset-0 z-40"
-        style={{ background: 'rgba(0,0,0,0.4)' }}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)', zIndex: 200 }}
       />
 
       {/* Sheet */}
       <motion.div
-        className="fixed bottom-0 left-0 right-0 z-50 rounded-t-sheet overflow-hidden"
+        initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+        transition={{ type: 'spring', stiffness: 380, damping: 40 }}
         style={{
-          background: 'var(--surface-primary)',
+          position: 'fixed', left: 0, right: 0, bottom: 0,
+          background: 'var(--surface)', borderRadius: '24px 24px 0 0',
+          zIndex: 201, paddingBottom: 'var(--safe-bottom)',
           boxShadow: '0 -4px 32px rgba(0,0,0,0.16)',
-          paddingBottom: 'var(--safe-bottom)',
-          maxHeight: '92vh',
         }}
-        initial={{ y: '100%' }}
-        animate={{ y: 0 }}
-        exit={{ y: '100%' }}
-        transition={{ type: 'spring', stiffness: 400, damping: 40 }}
       >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-4 py-3 border-b"
-          style={{ borderColor: 'var(--separator)' }}
-        >
-          <button
-            className="touch-target"
-            onClick={onClose}
-            aria-label="Cancel"
-            style={{ color: 'var(--glimpse-blue)', fontSize: '17px', fontWeight: 400 }}
-          >
-            Cancel
-          </button>
-
-          {/* Visibility selector */}
-          <button
-            className="flex items-center gap-1 px-3 py-1.5 rounded-chip"
-            style={{ background: 'var(--fill-secondary)', color: 'var(--label-secondary)' }}
-            aria-label="Post visibility"
-          >
-            <Globe size={13} strokeWidth={2} />
-            <span style={{ fontSize: '13px', fontWeight: 500 }}>Everyone</span>
-            <ChevronDown size={12} strokeWidth={2.5} />
-          </button>
-
-          <button
-            className="px-4 py-1.5 rounded-chip font-semibold text-sm"
-            style={{
-              background: canPost ? 'var(--glimpse-blue)' : 'var(--fill-secondary)',
-              color: canPost ? 'white' : 'var(--label-tertiary)',
-              transition: 'background 0.15s, color 0.15s',
-            }}
-            disabled={!canPost}
-            aria-label="Post"
-          >
-            Post
-          </button>
+        {/* Handle */}
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--fill-3)' }} />
         </div>
 
-        <div className="overflow-y-auto" style={{ maxHeight: 'calc(92vh - 120px)' }}>
-          {/* Author row */}
-          <div className="flex gap-3 px-4 pt-4">
-            <div
-              className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0"
-              style={{ background: 'var(--glimpse-indigo)' }}
-            >
-              G
-            </div>
+        {/* Header */}
+        <div style={{
+          display: 'flex', flexDirection: 'row', alignItems: 'center',
+          padding: '4px 16px 12px', borderBottom: '0.5px solid var(--sep)',
+        }}>
+          <button onClick={onClose} style={{ fontSize: 15, color: 'var(--label-2)', fontWeight: 400 }}>Cancel</button>
+          <span style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.4 }}>New Post</span>
+          <button
+            disabled={!canPost}
+            style={{
+              padding: '7px 18px', borderRadius: 100,
+              background: canPost ? 'var(--blue)' : 'var(--fill-2)',
+              color: canPost ? '#fff' : 'var(--label-3)',
+              fontSize: 14, fontWeight: 600, border: 'none',
+              cursor: canPost ? 'pointer' : 'default',
+              transition: 'all 0.15s',
+            }}
+          >Post</button>
+        </div>
 
-            <div className="flex-1">
-              <p className="font-semibold text-sm mb-2" style={{ color: 'var(--label-primary)' }}>
-                glimpse.bsky.social
-              </p>
-
-              {/* Textarea */}
+        {/* Body */}
+        <div style={{ overflow: 'auto', maxHeight: 'calc(92vh - 130px)' }}>
+          <div style={{ display: 'flex', flexDirection: 'row', gap: 12, padding: '14px 16px 0' }}>
+            <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 15, fontWeight: 700, flexShrink: 0 }}>Y</div>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', marginBottom: 6 }}>you.bsky.social</p>
               <textarea
-                ref={textareaRef}
+                ref={taRef}
                 value={text}
-                onChange={handleTextChange}
-                placeholder="What's on your mind?"
-                className="w-full bg-transparent outline-none resize-none text-base leading-relaxed"
-                style={{
-                  color: 'var(--label-primary)',
-                  fontSize: '17px',
-                  letterSpacing: '-0.3px',
-                  lineHeight: '1.45',
-                  minHeight: 80,
-                  caretColor: 'var(--glimpse-blue)',
-                }}
+                onChange={handleChange}
+                placeholder="What's happening?"
                 rows={3}
-                maxLength={MAX_CHARS + 50}
-                aria-label="Post content"
+                style={{
+                  width: '100%', fontSize: 17, lineHeight: 1.45, letterSpacing: -0.3,
+                  color: 'var(--label-1)', background: 'none', border: 'none', outline: 'none',
+                  resize: 'none', fontFamily: 'inherit', minHeight: 80,
+                }}
               />
 
-              {/* Live preview card */}
-              {text.trim().length > 0 && (
+              {/* Preview card */}
+              {text.trim().length > 20 && (
                 <motion.div
-                  className="rounded-xl p-3 mt-2 border"
-                  style={{ borderColor: 'var(--separator)', background: 'var(--surface-secondary)' }}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
+                  initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                  style={{ border: '1px solid var(--sep)', borderRadius: 14, padding: '10px 12px', marginTop: 8, background: 'var(--bg)' }}
                 >
-                  <p className="text-xs font-semibold mb-1" style={{ color: 'var(--label-secondary)' }}>Preview</p>
-                  <p className="text-sm leading-relaxed" style={{ color: 'var(--label-primary)' }}>{text}</p>
+                  <p style={{ fontSize: 11, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Preview</p>
+                  <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.4 }}>{text}</p>
                   {text.match(/#\w+/g) && (
-                    <div className="flex flex-wrap gap-1 mt-2">
+                    <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                       {text.match(/#\w+/g)!.map((tag, i) => (
-                        <span key={i} className="glimpse-chip blue text-xs">{tag}</span>
+                        <span key={i} style={{ padding: '3px 10px', borderRadius: 100, background: 'rgba(0,122,255,0.1)', color: 'var(--blue)', fontSize: 12, fontWeight: 500 }}>{tag}</span>
                       ))}
                     </div>
                   )}
@@ -159,77 +110,72 @@ export default function ComposeSheet({ onClose }: ComposeSheetProps) {
             </div>
           </div>
 
-          {/* Thread add button */}
-          <div className="flex items-center gap-3 px-4 py-3">
-            <div className="w-10 flex justify-center">
-              <div className="w-0.5 h-6 rounded-full" style={{ background: 'var(--separator)' }} />
+          {/* Thread add */}
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12, padding: '10px 16px 4px' }}>
+            <div style={{ width: 38, display: 'flex', justifyContent: 'center' }}>
+              <div style={{ width: 1.5, height: 20, background: 'var(--sep)', borderRadius: 1 }} />
             </div>
-            <button
-              className="text-sm"
-              style={{ color: 'var(--label-tertiary)' }}
-              aria-label="Add to thread"
-            >
-              Add to thread...
-            </button>
+            <span style={{ fontSize: 14, color: 'var(--label-3)' }}>Add to thread…</span>
           </div>
         </div>
 
         {/* Toolbar */}
-        <div
-          className="flex items-center justify-between px-4 py-2 border-t"
-          style={{ borderColor: 'var(--separator)' }}
-        >
-          <div className="flex items-center gap-1">
-            {[
-              { Icon: Image, label: 'Add image' },
-              { Icon: Link, label: 'Add link' },
-              { Icon: Hash, label: 'Add hashtag' },
-              { Icon: AtSign, label: 'Mention' },
-              { Icon: Smile, label: 'Add emoji' },
-            ].map(({ Icon, label }) => (
-              <button
-                key={label}
-                className="touch-target"
-                aria-label={label}
-                style={{ color: 'var(--glimpse-blue)' }}
-              >
-                <Icon size={20} strokeWidth={1.75} />
-              </button>
-            ))}
-          </div>
+        <div style={{
+          display: 'flex', flexDirection: 'row', alignItems: 'center',
+          padding: '10px 16px 12px', borderTop: '0.5px solid var(--sep)', gap: 4,
+        }}>
+          <ToolBtn label="Image">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+            </svg>
+          </ToolBtn>
+          <ToolBtn label="Link">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+            </svg>
+          </ToolBtn>
+          <ToolBtn label="Hashtag">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/>
+              <line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>
+            </svg>
+          </ToolBtn>
 
-          {/* Character count */}
-          <div className="flex items-center gap-2">
-            {charCount > 0 && (
-              <>
-                {/* Arc progress */}
-                <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="12" cy="12" r="10" fill="none" stroke="var(--fill-secondary)" strokeWidth="2" />
-                  <circle
-                    cx="12" cy="12" r="10"
-                    fill="none"
-                    stroke={isOverLimit ? 'var(--glimpse-red)' : isNearLimit ? 'var(--glimpse-orange)' : 'var(--glimpse-blue)'}
-                    strokeWidth="2"
-                    strokeDasharray={`${Math.min(charCount / MAX_CHARS, 1) * 62.8} 62.8`}
-                    strokeLinecap="round"
-                    transform="rotate(-90 12 12)"
-                  />
-                </svg>
-                <span
-                  className="text-sm font-medium"
-                  style={{
-                    color: isOverLimit ? 'var(--glimpse-red)' : isNearLimit ? 'var(--glimpse-orange)' : 'var(--label-tertiary)',
-                    minWidth: '2ch',
-                    textAlign: 'right',
-                  }}
-                >
-                  {isNearLimit || isOverLimit ? remaining : ''}
+          <div style={{ flex: 1 }} />
+
+          {/* Character arc */}
+          {text.length > 0 && (
+            <div style={{ position: 'relative', width: 26, height: 26, marginRight: 4 }}>
+              <svg width="26" height="26" viewBox="0 0 26 26">
+                <circle cx="13" cy="13" r={r} fill="none" stroke="var(--fill-3)" strokeWidth={2.5} />
+                <circle
+                  cx="13" cy="13" r={r} fill="none"
+                  stroke={remaining < 0 ? 'var(--red)' : remaining < 20 ? 'var(--orange)' : 'var(--blue)'}
+                  strokeWidth={2.5}
+                  strokeDasharray={circ}
+                  strokeDashoffset={circ * (1 - pct)}
+                  strokeLinecap="round"
+                  transform="rotate(-90 13 13)"
+                />
+              </svg>
+              {remaining < 30 && (
+                <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700, color: remaining < 0 ? 'var(--red)' : 'var(--orange)' }}>
+                  {remaining}
                 </span>
-              </>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </motion.div>
     </>
+  );
+}
+
+function ToolBtn({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <button aria-label={label} style={{ width: 36, height: 36, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
+      {children}
+    </button>
   );
 }

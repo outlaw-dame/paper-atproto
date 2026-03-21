@@ -1,251 +1,161 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Bookmark, Rss, Package, Clock, Sparkles } from 'lucide-react';
 import { MOCK_POSTS, MOCK_FEEDS, MOCK_PACKS, formatTime } from '../data/mockData';
 import type { StoryEntry } from '../App';
 
-interface LibraryTabProps {
-  onOpenStory: (entry: StoryEntry) => void;
+interface Props {
+  onOpenStory: (e: StoryEntry) => void;
 }
 
-const SECTIONS = [
-  { id: 'saved',   label: 'Saved',   icon: Bookmark },
-  { id: 'feeds',   label: 'My Feeds', icon: Rss },
-  { id: 'packs',   label: 'My Packs', icon: Package },
-  { id: 'history', label: 'History',  icon: Clock },
-] as const;
-type SectionId = typeof SECTIONS[number]['id'];
+const TABS = ['Saved', 'My Feeds', 'My Packs', 'History'] as const;
+type Tab = typeof TABS[number];
 
-export default function LibraryTab({ onOpenStory }: LibraryTabProps) {
-  const [section, setSection] = useState<SectionId>('saved');
-
-  // Simulate saved posts (first 3)
-  const savedPosts = MOCK_POSTS.slice(0, 3);
+export default function LibraryTab({ onOpenStory }: Props) {
+  const [tab, setTab] = useState<Tab>('Saved');
 
   return (
-    <div className="min-h-full">
-      {/* Section tabs */}
-      <div
-        className="sticky top-0 z-10 px-4 pt-3 pb-2"
-        style={{ background: 'var(--surface-secondary)' }}
-      >
-        <div className="flex gap-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-          {SECTIONS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setSection(id)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-chip text-sm font-medium whitespace-nowrap flex-shrink-0"
-              style={{
-                background: section === id ? 'var(--glimpse-blue)' : 'var(--fill-secondary)',
-                color: section === id ? 'white' : 'var(--label-secondary)',
-                transition: 'background 0.15s, color 0.15s',
-              }}
-              aria-pressed={section === id}
-            >
-              <Icon size={13} strokeWidth={2} />
-              {label}
-            </button>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
+      {/* Nav */}
+      <div style={{
+        flexShrink: 0,
+        paddingTop: 'calc(var(--safe-top) + 12px)',
+        background: 'var(--chrome-bg)',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        borderBottom: '0.5px solid var(--sep)',
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px' }}>
+          <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.5 }}>Library</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 12px', gap: 8, overflowX: 'auto' }}>
+          {TABS.map(t => (
+            <button key={t} onClick={() => setTab(t)} style={{
+              padding: '6px 14px', borderRadius: 100, flexShrink: 0,
+              fontSize: 14, fontWeight: tab === t ? 600 : 400,
+              color: tab === t ? '#fff' : 'var(--label-2)',
+              background: tab === t ? 'var(--blue)' : 'var(--fill-2)',
+              border: 'none', cursor: 'pointer',
+            }}>{t}</button>
           ))}
         </div>
       </div>
 
-      <div className="px-4 pb-4">
-        {section === 'saved' && (
-          <SavedSection posts={savedPosts} onOpenStory={onOpenStory} />
-        )}
-        {section === 'feeds' && (
-          <MyFeedsSection />
-        )}
-        {section === 'packs' && (
-          <MyPacksSection />
-        )}
-        {section === 'history' && (
-          <HistorySection posts={MOCK_POSTS.slice(0, 4)} onOpenStory={onOpenStory} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SavedSection({ posts, onOpenStory }: { posts: typeof MOCK_POSTS; onOpenStory: (e: StoryEntry) => void }) {
-  if (posts.length === 0) {
-    return (
-      <EmptyState icon="🔖" title="Nothing saved yet" subtitle="Tap the bookmark icon on any post to save it here." />
-    );
-  }
-
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase mb-3 mt-1" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-        {posts.length} Saved Posts
-      </p>
-      <div className="flex flex-col gap-2">
-        {posts.map((post, i) => (
-          <motion.button
-            key={post.id}
-            className="glimpse-card p-4 text-left w-full"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.06 }}
-            onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
-          >
-            {/* Media thumbnail */}
-            {post.media && post.media[0] && (
-              <div className="w-full rounded-xl overflow-hidden mb-3" style={{ height: 120 }}>
-                <img src={post.media[0].url} alt="" className="w-full h-full object-cover" loading="lazy" />
+      {/* Content */}
+      <div className="scroll-y" style={{ flex: 1, padding: '12px 12px 0' }}>
+        {tab === 'Saved' && (
+          MOCK_POSTS.slice(0, 3).map((post, i) => (
+            <motion.button
+              key={post.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.06 }}
+              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+              style={{
+                width: '100%', textAlign: 'left',
+                background: 'var(--surface)', borderRadius: 16,
+                padding: '14px 16px', marginBottom: 10,
+                display: 'flex', flexDirection: 'row', gap: 12, alignItems: 'flex-start',
+                border: 'none', cursor: 'pointer',
+              }}
+            >
+              {post.media?.[0] && (
+                <div style={{ width: 64, height: 64, borderRadius: 10, overflow: 'hidden', flexShrink: 0, background: 'var(--fill-3)' }}>
+                  <img src={post.media[0].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-2)', marginBottom: 3 }}>{post.author.displayName}</p>
+                <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {post.content}
+                </p>
               </div>
-            )}
-            <div className="flex items-center gap-2 mb-1.5">
-              <div
-                className="w-6 h-6 rounded-full overflow-hidden flex-shrink-0"
-                style={{ background: 'var(--glimpse-indigo)' }}
-              >
-                {post.author.avatar && <img src={post.author.avatar} alt="" className="w-full h-full object-cover" />}
+            </motion.button>
+          ))
+        )}
+
+        {tab === 'My Feeds' && (
+          MOCK_FEEDS.map((feed, i) => (
+            <motion.div
+              key={feed.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.06 }}
+              style={{
+                background: 'var(--surface)', borderRadius: 16, padding: '14px 16px', marginBottom: 10,
+                display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12,
+              }}
+            >
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--fill-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>
+                {feed.icon}
               </div>
-              <span className="text-xs font-medium" style={{ color: 'var(--label-secondary)' }}>
-                {post.author.displayName}
-              </span>
-              <span className="text-xs" style={{ color: 'var(--label-tertiary)' }}>·</span>
-              <span className="text-xs" style={{ color: 'var(--label-tertiary)' }}>{formatTime(post.createdAt)}</span>
-            </div>
-            <p className="text-sm leading-relaxed line-clamp-3" style={{ color: 'var(--label-primary)', letterSpacing: '-0.1px' }}>
-              {post.content}
-            </p>
-            <div className="flex items-center gap-1.5 mt-2">
-              {post.chips.slice(0, 2).map(chip => (
-                <span key={chip} className={`glimpse-chip ${chip === 'story' ? 'blue' : chip === 'topic' ? 'purple' : 'teal'}`}>
-                  {chip}
-                </span>
-              ))}
-            </div>
-          </motion.button>
-        ))}
-      </div>
-    </div>
-  );
-}
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2, marginBottom: 2 }}>{feed.name}</p>
+                <p style={{ fontSize: 13, color: 'var(--label-3)' }}>by @{feed.creator.replace('.bsky.social', '')}</p>
+              </div>
+              <button style={{ padding: '6px 14px', borderRadius: 100, background: 'rgba(255,59,48,0.1)', color: 'var(--red)', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer' }}>
+                Unfollow
+              </button>
+            </motion.div>
+          ))
+        )}
 
-function MyFeedsSection() {
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase mb-3 mt-1" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-        Following {MOCK_FEEDS.length} Feeds
-      </p>
-      <div className="flex flex-col gap-2">
-        {MOCK_FEEDS.map((feed, i) => (
-          <motion.div
-            key={feed.id}
-            className="glimpse-card p-4 flex items-center gap-3"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.06 }}
-          >
-            <div
-              className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
-              style={{ background: 'var(--surface-secondary)' }}
+        {tab === 'My Packs' && (
+          MOCK_PACKS.map((pack, i) => (
+            <motion.div
+              key={pack.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.06 }}
+              style={{
+                background: 'var(--surface)', borderRadius: 16, padding: '14px 16px', marginBottom: 10,
+                display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12,
+              }}
             >
-              {feed.icon}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm" style={{ color: 'var(--label-primary)' }}>{feed.name}</p>
-              <p className="text-xs" style={{ color: 'var(--label-secondary)' }}>by @{feed.creator}</p>
-            </div>
-            <button
-              className="px-3 py-1.5 rounded-chip text-xs font-semibold"
-              style={{ background: 'var(--fill-secondary)', color: 'var(--label-secondary)' }}
-            >
-              Unfollow
-            </button>
-          </motion.div>
-        ))}
-      </div>
-    </div>
-  );
-}
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--fill-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>
+                {pack.icon}
+              </div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2, marginBottom: 2 }}>{pack.name}</p>
+                <p style={{ fontSize: 13, color: 'var(--label-3)' }}>{pack.memberCount} members</p>
+              </div>
+              <button style={{ padding: '6px 14px', borderRadius: 100, background: 'rgba(255,59,48,0.1)', color: 'var(--red)', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer' }}>
+                Leave
+              </button>
+            </motion.div>
+          ))
+        )}
 
-function MyPacksSection() {
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase mb-3 mt-1" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-        {MOCK_PACKS.length} Starter Packs
-      </p>
-      <div className="flex flex-col gap-2">
-        {MOCK_PACKS.map((pack, i) => (
-          <motion.div
-            key={pack.id}
-            className="glimpse-card p-4 flex items-center gap-3"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.06 }}
-          >
-            <div
-              className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
-              style={{ background: 'var(--surface-secondary)' }}
+        {tab === 'History' && (
+          MOCK_POSTS.slice(0, 4).map((post, i) => (
+            <motion.button
+              key={post.id}
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.05 }}
+              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+              style={{
+                width: '100%', textAlign: 'left',
+                background: 'var(--surface)', borderRadius: 16,
+                padding: '12px 16px', marginBottom: 8,
+                display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12,
+                border: 'none', cursor: 'pointer',
+              }}
             >
-              {pack.icon}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm" style={{ color: 'var(--label-primary)' }}>{pack.name}</p>
-              <p className="text-xs" style={{ color: 'var(--label-secondary)' }}>{pack.memberCount} members · @{pack.creator}</p>
-            </div>
-            <button
-              className="px-3 py-1.5 rounded-chip text-xs font-semibold"
-              style={{ background: 'var(--fill-secondary)', color: 'var(--label-secondary)' }}
-            >
-              Leave
-            </button>
-          </motion.div>
-        ))}
-      </div>
-    </div>
-  );
-}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--label-3)" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--label-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {post.content.slice(0, 60)}…
+                </p>
+                <p style={{ fontSize: 12, color: 'var(--label-3)' }}>{post.author.displayName} · {formatTime(post.createdAt)}</p>
+              </div>
+            </motion.button>
+          ))
+        )}
 
-function HistorySection({ posts, onOpenStory }: { posts: typeof MOCK_POSTS; onOpenStory: (e: StoryEntry) => void }) {
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase mb-3 mt-1" style={{ color: 'var(--label-secondary)', letterSpacing: '0.5px' }}>
-        Recently Viewed
-      </p>
-      <div className="flex flex-col gap-1">
-        {posts.map((post, i) => (
-          <motion.button
-            key={post.id}
-            className="flex items-center gap-3 p-3 rounded-xl text-left w-full"
-            style={{ background: 'var(--surface-card)' }}
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: i * 0.05 }}
-            onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
-          >
-            <Clock size={16} strokeWidth={1.75} style={{ color: 'var(--label-tertiary)', flexShrink: 0 }} />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium line-clamp-1" style={{ color: 'var(--label-primary)' }}>
-                {post.content.slice(0, 60)}...
-              </p>
-              <p className="text-xs" style={{ color: 'var(--label-secondary)' }}>
-                {post.author.displayName} · {formatTime(post.createdAt)}
-              </p>
-            </div>
-            <Sparkles size={14} strokeWidth={1.75} style={{ color: 'var(--glimpse-blue)', flexShrink: 0 }} />
-          </motion.button>
-        ))}
+        <div style={{ height: 24 }} />
       </div>
-    </div>
-  );
-}
-
-function EmptyState({ icon, title, subtitle }: { icon: string; title: string; subtitle: string }) {
-  return (
-    <div className="flex flex-col items-center py-16 gap-3 text-center">
-      <div
-        className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl"
-        style={{ background: 'var(--fill-secondary)' }}
-      >
-        {icon}
-      </div>
-      <p className="font-semibold" style={{ color: 'var(--label-primary)' }}>{title}</p>
-      <p className="text-sm max-w-xs" style={{ color: 'var(--label-secondary)' }}>{subtitle}</p>
     </div>
   );
 }
