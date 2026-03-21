@@ -17,6 +17,7 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **Styling:** Tailwind CSS - For utility-first CSS styling, enabling rapid UI development and consistency.
 *   **UI Components:** Konsta UI - For mobile-first, iOS-style UI components that follow Apple's design guidelines.
 *   **Emoji Support:** Twemoji - For consistent, high-quality emoji rendering across all platforms.
+*   **Markdown Rendering:** `react-markdown` with `remark-gfm` and Discord-flavored extensions - For rich, expressive, and secure content display.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
 *   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
 *   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining full-text search (tsvector) and semantic search (vector embeddings) for high-performance, intent-aware discovery.

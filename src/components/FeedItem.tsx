@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Block, Card, List, ListItem } from 'konsta/react';
-import { Emoji } from './Emoji';
+import { Markdown } from './Markdown';
 
 interface FeedItemProps {
   post: {
@@ -56,9 +56,9 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
               </div>
             </div>
           </div>
-          <p className="text-base leading-relaxed dark:text-zinc-200">
-            <Emoji>{post.content}</Emoji>
-          </p>
+          <div className="text-base leading-relaxed dark:text-zinc-200">
+            <Markdown content={post.content} />
+          </div>
         </div>
       </Card>
     </motion.div>

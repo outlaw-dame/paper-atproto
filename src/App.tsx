@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { App, Page, Navbar, Block, List, ListItem, Searchbar } from 'konsta/react';
 import { FeedItem } from './components/FeedItem';
 import { GestureView } from './components/GestureView';
-import { Emoji } from './components/Emoji';
+import { Markdown } from './components/Markdown';
 import { hybridSearch } from './search';
 import { paperDB } from './db';
 
@@ -96,9 +96,9 @@ const PaperApp: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <p className="text-xl leading-relaxed dark:text-zinc-200">
-                <Emoji>{selectedPost.content}</Emoji>
-              </p>
+              <div className="text-xl leading-relaxed dark:text-zinc-200">
+                <Markdown content={selectedPost.content} />
+              </div>
             </Block>
             <Block className="text-center text-zinc-400 text-sm mt-20">
               Swipe down to dismiss
