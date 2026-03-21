@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Block, Searchbar, List, ListItem, Button } from 'konsta/react';
+import { Block, Searchbar, Button } from 'konsta/react';
 
 interface TenorGif {
   id: string;
@@ -41,17 +41,18 @@ export const GifPicker: React.FC<GifPickerProps> = ({ onSelect, onClose }) => {
     }
   };
 
+  // Debounce search to avoid excessive API calls
   useEffect(() => {
-    fetchGifs('');
-  }, []);
+    const timer = setTimeout(() => {
+      if (searchQuery.length > 2 || searchQuery.length === 0) {
+        fetchGifs(searchQuery);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleSearch = (e: any) => {
-    const query = e.target.value;
-    setSearchQuery(query);
-    // Debounce search in a real app, but for now just fetch
-    if (query.length > 2 || query.length === 0) {
-      fetchGifs(query);
-    }
+    setSearchQuery(e.target.value);
   };
 
   return (

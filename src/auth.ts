@@ -93,10 +93,10 @@ export class PaperAuth {
    * Securely clears the current session.
    */
   async logout() {
-    // In a real app, you'd also clear local storage tokens
     console.log('Logging out and clearing session...');
-    // The agent doesn't have a direct logout, but we can clear its internal state
-    // or simply discard the agent instance.
+    // Clear session from local storage and reset agent
+    this.agent = new BskyAgent({ service: 'https://bsky.social' });
+    // In a real app, you would also clear any persisted session tokens from IndexedDB/LocalStorage
   }
 
   getAgent() {

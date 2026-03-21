@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Block, Card, List, ListItem } from 'konsta/react';
+import { Card } from 'konsta/react';
 import { Markdown } from './Markdown';
 import { Gif } from './Gif';
 import { LinkPreview } from './LinkPreview';
@@ -26,6 +26,9 @@ interface FeedItemProps {
  * Uses Konsta UI for the base and Framer Motion for subtle animations.
  */
 export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
+  // Parse embed if it's a string (from DB)
+  const embed = typeof post.embed === 'string' ? JSON.parse(post.embed) : post.embed;
+
   return (
     <motion.div
       whileTap={{ scale: 0.98 }}
@@ -88,19 +91,19 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
               ))}
             </div>
           )}
-          {post.embed?.type === 'app.bsky.embed.external' && (
-            post.embed.external.uri.includes('tenor.com') ? (
+          {embed?.type === 'app.bsky.embed.external' && (
+            embed.external.uri.includes('tenor.com') ? (
               <Gif 
-                url={post.embed.external.uri} 
-                title={post.embed.external.title} 
-                thumbnail={post.embed.external.thumb} 
+                url={embed.external.uri} 
+                title={embed.external.title} 
+                thumbnail={embed.external.thumb} 
               />
             ) : (
               <LinkPreview
-                url={post.embed.external.uri}
-                title={post.embed.external.title}
-                description={post.embed.external.description}
-                image={post.embed.external.thumb}
+                url={embed.external.uri}
+                title={embed.external.title}
+                description={embed.external.description}
+                image={embed.external.thumb}
               />
             )
           )}

@@ -2,16 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { App, Page, Navbar, Block, List, ListItem, Searchbar } from 'konsta/react';
 import { FeedItem } from './components/FeedItem';
 import { GestureView } from './components/GestureView';
-import { Markdown } from './components/Markdown';
 import { GifPicker } from './components/GifPicker';
-import { Gif } from './components/Gif';
-import { Button } from 'konsta/react';
+import { Button, Toolbar, Link } from 'konsta/react';
 import { hybridSearch } from './search';
 import { paperDB } from './db';
 import { fetchOGData, OGMetadata } from './og';
-import { LinkPreview } from './LinkPreview';
+import { LinkPreview } from './components/LinkPreview';
 import { FeedList } from './components/FeedList';
-import { Toolbar, Link } from 'konsta/react';
 
 const PaperApp: React.FC = () => {
   const [posts, setPosts] = useState<any[]>([]);
@@ -140,41 +137,24 @@ const PaperApp: React.FC = () => {
             <Navbar
               title="Post Detail"
               left={
-                <a onClick={() => setSelectedPost(null)} className="link cursor-pointer">
-                  Close
-                </a>
+                <Link onClick={() => setSelectedPost(null)}>Close</Link>
               }
             />
-            <Block className="mt-8">
-              <div className="flex items-center mb-6">
-                <div className="w-12 h-12 rounded-full bg-zinc-200 dark:bg-zinc-700 mr-4 flex items-center justify-center">
-                  <span className="text-zinc-500 font-bold">
-                    {selectedPost.author_did[0].toUpperCase()}
-                  </span>
-                </div>
-                <div>
-                  <div className="font-bold text-lg dark:text-white">
-                    {selectedPost.author_did}
-                  </div>
-                  <div className="text-sm text-zinc-500">
-                    {new Date(selectedPost.created_at).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-              <div className="text-xl leading-relaxed dark:text-zinc-200">
-                <Markdown content={selectedPost.content} />
-              </div>
-              {selectedPost.embed?.type === 'app.bsky.embed.external' && selectedPost.embed.external.uri.includes('tenor.com') && (
-                <Gif 
-                  url={selectedPost.embed.external.uri} 
-                  title={selectedPost.embed.external.title} 
-                  thumbnail={selectedPost.embed.external.thumb} 
-                />
-              )}
-            </Block>
-            <Block className="text-center text-zinc-400 text-sm mt-20">
-              Swipe down to dismiss
-            </Block>
+            <div className="p-4">
+              <FeedItem 
+                post={{
+                  id: selectedPost.id,
+                  author: { handle: selectedPost.author_did.substring(0, 15) },
+                  content: selectedPost.content,
+                  createdAt: selectedPost.created_at,
+                  embed: selectedPost.embed,
+                  entities: selectedPost.entities,
+                }}
+              />
+              <Block className="text-center text-zinc-400 text-sm mt-10">
+                Swipe down to dismiss
+              </Block>
+            </div>
           </GestureView>
         )}
 

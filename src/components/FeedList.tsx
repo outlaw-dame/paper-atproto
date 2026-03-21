@@ -40,7 +40,14 @@ export const FeedList: React.FC = () => {
   const handleSelectFeed = async (feed: Feed) => {
     setSelectedFeed(feed);
     const items = await feedService.getFeedItems(feed.id);
-    setFeedItems(items);
+    // Map snake_case from DB to camelCase for UI
+    const mappedItems = items.map((item: any) => ({
+      ...item,
+      pubDate: item.pub_date,
+      enclosureUrl: item.enclosure_url,
+      enclosureType: item.enclosure_type,
+    }));
+    setFeedItems(mappedItems);
   };
 
   return (
@@ -117,10 +124,9 @@ export const FeedList: React.FC = () => {
                     ) : null}
                   </div>
                 )}
-                <div 
-                  className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-3 mb-3"
-                  dangerouslySetInnerHTML={{ __html: item.content || '' }}
-                />
+                <div className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-3 mb-3">
+                  <Markdown content={item.content || ''} />
+                </div>
                 <div className="flex justify-between items-center text-xs text-zinc-500">
                   <span>{item.author || selectedFeed.title}</span>
                   <span>{item.pubDate ? new Date(item.pubDate).toLocaleDateString() : ''}</span>

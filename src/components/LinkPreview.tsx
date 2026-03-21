@@ -1,5 +1,5 @@
 import React from 'react';
-import { Block, Card } from 'konsta/react';
+import { Card } from 'konsta/react';
 
 interface LinkPreviewProps {
   url: string;
@@ -16,7 +16,13 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({
   image,
   siteName,
 }) => {
-  const hostname = new URL(url).hostname;
+  let hostname = '';
+  try {
+    hostname = new URL(url).hostname;
+  } catch (e) {
+    console.error('Invalid URL in LinkPreview:', url);
+    return null;
+  }
 
   return (
     <Card

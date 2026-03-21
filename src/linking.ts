@@ -43,12 +43,12 @@ export const extractEntities = async (text: string): Promise<LinkedEntity[]> => 
     if (label.startsWith('B-')) {
       if (currentEntity) entities.push(currentEntity);
       currentEntity = {
-        text: word.replace('##', ''),
+        text: word.startsWith('##') ? word.slice(2) : word,
         type: label.substring(2),
         score: score,
       };
     } else if (label.startsWith('I-') && currentEntity) {
-      currentEntity.text += word.replace('##', '');
+      currentEntity.text += word.startsWith('##') ? word.slice(2) : ' ' + word;
       currentEntity.score = (currentEntity.score + score) / 2;
     } else {
       if (currentEntity) entities.push(currentEntity);
