@@ -10,6 +10,8 @@ import { hybridSearch } from './search';
 import { paperDB } from './db';
 import { fetchOGData, OGMetadata } from './og';
 import { LinkPreview } from './LinkPreview';
+import { FeedList } from './components/FeedList';
+import { Toolbar, Link } from 'konsta/react';
 
 const PaperApp: React.FC = () => {
   const [posts, setPosts] = useState<any[]>([]);
@@ -19,6 +21,7 @@ const PaperApp: React.FC = () => {
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [selectedGif, setSelectedGif] = useState<any>(null);
   const [previewLink, setPreviewLink] = useState<OGMetadata | null>(null);
+  const [activeTab, setActiveTab] = useState<'timeline' | 'feeds'>('timeline');
 
   useEffect(() => {
     const init = async () => {
@@ -69,7 +72,7 @@ const PaperApp: React.FC = () => {
       <Page>
         <Navbar
           title="Paper ATProto"
-          subtitle={isSearching ? 'Searching...' : 'Your Feed'}
+          subtitle={activeTab === 'timeline' ? (isSearching ? 'Searching...' : 'Your Feed') : 'News, Podcasts, Videos'}
           className="top-0 sticky"
           right={
             <Button clear inline onClick={() => setShowGifPicker(true)}>
@@ -78,29 +81,54 @@ const PaperApp: React.FC = () => {
           }
         />
 
-        <Searchbar
-          placeholder="Search posts semantically..."
-          value={searchQuery}
-          onInput={(e: any) => handleSearch(e.target.value)}
-          onClear={() => handleSearch('')}
-        />
-
-        <div className="pb-20">
-          {posts.map((post) => (
-            <FeedItem
-              key={post.id}
-              post={{
-                id: post.id,
-                author: { handle: post.author_did.substring(0, 15) }, // Simplified for demo
-                content: post.content,
-                createdAt: post.created_at,
-                embed: post.embed,
-                entities: post.entities,
-              }}
-              onClick={() => setSelectedPost(post)}
+        {activeTab === 'timeline' ? (
+          <>
+            <Searchbar
+              placeholder="Search posts semantically..."
+              value={searchQuery}
+              onInput={(e: any) => handleSearch(e.target.value)}
+              onClear={() => handleSearch('')}
             />
-          ))}
-        </div>
+
+            <div className="pb-20">
+              {posts.map((post) => (
+                <FeedItem
+                  key={post.id}
+                  post={{
+                    id: post.id,
+                    author: { handle: post.author_did.substring(0, 15) }, // Simplified for demo
+                    content: post.content,
+                    createdAt: post.created_at,
+                    embed: post.embed,
+                    entities: post.entities,
+                  }}
+                  onClick={() => setSelectedPost(post)}
+                />
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 overflow-hidden pb-20">
+            <FeedList />
+          </div>
+        )}
+
+        <Toolbar bottom className="ios:bg-zinc-100 dark:ios:bg-zinc-900 fixed bottom-0 w-full z-50">
+          <Link 
+            tabLink 
+            tabLinkActive={activeTab === 'timeline'} 
+            onClick={() => setActiveTab('timeline')}
+          >
+            Timeline
+          </Link>
+          <Link 
+            tabLink 
+            tabLinkActive={activeTab === 'feeds'} 
+            onClick={() => setActiveTab('feeds')}
+          >
+            Feeds
+          </Link>
+        </Toolbar>
 
         {selectedPost && (
           <GestureView onDismiss={() => setSelectedPost(null)}>

@@ -21,6 +21,7 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **Hashtag Support:** Custom regex-based linkification with integrated search - For interactive and discoverable content.
 *   **GIF Support:** Tenor API - For high-quality GIF search and selection, integrated with ATProto embeds.
 *   **Link Previews:** OpenGraph fetching with proxy support - For rich, interactive link displays in the feed and post details.
+*   **Feed Support:** Feedsmith - All-in-one parser and generator for ATOM, RSS, and JSON feeds, supporting news, podcasts, and video content.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
 *   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
 *   **Entity Mapping:** Drizzle ORM & Zod - For type-safe schema management, migrations, and robust data validation of ATProto records.

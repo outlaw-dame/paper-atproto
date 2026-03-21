@@ -26,7 +26,35 @@ export const entities = pgTable('entities', {
   score: text('score'), // Confidence score
 });
 
+export const feeds = pgTable('feeds', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  url: text('url').unique().notNull(),
+  title: text('title'),
+  description: text('description'),
+  type: text('type').notNull(), // RSS, ATOM, JSON
+  lastSyncedAt: timestamp('last_synced_at'),
+  category: text('category'), // News, Podcast, Video, etc.
+});
+
+export const feedItems = pgTable('feed_items', {
+  id: text('id').primaryKey(), // Usually the link or a hash
+  feedId: uuid('feed_id').references(() => feeds.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  content: text('content'),
+  link: text('link').notNull(),
+  pubDate: timestamp('pub_date'),
+  author: text('author'),
+  enclosureUrl: text('enclosure_url'), // For podcasts/videos
+  enclosureType: text('enclosure_type'),
+  embedding: vector('embedding', { dimensions: 384 }), // For semantic search
+  searchVector: tsvector('search_vector'), // For full-text search
+});
+
 export type Post = typeof posts.$inferSelect;
 export type NewPost = typeof posts.$inferInsert;
 export type Entity = typeof entities.$inferSelect;
 export type NewEntity = typeof entities.$inferInsert;
+export type Feed = typeof feeds.$inferSelect;
+export type NewFeed = typeof feeds.$inferInsert;
+export type FeedItem = typeof feedItems.$inferSelect;
+export type NewFeedItem = typeof feedItems.$inferInsert;
