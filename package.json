@@ -1,0 +1,25 @@
+{
+  "name": "paper-atproto",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.32.1",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "autoprefixer": "^10.4.27",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@atproto/api": "^0.19.4",
+    "localforage": "^1.10.0",
+    "zustand": "^5.0.12"
+  }
+}
