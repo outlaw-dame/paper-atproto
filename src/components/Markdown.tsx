@@ -16,10 +16,11 @@ interface MarkdownProps {
  */
 const preprocessDiscordMarkdown = (content: string): string => {
   // Handle spoilers: ||text|| -> <span class="spoiler">text</span>
-  // Note: We use a placeholder that rehype-raw will handle after sanitization if allowed,
-  // or we can use a custom component. For simplicity and security, we'll use a custom syntax
-  // that we can target with CSS.
   let processed = content.replace(/\|\|(.+?)\|\|/g, '<span class="spoiler">$1</span>');
+  
+  // Handle hashtags: #tag -> <a href="hashtag:tag" class="hashtag">#tag</a>
+  // We use a custom protocol "hashtag:" to identify them in the renderer
+  processed = processed.replace(/(^|\s)#(\w+)/g, '$1<a href="hashtag:$2" class="hashtag">#$2</a>');
   
   return processed;
 };
@@ -65,11 +66,29 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
               {children}
             </code>
           ),
-          a: ({ href, children }) => (
-            <a href={href} className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            if (href?.startsWith('hashtag:')) {
+              const tag = href.split(':')[1];
+              return (
+                <a
+                  href="#"
+                  className="text-blue-500 hover:underline font-medium"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    // Dispatch a custom event that App.tsx can listen to
+                    window.dispatchEvent(new CustomEvent('hashtag-click', { detail: tag }));
+                  }}
+                >
+                  {children}
+                </a>
+              );
+            }
+            return (
+              <a href={href} className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            );
+          },
         }}
       >
         {processedContent}

@@ -24,6 +24,17 @@ const PaperApp: React.FC = () => {
       loadPosts();
     };
     init();
+
+    // Listen for hashtag clicks from the Markdown component
+    const handleHashtagClick = (e: any) => {
+      const tag = e.detail;
+      handleSearch(`#${tag}`);
+      // Close post detail if open
+      setSelectedPost(null);
+    };
+
+    window.addEventListener('hashtag-click', handleHashtagClick);
+    return () => window.removeEventListener('hashtag-click', handleHashtagClick);
   }, []);
 
   const loadPosts = async () => {

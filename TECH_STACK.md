@@ -18,6 +18,7 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **UI Components:** Konsta UI - For mobile-first, iOS-style UI components that follow Apple's design guidelines.
 *   **Emoji Support:** Twemoji - For consistent, high-quality emoji rendering across all platforms.
 *   **Markdown Rendering:** `react-markdown` with `remark-gfm` and Discord-flavored extensions - For rich, expressive, and secure content display.
+*   **Hashtag Support:** Custom regex-based linkification with integrated search - For interactive and discoverable content.
 *   **GIF Support:** Tenor API - For high-quality GIF search and selection, integrated with ATProto embeds.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
 *   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
