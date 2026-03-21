@@ -16,8 +16,8 @@ interface GifPickerProps {
   onClose: () => void;
 }
 
-const TENOR_API_KEY = 'LIVDSRZULELA'; // Default public key for testing/demo if possible, or placeholder
-const CLIENT_KEY = 'paper-atproto';
+const TENOR_API_KEY = import.meta.env.VITE_TENOR_API_KEY || 'LIVDSRZULELA';
+const CLIENT_KEY = import.meta.env.VITE_TENOR_CLIENT_KEY || 'paper-atproto';
 
 export const GifPicker: React.FC<GifPickerProps> = ({ onSelect, onClose }) => {
   const [searchQuery, setSearchQuery] = useState('');
