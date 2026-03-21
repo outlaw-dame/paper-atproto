@@ -8,6 +8,8 @@ import { Gif } from './components/Gif';
 import { Button } from 'konsta/react';
 import { hybridSearch } from './search';
 import { paperDB } from './db';
+import { fetchOGData, OGMetadata } from './og';
+import { LinkPreview } from './LinkPreview';
 
 const PaperApp: React.FC = () => {
   const [posts, setPosts] = useState<any[]>([]);
@@ -16,6 +18,7 @@ const PaperApp: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [selectedGif, setSelectedGif] = useState<any>(null);
+  const [previewLink, setPreviewLink] = useState<OGMetadata | null>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -85,6 +88,7 @@ const PaperApp: React.FC = () => {
                 author: { handle: post.author_did.substring(0, 15) }, // Simplified for demo
                 content: post.content,
                 createdAt: post.created_at,
+                embed: post.embed,
               }}
               onClick={() => setSelectedPost(post)}
             />
@@ -142,6 +146,40 @@ const PaperApp: React.FC = () => {
             }} 
             onClose={() => setShowGifPicker(false)} 
           />
+        )}
+
+        {/* Link Preview Demo Trigger */}
+        <div className="fixed bottom-20 right-4 z-40">
+          <Button 
+            clear 
+            inline 
+            className="bg-blue-500 text-white rounded-full p-3 shadow-lg"
+            onClick={async () => {
+              const url = prompt('Enter a URL to preview:');
+              if (url) {
+                const data = await fetchOGData(url);
+                setPreviewLink(data);
+              }
+            }}
+          >
+            🔗
+          </Button>
+        </div>
+
+        {previewLink && (
+          <div className="fixed bottom-24 right-4 z-50 w-72 shadow-2xl rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border dark:border-zinc-800">
+            <div className="relative">
+              <LinkPreview {...previewLink} />
+              <Button 
+                clear 
+                inline 
+                className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1 z-10"
+                onClick={() => setPreviewLink(null)}
+              >
+                ✕
+              </Button>
+            </div>
+          </div>
         )}
 
         {selectedGif && (

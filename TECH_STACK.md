@@ -20,6 +20,7 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **Markdown Rendering:** `react-markdown` with `remark-gfm` and Discord-flavored extensions - For rich, expressive, and secure content display.
 *   **Hashtag Support:** Custom regex-based linkification with integrated search - For interactive and discoverable content.
 *   **GIF Support:** Tenor API - For high-quality GIF search and selection, integrated with ATProto embeds.
+*   **Link Previews:** OpenGraph fetching with proxy support - For rich, interactive link displays in the feed and post details.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
 *   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
 *   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining full-text search (tsvector) and semantic search (vector embeddings) for high-performance, intent-aware discovery.

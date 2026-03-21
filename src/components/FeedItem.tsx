@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Block, Card, List, ListItem } from 'konsta/react';
 import { Markdown } from './Markdown';
 import { Gif } from './Gif';
+import { LinkPreview } from './LinkPreview';
 
 interface FeedItemProps {
   post: {
@@ -14,6 +15,7 @@ interface FeedItemProps {
     };
     content: string;
     createdAt: string;
+    embed?: any;
   };
   onClick?: () => void;
 }
@@ -60,12 +62,21 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
           <div className="text-base leading-relaxed dark:text-zinc-200">
             <Markdown content={post.content} />
           </div>
-          {post.embed?.type === 'app.bsky.embed.external' && post.embed.external.uri.includes('tenor.com') && (
-            <Gif 
-              url={post.embed.external.uri} 
-              title={post.embed.external.title} 
-              thumbnail={post.embed.external.thumb} 
-            />
+          {post.embed?.type === 'app.bsky.embed.external' && (
+            post.embed.external.uri.includes('tenor.com') ? (
+              <Gif 
+                url={post.embed.external.uri} 
+                title={post.embed.external.title} 
+                thumbnail={post.embed.external.thumb} 
+              />
+            ) : (
+              <LinkPreview
+                url={post.embed.external.uri}
+                title={post.embed.external.title}
+                description={post.embed.external.description}
+                image={post.embed.external.thumb}
+              />
+            )
           )}
         </div>
       </Card>
