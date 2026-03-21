@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { List, ListItem, Block, Button, Searchbar, Card, Navbar, Page, Toolbar, Link } from 'konsta/react';
 import { feedService } from '../feeds';
-import { Feed, FeedItem } from '../schema';
+import type { Feed, FeedItem } from '../schema';
 
 /**
  * FeedList Component for managing and consuming ATOM/RSS/JSON feeds.

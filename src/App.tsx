@@ -6,7 +6,8 @@ import { GifPicker } from './components/GifPicker';
 import { Button, Toolbar, Link } from 'konsta/react';
 import { hybridSearch } from './search';
 import { paperDB } from './db';
-import { fetchOGData, OGMetadata } from './og';
+import { fetchOGData } from './og';
+import type { OGMetadata } from './og';
 import { LinkPreview } from './components/LinkPreview';
 import { FeedList } from './components/FeedList';
 

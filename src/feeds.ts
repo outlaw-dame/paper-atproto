@@ -1,4 +1,4 @@
-import { parseFeed, generateFeed } from 'feedsmith';
+import { parseFeed, generateRssFeed, generateAtomFeed, generateJsonFeed } from 'feedsmith';
 import { paperDB } from './db';
 import { hybridSearch } from './search';
 
@@ -102,7 +102,9 @@ export class FeedService {
       })),
     };
 
-    return generateFeed(feedData, type);
+    if (type === 'atom') return generateAtomFeed(feedData);
+    if (type === 'json') return generateJsonFeed(feedData);
+    return generateRssFeed(feedData);
   }
 
   /**
