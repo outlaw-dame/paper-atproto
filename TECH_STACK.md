@@ -15,6 +15,7 @@ This document outlines the core technologies and frameworks selected for the loc
 
 *   **Framework:** React (with Next.js for SSR/SSG) - For building dynamic and responsive user interfaces.
 *   **Styling:** Tailwind CSS - For utility-first CSS styling, enabling rapid UI development and consistency.
+*   **UI Components:** Konsta UI - For mobile-first, iOS-style UI components that follow Apple's design guidelines.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
 *   **Offline-First/Data Persistence:** IndexedDB (via `localforage` or similar) - For robust client-side data storage, enabling offline access and fast data retrieval.
 *   **ATProto Client:** `@atproto/api` - Official ATProto client library for interacting with the ATProto network.
