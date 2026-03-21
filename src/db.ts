@@ -1,38 +1,52 @@
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
+import { drizzle } from 'drizzle-orm/pglite';
+import * as schema from './schema';
+
+/**
+ * Database Utility using PGlite and Drizzle ORM.
+ * Persists to IndexedDB for local-first reliability.
+ */
 
 export class PaperDB {
-  private db: PGlite;
+  private pg: PGlite;
+  private db: any;
 
   constructor() {
-    // Initialize PGlite with the vector extension
-    this.db = new PGlite('idb://paper-atproto-db', {
+    this.pg = new PGlite('idb://paper-atproto-db', {
       extensions: {
         vector,
       },
     });
+    // Initialize Drizzle with PGlite
+    this.db = drizzle(this.pg, { schema });
   }
 
   async init() {
     // Create tables for ATProto records with hybrid search support
-    await this.db.exec(`
+    await this.pg.exec(`
       -- Enable pgvector extension
       CREATE EXTENSION IF NOT EXISTS vector;
 
       -- Create posts table
       CREATE TABLE IF NOT EXISTS posts (
         id TEXT PRIMARY KEY,
-        uri TEXT UNIQUE NOT NULL,
-        cid TEXT NOT NULL,
         author_did TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        
-        -- Full-text search vector
         search_vector tsvector,
-        
-        -- Semantic search vector (384 dimensions for typical small models like all-MiniLM-L6-v2)
-        embedding vector(384)
+        embedding vector(384),
+        embed TEXT
+      );
+
+      -- Create entities table for linking
+      CREATE TABLE IF NOT EXISTS entities (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        post_id TEXT REFERENCES posts(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        type TEXT NOT NULL,
+        wikidata_id TEXT,
+        score TEXT
       );
 
       -- Create index for full-text search
@@ -43,7 +57,7 @@ export class PaperDB {
     `);
 
     // Trigger to update search_vector on insert/update
-    await this.db.exec(`
+    await this.pg.exec(`
       CREATE OR REPLACE FUNCTION posts_search_vector_update() RETURNS trigger AS $$
       BEGIN
         new.search_vector := to_tsvector('english', new.content);
@@ -60,6 +74,10 @@ export class PaperDB {
 
   getDB() {
     return this.db;
+  }
+
+  getPG() {
+    return this.pg;
   }
 }
 

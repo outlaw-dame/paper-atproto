@@ -16,6 +16,7 @@ interface FeedItemProps {
     content: string;
     createdAt: string;
     embed?: any;
+    entities?: any[];
   };
   onClick?: () => void;
 }
@@ -62,6 +63,31 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
           <div className="text-base leading-relaxed dark:text-zinc-200">
             <Markdown content={post.content} />
           </div>
+          {post.entities && post.entities.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {post.entities.map((entity, idx) => (
+                <div 
+                  key={idx}
+                  className="px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-md text-xs font-medium flex items-center"
+                  title={entity.type}
+                >
+                  <span className="mr-1">🏷️</span>
+                  {entity.text}
+                  {entity.wikidata_id && (
+                    <a 
+                      href={`https://www.wikidata.org/wiki/${entity.wikidata_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-1 opacity-50 hover:opacity-100"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      (wiki)
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {post.embed?.type === 'app.bsky.embed.external' && (
             post.embed.external.uri.includes('tenor.com') ? (
               <Gif 

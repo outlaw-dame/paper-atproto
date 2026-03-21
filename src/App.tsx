@@ -41,9 +41,15 @@ const PaperApp: React.FC = () => {
   }, []);
 
   const loadPosts = async () => {
-    const db = paperDB.getDB();
-    const result = await db.query('SELECT * FROM posts ORDER BY created_at DESC LIMIT 20');
-    setPosts(result.rows);
+    const pg = paperDB.getPG();
+    const result = await pg.query('SELECT * FROM posts ORDER BY created_at DESC LIMIT 20');
+    const postsWithEntities = await Promise.all(
+      result.rows.map(async (post: any) => {
+        const entitiesResult = await pg.query('SELECT * FROM entities WHERE post_id = $1', [post.id]);
+        return { ...post, entities: entitiesResult.rows };
+      })
+    );
+    setPosts(postsWithEntities);
   };
 
   const handleSearch = async (query: string) => {
@@ -89,6 +95,7 @@ const PaperApp: React.FC = () => {
                 content: post.content,
                 createdAt: post.created_at,
                 embed: post.embed,
+                entities: post.entities,
               }}
               onClick={() => setSelectedPost(post)}
             />

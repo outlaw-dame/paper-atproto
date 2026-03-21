@@ -23,6 +23,8 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **Link Previews:** OpenGraph fetching with proxy support - For rich, interactive link displays in the feed and post details.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
 *   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
+*   **Entity Mapping:** Drizzle ORM & Zod - For type-safe schema management, migrations, and robust data validation of ATProto records.
+*   **Entity Linking:** Transformers.js & Wikidata API - For browser-side Named Entity Recognition (NER) and linking entities to a global knowledge base.
 *   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining full-text search (tsvector) and semantic search (vector embeddings) for high-performance, intent-aware discovery.
 *   **ATProto Client:** `@atproto/api` - Official ATProto client library for interacting with the ATProto network.
 

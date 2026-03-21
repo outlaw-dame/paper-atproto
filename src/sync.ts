@@ -1,19 +1,37 @@
 import { BskyAgent } from '@atproto/api';
 import { paperDB } from './db';
 import { hybridSearch } from './search';
+import { processTextEntities } from './linking';
+import { z } from 'zod';
+
+/**
+ * Robust Data Synchronization Layer for ATProto.
+ * Includes entity mapping (Zod) and entity linking (Transformers.js).
+ */
+
+// Zod schema for ATProto post validation
+const PostSchema = z.object({
+  uri: z.string(),
+  cid: z.string(),
+  author: z.object({
+    did: z.string(),
+    handle: z.string(),
+  }),
+  record: z.object({
+    text: z.string(),
+    createdAt: z.string(),
+    embed: z.any().optional(),
+  }),
+});
 
 /**
  * Utility for sanitizing content to prevent XSS and other injection attacks.
  */
 function sanitizeContent(content: string): string {
   // Basic sanitization: remove HTML tags and trim whitespace
-  // In a real app, use a more robust library like DOMPurify
   return content.replace(/<[^>]*>?/gm, '').trim();
 }
 
-/**
- * Synchronization service for ATProto records.
- */
 export class PaperSync {
   private agent: BskyAgent;
 
@@ -22,47 +40,61 @@ export class PaperSync {
   }
 
   /**
-   * Performs a full synchronization of the user's posts from their PDS.
+   * Sync the latest posts from the user's timeline.
    */
-  async syncPosts(did: string) {
-    console.log(`Starting sync for user: ${did}`);
-    let cursor: string | undefined;
-    const db = paperDB.getDB();
-
+  async syncTimeline() {
     try {
-      while (true) {
-        const response = await this.agent.api.app.bsky.feed.getAuthorFeed({
-          actor: did,
-          cursor,
-          limit: 50,
-        });
+      const response = await this.agent.getTimeline({ limit: 20 });
+      const feed = response.data.feed;
+      const pg = paperDB.getPG();
 
-        const { feed, cursor: nextCursor } = response.data;
+      for (const item of feed) {
+        // 1. Validate and Map Entity (Zod)
+        const validated = PostSchema.safeParse(item.post);
+        if (!validated.success) continue;
 
-        for (const item of feed) {
-          const post = item.post;
-          const record = post.record as any;
+        const post = validated.data;
+        const postId = post.cid;
+        const sanitizedContent = sanitizeContent(post.record.text);
 
-          // Sanitize and validate the record content
-          const sanitizedContent = sanitizeContent(record.text || '');
+        // 2. Generate Semantic Embedding
+        const embedding = await hybridSearch.generateEmbedding(sanitizedContent);
 
-          // Index the post for hybrid search and store in local DB
-          await hybridSearch.indexPost({
-            id: post.uri.split('/').pop() || '',
-            uri: post.uri,
-            cid: post.cid,
-            author_did: post.author.did,
-            content: sanitizedContent,
-          });
+        // 3. Save to Local PGlite (Entity Mapping)
+        await pg.query(
+          `INSERT INTO posts (id, author_did, content, created_at, embedding, embed)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            postId,
+            post.author.did,
+            sanitizedContent,
+            post.record.createdAt,
+            embedding,
+            JSON.stringify(post.record.embed || {}),
+          ]
+        );
+
+        // 4. Entity Linking (Transformers.js + Wikidata)
+        const linkedEntities = await processTextEntities(sanitizedContent);
+        for (const entity of linkedEntities) {
+          await pg.query(
+            `INSERT INTO entities (post_id, text, type, wikidata_id, score)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+              postId,
+              entity.text,
+              entity.type,
+              entity.wikidataId || null,
+              entity.score.toString(),
+            ]
+          );
         }
-
-        if (!nextCursor || feed.length === 0) break;
-        cursor = nextCursor;
       }
-      console.log('Sync completed successfully');
+
+      console.log(`Synced ${feed.length} posts with entity linking.`);
     } catch (error) {
       console.error('Sync failed:', error);
-      throw error;
     }
   }
 
@@ -81,28 +113,25 @@ export class PaperSync {
       });
 
       // 2. Update local database and search index
-      await hybridSearch.indexPost({
-        id: response.uri.split('/').pop() || '',
-        uri: response.uri,
-        cid: response.cid,
-        author_did: this.agent.session?.did || '',
-        content: sanitizedText,
-      });
+      const pg = paperDB.getPG();
+      const embedding = await hybridSearch.generateEmbedding(sanitizedText);
+      
+      await pg.query(
+        `INSERT INTO posts (id, author_did, content, created_at, embedding)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          response.cid,
+          this.agent.session?.did || '',
+          sanitizedText,
+          new Date().toISOString(),
+          embedding,
+        ]
+      );
 
       return response;
     } catch (error) {
       console.error('Failed to create post:', error);
       throw error;
     }
-  }
-
-  /**
-   * Resolves conflicts between local and remote data.
-   * Currently implements a simple "last-write-wins" strategy.
-   */
-  async resolveConflict(localData: any, remoteData: any) {
-    // In a more advanced implementation, this would compare timestamps or use CRDTs
-    console.log('Resolving conflict using last-write-wins strategy');
-    return remoteData;
   }
 }
