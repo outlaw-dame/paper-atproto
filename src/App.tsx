@@ -1,227 +1,176 @@
-import React, { useState, useEffect } from 'react';
-import { App, Page, Navbar, Block, List, ListItem, Searchbar } from 'konsta/react';
-import { FeedItem } from './components/FeedItem';
-import { GestureView } from './components/GestureView';
-import { GifPicker } from './components/GifPicker';
-import { Button, Toolbar, Link } from 'konsta/react';
-import { hybridSearch } from './search';
-import { paperDB } from './db';
-import { fetchOGData } from './og';
-import type { OGMetadata } from './og';
-import { LinkPreview } from './components/LinkPreview';
-import { FeedList } from './components/FeedList';
+import React, { useState, useCallback } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Home, Compass, PlusCircle, Bell, BookMarked, Search, SlidersHorizontal, ChevronDown } from 'lucide-react';
+import HomeTab from './tabs/HomeTab';
+import ExploreTab from './tabs/ExploreTab';
+import InboxTab from './tabs/InboxTab';
+import LibraryTab from './tabs/LibraryTab';
+import ComposeSheet from './components/ComposeSheet';
+import StoryMode from './components/StoryMode';
+import EntitySheet from './components/EntitySheet';
 
-const PaperApp: React.FC = () => {
-  const [posts, setPosts] = useState<any[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedPost, setSelectedPost] = useState<any | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  const [showGifPicker, setShowGifPicker] = useState(false);
-  const [selectedGif, setSelectedGif] = useState<any>(null);
-  const [previewLink, setPreviewLink] = useState<OGMetadata | null>(null);
-  const [activeTab, setActiveTab] = useState<'timeline' | 'feeds'>('timeline');
+export type TabId = 'home' | 'explore' | 'inbox' | 'library';
 
-  useEffect(() => {
-    const init = async () => {
-      await paperDB.init();
-      await hybridSearch.init();
-      loadPosts();
-    };
-    init();
+export interface StoryEntry {
+  type: 'post' | 'topic' | 'feed' | 'person' | 'domain';
+  id: string;
+  title?: string;
+  data?: Record<string, unknown>;
+}
 
-    // Listen for hashtag clicks from the Markdown component
-    const handleHashtagClick = (e: any) => {
-      const tag = e.detail;
-      handleSearch(`#${tag}`);
-      // Close post detail if open
-      setSelectedPost(null);
-    };
+export interface EntityEntry {
+  type: 'person' | 'topic' | 'feed' | 'pack' | 'domain';
+  id: string;
+  name: string;
+  reason?: string;
+}
 
-    window.addEventListener('hashtag-click', handleHashtagClick);
-    return () => window.removeEventListener('hashtag-click', handleHashtagClick);
-  }, []);
+const TABS: { id: TabId; label: string; Icon: React.FC<{ size?: number; strokeWidth?: number }> }[] = [
+  { id: 'home',    label: 'Home',    Icon: Home },
+  { id: 'explore', label: 'Explore', Icon: Compass },
+  { id: 'inbox',   label: 'Inbox',   Icon: Bell },
+  { id: 'library', label: 'Library', Icon: BookMarked },
+];
 
-  const loadPosts = async () => {
-    const pg = paperDB.getPG();
-    const result = await pg.query('SELECT * FROM posts ORDER BY created_at DESC LIMIT 20');
-    const postsWithEntities = await Promise.all(
-      result.rows.map(async (post: any) => {
-        const entitiesResult = await pg.query('SELECT * FROM entities WHERE post_id = $1', [post.id]);
-        return { ...post, entities: entitiesResult.rows };
-      })
-    );
-    setPosts(postsWithEntities);
-  };
+const FEED_NAMES: Record<TabId, string> = {
+  home:    'Following',
+  explore: 'Explore',
+  inbox:   'Inbox',
+  library: 'Library',
+};
 
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query);
-    if (query.trim()) {
-      setIsSearching(true);
-      // Search across both posts and feed items using hybrid search
-      const results = await hybridSearch.searchAll(query);
-      setPosts(results.rows.map((row: any) => ({
-        ...row,
-        author_did: row.item_type === 'post' ? row.author_did || 'unknown' : 'feed',
-        created_at: row.created_at || new Date().toISOString(),
-      })));
-    } else {
-      setIsSearching(false);
-      loadPosts();
-    }
+export default function App() {
+  const [activeTab, setActiveTab] = useState<TabId>('home');
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [story, setStory] = useState<StoryEntry | null>(null);
+  const [entity, setEntity] = useState<EntityEntry | null>(null);
+  const [feedName, setFeedName] = useState('Following');
+
+  const openStory = useCallback((entry: StoryEntry) => setStory(entry), []);
+  const closeStory = useCallback(() => setStory(null), []);
+  const openEntity = useCallback((entry: EntityEntry) => setEntity(entry), []);
+  const closeEntity = useCallback(() => setEntity(null), []);
+
+  const handleTabChange = (id: TabId) => {
+    if (id === activeTab) return;
+    setActiveTab(id);
+    setFeedName(FEED_NAMES[id]);
   };
 
   return (
-    <App theme="ios">
-      <Page>
-        <Navbar
-          title="Paper ATProto"
-          subtitle={activeTab === 'timeline' ? (isSearching ? 'Searching...' : 'Your Feed') : 'News, Podcasts, Videos'}
-          className="top-0 sticky"
-          right={
-            <Button clear inline onClick={() => setShowGifPicker(true)}>
-              GIF
-            </Button>
+    <div className="relative flex flex-col h-full overflow-hidden" style={{ background: 'var(--surface-secondary)' }}>
+      {/* Top Navigation Bar */}
+      <header
+        className="chrome-blur fixed top-0 left-0 right-0 z-30 flex items-center justify-between border-b"
+        style={{
+          height: 'calc(var(--nav-bar-height) + var(--safe-top))',
+          paddingTop: 'var(--safe-top)',
+          paddingLeft: 'max(16px, var(--safe-left))',
+          paddingRight: 'max(16px, var(--safe-right))',
+          borderColor: 'var(--separator)',
+        }}
+      >
+        <button className="touch-target rounded-full" aria-label="Profile" style={{ width: 32, height: 32 }}>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold" style={{ background: 'var(--glimpse-indigo)' }}>
+            G
+          </div>
+        </button>
+
+        <button className="flex items-center gap-1 touch-target" aria-label="Change feed" style={{ color: 'var(--label-primary)' }}>
+          <span style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '-0.4px' }}>{feedName}</span>
+          {activeTab === 'home' && <ChevronDown size={14} strokeWidth={2.5} style={{ color: 'var(--label-secondary)' }} />}
+        </button>
+
+        <div className="flex items-center">
+          {activeTab === 'explore'
+            ? <button className="touch-target" aria-label="Filter" style={{ color: 'var(--glimpse-blue)' }}><SlidersHorizontal size={20} strokeWidth={2} /></button>
+            : <button className="touch-target" aria-label="Search" style={{ color: 'var(--glimpse-blue)' }}><Search size={20} strokeWidth={2} /></button>
           }
-        />
-
-        {activeTab === 'timeline' ? (
-          <>
-            <Searchbar
-              placeholder="Search posts semantically..."
-              value={searchQuery}
-              onInput={(e: any) => handleSearch(e.target.value)}
-              onClear={() => handleSearch('')}
-            />
-
-            <div className="pb-20">
-              {posts.map((post) => (
-                <FeedItem
-                  key={post.id}
-                  post={{
-                    id: post.id,
-                    author: { handle: post.author_did.substring(0, 15) }, // Simplified for demo
-                    content: post.content,
-                    createdAt: post.created_at,
-                    embed: post.embed,
-                    entities: post.entities,
-                  }}
-                  onClick={() => setSelectedPost(post)}
-                />
-              ))}
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 overflow-hidden pb-20">
-            <FeedList />
-          </div>
-        )}
-
-        <Toolbar bottom className="ios:bg-zinc-100 dark:ios:bg-zinc-900 fixed bottom-0 w-full z-50">
-          <Link 
-            tabLink 
-            tabLinkActive={activeTab === 'timeline'} 
-            onClick={() => setActiveTab('timeline')}
-          >
-            Timeline
-          </Link>
-          <Link 
-            tabLink 
-            tabLinkActive={activeTab === 'feeds'} 
-            onClick={() => setActiveTab('feeds')}
-          >
-            Feeds
-          </Link>
-        </Toolbar>
-
-        {selectedPost && (
-          <GestureView onDismiss={() => setSelectedPost(null)}>
-            <Navbar
-              title="Post Detail"
-              left={
-                <Link onClick={() => setSelectedPost(null)}>Close</Link>
-              }
-            />
-            <div className="p-4">
-              <FeedItem 
-                post={{
-                  id: selectedPost.id,
-                  author: { handle: selectedPost.author_did.substring(0, 15) },
-                  content: selectedPost.content,
-                  createdAt: selectedPost.created_at,
-                  embed: selectedPost.embed,
-                  entities: selectedPost.entities,
-                }}
-              />
-              <Block className="text-center text-zinc-400 text-sm mt-10">
-                Swipe down to dismiss
-              </Block>
-            </div>
-          </GestureView>
-        )}
-
-        {showGifPicker && (
-          <GifPicker 
-            onSelect={(gif) => {
-              setSelectedGif(gif);
-              setShowGifPicker(false);
-            }} 
-            onClose={() => setShowGifPicker(false)} 
-          />
-        )}
-
-        {/* Link Preview Demo Trigger */}
-        <div className="fixed bottom-20 right-4 z-40">
-          <Button 
-            clear 
-            inline 
-            className="bg-blue-500 text-white rounded-full p-3 shadow-lg"
-            onClick={async () => {
-              const url = prompt('Enter a URL to preview:');
-              if (url) {
-                const data = await fetchOGData(url);
-                setPreviewLink(data);
-              }
-            }}
-          >
-            🔗
-          </Button>
         </div>
+      </header>
 
-        {previewLink && (
-          <div className="fixed bottom-24 right-4 z-50 w-72 shadow-2xl rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border dark:border-zinc-800">
-            <div className="relative">
-              <LinkPreview {...previewLink} />
-              <Button 
-                clear 
-                inline 
-                className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1 z-10"
-                onClick={() => setPreviewLink(null)}
-              >
-                ✕
-              </Button>
-            </div>
-          </div>
-        )}
+      {/* Main Content */}
+      <main
+        className="flex-1 overflow-hidden"
+        style={{
+          paddingTop: 'calc(var(--nav-bar-height) + var(--safe-top))',
+          paddingBottom: 'calc(var(--tab-bar-height) + var(--safe-bottom))',
+        }}
+      >
+        <AnimatePresence mode="wait" initial={false}>
+          {activeTab === 'home' && (
+            <motion.div key="home" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              <HomeTab onOpenStory={openStory} onOpenEntity={openEntity} />
+            </motion.div>
+          )}
+          {activeTab === 'explore' && (
+            <motion.div key="explore" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              <ExploreTab onOpenStory={openStory} onOpenEntity={openEntity} />
+            </motion.div>
+          )}
+          {activeTab === 'inbox' && (
+            <motion.div key="inbox" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              <InboxTab />
+            </motion.div>
+          )}
+          {activeTab === 'library' && (
+            <motion.div key="library" className="h-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              <LibraryTab onOpenStory={openStory} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
 
-        {selectedGif && (
-          <div className="fixed bottom-4 right-4 z-40 w-48 shadow-2xl rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border dark:border-zinc-800">
-            <div className="relative">
-              <img src={selectedGif.media_formats.tinygif.url} alt="Selected GIF" className="w-full h-auto" />
-              <Button 
-                clear 
-                inline 
-                className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"
-                onClick={() => setSelectedGif(null)}
-              >
-                ✕
-              </Button>
-            </div>
-            <div className="p-2 text-xs text-center font-medium dark:text-white">Ready to post</div>
-          </div>
-        )}
-      </Page>
-    </App>
+      {/* Tab Bar */}
+      <nav
+        className="chrome-blur fixed bottom-0 left-0 right-0 z-30 flex items-start justify-around border-t"
+        style={{
+          height: 'calc(var(--tab-bar-height) + var(--safe-bottom))',
+          paddingBottom: 'var(--safe-bottom)',
+          paddingLeft: 'var(--safe-left)',
+          paddingRight: 'var(--safe-right)',
+          borderColor: 'var(--separator)',
+        }}
+        aria-label="Main navigation"
+      >
+        {TABS.map(({ id, label, Icon }, i) => {
+          const isActive = activeTab === id;
+          const items: React.ReactNode[] = [];
+
+          if (i === 2) {
+            items.push(
+              <button key="compose" className="flex flex-col items-center justify-start pt-2" aria-label="Compose" onClick={() => setComposeOpen(true)} style={{ flex: 1 }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'var(--glimpse-blue)' }}>
+                  <PlusCircle size={22} strokeWidth={2} color="white" />
+                </div>
+              </button>
+            );
+          }
+
+          items.push(
+            <button
+              key={id}
+              className="flex flex-col items-center justify-start gap-0.5 pt-2"
+              aria-label={label}
+              aria-current={isActive ? 'page' : undefined}
+              onClick={() => handleTabChange(id)}
+              style={{ flex: 1, color: isActive ? 'var(--glimpse-blue)' : 'var(--label-tertiary)', minHeight: 44 }}
+            >
+              <Icon size={24} strokeWidth={isActive ? 2 : 1.75} />
+              <span style={{ fontSize: '10px', fontWeight: 500, letterSpacing: '0.1px' }}>{label}</span>
+            </button>
+          );
+
+          return items;
+        })}
+      </nav>
+
+      {/* Overlays */}
+      <AnimatePresence>
+        {composeOpen && <ComposeSheet key="compose" onClose={() => setComposeOpen(false)} />}
+        {story && <StoryMode key="story" entry={story} onClose={closeStory} onOpenEntity={openEntity} />}
+        {entity && <EntitySheet key="entity" entry={entity} onClose={closeEntity} onOpenStory={openStory} />}
+      </AnimatePresence>
+    </div>
   );
-};
-
-export default PaperApp;
+}
