@@ -26,7 +26,7 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
 *   **Entity Mapping:** Drizzle ORM & Zod - For type-safe schema management, migrations, and robust data validation of ATProto records.
 *   **Entity Linking:** Transformers.js & Wikidata API - For browser-side Named Entity Recognition (NER) and linking entities to a global knowledge base.
-*   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining full-text search (tsvector) and semantic search (vector embeddings) for high-performance, intent-aware discovery.
+*   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining Full-Text Search (GIN indexes) and Semantic Search (HNSW indexes) using **Reciprocal Rank Fusion (RRF)** for high-performance, intent-aware discovery entirely in the browser.
 *   **ATProto Client:** `@atproto/api` - Official ATProto client library for interacting with the ATProto network.
 
 ### Backend (Optional/Minimal)

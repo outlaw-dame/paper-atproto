@@ -59,8 +59,13 @@ const PaperApp: React.FC = () => {
     setSearchQuery(query);
     if (query.trim()) {
       setIsSearching(true);
-      const results = await hybridSearch.search(query);
-      setPosts(results.rows);
+      // Search across both posts and feed items using hybrid search
+      const results = await hybridSearch.searchAll(query);
+      setPosts(results.rows.map((row: any) => ({
+        ...row,
+        author_did: row.item_type === 'post' ? row.author_did || 'unknown' : 'feed',
+        created_at: row.created_at || new Date().toISOString(),
+      })));
     } else {
       setIsSearching(false);
       loadPosts();
