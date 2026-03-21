@@ -6,7 +6,8 @@ import InboxTab from './tabs/InboxTab';
 import LibraryTab from './tabs/LibraryTab';
 import ComposeSheet from './components/ComposeSheet';
 import StoryMode from './components/StoryMode';
-import { MOCK_NOTIFICATIONS } from './data/mockData';
+import LoginScreen from './components/LoginScreen';
+import { AtpProvider, useAtp } from './atproto/AtpContext';
 
 export type TabId = 'home' | 'explore' | 'compose' | 'inbox' | 'library';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
@@ -97,13 +98,44 @@ const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNo
   },
 ];
 
+// ─── Root wrapper ──────────────────────────────────────────────────────────
 export default function App() {
+  return (
+    <AtpProvider>
+      <AppInner />
+    </AtpProvider>
+  );
+}
+
+// ─── Inner app (requires session) ─────────────────────────────────────────
+function AppInner() {
+  const { session, isLoading } = useAtp();
   const [tab, setTab] = useState<TabId>('home');
   const [prevTab, setPrevTab] = useState<TabId>('home');
   const [showCompose, setShowCompose] = useState(false);
   const [story, setStory] = useState<StoryEntry | null>(null);
 
-  const unread = MOCK_NOTIFICATIONS.filter(n => !n.read).length;
+  // Loading splash while restoring persisted session
+  if (isLoading) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', gap: 16 }}>
+        <div style={{ width: 64, height: 64, borderRadius: 20, background: 'linear-gradient(135deg, var(--blue) 0%, var(--indigo) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 32px rgba(0,122,255,0.3)' }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
+            <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+          </svg>
+        </div>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth={2.5} strokeLinecap="round">
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83">
+            <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>
+          </path>
+        </svg>
+      </div>
+    );
+  }
+
+  // Show login screen if no session
+  if (!session) return <LoginScreen />;
 
   const handleTabPress = (id: TabId) => {
     if (id === 'compose') { setShowCompose(true); return; }
@@ -165,14 +197,6 @@ export default function App() {
             >
               <div style={{ position: 'relative' }}>
                 {icon(active)}
-                {id === 'inbox' && unread > 0 && (
-                  <div style={{
-                    position: 'absolute', top: -2, right: -2,
-                    width: 8, height: 8, borderRadius: '50%',
-                    background: 'var(--red)',
-                    border: '1.5px solid var(--chrome-bg)',
-                  }} />
-                )}
               </div>
               <span style={{ ...S.tabLabel, color: active ? 'var(--blue)' : 'var(--label-2)' }}>
                 {label}

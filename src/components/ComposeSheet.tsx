@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
+import { useAtp } from '../atproto/AtpContext';
+import { RichText } from '@atproto/api';
 
 interface Props {
   onClose: () => void;
@@ -293,14 +295,37 @@ function FormatBar({ onInsert }: { onInsert: (text: string) => void }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ComposeSheet({ onClose }: Props) {
+  const { agent, profile } = useAtp();
   const [text, setText] = useState('');
   const [audience, setAudience] = useState<AudienceOption>('Everyone');
   const [showPreview, setShowPreview] = useState(false);
   const [showFormatBar, setShowFormatBar] = useState(false);
   const [activeTool, setActiveTool] = useState<ActiveTool>(null);
+  const [posting, setPosting] = useState(false);
+  const [postError, setPostError] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const remaining = MAX - text.length;
-  const canPost = text.trim().length > 0 && remaining >= 0;
+  const canPost = text.trim().length > 0 && remaining >= 0 && !posting;
+
+  const handlePost = useCallback(async () => {
+    if (!canPost || !agent.session) return;
+    setPosting(true);
+    setPostError(null);
+    try {
+      const rt = new RichText({ text: text.trim() });
+      await rt.detectFacets(agent);
+      await agent.post({
+        text: rt.text,
+        facets: rt.facets,
+        createdAt: new Date().toISOString(),
+      });
+      onClose();
+    } catch (err: any) {
+      setPostError(err?.message ?? 'Failed to post. Please try again.');
+    } finally {
+      setPosting(false);
+    }
+  }, [canPost, agent, text, onClose]);
 
   useEffect(() => {
     const timer = setTimeout(() => taRef.current?.focus(), 120);
@@ -393,6 +418,7 @@ export default function ComposeSheet({ onClose }: Props) {
           <div style={{ minWidth: 56, display: 'flex', justifyContent: 'flex-end' }}>
             <motion.button
               disabled={!canPost}
+              onClick={handlePost}
               whileTap={canPost ? { scale: 0.94 } : {}}
               style={{
                 padding: '8px 20px', borderRadius: 100,
@@ -402,9 +428,12 @@ export default function ComposeSheet({ onClose }: Props) {
                 cursor: canPost ? 'pointer' : 'default',
                 transition: 'background 0.15s, color 0.15s',
                 letterSpacing: -0.2,
+                display: 'flex', alignItems: 'center', gap: 6,
               }}
             >
-              Post
+              {posting ? (
+                <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>Posting…</>
+              ) : 'Post'}
             </motion.button>
           </div>
         </div>
@@ -414,22 +443,36 @@ export default function ComposeSheet({ onClose }: Props) {
           {showFormatBar && <FormatBar onInsert={insertText} />}
         </AnimatePresence>
 
+        {/* Post error */}
+        {postError && (
+          <div style={{ padding: '8px 16px', background: 'rgba(255,59,48,0.08)', borderBottom: '0.5px solid rgba(255,59,48,0.2)' }}>
+            <p style={{ fontSize: 13, color: 'var(--red)' }}>{postError}</p>
+          </div>
+        )}
+
         {/* Scrollable body */}
         <div className="scroll-y" style={{ flex: 1, minHeight: 0 }}>
           <div style={{ display: 'flex', flexDirection: 'row', gap: 12, padding: '14px 16px 0' }}>
             {/* Avatar */}
             <div style={{
-              width: 42, height: 42, borderRadius: '50%',
+              width: 42, height: 42, borderRadius: '50%', overflow: 'hidden',
               background: 'linear-gradient(135deg, var(--blue) 0%, var(--indigo) 100%)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: '#fff', fontSize: 17, fontWeight: 800, flexShrink: 0,
               boxShadow: '0 2px 8px rgba(0,122,255,0.3)',
-            }}>Y</div>
+            }}>
+              {profile?.avatar
+                ? <img src={profile.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : (profile?.displayName?.[0] ?? profile?.handle?.[0] ?? 'Y')
+              }
+            </div>
 
             <div style={{ flex: 1, minWidth: 0 }}>
               {/* Handle + audience */}
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.3 }}>you.bsky.social</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.3 }}>
+                  {profile?.displayName ?? profile?.handle ?? 'you.bsky.social'}
+                </span>
                 <AudiencePicker value={audience} onChange={setAudience} />
               </div>
 

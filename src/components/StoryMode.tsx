@@ -1,8 +1,12 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
 import type { StoryEntry } from '../App';
-import { MOCK_POSTS } from '../data/mockData';
+import type { AppBskyFeedDefs, AppBskyFeedPost, AppBskyActorDefs } from '@atproto/api';
+import { useAtp } from '../atproto/AtpContext';
+import { mapFeedViewPost } from '../atproto/mappers';
+import type { MockPost } from '../data/mockData';
+import { formatTime, formatCount } from '../data/mockData';
 
 interface Props {
   entry: StoryEntry;
@@ -11,9 +15,25 @@ interface Props {
 
 const CARDS = ['Overview', 'Source', 'Conversation', 'Entity Graph'];
 
+function Spinner() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth={2.5} strokeLinecap="round">
+        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83">
+          <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>
+        </path>
+      </svg>
+    </div>
+  );
+}
+
 export default function StoryMode({ entry, onClose }: Props) {
+  const { agent } = useAtp();
   const [cardIndex, setCardIndex] = useState(0);
   const [dir, setDir] = useState(0);
+  const [post, setPost] = useState<MockPost | null>(null);
+  const [replies, setReplies] = useState<MockPost[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const y = useMotionValue(0);
   const opacity = useTransform(y, [0, 200], [1, 0]);
@@ -28,7 +48,28 @@ export default function StoryMode({ entry, onClose }: Props) {
     }
   }, { axis: 'y', filterTaps: true });
 
-  const post = MOCK_POSTS.find(p => p.id === entry.id) || MOCK_POSTS[0];
+  // Fetch the post thread from ATProto
+  useEffect(() => {
+    if (!agent.session || !entry.id) { setLoading(false); return; }
+    setLoading(true);
+    agent.getPostThread({ uri: entry.id, depth: 6 }).then(res => {
+      const thread = res.data.thread as AppBskyFeedDefs.ThreadViewPost;
+      if (thread?.post) {
+        const postView = thread.post as AppBskyFeedDefs.PostView;
+        const mapped = mapFeedViewPost({ post: postView, reply: undefined, reason: undefined });
+        setPost(mapped);
+        // Extract replies
+        const replyItems = (thread.replies ?? []) as AppBskyFeedDefs.ThreadViewPost[];
+        const mappedReplies = replyItems
+          .filter(r => r?.post && (r.post.record as any)?.text)
+          .slice(0, 8)
+          .map(r => mapFeedViewPost({ post: r.post as AppBskyFeedDefs.PostView, reply: undefined, reason: undefined }));
+        setReplies(mappedReplies);
+      }
+    }).catch(() => {
+      // If the URI is not a valid AT URI (e.g., a mock ID), silently fail
+    }).finally(() => setLoading(false));
+  }, [agent, entry.id]);
 
   const goNext = useCallback(() => {
     if (cardIndex < CARDS.length - 1) { setDir(1); setCardIndex(i => i + 1); }
@@ -64,7 +105,7 @@ export default function StoryMode({ entry, onClose }: Props) {
         display: 'flex', flexDirection: 'row', alignItems: 'center',
         padding: 'calc(var(--safe-top) + 4px) 16px 8px',
       }}>
-        <button onClick={onClose} aria-label="Close" style={{ padding: 6, color: 'var(--label-2)' }}>
+        <button onClick={onClose} aria-label="Close" style={{ padding: 6, color: 'var(--label-2)', background: 'none', border: 'none', cursor: 'pointer' }}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
@@ -85,12 +126,12 @@ export default function StoryMode({ entry, onClose }: Props) {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'row', gap: 4 }}>
-          <button aria-label="Save" style={{ padding: 6, color: 'var(--label-2)' }}>
+          <button aria-label="Save" style={{ padding: 6, color: 'var(--label-2)', background: 'none', border: 'none', cursor: 'pointer' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
             </svg>
           </button>
-          <button aria-label="Share" style={{ padding: 6, color: 'var(--label-2)' }}>
+          <button aria-label="Share" style={{ padding: 6, color: 'var(--label-2)', background: 'none', border: 'none', cursor: 'pointer' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
               <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
               <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
@@ -109,24 +150,28 @@ export default function StoryMode({ entry, onClose }: Props) {
 
       {/* Card content */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-        <AnimatePresence mode="wait" custom={dir}>
-          <motion.div
-            key={cardIndex}
-            custom={dir}
-            style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}
-            initial={{ x: dir * 60, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: dir * -60, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
-          >
-            <div style={{ padding: '0 16px 32px' }}>
-              {cardIndex === 0 && <OverviewCard post={post} />}
-              {cardIndex === 1 && <SourceCard post={post} />}
-              {cardIndex === 2 && <ConversationCard post={post} />}
-              {cardIndex === 3 && <GraphCard post={post} />}
-            </div>
-          </motion.div>
-        </AnimatePresence>
+        {loading ? (
+          <Spinner />
+        ) : (
+          <AnimatePresence mode="wait" custom={dir}>
+            <motion.div
+              key={cardIndex}
+              custom={dir}
+              style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}
+              initial={{ x: dir * 60, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: dir * -60, opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+            >
+              <div style={{ padding: '0 16px 32px' }}>
+                {cardIndex === 0 && <OverviewCard post={post} entry={entry} />}
+                {cardIndex === 1 && <SourceCard post={post} />}
+                {cardIndex === 2 && <ConversationCard replies={replies} />}
+                {cardIndex === 3 && <GraphCard post={post} />}
+              </div>
+            </motion.div>
+          </AnimatePresence>
+        )}
       </div>
 
       {/* Navigation */}
@@ -138,7 +183,7 @@ export default function StoryMode({ entry, onClose }: Props) {
         <button
           onClick={goPrev}
           disabled={cardIndex === 0}
-          style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, fontSize: 14, fontWeight: 500, color: cardIndex === 0 ? 'var(--label-4)' : 'var(--blue)' }}
+          style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, fontSize: 14, fontWeight: 500, color: cardIndex === 0 ? 'var(--label-4)' : 'var(--blue)', background: 'none', border: 'none', cursor: cardIndex === 0 ? 'default' : 'pointer' }}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6"/>
@@ -151,7 +196,7 @@ export default function StoryMode({ entry, onClose }: Props) {
         <button
           onClick={goNext}
           disabled={cardIndex === CARDS.length - 1}
-          style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, fontSize: 14, fontWeight: 500, color: cardIndex === CARDS.length - 1 ? 'var(--label-4)' : 'var(--blue)' }}
+          style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4, fontSize: 14, fontWeight: 500, color: cardIndex === CARDS.length - 1 ? 'var(--label-4)' : 'var(--blue)', background: 'none', border: 'none', cursor: cardIndex === CARDS.length - 1 ? 'default' : 'pointer' }}
         >
           {cardIndex < CARDS.length - 1 ? CARDS[cardIndex + 1] : 'Done'}
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -163,7 +208,13 @@ export default function StoryMode({ entry, onClose }: Props) {
   );
 }
 
-function OverviewCard({ post }: { post: typeof MOCK_POSTS[0] }) {
+// ─── Overview card ─────────────────────────────────────────────────────────
+function OverviewCard({ post, entry }: { post: MockPost | null; entry: StoryEntry }) {
+  if (!post) return (
+    <div style={{ padding: '24px 0', textAlign: 'center' }}>
+      <p style={{ fontSize: 14, color: 'var(--label-3)' }}>Could not load post details.</p>
+    </div>
+  );
   return (
     <div>
       {/* Gist card */}
@@ -177,22 +228,18 @@ function OverviewCard({ post }: { post: typeof MOCK_POSTS[0] }) {
           <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--blue)', letterSpacing: 0.5, textTransform: 'uppercase' }}>The Gist</span>
         </div>
         <p style={{ fontSize: 16, fontWeight: 500, lineHeight: 1.5, color: 'var(--label-1)', letterSpacing: -0.3 }}>
-          {post.author.displayName} is discussing the significance of ATProto's open social graph and portable identity — a thread gaining traction in the decentralized web community.
+          {post.author.displayName} shared this post {formatTime(post.createdAt)} ago.
+          {post.replyCount > 0 ? ` It has sparked ${post.replyCount} replies` : ''}
+          {post.likeCount > 0 ? ` and received ${formatCount(post.likeCount)} likes` : ''}.
         </p>
       </div>
-
-      {/* Why it matters */}
-      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>Why it matters</p>
-      <p style={{ fontSize: 15, color: 'var(--label-1)', lineHeight: 1.5, letterSpacing: -0.2, marginBottom: 20 }}>
-        This post is part of a growing conversation about the future of social media infrastructure. The author has {post.likeCount.toLocaleString()} likes and {post.replyCount} replies, indicating strong community engagement.
-      </p>
 
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
         {[
-          { label: 'Likes', value: post.likeCount.toLocaleString(), color: 'var(--red)' },
-          { label: 'Replies', value: String(post.replyCount), color: 'var(--blue)' },
-          { label: 'Reposts', value: String(post.repostCount), color: 'var(--green)' },
+          { label: 'Likes', value: formatCount(post.likeCount), color: 'var(--red)' },
+          { label: 'Replies', value: formatCount(post.replyCount), color: 'var(--blue)' },
+          { label: 'Reposts', value: formatCount(post.repostCount), color: 'var(--green)' },
         ].map(s => (
           <div key={s.label} style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 8px', textAlign: 'center' }}>
             <p style={{ fontSize: 20, fontWeight: 700, color: s.color, letterSpacing: -0.5, marginBottom: 2 }}>{s.value}</p>
@@ -204,7 +251,13 @@ function OverviewCard({ post }: { post: typeof MOCK_POSTS[0] }) {
   );
 }
 
-function SourceCard({ post }: { post: typeof MOCK_POSTS[0] }) {
+// ─── Source card ───────────────────────────────────────────────────────────
+function SourceCard({ post }: { post: MockPost | null }) {
+  if (!post) return (
+    <div style={{ padding: '24px 0', textAlign: 'center' }}>
+      <p style={{ fontSize: 14, color: 'var(--label-3)' }}>Could not load source.</p>
+    </div>
+  );
   return (
     <div>
       <div style={{ background: 'var(--surface)', borderRadius: 16, padding: '14px 16px', marginBottom: 14 }}>
@@ -216,6 +269,7 @@ function SourceCard({ post }: { post: typeof MOCK_POSTS[0] }) {
             <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)' }}>{post.author.displayName}</p>
             <p style={{ fontSize: 12, color: 'var(--label-3)' }}>@{post.author.handle}</p>
           </div>
+          <p style={{ fontSize: 12, color: 'var(--label-4)', marginLeft: 'auto' }}>{formatTime(post.createdAt)}</p>
         </div>
         <p style={{ fontSize: 15, lineHeight: 1.45, color: 'var(--label-1)', letterSpacing: -0.2 }}>{post.content}</p>
       </div>
@@ -229,26 +283,36 @@ function SourceCard({ post }: { post: typeof MOCK_POSTS[0] }) {
       <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '10px 14px' }}>
         <p style={{ fontSize: 11, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>AT URI</p>
         <p style={{ fontSize: 12, color: 'var(--blue)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-          at://{post.author.did}/app.bsky.feed.post/{post.id}
+          {post.id}
         </p>
       </div>
     </div>
   );
 }
 
-function ConversationCard({ post }: { post: typeof MOCK_POSTS[0] }) {
-  const replies = MOCK_POSTS.filter(p => p.id !== post.id).slice(0, 3);
+// ─── Conversation card ─────────────────────────────────────────────────────
+function ConversationCard({ replies }: { replies: MockPost[] }) {
+  if (replies.length === 0) return (
+    <div style={{ padding: '24px 0', textAlign: 'center' }}>
+      <p style={{ fontSize: 14, color: 'var(--label-3)' }}>No replies yet.</p>
+    </div>
+  );
   return (
     <div>
-      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10 }}>Top Replies</p>
-      {replies.map((r, i) => (
+      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10 }}>
+        Top Replies
+      </p>
+      {replies.map(r => (
         <div key={r.id} style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', marginBottom: 8 }}>
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-              {r.author.displayName[0]}
+            <div style={{ width: 28, height: 28, borderRadius: '50%', overflow: 'hidden', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+              {r.author.avatar
+                ? <img src={r.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : r.author.displayName[0]
+              }
             </div>
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-1)' }}>{r.author.displayName}</span>
-            <span style={{ fontSize: 12, color: 'var(--label-3)', marginLeft: 'auto' }}>♥ {r.likeCount}</span>
+            <span style={{ fontSize: 12, color: 'var(--label-3)', marginLeft: 'auto' }}>♥ {formatCount(r.likeCount)}</span>
           </div>
           <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
             {r.content}
@@ -259,14 +323,27 @@ function ConversationCard({ post }: { post: typeof MOCK_POSTS[0] }) {
   );
 }
 
-function GraphCard({ post }: { post: typeof MOCK_POSTS[0] }) {
+// ─── Entity graph card ─────────────────────────────────────────────────────
+function GraphCard({ post }: { post: MockPost | null }) {
+  if (!post) return (
+    <div style={{ padding: '24px 0', textAlign: 'center' }}>
+      <p style={{ fontSize: 14, color: 'var(--label-3)' }}>No entities detected.</p>
+    </div>
+  );
+
+  // Extract hashtags and mentions from post text as "entities"
+  const hashtags = (post.content.match(/#\w+/g) ?? []).slice(0, 4);
+  const mentions = (post.content.match(/@[\w.]+/g) ?? []).slice(0, 3);
+
   const entities = [
-    { label: 'ATProto', type: 'Protocol', color: 'var(--blue)' },
-    { label: 'Bluesky', type: 'Platform', color: 'var(--indigo)' },
-    { label: 'Decentralization', type: 'Topic', color: 'var(--purple)' },
-    { label: post.author.displayName, type: 'Person', color: 'var(--teal)' },
-    { label: 'Open Source', type: 'Topic', color: 'var(--green)' },
+    ...hashtags.map(tag => ({ label: tag, type: 'Hashtag', color: 'var(--blue)' })),
+    ...mentions.map(m => ({ label: m, type: 'Mention', color: 'var(--purple)' })),
+    { label: post.author.displayName, type: 'Author', color: 'var(--teal)' },
   ];
+
+  if (entities.length === 0) {
+    entities.push({ label: 'ATProto', type: 'Protocol', color: 'var(--blue)' });
+  }
 
   return (
     <div>
