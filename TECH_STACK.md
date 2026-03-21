@@ -17,7 +17,8 @@ This document outlines the core technologies and frameworks selected for the loc
 *   **Styling:** Tailwind CSS - For utility-first CSS styling, enabling rapid UI development and consistency.
 *   **UI Components:** Konsta UI - For mobile-first, iOS-style UI components that follow Apple's design guidelines.
 *   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
-*   **Offline-First/Data Persistence:** IndexedDB (via `localforage` or similar) - For robust client-side data storage, enabling offline access and fast data retrieval.
+*   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
+*   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining full-text search (tsvector) and semantic search (vector embeddings) for high-performance, intent-aware discovery.
 *   **ATProto Client:** `@atproto/api` - Official ATProto client library for interacting with the ATProto network.
 
 ### Backend (Optional/Minimal)
