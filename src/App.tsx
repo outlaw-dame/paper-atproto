@@ -3,6 +3,9 @@ import { App, Page, Navbar, Block, List, ListItem, Searchbar } from 'konsta/reac
 import { FeedItem } from './components/FeedItem';
 import { GestureView } from './components/GestureView';
 import { Markdown } from './components/Markdown';
+import { GifPicker } from './components/GifPicker';
+import { Gif } from './components/Gif';
+import { Button } from 'konsta/react';
 import { hybridSearch } from './search';
 import { paperDB } from './db';
 
@@ -11,6 +14,8 @@ const PaperApp: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPost, setSelectedPost] = useState<any | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [selectedGif, setSelectedGif] = useState<any>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -46,6 +51,11 @@ const PaperApp: React.FC = () => {
           title="Paper ATProto"
           subtitle={isSearching ? 'Searching...' : 'Your Feed'}
           className="top-0 sticky"
+          right={
+            <Button clear inline onClick={() => setShowGifPicker(true)}>
+              GIF
+            </Button>
+          }
         />
 
         <Searchbar
@@ -99,11 +109,45 @@ const PaperApp: React.FC = () => {
               <div className="text-xl leading-relaxed dark:text-zinc-200">
                 <Markdown content={selectedPost.content} />
               </div>
+              {selectedPost.embed?.type === 'app.bsky.embed.external' && selectedPost.embed.external.uri.includes('tenor.com') && (
+                <Gif 
+                  url={selectedPost.embed.external.uri} 
+                  title={selectedPost.embed.external.title} 
+                  thumbnail={selectedPost.embed.external.thumb} 
+                />
+              )}
             </Block>
             <Block className="text-center text-zinc-400 text-sm mt-20">
               Swipe down to dismiss
             </Block>
           </GestureView>
+        )}
+
+        {showGifPicker && (
+          <GifPicker 
+            onSelect={(gif) => {
+              setSelectedGif(gif);
+              setShowGifPicker(false);
+            }} 
+            onClose={() => setShowGifPicker(false)} 
+          />
+        )}
+
+        {selectedGif && (
+          <div className="fixed bottom-4 right-4 z-40 w-48 shadow-2xl rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border dark:border-zinc-800">
+            <div className="relative">
+              <img src={selectedGif.media_formats.tinygif.url} alt="Selected GIF" className="w-full h-auto" />
+              <Button 
+                clear 
+                inline 
+                className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"
+                onClick={() => setSelectedGif(null)}
+              >
+                ✕
+              </Button>
+            </div>
+            <div className="p-2 text-xs text-center font-medium dark:text-white">Ready to post</div>
+          </div>
         )}
       </Page>
     </App>

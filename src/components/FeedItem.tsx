@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Block, Card, List, ListItem } from 'konsta/react';
 import { Markdown } from './Markdown';
+import { Gif } from './Gif';
 
 interface FeedItemProps {
   post: {
@@ -59,6 +60,13 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
           <div className="text-base leading-relaxed dark:text-zinc-200">
             <Markdown content={post.content} />
           </div>
+          {post.embed?.type === 'app.bsky.embed.external' && post.embed.external.uri.includes('tenor.com') && (
+            <Gif 
+              url={post.embed.external.uri} 
+              title={post.embed.external.title} 
+              thumbnail={post.embed.external.thumb} 
+            />
+          )}
         </div>
       </Card>
     </motion.div>
