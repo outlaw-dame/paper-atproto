@@ -26,6 +26,7 @@ export interface MockPost {
   };
   chips: ChipType[];
   threadCount?: number;
+  replyTo?: { handle: string; displayName: string } | undefined;
 }
 
 export type ChipType = 'thread' | 'topic' | 'feed' | 'pack' | 'related' | 'story';

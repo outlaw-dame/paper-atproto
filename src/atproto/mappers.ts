@@ -100,6 +100,19 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
     ...(author.avatar ? { avatar: author.avatar } : {}),
   };
 
+  // Reply context — who is this post replying to?
+  let replyTo: MockPost['replyTo'];
+  if (item.reply) {
+    const parentPost = (item.reply.parent as any)?.post ?? item.reply.parent;
+    const parentAuthor = parentPost?.author as AppBskyActorDefs.ProfileViewBasic | undefined;
+    if (parentAuthor) {
+      replyTo = {
+        handle: parentAuthor.handle,
+        displayName: parentAuthor.displayName ?? parentAuthor.handle,
+      };
+    }
+  }
+
   return {
     id: post.uri,
     author: authorObj,
@@ -112,6 +125,7 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
     ...(embed ? { embed } : {}),
     chips: deriveChips(item),
     threadCount: post.replyCount ?? 0,
+    ...(replyTo ? { replyTo } : {}),
   };
 }
 
