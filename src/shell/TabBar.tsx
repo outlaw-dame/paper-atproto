@@ -107,7 +107,7 @@ export default function TabBar() {
                   position: 'absolute', top: -3, right: -6,
                   minWidth: 16, height: 16, borderRadius: 8,
                   background: 'var(--red)', color: '#fff',
-                  fontSize: 10, fontWeight: 700,
+                  fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-meta-sm-track)', fontVariantNumeric: 'tabular-nums',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   padding: '0 4px',
                 }}>
@@ -115,7 +115,7 @@ export default function TabBar() {
                 </span>
               )}
             </div>
-            <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: 0.1, color: active ? 'var(--blue)' : 'var(--label-2)' }}>
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-meta-sm-track)', color: active ? 'var(--blue)' : 'var(--label-2)' }}>
               {label}
             </span>
           </button>

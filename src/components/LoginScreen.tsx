@@ -49,8 +49,8 @@ export default function LoginScreen() {
               <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
             </svg>
           </div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, color: 'var(--label-1)', letterSpacing: -1, marginBottom: 6 }}>Glimpse</h1>
-          <p style={{ fontSize: 15, color: 'var(--label-3)', textAlign: 'center', lineHeight: 1.4 }}>
+          <h1 style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-headline-lg-size)', lineHeight: 'var(--type-ui-headline-lg-line)', fontWeight: 'var(--type-ui-headline-lg-weight)', letterSpacing: 'var(--type-ui-headline-lg-track)', color: 'var(--label-1)', marginBottom: 6 }}>Glimpse</h1>
+          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-3)', textAlign: 'center' }}>
             Sign in with your Bluesky account
           </p>
         </div>
@@ -59,7 +59,7 @@ export default function LoginScreen() {
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Handle */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-2)', letterSpacing: -0.1 }}>
+            <label style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', fontWeight: 700, color: 'var(--label-2)', letterSpacing: 'var(--type-label-lg-track)' }}>
               Handle or email
             </label>
             <input
@@ -76,7 +76,11 @@ export default function LoginScreen() {
                 borderRadius: 14,
                 background: 'var(--fill-2)',
                 border: '1px solid var(--sep)',
-                fontSize: 16,
+                fontFamily: 'var(--font-ui)',
+                fontSize: 'var(--type-ui-title-md-size)',
+                lineHeight: 'var(--type-ui-title-md-line)',
+                fontWeight: 400,
+                letterSpacing: 'var(--type-ui-title-md-track)',
                 color: 'var(--label-1)',
                 outline: 'none',
                 width: '100%',
@@ -88,13 +92,13 @@ export default function LoginScreen() {
           {/* App password */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-2)', letterSpacing: -0.1 }}>
+              <label style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', fontWeight: 700, color: 'var(--label-2)', letterSpacing: 'var(--type-label-lg-track)' }}>
                 App password
               </label>
               <button
                 type="button"
                 onClick={() => setShowPwHelp(v => !v)}
-                style={{ fontSize: 12, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 600, letterSpacing: 'var(--type-label-md-track)', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
               >
                 What's this?
               </button>
@@ -133,10 +137,10 @@ export default function LoginScreen() {
                 border: '1px solid rgba(0,122,255,0.15)',
               }}
             >
-              <p style={{ fontSize: 13, color: 'var(--label-2)', lineHeight: 1.5, marginBottom: 6 }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-2)', marginBottom: 6 }}>
                 App passwords are separate from your main password and keep your account safe.
               </p>
-              <p style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)' }}>
                 <span style={{ color: 'var(--label-2)' }}>Create one at </span>
                 <a
                   href="https://bsky.app/settings/app-passwords"
@@ -161,7 +165,7 @@ export default function LoginScreen() {
                 border: '1px solid rgba(255,59,48,0.2)',
               }}
             >
-              <p style={{ fontSize: 13, color: 'var(--red)', lineHeight: 1.4 }}>{error}</p>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--red)' }}>{error}</p>
             </motion.div>
           )}
 
@@ -174,7 +178,7 @@ export default function LoginScreen() {
               padding: '16px', borderRadius: 16, marginTop: 4,
               background: canSubmit ? 'var(--blue)' : 'var(--fill-3)',
               color: canSubmit ? '#fff' : 'var(--label-4)',
-              fontSize: 17, fontWeight: 700, letterSpacing: -0.3,
+              fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', fontWeight: 600, letterSpacing: 'var(--type-ui-title-md-track)',
               border: 'none', cursor: canSubmit ? 'pointer' : 'default',
               transition: 'background 0.15s, color 0.15s',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -190,7 +194,7 @@ export default function LoginScreen() {
         </form>
 
         {/* Footer */}
-        <p style={{ fontSize: 12, color: 'var(--label-4)', textAlign: 'center', marginTop: 24, lineHeight: 1.5 }}>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-4)', textAlign: 'center', marginTop: 24 }}>
           Glimpse connects to the open{' '}
           <a href="https://atproto.com" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue)' }}>AT Protocol</a>
           {' '}network. Your data stays yours.

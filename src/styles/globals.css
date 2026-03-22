@@ -1,4 +1,4 @@
-/* ─── Glimpse Design System — pure CSS, no Tailwind ─── */
+/* ─── Glympse Design System — Paper × Gist × Apple HIG ─── */
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -8,7 +8,8 @@
 }
 
 html {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  /* Glympse type system: Plus Jakarta Sans (UI) + Newsreader (editorial) */
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-size-adjust: 100%;
@@ -23,9 +24,9 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--label-1);
-  font-size: 17px;
-  line-height: 1.35;
-  letter-spacing: -0.4px;
+  font-size: var(--type-body-md-size);
+  line-height: var(--type-body-md-line);
+  letter-spacing: var(--type-body-md-track);
 }
 
 #root {
@@ -43,7 +44,7 @@ button {
   border: none;
   background: none;
   cursor: pointer;
-  font-family: inherit;
+  font-family: var(--font-ui);
   color: inherit;
   padding: 0;
   display: inline-flex;
@@ -54,14 +55,20 @@ button {
 button:active { opacity: 0.55; transition: opacity 0.05s; }
 
 img { display: block; max-width: 100%; }
-input, textarea { font-family: inherit; border: none; outline: none; background: none; color: inherit; }
+input, textarea {
+  font-family: var(--font-ui);
+  border: none;
+  outline: none;
+  background: none;
+  color: inherit;
+}
 textarea { resize: none; }
 a { text-decoration: none; color: inherit; }
 
 ::selection { background: rgba(10,132,255,0.25); }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
 
-/* ─── Light tokens ─── */
+/* ─── Light colour tokens ─── */
 :root {
   --bg:              #F2F2F7;
   --surface:         #FFFFFF;
@@ -95,9 +102,127 @@ a { text-decoration: none; color: inherit; }
 
   --safe-top:        env(safe-area-inset-top, 0px);
   --safe-bottom:     env(safe-area-inset-bottom, 0px);
+
+  /* ─── Glympse type system ─── */
+
+  /* Font families */
+  --font-ui:       "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                   "Helvetica Neue", Arial, sans-serif;
+  --font-editorial: "Newsreader", "Iowan Old Style", "Palatino Linotype",
+                   "Book Antiqua", Georgia, serif;
+
+  /* ── Editorial scale (Newsreader) ── */
+  --type-editorial-display-xl-size:   44px;
+  --type-editorial-display-xl-line:   46px;
+  --type-editorial-display-xl-weight: 600;
+  --type-editorial-display-xl-track:  -0.03em;
+
+  --type-editorial-display-lg-size:   38px;
+  --type-editorial-display-lg-line:   42px;
+  --type-editorial-display-lg-weight: 600;
+  --type-editorial-display-lg-track:  -0.028em;
+
+  --type-editorial-display-md-size:   32px;
+  --type-editorial-display-md-line:   36px;
+  --type-editorial-display-md-weight: 600;
+  --type-editorial-display-md-track:  -0.024em;
+
+  --type-editorial-title-lg-size:     28px;
+  --type-editorial-title-lg-line:     32px;
+  --type-editorial-title-lg-weight:   600;
+  --type-editorial-title-lg-track:    -0.02em;
+
+  --type-editorial-title-md-size:     24px;
+  --type-editorial-title-md-line:     29px;
+  --type-editorial-title-md-weight:   600;
+  --type-editorial-title-md-track:    -0.018em;
+
+  --type-editorial-title-sm-size:     20px;
+  --type-editorial-title-sm-line:     25px;
+  --type-editorial-title-sm-weight:   600;
+  --type-editorial-title-sm-track:    -0.015em;
+
+  /* ── UI / product scale (Plus Jakarta Sans) ── */
+  --type-ui-headline-xl-size:   34px;
+  --type-ui-headline-xl-line:   38px;
+  --type-ui-headline-xl-weight: 700;
+  --type-ui-headline-xl-track:  -0.025em;
+
+  --type-ui-headline-lg-size:   28px;
+  --type-ui-headline-lg-line:   32px;
+  --type-ui-headline-lg-weight: 700;
+  --type-ui-headline-lg-track:  -0.02em;
+
+  --type-ui-headline-md-size:   24px;
+  --type-ui-headline-md-line:   29px;
+  --type-ui-headline-md-weight: 700;
+  --type-ui-headline-md-track:  -0.018em;
+
+  --type-ui-title-lg-size:   20px;
+  --type-ui-title-lg-line:   24px;
+  --type-ui-title-lg-weight: 700;
+  --type-ui-title-lg-track:  -0.015em;
+
+  --type-ui-title-md-size:   18px;
+  --type-ui-title-md-line:   22px;
+  --type-ui-title-md-weight: 600;
+  --type-ui-title-md-track:  -0.012em;
+
+  --type-ui-title-sm-size:   16px;
+  --type-ui-title-sm-line:   20px;
+  --type-ui-title-sm-weight: 600;
+  --type-ui-title-sm-track:  -0.01em;
+
+  /* ── Body scale (Plus Jakarta Sans) ── */
+  --type-body-xl-size:   20px;
+  --type-body-xl-line:   31px;
+  --type-body-xl-weight: 400;
+  --type-body-xl-track:  -0.01em;
+
+  --type-body-lg-size:   18px;
+  --type-body-lg-line:   29px;
+  --type-body-lg-weight: 400;
+  --type-body-lg-track:  -0.008em;
+
+  --type-body-md-size:   17px;
+  --type-body-md-line:   27px;
+  --type-body-md-weight: 400;
+  --type-body-md-track:  -0.006em;
+
+  --type-body-sm-size:   15px;
+  --type-body-sm-line:   23px;
+  --type-body-sm-weight: 400;
+  --type-body-sm-track:  -0.002em;
+
+  /* ── Label scale (Plus Jakarta Sans) ── */
+  --type-label-lg-size:   15px;
+  --type-label-lg-line:   20px;
+  --type-label-lg-weight: 600;
+  --type-label-lg-track:  0.002em;
+
+  --type-label-md-size:   14px;
+  --type-label-md-line:   18px;
+  --type-label-md-weight: 600;
+  --type-label-md-track:  0.004em;
+
+  --type-label-sm-size:   13px;
+  --type-label-sm-line:   16px;
+  --type-label-sm-weight: 600;
+  --type-label-sm-track:  0.006em;
+
+  /* ── Meta scale (Plus Jakarta Sans) ── */
+  --type-meta-md-size:   13px;
+  --type-meta-md-line:   17px;
+  --type-meta-md-weight: 500;
+  --type-meta-md-track:  0.004em;
+
+  --type-meta-sm-size:   12px;
+  --type-meta-sm-line:   16px;
+  --type-meta-sm-weight: 500;
+  --type-meta-sm-track:  0.008em;
 }
 
-/* ─── Dark tokens ─── */
+/* ─── Dark colour tokens ─── */
 @media (prefers-color-scheme: dark) {
   :root {
     --bg:              #000000;
@@ -131,6 +256,191 @@ a { text-decoration: none; color: inherit; }
     --chrome-bg:       rgba(28,28,30,0.88);
   }
 }
+
+/* ─── Responsive type scale adjustments ─── */
+@media (min-width: 430px) {
+  :root {
+    --type-editorial-display-xl-size: 46px;
+    --type-editorial-display-xl-line: 48px;
+    --type-editorial-display-lg-size: 40px;
+    --type-editorial-display-lg-line: 44px;
+    --type-ui-headline-xl-size: 36px;
+    --type-ui-headline-xl-line: 40px;
+  }
+}
+
+@media (min-width: 768px) {
+  :root {
+    --type-editorial-display-xl-size: 52px;
+    --type-editorial-display-xl-line: 54px;
+    --type-editorial-display-lg-size: 44px;
+    --type-editorial-display-lg-line: 48px;
+    --type-editorial-display-md-size: 36px;
+    --type-editorial-display-md-line: 40px;
+    --type-ui-headline-xl-size: 40px;
+    --type-ui-headline-xl-line: 44px;
+    --type-ui-headline-lg-size: 32px;
+    --type-ui-headline-lg-line: 36px;
+  }
+}
+
+/* ─── Utility type classes ─── */
+
+/* Editorial (Newsreader) */
+.t-editorial-display-xl {
+  font-family: var(--font-editorial);
+  font-size: var(--type-editorial-display-xl-size);
+  line-height: var(--type-editorial-display-xl-line);
+  font-weight: var(--type-editorial-display-xl-weight);
+  letter-spacing: var(--type-editorial-display-xl-track);
+}
+.t-editorial-display-lg {
+  font-family: var(--font-editorial);
+  font-size: var(--type-editorial-display-lg-size);
+  line-height: var(--type-editorial-display-lg-line);
+  font-weight: var(--type-editorial-display-lg-weight);
+  letter-spacing: var(--type-editorial-display-lg-track);
+}
+.t-editorial-display-md {
+  font-family: var(--font-editorial);
+  font-size: var(--type-editorial-display-md-size);
+  line-height: var(--type-editorial-display-md-line);
+  font-weight: var(--type-editorial-display-md-weight);
+  letter-spacing: var(--type-editorial-display-md-track);
+}
+.t-editorial-title-lg {
+  font-family: var(--font-editorial);
+  font-size: var(--type-editorial-title-lg-size);
+  line-height: var(--type-editorial-title-lg-line);
+  font-weight: var(--type-editorial-title-lg-weight);
+  letter-spacing: var(--type-editorial-title-lg-track);
+}
+.t-editorial-title-md {
+  font-family: var(--font-editorial);
+  font-size: var(--type-editorial-title-md-size);
+  line-height: var(--type-editorial-title-md-line);
+  font-weight: var(--type-editorial-title-md-weight);
+  letter-spacing: var(--type-editorial-title-md-track);
+}
+.t-editorial-title-sm {
+  font-family: var(--font-editorial);
+  font-size: var(--type-editorial-title-sm-size);
+  line-height: var(--type-editorial-title-sm-line);
+  font-weight: var(--type-editorial-title-sm-weight);
+  letter-spacing: var(--type-editorial-title-sm-track);
+}
+
+/* UI / product (Plus Jakarta Sans) */
+.t-ui-headline-xl {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui-headline-xl-size);
+  line-height: var(--type-ui-headline-xl-line);
+  font-weight: var(--type-ui-headline-xl-weight);
+  letter-spacing: var(--type-ui-headline-xl-track);
+}
+.t-ui-headline-lg {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui-headline-lg-size);
+  line-height: var(--type-ui-headline-lg-line);
+  font-weight: var(--type-ui-headline-lg-weight);
+  letter-spacing: var(--type-ui-headline-lg-track);
+}
+.t-ui-headline-md {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui-headline-md-size);
+  line-height: var(--type-ui-headline-md-line);
+  font-weight: var(--type-ui-headline-md-weight);
+  letter-spacing: var(--type-ui-headline-md-track);
+}
+.t-ui-title-lg {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui-title-lg-size);
+  line-height: var(--type-ui-title-lg-line);
+  font-weight: var(--type-ui-title-lg-weight);
+  letter-spacing: var(--type-ui-title-lg-track);
+}
+.t-ui-title-md {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui-title-md-size);
+  line-height: var(--type-ui-title-md-line);
+  font-weight: var(--type-ui-title-md-weight);
+  letter-spacing: var(--type-ui-title-md-track);
+}
+.t-ui-title-sm {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui-title-sm-size);
+  line-height: var(--type-ui-title-sm-line);
+  font-weight: var(--type-ui-title-sm-weight);
+  letter-spacing: var(--type-ui-title-sm-track);
+}
+.t-body-xl {
+  font-family: var(--font-ui);
+  font-size: var(--type-body-xl-size);
+  line-height: var(--type-body-xl-line);
+  font-weight: var(--type-body-xl-weight);
+  letter-spacing: var(--type-body-xl-track);
+}
+.t-body-lg {
+  font-family: var(--font-ui);
+  font-size: var(--type-body-lg-size);
+  line-height: var(--type-body-lg-line);
+  font-weight: var(--type-body-lg-weight);
+  letter-spacing: var(--type-body-lg-track);
+}
+.t-body-md {
+  font-family: var(--font-ui);
+  font-size: var(--type-body-md-size);
+  line-height: var(--type-body-md-line);
+  font-weight: var(--type-body-md-weight);
+  letter-spacing: var(--type-body-md-track);
+}
+.t-body-sm {
+  font-family: var(--font-ui);
+  font-size: var(--type-body-sm-size);
+  line-height: var(--type-body-sm-line);
+  font-weight: var(--type-body-sm-weight);
+  letter-spacing: var(--type-body-sm-track);
+}
+.t-label-lg {
+  font-family: var(--font-ui);
+  font-size: var(--type-label-lg-size);
+  line-height: var(--type-label-lg-line);
+  font-weight: var(--type-label-lg-weight);
+  letter-spacing: var(--type-label-lg-track);
+}
+.t-label-md {
+  font-family: var(--font-ui);
+  font-size: var(--type-label-md-size);
+  line-height: var(--type-label-md-line);
+  font-weight: var(--type-label-md-weight);
+  letter-spacing: var(--type-label-md-track);
+}
+.t-label-sm {
+  font-family: var(--font-ui);
+  font-size: var(--type-label-sm-size);
+  line-height: var(--type-label-sm-line);
+  font-weight: var(--type-label-sm-weight);
+  letter-spacing: var(--type-label-sm-track);
+}
+.t-meta-md {
+  font-family: var(--font-ui);
+  font-size: var(--type-meta-md-size);
+  line-height: var(--type-meta-md-line);
+  font-weight: var(--type-meta-md-weight);
+  letter-spacing: var(--type-meta-md-track);
+  font-variant-numeric: tabular-nums;
+}
+.t-meta-sm {
+  font-family: var(--font-ui);
+  font-size: var(--type-meta-sm-size);
+  line-height: var(--type-meta-sm-line);
+  font-weight: var(--type-meta-sm-weight);
+  letter-spacing: var(--type-meta-sm-track);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tabular numerals helper */
+.tabular-nums { font-variant-numeric: tabular-nums; }
 
 /* ─── Scroll containers ─── */
 .scroll-y {

@@ -26,7 +26,7 @@ function Spinner() {
 
 function SectionHeader({ title }: { title: string }) {
   return (
-    <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', padding: '16px 16px 8px' }}>
+    <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--label-3)', padding: '16px 16px 8px' }}>
       {title}
     </p>
   );
@@ -40,16 +40,16 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
       <div style={{ width: 42, height: 42, borderRadius: '50%', overflow: 'hidden', background: 'var(--fill-2)', flexShrink: 0 }}>
         {actor.avatar
           ? <img src={actor.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--indigo)', color: '#fff', fontSize: 16, fontWeight: 700 }}>{(actor.displayName ?? actor.handle)[0]}</div>
+          : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--indigo)', color: '#fff', fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', fontWeight: 700 }}>{(actor.displayName ?? actor.handle)[0]}</div>
         }
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', fontWeight: 700, letterSpacing: 'var(--type-label-lg-track)', color: 'var(--label-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {actor.displayName ?? actor.handle}
         </p>
-        <p style={{ fontSize: 13, color: 'var(--label-3)' }}>@{actor.handle}</p>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)' }}>@{actor.handle}</p>
         {actor.description && (
-          <p style={{ fontSize: 12, color: 'var(--label-2)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-2)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {actor.description}
           </p>
         )}
@@ -60,7 +60,8 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
           padding: '6px 14px', borderRadius: 100, flexShrink: 0,
           background: following ? 'var(--fill-2)' : 'var(--blue)',
           color: following ? 'var(--label-1)' : '#fff',
-          fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
+          fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-sm-size)', lineHeight: 'var(--type-label-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-label-sm-track)',
+          border: 'none', cursor: 'pointer',
           transition: 'all 0.15s',
         }}
       >
@@ -87,10 +88,10 @@ function FeedCard({ gen }: { gen: AppBskyFeedDefs.GeneratorView }) {
         }
       </div>
       <div>
-        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gen.displayName}</p>
-        <p style={{ fontSize: 12, color: 'var(--label-3)' }}>by @{gen.creator.handle.replace('.bsky.social', '')}</p>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 700, letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gen.displayName}</p>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)' }}>by @{gen.creator.handle.replace('.bsky.social', '')}</p>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--label-2)', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+      <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-2)', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
         {gen.description ?? 'Custom feed'}
       </p>
       <button
@@ -99,7 +100,8 @@ function FeedCard({ gen }: { gen: AppBskyFeedDefs.GeneratorView }) {
           padding: '7px 0', borderRadius: 8,
           background: following ? 'var(--fill-2)' : 'var(--blue)',
           color: following ? 'var(--label-1)' : '#fff',
-          fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
+          fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-sm-size)', lineHeight: 'var(--type-label-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-label-sm-track)',
+          border: 'none', cursor: 'pointer',
           transition: 'all 0.15s',
         }}
       >
@@ -198,7 +200,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
-              style={{ flex: 1, fontSize: 15, color: 'var(--label-1)', background: 'none', border: 'none', outline: 'none' }}
+              style={{ flex: 1, fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)', background: 'none', border: 'none', outline: 'none' }}
             />
             {query && (
               <button onClick={() => setQuery('')} style={{ color: 'var(--label-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
@@ -209,7 +211,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
             )}
           </div>
           {query && (
-            <button onClick={() => { setQuery(''); inputRef.current?.blur(); }} style={{ fontSize: 15, color: 'var(--blue)', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer' }}>
+            <button onClick={() => { setQuery(''); inputRef.current?.blur(); }} style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 600, letterSpacing: 'var(--type-label-md-track)', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
               Cancel
             </button>
           )}
@@ -247,7 +249,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
                   {searchActors.length === 0 && searchPosts.length === 0 && (
                     <div style={{ padding: '40px 24px', textAlign: 'center' }}>
-                      <p style={{ fontSize: 15, color: 'var(--label-3)' }}>No results for "{debouncedQuery}"</p>
+                      <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-3)' }}>No results for "{debouncedQuery}"</p>
                     </div>
                   )}
                 </>

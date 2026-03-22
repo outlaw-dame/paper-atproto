@@ -123,7 +123,7 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--label-3)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 00-4-4H4"/>
               </svg>
-              <span style={{ fontSize: 13, color: 'var(--label-3)' }}>
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)' }}>
                 Replying to{' '}
                 <span style={{ color: 'var(--blue)', fontWeight: 500 }}>
                   @{post.replyTo.handle.replace('.bsky.social', '')}
@@ -142,9 +142,9 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 5, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.3 }}>{post.author.displayName}</span>
-                <span style={{ fontSize: 13, color: 'var(--label-3)' }}>@{post.author.handle.replace('.bsky.social', '')}</span>
-                <span style={{ fontSize: 12, color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-label-lg-track)' }}>{post.author.displayName}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', color: 'var(--label-3)', letterSpacing: 'var(--type-meta-md-track)' }}>@{post.author.handle.replace('.bsky.social', '')}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', color: 'var(--label-3)', letterSpacing: 'var(--type-meta-sm-track)', fontVariantNumeric: 'tabular-nums' }}>· {formatTime(post.createdAt)}</span>
               </div>
             </div>
             <button
@@ -157,7 +157,7 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
           </div>
 
           {/* Rich text body */}
-          <p style={{ fontSize: 15, lineHeight: 1.5, letterSpacing: -0.2, color: 'var(--label-1)', marginBottom: 12, wordBreak: 'break-word' }}>
+          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', fontWeight: 'var(--type-body-md-weight)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)', marginBottom: 12, wordBreak: 'break-word' }}>
             <RichText text={post.content} />
           </p>
 
@@ -176,9 +176,9 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
                 </div>
               )}
               <div style={{ padding: '10px 12px 12px' }}>
-                <p style={{ fontSize: 11, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>{post.embed.domain}</p>
-                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2, lineHeight: 1.3, marginBottom: 4 }}>{post.embed.title}</p>
-                <p style={{ fontSize: 13, color: 'var(--label-2)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{post.embed.description}</p>
+                <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: '0.04em', color: 'var(--label-3)', textTransform: 'uppercase', marginBottom: 3 }}>{post.embed.domain}</p>
+                <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-label-md-track)', marginBottom: 4 }}>{post.embed.title}</p>
+                <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', color: 'var(--label-2)', letterSpacing: 'var(--type-body-sm-track)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{post.embed.description}</p>
               </div>
             </a>
           )}
@@ -190,10 +190,10 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
                 <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
                   {post.embed.post.author.displayName[0]}
                 </div>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-1)' }}>{post.embed.post.author.displayName}</span>
-                <span style={{ fontSize: 12, color: 'var(--label-3)' }}>@{post.embed.post.author.handle.replace('.bsky.social', '')}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-sm-size)', lineHeight: 'var(--type-label-sm-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-label-sm-track)' }}>{post.embed.post.author.displayName}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', color: 'var(--label-3)', letterSpacing: 'var(--type-meta-sm-track)' }}>@{post.embed.post.author.handle.replace('.bsky.social', '')}</span>
               </div>
-              <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.4, letterSpacing: -0.2 }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
                 <RichText text={post.embed.post.content} />
               </p>
             </div>
@@ -207,7 +207,7 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
                 return (
                   <span
                     key={chip}
-                    style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 10px', borderRadius: 100, background: c.bg, color: c.color, fontSize: 12, fontWeight: 500, letterSpacing: -0.1 }}
+                    style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 10px', borderRadius: 100, background: c.bg, color: c.color, fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-sm-size)', lineHeight: 'var(--type-label-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-label-sm-track)' }}
                   >
                     {c.label}{chip === 'thread' && post.threadCount ? ` · ${post.threadCount}` : ''}
                   </span>
@@ -262,7 +262,7 @@ function Btn({ icon, count, label, color, onPress }: {
       style={{
         display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5,
         padding: '6px 10px', color: color || 'var(--label-2)',
-        fontSize: 13, fontWeight: 400,
+        fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', letterSpacing: 'var(--type-meta-md-track)', fontVariantNumeric: 'tabular-nums',
         background: 'none', border: 'none', cursor: 'pointer',
         WebkitTapHighlightColor: 'transparent',
       }}

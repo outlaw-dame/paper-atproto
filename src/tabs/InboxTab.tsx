@@ -86,17 +86,18 @@ export default function InboxTab() {
       }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-            <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--label-1)', letterSpacing: -0.8 }}>Inbox</span>
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-headline-md-size)', lineHeight: 'var(--type-ui-headline-md-line)', fontWeight: 'var(--type-ui-headline-md-weight)', letterSpacing: 'var(--type-ui-headline-md-track)', color: 'var(--label-1)' }}>Inbox</span>
             {unreadCount > 0 && (
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 minWidth: 20, height: 20, padding: '0 6px', borderRadius: 100,
-                background: 'var(--blue)', color: '#fff', fontSize: 11, fontWeight: 700,
+                background: 'var(--blue)', color: '#fff',
+                fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', fontWeight: 700, letterSpacing: 'var(--type-meta-sm-track)', fontVariantNumeric: 'tabular-nums',
               }}>{unreadCount}</span>
             )}
           </div>
           {unreadCount > 0 && (
-            <button onClick={markAllRead} style={{ fontSize: 14, color: 'var(--blue)', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer' }}>
+            <button onClick={markAllRead} style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 600, letterSpacing: 'var(--type-label-md-track)', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
               Mark all read
             </button>
           )}
@@ -111,7 +112,7 @@ export default function InboxTab() {
           {FILTERS.map(f => (
             <button key={f} onClick={() => setFilter(f)} style={{
               padding: '6px 14px', borderRadius: 100,
-              fontSize: 14, fontWeight: filter === f ? 600 : 400,
+              fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: filter === f ? 600 : 400, letterSpacing: 'var(--type-label-md-track)',
               color: filter === f ? '#fff' : 'var(--label-2)',
               background: filter === f ? 'var(--blue)' : 'var(--fill-2)',
               border: 'none', cursor: 'pointer',
@@ -131,8 +132,8 @@ export default function InboxTab() {
           ) : error ? (
             <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               style={{ padding: '32px 16px', textAlign: 'center' }}>
-              <p style={{ fontSize: 14, color: 'var(--red)', marginBottom: 12 }}>{error}</p>
-              <button onClick={fetchNotifications} style={{ fontSize: 14, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--red)', marginBottom: 12 }}>{error}</p>
+              <button onClick={fetchNotifications} style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 600, letterSpacing: 'var(--type-label-md-track)', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
                 Try again
               </button>
             </motion.div>
@@ -145,13 +146,13 @@ export default function InboxTab() {
                   <path d="M13.73 21a2 2 0 01-3.46 0"/>
                 </svg>
               </div>
-              <p style={{ fontSize: 14, color: 'var(--label-3)' }}>No notifications yet</p>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-3)' }}>No notifications yet</p>
             </motion.div>
           ) : (
             <motion.div key="list" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               {newItems.length > 0 && (
                 <>
-                  <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', padding: '16px 16px 8px' }}>New</p>
+                  <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--label-3)', padding: '16px 16px 8px' }}>New</p>
                   <div style={{ background: 'var(--surface)', borderRadius: 16, margin: '0 12px 8px', overflow: 'hidden' }}>
                     {newItems.map((n, i) => <NotifRow key={n.id} n={n} index={i} last={i === newItems.length - 1} />)}
                   </div>
@@ -159,7 +160,7 @@ export default function InboxTab() {
               )}
               {oldItems.length > 0 && (
                 <>
-                  <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-3)', letterSpacing: 0.5, textTransform: 'uppercase', padding: '16px 16px 8px' }}>Earlier</p>
+                  <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--label-3)', padding: '16px 16px 8px' }}>Earlier</p>
                   <div style={{ background: 'var(--surface)', borderRadius: 16, margin: '0 12px 8px', overflow: 'hidden' }}>
                     {oldItems.map((n, i) => <NotifRow key={n.id} n={n} index={i} last={i === oldItems.length - 1} />)}
                   </div>
@@ -194,7 +195,7 @@ function NotifRow({ n, index, last }: { n: LiveNotification; index: number; last
         <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', background: 'var(--fill-2)' }}>
           {n.avatar
             ? <img src={n.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: cfg.bg, color: cfg.color, fontSize: 15, fontWeight: 700 }}>
+            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: cfg.bg, color: cfg.color, fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', fontWeight: 700 }}>
                 {n.displayName[0]}
               </div>
           }
@@ -205,7 +206,7 @@ function NotifRow({ n, index, last }: { n: LiveNotification; index: number; last
           width: 18, height: 18, borderRadius: '50%',
           background: cfg.bg, color: cfg.color,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 10, fontWeight: 700,
+          fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', fontWeight: 700,
           border: '1.5px solid var(--surface)',
         }}>
           {cfg.symbol}
@@ -213,10 +214,10 @@ function NotifRow({ n, index, last }: { n: LiveNotification; index: number; last
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontSize: 14, color: 'var(--label-1)', lineHeight: 1.35, marginBottom: 2 }}>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)', marginBottom: 2 }}>
           <strong>{n.displayName}</strong>{' '}{n.content}
         </p>
-        <p style={{ fontSize: 12, color: 'var(--label-3)' }}>{formatTime(n.time)}</p>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)', fontVariantNumeric: 'tabular-nums' }}>{formatTime(n.time)}</p>
       </div>
 
       {!n.read && (

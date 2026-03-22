@@ -38,7 +38,7 @@ function EmptyState({ label }: { label: string }) {
           <path d="M9 21V12h6v9"/>
         </svg>
       </div>
-      <p style={{ fontSize: 14, color: 'var(--label-3)', textAlign: 'center' }}>{label}</p>
+      <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-3)', textAlign: 'center' }}>{label}</p>
     </div>
   );
 }
@@ -127,7 +127,7 @@ export default function HomeTab({ onOpenStory }: Props) {
           <div style={{
             width: 32, height: 32, borderRadius: '50%', overflow: 'hidden',
             background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontSize: 13, fontWeight: 700, flexShrink: 0,
+            color: '#fff', fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', fontWeight: 700, flexShrink: 0,
           }}>
             {profile?.avatar
               ? <img src={profile.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -135,7 +135,7 @@ export default function HomeTab({ onOpenStory }: Props) {
             }
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-            <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.5 }}>Glimpse</span>
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-ui-title-md-track)' }}>Glimpse</span>
           </div>
           <button
             aria-label="Refresh"
@@ -157,7 +157,7 @@ export default function HomeTab({ onOpenStory }: Props) {
               onClick={() => setMode(m)}
               style={{
                 padding: '6px 14px', borderRadius: 100,
-                fontSize: 14, fontWeight: mode === m ? 600 : 400,
+                fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: mode === m ? 600 : 400, letterSpacing: 'var(--type-label-md-track)',
                 color: mode === m ? '#fff' : 'var(--label-2)',
                 background: mode === m ? 'var(--blue)' : 'var(--fill-2)',
                 border: 'none', cursor: 'pointer',
@@ -184,8 +184,8 @@ export default function HomeTab({ onOpenStory }: Props) {
           ) : error ? (
             <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               style={{ padding: '32px 16px', textAlign: 'center' }}>
-              <p style={{ fontSize: 14, color: 'var(--red)', marginBottom: 12 }}>{error}</p>
-              <button onClick={() => fetchFeed(mode)} style={{ fontSize: 14, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--red)', marginBottom: 12 }}>{error}</p>
+              <button onClick={() => fetchFeed(mode)} style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 600, letterSpacing: 'var(--type-label-md-track)', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer' }}>
                 Try again
               </button>
             </motion.div>
