@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PostCard from '../components/PostCard';
-import { useAtp } from '../atproto/AtpContext';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall, atpMutate } from '../lib/atproto/client';
 import { mapFeedViewPost } from '../atproto/mappers';
 import type { MockPost } from '../data/mockData';
 import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
@@ -110,7 +111,7 @@ function FeedCard({ gen }: { gen: AppBskyFeedDefs.GeneratorView }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ExploreTab({ onOpenStory }: Props) {
-  const { agent } = useAtp();
+  const { agent, session } = useSessionStore();
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [searchPosts, setSearchPosts] = useState<MockPost[]>([]);
@@ -130,11 +131,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
   // Live search
   useEffect(() => {
     if (!debouncedQuery.trim()) { setSearchPosts([]); setSearchActors([]); return; }
-    if (!agent.session) return;
+    if (!session) return;
     setLoading(true);
     Promise.all([
-      agent.app.bsky.feed.searchPosts({ q: debouncedQuery, limit: 20 }).catch(() => null),
-      agent.searchActors({ term: debouncedQuery, limit: 8 }).catch(() => null),
+      atpCall(s => agent.app.bsky.feed.searchPosts({ q: debouncedQuery, limit: 20 })).catch(() => null),
+      atpCall(s => agent.searchActors({ term: debouncedQuery, limit: 8 })).catch(() => null),
     ]).then(([postsRes, actorsRes]) => {
       if (postsRes?.data?.posts) {
         setSearchPosts(
@@ -147,25 +148,25 @@ export default function ExploreTab({ onOpenStory }: Props) {
         setSearchActors(actorsRes.data.actors);
       }
     }).finally(() => setLoading(false));
-  }, [debouncedQuery, agent]);
+  }, [debouncedQuery, agent, session]);
 
   // Load discovery content on mount
   useEffect(() => {
-    if (!agent.session) return;
+    if (!session) return;
     setDiscoverLoading(true);
     Promise.all([
-      agent.app.bsky.feed.getSuggestedFeeds({ limit: 10 }).catch(() => null),
-      agent.getSuggestions({ limit: 10 }).catch(() => null),
+      atpCall(s => agent.app.bsky.feed.getSuggestedFeeds({ limit: 10 })).catch(() => null),
+      atpCall(s => agent.getSuggestions({ limit: 10 })).catch(() => null),
     ]).then(([feedsRes, actorsRes]) => {
       if (feedsRes?.data?.feeds) setSuggestedFeeds(feedsRes.data.feeds);
       if (actorsRes?.data?.actors) setSuggestedActors(actorsRes.data.actors);
     }).finally(() => setDiscoverLoading(false));
-  }, [agent]);
+  }, [agent, session]);
 
   const handleFollow = useCallback(async (did: string) => {
-    if (!agent.session) return;
-    try { await agent.follow(did); } catch { /* ignore */ }
-  }, [agent]);
+    if (!session) return;
+    await atpMutate(s => agent.follow(did));
+  }, [agent, session]);
 
   const isSearching = debouncedQuery.trim().length > 0;
 

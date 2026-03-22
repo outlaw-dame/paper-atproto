@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAtp } from '../atproto/AtpContext';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall } from '../lib/atproto/client';
 import { mapFeedViewPost } from '../atproto/mappers';
 import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
@@ -227,7 +228,7 @@ function SectionHeader({ title, count }: { title: string; count?: number }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function LibraryTab({ onOpenStory }: Props) {
-  const { agent } = useAtp();
+  const { agent, session } = useSessionStore();
   const [tab, setTab] = useState<Tab>('Saved');
   const [savedPosts, setSavedPosts] = useState<MockPost[]>([]);
   const [myFeeds, setMyFeeds] = useState<AppBskyFeedDefs.GeneratorView[]>([]);
@@ -235,41 +236,40 @@ export default function LibraryTab({ onOpenStory }: Props) {
   const [loading, setLoading] = useState(false);
 
   const fetchSaved = useCallback(async () => {
-    if (!agent.session) return;
+    if (!session) return;
     setLoading(true);
     try {
-      // getLikes returns posts the user has liked — used as "saved" proxy
-      const res = await agent.getActorLikes({ actor: agent.session.did, limit: 30 });
+      const res = await atpCall(s => agent.getActorLikes({ actor: session.did, limit: 30 }));
       const posts = res.data.feed
         .filter(item => (item.post?.record as any)?.text !== undefined)
         .map(mapFeedViewPost);
       setSavedPosts(posts);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [agent]);
+  }, [agent, session]);
 
   const fetchMyFeeds = useCallback(async () => {
-    if (!agent.session) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const res = await agent.app.bsky.feed.getActorFeeds({ actor: agent.session.did, limit: 50 });
+      const res = await atpCall(s => agent.app.bsky.feed.getActorFeeds({ actor: session.did, limit: 50 }));
       setMyFeeds(res.data.feeds);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [agent]);
+  }, [agent, session]);
 
   const fetchHistory = useCallback(async () => {
-    if (!agent.session) return;
+    if (!session) return;
     setLoading(true);
     try {
-      const res = await agent.getAuthorFeed({ actor: agent.session.did, limit: 20 });
+      const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 20 }));
       const posts = res.data.feed
         .filter(item => (item.post?.record as any)?.text !== undefined)
         .map(mapFeedViewPost);
       setHistoryPosts(posts);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [agent]);
+  }, [agent, session]);
 
   useEffect(() => {
     if (tab === 'Saved') fetchSaved();

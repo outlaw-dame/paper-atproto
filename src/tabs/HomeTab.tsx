@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useQueryClient } from '@tanstack/react-query';
 import PostCard from '../components/PostCard';
-import { useAtp } from '../atproto/AtpContext';
+import { useSessionStore } from '../store/sessionStore';
 import { mapFeedViewPost } from '../atproto/mappers';
+import { atpCall } from '../lib/atproto/client';
+import { qk } from '../lib/atproto/queries';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
 
@@ -13,9 +16,7 @@ interface Props {
 const MODES = ['Following', 'Discover', 'Feeds'] as const;
 type Mode = typeof MODES[number];
 
-// Popular discover feeds on Bluesky
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
-const FRIENDS_FEED_URI  = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/with-friends';
 
 function Spinner({ small }: { small?: boolean }) {
   const s = small ? 18 : 28;
@@ -43,7 +44,8 @@ function EmptyState({ label }: { label: string }) {
 }
 
 export default function HomeTab({ onOpenStory }: Props) {
-  const { agent, profile } = useAtp();
+  const { agent, session, profile } = useSessionStore();
+  const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>('Following');
   const [posts, setPosts] = useState<MockPost[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
@@ -53,7 +55,7 @@ export default function HomeTab({ onOpenStory }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const fetchFeed = useCallback(async (m: Mode, cur?: string) => {
-    if (!agent.session) return;
+    if (!session) return;
     const isInitial = !cur;
     if (isInitial) setLoading(true); else setLoadingMore(true);
     setError(null);
@@ -62,27 +64,25 @@ export default function HomeTab({ onOpenStory }: Props) {
       let nextCursor: string | undefined;
 
       if (m === 'Following') {
-        const res = await agent.getTimeline({ limit: 30, cursor: cur });
+        const res = await atpCall(s => agent.getTimeline({ limit: 30, cursor: cur }));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else if (m === 'Discover') {
-        const res = await agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 30, cursor: cur });
+        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 30, cursor: cur }));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else {
-        // Feeds mode — show user's author feed
-        const res = await agent.getAuthorFeed({ actor: agent.session.did, limit: 30, cursor: cur });
+        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, cursor: cur }));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       }
 
       const mapped = feed
-        .filter(item => item.post?.record?.text !== undefined)
+        .filter((item: any) => item.post?.record?.text !== undefined)
         .map(mapFeedViewPost);
 
       if (isInitial) {
         setPosts(mapped);
-        // Scroll back to top on mode switch
         scrollRef.current?.scrollTo({ top: 0 });
       } else {
         setPosts(prev => [...prev, ...mapped]);
@@ -94,16 +94,14 @@ export default function HomeTab({ onOpenStory }: Props) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [agent]);
+  }, [agent, session]);
 
-  // Reload when mode changes
   useEffect(() => {
     setPosts([]);
     setCursor(undefined);
     fetchFeed(mode);
   }, [mode, fetchFeed]);
 
-  // Infinite scroll
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || loadingMore || !cursor) return;
@@ -126,7 +124,6 @@ export default function HomeTab({ onOpenStory }: Props) {
         borderBottom: '0.5px solid var(--sep)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
-          {/* Avatar */}
           <div style={{
             width: 32, height: 32, borderRadius: '50%', overflow: 'hidden',
             background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -139,9 +136,6 @@ export default function HomeTab({ onOpenStory }: Props) {
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
             <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.5 }}>Glimpse</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--label-2)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9"/>
-            </svg>
           </div>
           <button
             aria-label="Refresh"
@@ -204,7 +198,6 @@ export default function HomeTab({ onOpenStory }: Props) {
               {posts.map((post, i) => (
                 <PostCard key={post.id} post={post} onOpenStory={onOpenStory} index={i} />
               ))}
-              {/* Load more indicator */}
               {loadingMore && (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
                   <Spinner small />

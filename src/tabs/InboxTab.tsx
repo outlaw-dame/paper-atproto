@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAtp } from '../atproto/AtpContext';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall } from '../lib/atproto/client';
 import { mapNotification } from '../atproto/mappers';
 import type { LiveNotification } from '../atproto/mappers';
 import { formatTime } from '../data/mockData';
@@ -30,32 +31,32 @@ function Spinner() {
 }
 
 export default function InboxTab() {
-  const { agent } = useAtp();
+  const { agent, session } = useSessionStore();
   const [filter, setFilter] = useState<Filter>('All');
   const [notifications, setNotifications] = useState<LiveNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchNotifications = useCallback(async () => {
-    if (!agent.session) return;
+    if (!session) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await agent.listNotifications({ limit: 50 });
+      const res = await atpCall(s => agent.listNotifications({ limit: 50 }));
       setNotifications(res.data.notifications.map(mapNotification));
     } catch (err: any) {
       setError(err?.message ?? 'Failed to load notifications');
     } finally {
       setLoading(false);
     }
-  }, [agent]);
+  }, [agent, session]);
 
   useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
 
   const markAllRead = useCallback(async () => {
-    if (!agent.session) return;
+    if (!session) return;
     try {
-      await agent.updateSeenNotifications();
+      await atpCall(s => agent.updateSeenNotifications());
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     } catch { /* ignore */ }
   }, [agent]);
