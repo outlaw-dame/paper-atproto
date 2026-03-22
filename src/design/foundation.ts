@@ -140,19 +140,19 @@ export const discovery = {
 } as const;
 
 // ─── Discussion palette ───────────────────────────────────────────────────
-// Narwhal-inspired: warm grey thread bg, pure white contribution cards,
-// clearly recessed nested replies, deep navy Interpolator surface.
+// Uses the app's native CSS variables so the thread view is always
+// consistent with the rest of the app in both light and dark mode.
 export const discussion = {
-  bgBase:        '#EDEBE8',   // warm grey thread background (Narwhal-style)
-  bgSubtle:      '#E8E5E1',   // slightly deeper for inner sections
-  surfaceCard:   '#FFFFFF',   // contribution cards: pure white for max contrast
-  surfaceCard2:  '#F9F8F6',   // alternate card (e.g. featured post)
-  surfaceNested: '#E3DFDB',   // nested replies: clearly recessed mid-grey
-  lineSubtle:    '#D9D4CE',   // divider lines inside cards
-  lineStrong:    '#C8C2BB',   // stronger separators
-  textPrimary:   '#111111',   // near-black for body text
-  textSecondary: '#4A4643',   // secondary text
-  textTertiary:  '#8A837C',   // timestamps, meta
+  bgBase:        'var(--bg)',          // app native: #F2F2F7 light / #000 dark
+  bgSubtle:      'var(--surface-2)',   // #F2F2F7 light / #1C1C1E dark
+  surfaceCard:   'var(--surface)',     // #FFFFFF light / #1C1C1E dark
+  surfaceCard2:  'var(--surface-2)',   // #F2F2F7 light / #1C1C1E dark
+  surfaceNested: 'var(--surface-3)',   // #E5E5EA light / #2C2C2E dark
+  lineSubtle:    'var(--sep)',         // rgba(60,60,67,0.12) light
+  lineStrong:    'var(--sep-opaque)',  // #C6C6C8 light / #38383A dark
+  textPrimary:   'var(--label-1)',     // #000 light / #fff dark
+  textSecondary: 'var(--label-2)',     // rgba(60,60,67,0.6) light
+  textTertiary:  'var(--label-3)',     // rgba(60,60,67,0.3) light
   heroBg:        '#070707',
   heroText:      '#FFFFFF',
   heroSubtext:   'rgba(255,255,255,0.82)',

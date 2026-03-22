@@ -548,17 +548,19 @@ function RolePill({ role }: { role: ContributionRole }) {
 // ─── ContributionCard ─────────────────────────────────────────────────────
 function ContributionCard({
   node, score, rootUri, featured, nested,
-  onFeedback,
+  onFeedback, isFollowed,
 }: {
   node: ThreadNode;
   score?: ReplyScore;
   rootUri: string;
   featured?: boolean;
   nested?: boolean;
+  isFollowed?: boolean;   // only distinction: slightly bolder display name
   onFeedback: (uri: string, fb: ReplyScore['userFeedback']) => void;
 }) {
   const [feedbackGiven, setFeedbackGiven] = useState<ReplyScore['userFeedback']>(score?.userFeedback);
-  const isRepetitive = score?.role === 'repetitive';
+  // Never dim any reply — every contribution is equally important
+  const isRepetitive = false;
 
   const handleFeedback = (fb: ReplyScore['userFeedback']) => {
     setFeedbackGiven(fb);
@@ -567,21 +569,14 @@ function ContributionCard({
 
   const cardStyle: React.CSSProperties = {
     borderRadius: nested ? ncTokens.radius : contTokens.radius,
-    // Narwhal hierarchy: white contribution cards, recessed grey nested replies
+    // Use native app CSS variables — consistent with rest of app in light + dark
     background: nested
-      ? ncTokens.bg          // '#E3DFDB' — clearly subordinate
-      : featured
-        ? contTokens.featured.bg  // '#FCFBF9' — featured variant
-        : contTokens.bg,          // '#FFFFFF' — pure white for max contrast
+      ? disc.surfaceNested    // var(--surface-3): slightly recessed, same family
+      : disc.surfaceCard,     // var(--surface): white light / #1C1C1E dark
     padding: `${nested ? ncTokens.padding : contTokens.padding}px`,
-    boxShadow: nested ? 'none' : (featured ? contTokens.featured.shadow : contTokens.shadow),
-    border: nested
-      ? `0.5px solid ${disc.lineSubtle}`
-      : featured
-        ? contTokens.featured.border
-        : `0.5px solid ${disc.lineSubtle}`,
-    opacity: isRepetitive ? 0.5 : 1,
-    transition: 'opacity 0.2s',
+    boxShadow: nested ? 'none' : contTokens.shadow,
+    border: `0.5px solid ${disc.lineSubtle}`,
+    // No opacity dimming — every reply reads at full weight
   };
 
   const signalType = score?.role === 'clarifying' ? 'clarifying'
@@ -601,7 +596,13 @@ function ContributionCard({
           }
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {/* Only distinction between replies: followed accounts get fontWeight 800 */}
+          <p style={{
+            fontSize: typeScale.chip[0],
+            fontWeight: isFollowed ? 800 : 600,
+            color: disc.textPrimary,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
             {node.authorName ?? node.authorHandle}
           </p>
           <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>@{node.authorHandle}</p>
@@ -765,6 +766,19 @@ export default function StoryMode({ entry, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<ThreadFilter>('Top');
+  // Set of DIDs the current user follows — used only for bold username treatment
+  const [followedDids, setFollowedDids] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!session?.did || !agent) return;
+    // Fetch the viewer's follows once, quietly — used only for name bolding
+    atpCall(() => agent.getFollows({ actor: session.did, limit: 100 }))
+      .then(res => {
+        const dids = new Set<string>((res?.data?.follows ?? []).map((f: { did: string }) => f.did));
+        setFollowedDids(dids);
+      })
+      .catch(() => {}); // non-critical, fail silently
+  }, [session?.did]);
 
   const threadState = getThread(entry.id);
 
@@ -841,8 +855,8 @@ export default function StoryMode({ entry, onClose }: Props) {
       transition={transitions.storyEntry}
       style={{
         position: 'fixed', inset: 0,
-        // Narwhal-style warm grey thread background
-        background: disc.bgBase,   // '#EDEBE8'
+        // Native app background — consistent with rest of app in light + dark mode
+        background: disc.bgBase,   // var(--bg): #F2F2F7 light / #000000 dark
         display: 'flex', flexDirection: 'column',
         zIndex: 200,
       }}
@@ -892,6 +906,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                 score={getThread(entry.id)?.replyScores[featuredReply.uri]}
                 rootUri={entry.id}
                 featured
+                isFollowed={followedDids.has(featuredReply.authorDid ?? '')}
                 onFeedback={handleFeedback}
               />
             )}
@@ -905,6 +920,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                   node={node}
                   score={getThread(entry.id)?.replyScores[node.uri]}
                   rootUri={entry.id}
+                  isFollowed={followedDids.has(node.authorDid ?? '')}
                   onFeedback={handleFeedback}
                 />
               ))

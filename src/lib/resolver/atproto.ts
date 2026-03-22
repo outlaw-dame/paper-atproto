@@ -210,6 +210,8 @@ export interface ThreadNode {
   cid: string;
   authorDid: string;
   authorHandle: string;
+  authorName?: string;    // display name (may be absent)
+  authorAvatar?: string; // avatar URL (may be absent)
   text: string;
   createdAt: string;
   likeCount: number;
@@ -235,6 +237,8 @@ export function resolveThread(
     cid: post.cid,
     authorDid: post.author.did,
     authorHandle: post.author.handle,
+    authorName: post.author.displayName ?? undefined,
+    authorAvatar: post.author.avatar ?? undefined,
     text: record.text ?? '',
     createdAt: record.createdAt ?? post.indexedAt,
     likeCount: post.likeCount ?? 0,
