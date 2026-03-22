@@ -33,6 +33,7 @@ import {
   promptHero as phTokens,
   interpolator as intTokens,
   contribution as contTokens,
+  rolePill as rpTokens,
   signalChip as scTokens,
   nestedContribution as ncTokens,
   discussion as disc,
@@ -107,9 +108,9 @@ function HostBar({ onClose }: { onClose: () => void }) {
     <div style={{
       flexShrink: 0,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: 'calc(var(--safe-top) + 12px) 20px 12px',
+      padding: 'calc(var(--safe-top) + 12px) 16px 12px',
       background: disc.bgBase,
-      borderBottom: `0.5px solid ${disc.lineSubtle}`,
+      borderBottom: `0.5px solid ${disc.lineStrong}`,
     }}>
       <button
         onClick={onClose}
@@ -481,8 +482,8 @@ function ThreadControls({ active, onChange }: { active: ThreadFilter; onChange: 
             flexShrink: 0,
             height: 36, padding: '0 14px',
             borderRadius: radius.full,
-            background: active === f ? accent.primary : disc.surfaceCard2,
-            border: `0.5px solid ${active === f ? accent.primary : disc.lineSubtle}`,
+            background: active === f ? accent.primary : disc.surfaceCard,
+            border: `0.5px solid ${active === f ? accent.primary : disc.lineStrong}`,
             color: active === f ? '#fff' : disc.textSecondary,
             fontSize: typeScale.chip[0], fontWeight: 600,
             cursor: 'pointer',
@@ -516,31 +517,34 @@ function SignalChip({ type, count }: { type: keyof typeof scTokens; count: numbe
   );
 }
 
-// ─── RolePill ─────────────────────────────────────────────────────────────
-const ROLE_CONFIG: Record<ContributionRole, { label: string; color: string; bg: string }> = {
-  clarifying:           { label: 'Clarifying',      color: '#0E5561', bg: '#CFEFF4' },
-  new_information:      { label: 'New info',         color: '#21417D', bg: '#DCE7FF' },
-  direct_response:      { label: 'Direct',           color: '#1A4D2E', bg: '#D4F4E2' },
-  repetitive:           { label: 'Repetitive',       color: '#5F5B56', bg: '#EFEAE5' },
-  provocative:          { label: 'Provocative',      color: '#7A2D33', bg: '#F3D5D4' },
-  useful_counterpoint:  { label: 'Counterpoint',     color: '#5B3F98', bg: '#E8DDFB' },
-  story_worthy:         { label: 'Story-worthy',     color: '#7A2D33', bg: '#F3D5D4' },
-  unknown:              { label: 'Reply',             color: '#5F5B56', bg: '#EFEAE5' },
+// ─── RolePill ─────────────────────────────────────────────────────────────────
+// Narwhal-style: bold saturated fills, white text, clearly communicates role.
+const ROLE_LABELS: Record<ContributionRole, string> = {
+  clarifying:           'Clarifying',
+  new_information:      'New info',
+  direct_response:      'Direct',
+  repetitive:           'Repetitive',
+  provocative:          'Provocative',
+  useful_counterpoint:  'Counterpoint',
+  story_worthy:         'Opinion',
+  unknown:              'Reply',
 };
 
 function RolePill({ role }: { role: ContributionRole }) {
-  const cfg = ROLE_CONFIG[role];
+  const cfg = rpTokens[role as keyof typeof rpTokens] as { bg: string; text: string } | undefined;
+  if (!cfg || typeof cfg !== 'object' || !('bg' in cfg)) return null;
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center',
-      height: contTokens.rolePill.height, padding: `0 ${contTokens.rolePill.paddingX}px`,
-      borderRadius: radius.full,
-      background: cfg.bg, color: cfg.color,
-      fontSize: typeScale.metaLg[0], fontWeight: 600,
-    }}>{cfg.label}</span>
+      height: rpTokens.height, padding: `0 ${rpTokens.paddingX}px`,
+      borderRadius: rpTokens.radius,
+      background: cfg.bg, color: cfg.text,
+      fontSize: typeScale.metaLg[0], fontWeight: 700,
+      letterSpacing: '0.01em',
+      whiteSpace: 'nowrap',
+    }}>{ROLE_LABELS[role]}</span>
   );
 }
-
 // ─── ContributionCard ─────────────────────────────────────────────────────
 function ContributionCard({
   node, score, rootUri, featured, nested,
@@ -563,11 +567,20 @@ function ContributionCard({
 
   const cardStyle: React.CSSProperties = {
     borderRadius: nested ? ncTokens.radius : contTokens.radius,
-    background: nested ? ncTokens.bg : (featured ? contTokens.featured.bg : contTokens.bg),
+    // Narwhal hierarchy: white contribution cards, recessed grey nested replies
+    background: nested
+      ? ncTokens.bg          // '#E3DFDB' — clearly subordinate
+      : featured
+        ? contTokens.featured.bg  // '#FCFBF9' — featured variant
+        : contTokens.bg,          // '#FFFFFF' — pure white for max contrast
     padding: `${nested ? ncTokens.padding : contTokens.padding}px`,
-    boxShadow: featured ? contTokens.featured.shadow : contTokens.shadow,
-    border: featured ? contTokens.featured.border : `0.5px solid ${disc.lineSubtle}`,
-    opacity: isRepetitive ? 0.55 : 1,
+    boxShadow: nested ? 'none' : (featured ? contTokens.featured.shadow : contTokens.shadow),
+    border: nested
+      ? `0.5px solid ${disc.lineSubtle}`
+      : featured
+        ? contTokens.featured.border
+        : `0.5px solid ${disc.lineSubtle}`,
+    opacity: isRepetitive ? 0.5 : 1,
     transition: 'opacity 0.2s',
   };
 
@@ -581,10 +594,10 @@ function ContributionCard({
     <div style={cardStyle}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: contTokens.gap }}>
-        <div style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceCard2, flexShrink: 0 }}>
+        <div style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0 }}>
           {node.authorAvatar
             ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent.indigo600, color: '#fff', fontSize: 15, fontWeight: 700 }}>{(node.authorName ?? node.authorHandle ?? '?')[0]}</div>
+            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{(node.authorName ?? node.authorHandle ?? '?')[0].toUpperCase()}</div>
           }
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -596,13 +609,15 @@ function ContributionCard({
         {score && score.role !== 'unknown' && <RolePill role={score.role} />}
         {score && score.usefulnessScore > 0.7 && (
           <div style={{
-            minWidth: 44, height: 28, borderRadius: radius[8],
-            background: '#FFF8E7', color: '#7A5A00',
+            minWidth: 40, height: 26, borderRadius: radius.full,
+            background: '#FEF9C3', color: '#78610A',
+            border: '0.5px solid #F5E07A',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: typeScale.metaSm[0], fontWeight: 700,
-            padding: '0 8px',
+            padding: '0 8px', gap: 3,
           }}>
-            ⭐ {Math.round(score.usefulnessScore * 10)}
+            <span style={{ fontSize: 11 }}>AHA!</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{Math.round(score.usefulnessScore * 10)}</span>
           </div>
         )}
       </div>
@@ -668,7 +683,10 @@ function ContributionCard({
 
       {/* Footer: timestamp + feedback */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-        <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+        <span style={{
+          fontSize: typeScale.metaSm[0], color: disc.textTertiary,
+          textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 500,
+        }}>
           {node.createdAt ? formatTime(node.createdAt) : ''}
         </span>
         <div style={{ flex: 1 }} />
@@ -823,7 +841,8 @@ export default function StoryMode({ entry, onClose }: Props) {
       transition={transitions.storyEntry}
       style={{
         position: 'fixed', inset: 0,
-        background: disc.bgBase,
+        // Narwhal-style warm grey thread background
+        background: disc.bgBase,   // '#EDEBE8'
         display: 'flex', flexDirection: 'column',
         zIndex: 200,
       }}
@@ -840,7 +859,7 @@ export default function StoryMode({ entry, onClose }: Props) {
             <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>{error}</p>
           </div>
         ) : (
-          <div style={{ padding: '20px 20px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ padding: '20px 16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* PromptHeroCard */}
             {rootPost && (

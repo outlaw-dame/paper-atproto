@@ -142,16 +142,31 @@ export const contribution = {
   },
 } as const;
 
-// ─── Feedback / Signal chips ──────────────────────────────────────────────
+// ─── Role pills (bold fills, white text — Narwhal-style) ──────────────────────
+export const rolePill = {
+  height:   28,
+  paddingX: 12,
+  radius:   radius.full,
+  clarifying:        { bg: signal.clarifyingBg,   text: signal.clarifyingText },
+  new_information:   { bg: signal.newBg,          text: signal.newText },
+  provocative:       { bg: signal.provocativeBg,  text: signal.provocativeText },
+  direct_response:   { bg: signal.sourceBg,       text: signal.sourceText },
+  useful_counterpoint:{ bg: signal.counterpointBg, text: signal.counterpointText },
+  story_worthy:      { bg: signal.opinionBg,      text: signal.opinionText },
+  repetitive:        { bg: signal.repetitiveBg,   text: signal.repetitiveText },
+  unknown:           { bg: '#E5E7EB',             text: '#374151' },
+} as const;
+
+// ─── Feedback chips (softer, below post body) ─────────────────────────────
 export const signalChip = {
   height:   32,
   paddingX: 12,
   radius:   radius.full,
-  clarifying:   { bg: signal.clarifyingBg,   text: signal.clarifyingText },
-  new:          { bg: signal.newBg,          text: signal.newText },
-  provocative:  { bg: signal.provocativeBg,  text: signal.provocativeText },
-  source:       { bg: signal.sourceBg,       text: signal.sourceText },
-  counterpoint: { bg: signal.counterpointBg, text: signal.counterpointText },
+  clarifying:   { bg: signal.fbClarifyingBg,   text: signal.fbClarifyingText },
+  new:          { bg: signal.fbNewBg,          text: signal.fbNewText },
+  provocative:  { bg: signal.fbProvocativeBg,  text: signal.fbProvocativeText },
+  source:       { bg: signal.fbSourceBg,       text: signal.fbSourceText },
+  counterpoint: { bg: signal.counterpointBg,   text: signal.counterpointText },
 } as const;
 
 // ─── NestedContributionBlock ──────────────────────────────────────────────

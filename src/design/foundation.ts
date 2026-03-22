@@ -140,17 +140,19 @@ export const discovery = {
 } as const;
 
 // ─── Discussion palette ───────────────────────────────────────────────────
+// Narwhal-inspired: warm grey thread bg, pure white contribution cards,
+// clearly recessed nested replies, deep navy Interpolator surface.
 export const discussion = {
-  bgBase:        '#F6F5F3',
-  bgSubtle:      '#F1EFEC',
-  surfaceCard:   '#FBFAF8',
-  surfaceCard2:  '#F3F0EC',
-  surfaceNested: '#EFEAE5',
-  lineSubtle:    '#E1DBD4',
-  lineStrong:    '#D0C8C0',
-  textPrimary:   '#151515',
-  textSecondary: '#5F5B56',
-  textTertiary:  '#8B857F',
+  bgBase:        '#EDEBE8',   // warm grey thread background (Narwhal-style)
+  bgSubtle:      '#E8E5E1',   // slightly deeper for inner sections
+  surfaceCard:   '#FFFFFF',   // contribution cards: pure white for max contrast
+  surfaceCard2:  '#F9F8F6',   // alternate card (e.g. featured post)
+  surfaceNested: '#E3DFDB',   // nested replies: clearly recessed mid-grey
+  lineSubtle:    '#D9D4CE',   // divider lines inside cards
+  lineStrong:    '#C8C2BB',   // stronger separators
+  textPrimary:   '#111111',   // near-black for body text
+  textSecondary: '#4A4643',   // secondary text
+  textTertiary:  '#8A837C',   // timestamps, meta
   heroBg:        '#070707',
   heroText:      '#FFFFFF',
   heroSubtext:   'rgba(255,255,255,0.82)',
@@ -173,17 +175,35 @@ export const intel = {
 } as const;
 
 // ─── Signal palette ───────────────────────────────────────────────────────
+// Narwhal-inspired role pills: bold saturated fills, white text.
+// Feedback chips (below post): softer tinted backgrounds, dark text.
 export const signal = {
-  clarifyingBg:     '#ECE39A',
-  clarifyingText:   '#5B570B',
-  newBg:            '#CFEFF4',
-  newText:          '#0E5561',
-  provocativeBg:    '#F3D5D4',
-  provocativeText:  '#7A2D33',
-  sourceBg:         '#DCE7FF',
-  sourceText:       '#21417D',
-  counterpointBg:   '#E8DDFB',
-  counterpointText: '#5B3F98',
+  // Role pills — bold fills, white text (Narwhal Quick Take / Opinion style)
+  clarifyingBg:     '#D4A017',   // amber — Clarifying
+  clarifyingText:   '#FFFFFF',
+  newBg:            '#1A7A5E',   // teal — New info
+  newText:          '#FFFFFF',
+  provocativeBg:    '#C0392B',   // red — Provocative
+  provocativeText:  '#FFFFFF',
+  sourceBg:         '#2563EB',   // blue — Source / Direct
+  sourceText:       '#FFFFFF',
+  counterpointBg:   '#7C3AED',   // purple — Counterpoint
+  counterpointText: '#FFFFFF',
+  // Opinion / Quick Take (Narwhal magenta)
+  opinionBg:        '#B5179E',
+  opinionText:      '#FFFFFF',
+  // Repetitive (muted)
+  repetitiveBg:     '#9CA3AF',
+  repetitiveText:   '#FFFFFF',
+  // Feedback chips (below post body) — softer, dark text
+  fbClarifyingBg:   '#FEF9C3',   // yellow tint
+  fbClarifyingText: '#78610A',
+  fbNewBg:          '#D1FAE5',   // green tint
+  fbNewText:        '#065F46',
+  fbProvocativeBg:  '#FEE2E2',   // red tint
+  fbProvocativeText:'#991B1B',
+  fbSourceBg:       '#DBEAFE',   // blue tint
+  fbSourceText:     '#1E40AF',
 } as const;
 
 // ─── Motion ───────────────────────────────────────────────────────────────
