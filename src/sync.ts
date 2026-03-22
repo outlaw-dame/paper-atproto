@@ -1,15 +1,22 @@
+// ─── ATProto Sync Layer ────────────────────────────────────────────────────
+// Syncs timeline posts into the local PGlite database.
+//
+// Key architectural changes from the original:
+//   1. Embeddings are generated via the inference worker (off main thread)
+//   2. NER + Wikidata entity linking is REMOVED from the sync hot path
+//      per the architecture review — deterministic ATProto object resolution
+//      (facets, DIDs, AT URIs) replaces it as the default entity layer
+//   3. Cluster signals (hashtags, domains, mentions, quoted URIs) are stored
+//      as structured JSON for Pipeline A grouping, not as Wikidata entities
+//   4. The entities table is preserved for optional background enrichment only
+
 import { BskyAgent } from '@atproto/api';
 import { paperDB } from './db';
-import { hybridSearch } from './search';
-import { processTextEntities } from './linking';
+import { inferenceClient } from './workers/InferenceClient';
+import { resolveEmbed, resolveFacets, extractClusterSignals } from './lib/resolver/atproto';
 import { z } from 'zod';
 
-/**
- * Robust Data Synchronization Layer for ATProto.
- * Includes entity mapping (Zod) and entity linking (Transformers.js).
- */
-
-// Zod schema for ATProto post validation
+// ─── Zod schema for ATProto post validation ────────────────────────────────
 const PostSchema = z.object({
   uri: z.string(),
   cid: z.string(),
@@ -21,14 +28,11 @@ const PostSchema = z.object({
     text: z.string(),
     createdAt: z.string(),
     embed: z.any().optional(),
+    facets: z.any().optional(),
   }),
 });
 
-/**
- * Utility for sanitizing content to prevent XSS and other injection attacks.
- */
-function sanitizeContent(content: string): string {
-  // Basic sanitization: remove HTML tags and trim whitespace
+function sanitize(content: string): string {
   return content.replace(/<[^>]*>?/gm, '').trim();
 }
 
@@ -40,7 +44,10 @@ export class PaperSync {
   }
 
   /**
-   * Sync the latest posts from the user's timeline.
+   * Sync the latest posts from the user's timeline into local PGlite.
+   * Embeddings are generated off-thread via the inference worker.
+   * NER and Wikidata linking are NOT called here — see Pipeline A for
+   * on-demand enrichment when a Story card is opened.
    */
   async syncTimeline() {
     try {
@@ -49,18 +56,22 @@ export class PaperSync {
       const pg = paperDB.getPG();
 
       for (const item of feed) {
-        // 1. Validate and Map Entity (Zod)
         const validated = PostSchema.safeParse(item.post);
         if (!validated.success) continue;
 
         const post = validated.data;
         const postId = post.cid;
-        const sanitizedContent = sanitizeContent(post.record.text);
+        const sanitizedContent = sanitize(post.record.text);
+        if (!sanitizedContent) continue;
 
-        // 2. Generate Semantic Embedding
-        const embedding = await hybridSearch.generateEmbedding(sanitizedContent);
+        // Generate embedding via worker (non-blocking relative to UI)
+        const embedding = await inferenceClient.embed(sanitizedContent);
 
-        // 3. Save to Local PGlite (Entity Mapping)
+        // Resolve deterministic ATProto signals
+        const facets = resolveFacets(post.record.facets);
+        const embed = resolveEmbed(post.record.embed);
+        const signals = extractClusterSignals(sanitizedContent, facets, embed, []);
+
         await pg.query(
           `INSERT INTO posts (id, author_did, content, created_at, embedding, embed)
            VALUES ($1, $2, $3, $4, $5, $6)
@@ -70,68 +81,48 @@ export class PaperSync {
             post.author.did,
             sanitizedContent,
             post.record.createdAt,
-            embedding,
-            JSON.stringify(post.record.embed || {}),
+            embedding.length ? `[${embedding.join(',')}]` : null,
+            JSON.stringify({
+              ...post.record.embed,
+              _signals: signals,   // store cluster signals alongside embed
+            }),
           ]
         );
-
-        // 4. Entity Linking (Transformers.js + Wikidata)
-        const linkedEntities = await processTextEntities(sanitizedContent);
-        for (const entity of linkedEntities) {
-          await pg.query(
-            `INSERT INTO entities (post_id, text, type, wikidata_id, score)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [
-              postId,
-              entity.text,
-              entity.type,
-              entity.wikidataId || null,
-              entity.score.toString(),
-            ]
-          );
-        }
       }
 
-      console.log(`Synced ${feed.length} posts with entity linking.`);
+      console.log(`[sync] Synced ${feed.length} posts (embeddings via worker, deterministic signals only)`);
     } catch (error) {
-      console.error('Sync failed:', error);
+      console.error('[sync] Timeline sync failed:', error);
     }
   }
 
   /**
-   * Pushes a new post to the PDS and updates the local database.
+   * Create a new post on the PDS and index it locally.
    */
   async createPost(text: string) {
-    const sanitizedText = sanitizeContent(text);
+    const sanitizedText = sanitize(text);
     if (!sanitizedText) throw new Error('Post content cannot be empty');
 
-    try {
-      // 1. Push to PDS
-      const response = await this.agent.post({
-        text: sanitizedText,
-        createdAt: new Date().toISOString(),
-      });
+    const response = await this.agent.post({
+      text: sanitizedText,
+      createdAt: new Date().toISOString(),
+    });
 
-      // 2. Update local database and search index
-      const pg = paperDB.getPG();
-      const embedding = await hybridSearch.generateEmbedding(sanitizedText);
-      
-      await pg.query(
-        `INSERT INTO posts (id, author_did, content, created_at, embedding)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          response.cid,
-          this.agent.session?.did || '',
-          sanitizedText,
-          new Date().toISOString(),
-          embedding,
-        ]
-      );
+    const pg = paperDB.getPG();
+    const embedding = await inferenceClient.embed(sanitizedText);
 
-      return response;
-    } catch (error) {
-      console.error('Failed to create post:', error);
-      throw error;
-    }
+    await pg.query(
+      `INSERT INTO posts (id, author_did, content, created_at, embedding)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        response.cid,
+        this.agent.session?.did ?? '',
+        sanitizedText,
+        new Date().toISOString(),
+        embedding.length ? `[${embedding.join(',')}]` : null,
+      ]
+    );
+
+    return response;
   }
 }

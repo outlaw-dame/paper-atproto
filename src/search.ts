@@ -1,45 +1,29 @@
-import { pipeline } from '@xenova/transformers';
-import { paperDB } from './db';
+// ─── Hybrid Search ────────────────────────────────────────────────────────
+// Combines Full-Text Search (FTS) and Semantic Search using Reciprocal Rank
+// Fusion (RRF). Runs entirely in the browser using PGlite + pgvector.
+//
+// Embeddings are generated via the inference worker (off main thread).
+// This module no longer imports from @xenova/transformers directly.
 
-/**
- * Hybrid Search Utility
- * Combines Full-Text Search (FTS) and Semantic Search using Reciprocal Rank Fusion (RRF).
- * Runs entirely in the browser using PGlite and Transformers.js.
- */
+import { paperDB } from './db';
+import { inferenceClient } from './workers/InferenceClient';
 
 export class HybridSearch {
-  private extractor: any;
-
-  async init() {
-    if (!this.extractor) {
-      // Using a small, efficient model suitable for browser environments
-      this.extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-    }
-  }
-
   /**
-   * Generate a semantic embedding for a given text.
+   * Generate a semantic embedding for a given text via the inference worker.
    */
   async generateEmbedding(text: string): Promise<number[]> {
-    if (!this.extractor) await this.init();
-    const output = await this.extractor(text, { pooling: 'mean', normalize: true });
-    return Array.from(output.data);
+    return inferenceClient.embed(text);
   }
 
   /**
    * Perform a hybrid search using Reciprocal Rank Fusion (RRF).
-   * RRF combines the rankings from FTS and Semantic search without needing score normalization.
+   * RRF score = sum(1 / (k + rank)) across FTS and semantic rankings.
    */
-  async search(query: string, limit: number = 20) {
-    if (!this.extractor) await this.init();
+  async search(query: string, limit = 20) {
     const pg = paperDB.getPG();
     const queryEmbedding = await this.generateEmbedding(query);
     const vectorStr = `[${queryEmbedding.join(',')}]`;
-
-    /**
-     * RRF Algorithm: score = sum(1 / (k + rank))
-     * k is a constant (usually 60) to mitigate the impact of low-ranked items.
-     */
     const k = 60;
 
     const sql = `
@@ -55,7 +39,7 @@ export class HybridSearch {
         WHERE embedding IS NOT NULL
         LIMIT $2 * 2
       )
-      SELECT 
+      SELECT
         p.*,
         COALESCE(1.0 / ($4 + f.rank), 0.0) + COALESCE(1.0 / ($4 + s.rank), 0.0) as rrf_score
       FROM posts p
@@ -66,14 +50,13 @@ export class HybridSearch {
       LIMIT $2;
     `;
 
-    return await pg.query(sql, [query, limit, vectorStr, k]);
+    return pg.query(sql, [query, limit, vectorStr, k]);
   }
 
   /**
    * Search across both posts and feed items using hybrid search.
    */
-  async searchAll(query: string, limit: number = 20) {
-    if (!this.extractor) await this.init();
+  async searchAll(query: string, limit = 20) {
     const pg = paperDB.getPG();
     const queryEmbedding = await this.generateEmbedding(query);
     const vectorStr = `[${queryEmbedding.join(',')}]`;
@@ -99,7 +82,7 @@ export class HybridSearch {
         FROM feed_items WHERE embedding IS NOT NULL
         LIMIT $2 * 2
       )
-      SELECT 
+      SELECT
         ci.id,
         ci.text as content,
         COALESCE(1.0 / ($4 + f.rank), 0.0) + COALESCE(1.0 / ($4 + s.rank), 0.0) as rrf_score,
@@ -112,7 +95,7 @@ export class HybridSearch {
       LIMIT $2;
     `;
 
-    return await pg.query(sql, [query, limit, vectorStr, k]);
+    return pg.query(sql, [query, limit, vectorStr, k]);
   }
 }
 

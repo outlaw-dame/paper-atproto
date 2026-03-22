@@ -1,79 +1,257 @@
-# Architecture Design: Synchronization and Authentication
+# paper-atproto — Architecture
 
-This document outlines the architectural design for robust data synchronization and secure authentication within the Paper ATProto application. Adhering to high standards of security, privacy, and reliability is paramount for a local-first, decentralized social application.
+> **North Star:** A modernised, local-first social reader combining the best of Facebook Paper (gesture-driven, immersive cards), Neeva Gist (entity-first, story-assembled search), and Apple's Human Interface Guidelines — built on the decentralised AT Protocol.
 
-## 1. Authentication Architecture
+---
 
-### 1.1. Principles
+## Design Principles
 
-*   **Decentralized Identity**: Leverage ATProto DIDs and handles for user identity, ensuring portability and user control.
-*   **Secure Credential Storage**: Store authentication tokens securely using browser-native mechanisms (e.g., IndexedDB with encryption, if available, or `localStorage` with careful consideration of risks).
-*   **Resilience**: Implement retry mechanisms with exponential backoff for network-dependent authentication calls.
-*   **Privacy**: Minimize data exposure during authentication and ensure user consent for data access.
+| Principle | Application |
+|---|---|
+| **Deterministic first** | All ATProto object resolution (AT URIs, DIDs, facets, labels, embeds) is pure and synchronous — no inference required for the base layer |
+| **Inference off the main thread** | All Transformers.js model calls run in a dedicated web worker via `InferenceClient`. The UI thread is never blocked by model inference |
+| **Local-first** | PGlite (Postgres in WASM) stores all synced posts, embeddings, and cluster signals in IndexedDB/OPFS. The app works offline after initial sync |
+| **Progressive enrichment** | Posts are useful immediately (deterministic layer). Embeddings and scoring are added asynchronously. NER/Wikidata enrichment is deferred to on-demand story opening |
+| **Apple HIG** | All UI follows iOS/macOS conventions: spring physics, safe areas, system colours, bottom sheets, gesture dismissal |
 
-### 1.2. Flow
+---
 
-1.  **User Login**: The user provides their ATProto handle/DID and password.
-2.  **ATProto Agent Authentication**: The application uses the `@atproto/api` `BskyAgent` to authenticate with the user's Personal Data Server (PDS). This typically involves exchanging credentials for a session token.
-3.  **Session Management**: The obtained session token (JWT) is securely stored locally. This token will be used for subsequent authenticated requests to the PDS.
-4.  **Token Refresh**: Implement a mechanism to refresh session tokens before they expire to maintain continuous user sessions without re-authentication.
-5.  **Error Handling**: Implement comprehensive error handling for network issues, invalid credentials, and other authentication failures, providing clear feedback to the user.
+## Dual Pipeline Architecture
 
-### 1.3. Security Considerations
+### Pipeline A — Entity / Story Search (Gist-style)
 
-*   **HTTPS Everywhere**: All communication with PDS must occur over HTTPS.
-*   **Credential Hashing**: Passwords should never be stored or transmitted in plain text. ATProto handles password hashing on the PDS side.
-*   **Token Invalidation**: Implement mechanisms for users to revoke sessions or change passwords, invalidating old tokens.
-*   **Cross-Site Scripting (XSS) Protection**: Ensure proper input sanitization and output encoding to prevent XSS vulnerabilities, especially when displaying user-generated content.
-*   **Cross-Site Request Forgery (CSRF) Protection**: While less critical for a purely client-side application interacting with an API, ensure that any server-side components (if introduced later) are protected against CSRF.
+Inspired by Neeva Gist's approach of assembling a *story* from multiple signals rather than returning a ranked list of documents.
 
-## 2. Synchronization Architecture
-
-### 2.1. Principles
-
-*   **Local-First**: Prioritize local data access and modifications. All operations should ideally succeed locally first, then synchronize with the PDS.
-*   **Eventual Consistency**: Data will eventually be consistent across all user devices and the PDS.
-*   **Conflict Resolution**: Implement strategies to handle conflicts that arise when the same data is modified concurrently offline and online, or on multiple devices.
-*   **Efficiency**: Optimize data transfer to minimize bandwidth usage and latency.
-*   **Privacy**: Only synchronize data that the user explicitly consents to share or that is necessary for the application's core functionality.
-
-### 2.2. Flow
-
-1.  **Initial Sync**: Upon successful authentication, the application performs an initial synchronization to fetch the user's entire data repository from their PDS. This data is stored in the local PGlite database.
-2.  **Delta Sync**: After the initial sync, the application will periodically or reactively fetch only changes (deltas) from the PDS. ATProto's Merkle Search Tree (MST) structure facilitates efficient delta synchronization by allowing clients to verify and apply changes based on root hashes.
-3.  **Local Writes**: User actions (e.g., creating a post, liking, following) are first applied to the local PGlite database, providing immediate UI feedback.
-4.  **Outgoing Sync**: Local changes are then queued and pushed to the user's PDS. This process should be resilient to network failures, using exponential backoff for retries.
-5.  **Conflict Resolution**: When a conflict is detected (e.g., a local change conflicts with a PDS change), the application will apply a predefined resolution strategy (e.g., last-write-wins, user-prompted resolution, or a more sophisticated merge algorithm).
-6.  **Data Sanitation**: All incoming and outgoing data will be sanitized to prevent injection attacks and ensure data integrity.
-
-### 2.3. Data Flow Diagram
-
-```mermaid
-graph TD
-    User[User Interface] -->|Local Actions| LocalDB(PGlite Database)
-    LocalDB -->|Read/Write| User
-    LocalDB -->|Outgoing Changes| SyncService(Synchronization Service)
-    SyncService -->|Authenticated Requests| PDS(ATProto Personal Data Server)
-    PDS -->|Incoming Changes| SyncService
-    SyncService -->|Apply Changes & Resolve Conflicts| LocalDB
-    User -->|Login Credentials| AuthService(Authentication Service)
-    AuthService -->|Authenticate| PDS
-    PDS -->|Session Token| AuthService
-    AuthService -->|Store Token| LocalDB
+```
+Feed post arrives
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tier 1: Deterministic ATProto Resolution               │
+│  src/lib/resolver/atproto.ts                            │
+│                                                         │
+│  • parseAtUri()        — AT URI → { repo, collection,  │
+│                          rkey }                         │
+│  • resolveFacets()     — byte-accurate mention/tag/link │
+│  • resolveEmbed()      — typed embed (image, external,  │
+│                          record, recordWithMedia)        │
+│  • resolveLabels()     — { src, val, neg, cts }         │
+│  • canonicalDomain()   — URL → hostname (no www.)       │
+│  • extractClusterSignals() — hashtags, domains,         │
+│                          mentionedDids, quotedUris,      │
+│                          labelValues                     │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tier 2: Semantic Embedding (off-thread)                │
+│  src/workers/inference.worker.ts                        │
+│  src/workers/InferenceClient.ts                         │
+│                                                         │
+│  • Model: Xenova/all-MiniLM-L6-v2 (quantized ONNX)     │
+│  • 384-d embeddings stored in PGlite pgvector column    │
+│  • Worker warm-up on app start; lazy model download     │
+│  • Promise-based API: inferenceClient.embed(text)       │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tier 3: Clustering (Phase 2)                           │
+│                                                         │
+│  Group posts by shared cluster signals:                 │
+│  • Shared quoted AT URI                                 │
+│  • Shared canonical domain                             │
+│  • Shared hashtag                                       │
+│  • Cosine similarity of embeddings (pgvector <=>)       │
+│  • Mentioned DID overlap                                │
+│                                                         │
+│  Output: StoryCluster { rootUri, members[], signals }   │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tier 4: Story Card Assembly                            │
+│  src/components/StoryMode.tsx                           │
+│                                                         │
+│  Cards rendered in order:                               │
+│  0. Overview   — stats, gist summary, author, media     │
+│  1. Source     — full text with byte-accurate facets,   │
+│                  labels, AT URI                         │
+│  2. Conversation — scored replies (see Pipeline B)      │
+│  3. Signals    — deterministic cluster signals          │
+│  4. Interpolator — Pipeline B rolling state             │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## 3. Best Practices for Implementation
+---
 
-*   **Error Handling**: Implement centralized error handling with logging and user-friendly messages. Use `try-catch` blocks for asynchronous operations.
-*   **Exponential Backoff**: For network requests (authentication, synchronization), implement exponential backoff with jitter to prevent overwhelming the server and to gracefully handle transient network issues.
-*   **Input Validation & Sanitation**: Strictly validate and sanitize all user inputs and data received from external sources to prevent security vulnerabilities (e.g., SQL injection, XSS).
-*   **Privacy by Design**: Ensure that user data is handled with privacy in mind at every stage, from storage to transmission and display. Implement data minimization principles.
-*   **Security Audits**: Regularly review code for security vulnerabilities and keep dependencies updated.
-*   **Offline-First Development**: Design components to function seamlessly offline, with clear indicators for synchronization status.
+### Pipeline B — Rolling Conversation Interpolation (Narwhal-style)
 
-## References
+Inspired by Narwhal's approach of maintaining a *rolling state* of a conversation that updates as new replies arrive and as user feedback is collected.
 
-*   [1] [AT Protocol Documentation](https://atproto.com/docs) - Official documentation for the Authenticated Transfer Protocol.
-*   [2] [PGlite Documentation](https://pglite.dev/docs) - Documentation for PGlite, Postgres in WASM.
-*   [3] [Konsta UI Documentation](https://konstaui.com/docs/) - Documentation for Konsta UI, a React UI library for iOS & Material Design.
-*   [4] [Xenova/transformers.js](https://huggingface.co/Xenova/all-MiniLM-L6-v2) - Pre-trained model for feature extraction in Transformers.js.
+```
+Thread opened in StoryMode
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 1: Thread Resolution                              │
+│  resolveThread(ThreadViewPost) → ThreadNode tree        │
+│                                                         │
+│  Each node: { uri, text, facets, embed, labels,         │
+│               likeCount, replyCount, replies[] }        │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 2: Usefulness Scoring                             │
+│  src/store/threadStore.ts                               │
+│                                                         │
+│  Phase 1 (current): heuristicScoreReply()               │
+│  • Signals: question mark, link presence, word count,   │
+│    agreement/disagreement keywords, repetition check    │
+│  • Output: ContributionRole + usefulnessScore (0–1)     │
+│                                                         │
+│  Phase 2 (planned): SetFit few-shot classifier          │
+│  • 8–16 labelled examples per role                      │
+│  • Runs in inference worker                             │
+│  • Roles: clarifying | new_information | direct_response│
+│    | repetitive | provocative | useful_counterpoint     │
+│    | story_worthy                                        │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 3: Rolling State Update                           │
+│  useThreadStore (Zustand)                               │
+│                                                         │
+│  ThreadState per root URI:                              │
+│  • summaryText        — human-readable summary          │
+│  • salientClaims[]    — key claims from the thread      │
+│  • clarificationsAdded[] — clarifying replies           │
+│  • newAnglesAdded[]   — new-information replies         │
+│  • repetitionLevel    — 0–1 fraction of repetitive      │
+│  • heatLevel          — 0–1 conflict/derailment signal  │
+│  • sourceSupportPresent — any external links cited      │
+│  • replyScores{}      — per-reply score + user feedback │
+│  • version            — incremented on each update      │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 4: User Feedback Loop                             │
+│                                                         │
+│  Per-reply feedback buttons in ConversationCard:        │
+│  • Clarifying | New to me | Provocative | AHA!          │
+│                                                         │
+│  Feedback stored in threadStore.replyScores[uri]        │
+│  → Phase 2: used to fine-tune SetFit classifier         │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 5: Interpolator Card                              │
+│  StoryMode card index 4                                 │
+│                                                         │
+│  Displays:                                              │
+│  • AI-generated rolling summary                         │
+│  • Heat level + repetition meters                       │
+│  • New angles introduced                                │
+│  • Top 3 most useful replies                            │
+│  • Source support indicator                             │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Module Map
+
+```
+src/
+├── lib/
+│   ├── atproto/
+│   │   ├── errors.ts       — typed error kinds + retryability
+│   │   ├── retry.ts        — decorrelated jitter backoff
+│   │   ├── client.ts       — atpCall / atpMutate (all API calls)
+│   │   └── queries.ts      — TanStack Query hooks
+│   └── resolver/
+│       └── atproto.ts      — Pipeline A Tier 1: deterministic resolver
+│
+├── workers/
+│   ├── inference.worker.ts — Transformers.js worker (off main thread)
+│   └── InferenceClient.ts  — Promise-based worker API
+│
+├── store/
+│   ├── sessionStore.ts     — Zustand: BskyAgent + session + profile
+│   ├── uiStore.ts          — Zustand: active tab, compose, story
+│   └── threadStore.ts      — Zustand: Pipeline B rolling thread state
+│
+├── atproto/
+│   ├── AtpContext.tsx      — React context (delegates to sessionStore)
+│   └── mappers.ts          — FeedViewPost → MockPost adapter
+│
+├── shell/
+│   ├── TabBar.tsx          — bottom nav with unread badge
+│   └── OverlayHost.tsx     — ComposeSheet + StoryMode overlay manager
+│
+├── components/
+│   ├── StoryMode.tsx       — 5-card story reader (both pipelines)
+│   ├── PostCard.tsx        — feed card with tappable body + RichText
+│   ├── ComposeSheet.tsx    — live-preview composer with facet detection
+│   ├── LoginScreen.tsx     — app-password login
+│   └── EntitySheet.tsx     — entity details (Phase 3: live ATProto data)
+│
+└── tabs/
+    ├── HomeTab.tsx         — timeline + author feed + discover (TanStack Query)
+    ├── ExploreTab.tsx      — search + suggested feeds + suggested actors
+    ├── InboxTab.tsx        — live notifications + mark-as-read
+    └── LibraryTab.tsx      — liked posts + my feeds + my packs
+```
+
+---
+
+## Phase Roadmap
+
+### Phase 1 (complete)
+- Deterministic ATProto resolver (`lib/resolver/atproto.ts`)
+- Inference worker + `InferenceClient` (all Transformers.js off main thread)
+- `sync.ts` and `search.ts` migrated to use `InferenceClient`
+- NER/Wikidata removed from sync hot path
+- StoryMode rebuilt as 5-card typed deck (Overview, Source, Conversation, Signals, Interpolator)
+- Pipeline B: `threadStore`, `heuristicScoreReply`, `buildRollingSummary`
+- User feedback buttons on replies (Clarifying / New to me / Provocative / AHA!)
+- TanStack Query + Zustand session/UI stores
+- Shell refactor: `TabBar`, `OverlayHost`
+- Retry/backoff transport layer
+
+### Phase 2 (planned)
+- SetFit few-shot classifier in inference worker (replaces heuristic scorer)
+- Detoxify abuse scoring in inference worker
+- Pipeline A Tier 3: clustering by shared signals + cosine similarity
+- EntitySheet wired to live ATProto actor/feed/hashtag data
+- OAuth + PKCE login flow (app-password as fallback)
+
+### Phase 3 (planned)
+- Explore rebuilt as entity-first results (actors, feeds, topics, domains)
+- StoryMode cluster view: multiple posts assembled into one story
+- Reading queue with PGlite persistence
+- Optional GPT-4.1-mini summarisation for Interpolator card
+- Labeler integration: user-configurable label filters
+
+---
+
+## Key Decisions
+
+**Why not NER in the sync hot path?**
+The original `sync.ts` called `distilbert-base-uncased-finetuned-conll03-english` (a 260MB model) on every synced post, on the main thread, blocking the UI. ATProto's native facets already provide byte-accurate mention/hashtag/link spans — deterministically, with zero inference cost. NER is preserved for optional on-demand enrichment only.
+
+**Why heuristics before SetFit?**
+SetFit requires a small labelled dataset and a worker-side training loop. The heuristic scorer provides immediately useful role labels and usefulness scores while that dataset is being built from user feedback (the four feedback buttons on every reply).
+
+**Why keep `MockPost` as the internal type?**
+All existing components (PostCard, LibraryTab cards, OverviewCard) already render `MockPost`. The `mapFeedViewPost` adapter converts live ATProto data at the boundary, keeping the component layer stable while the data layer evolves.
+
+**Authentication**
+The app uses ATProto app-passwords (not the main account password) stored in `localStorage` via the `persistSession` callback in `BskyAgent`. OAuth + PKCE is planned for Phase 2. All PDS communication is over HTTPS. Session tokens are never logged.
+
+**Sync and conflict resolution**
+The local PGlite database is append-only for synced posts (`ON CONFLICT DO NOTHING`). User-created posts are pushed to the PDS first, then indexed locally. Conflict resolution is last-write-wins at the PDS level (ATProto's MST handles this).
