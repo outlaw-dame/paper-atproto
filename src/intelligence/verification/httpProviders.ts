@@ -101,3 +101,82 @@ export class HttpMediaVerificationProvider implements MediaVerificationProvider 
     return fetchJson<MediaVerificationResult>('/api/verify/media', input, this.options, input.signal);
   }
 }
+
+// ─── VerificationHttpClient ───────────────────────────────────────────────
+// High-level client that calls the /api/verify/evidence endpoint on the
+// Glympse verify-server and returns a typed VerificationResult.
+// API keys and provider secrets live server-side only.
+
+/** Matches the VerificationResult shape returned by the verify-server. */
+export interface ServerVerificationResult {
+  claimType: string;
+  extractedClaim: string | null;
+  knownFactCheckMatch: boolean;
+  factCheckMatches: Array<{
+    claimText: string;
+    reviewUrl: string;
+    matchConfidence: number;
+    textualRating?: string;
+    publisherName?: string;
+  }>;
+  sourcePresence: number;
+  sourceType: string;
+  sourceDomain?: string;
+  citedUrls: string[];
+  quoteFidelity: number;
+  corroborationLevel: number;
+  contradictionLevel: number;
+  mediaContextConfidence: number;
+  entityGrounding: number;
+  contextValue: number;
+  correctionValue: number;
+  checkability: number;
+  specificity: number;
+  factualContributionScore: number;
+  factualConfidence: number;
+  factualState: string;
+  reasons: string[];
+}
+
+export interface VerificationClientInput {
+  postUri?: string;
+  text: string;
+  urls?: string[];
+  imageUrls?: string[];
+  languageCode?: string;
+  topicHints?: string[];
+}
+
+export class VerificationHttpClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly sharedSecret?: string,
+  ) {}
+
+  async verifyEvidence(input: VerificationClientInput): Promise<ServerVerificationResult> {
+    const response = await fetch(`${this.baseUrl}/api/verify/evidence`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(this.sharedSecret !== undefined ? { 'x-verify-shared-secret': this.sharedSecret } : {}),
+      },
+      body: JSON.stringify(input),
+    });
+
+    const data = await response.json() as { ok: boolean; result?: ServerVerificationResult; error?: { message: string } };
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error?.message ?? 'Verification request failed');
+    }
+
+    return data.result!;
+  }
+}
+
+/** Computes the factual contribution boost to add to an existing score. */
+export function computeVerificationBoost(verification: {
+  factualContributionScore: number;
+  factualConfidence: number;
+}): number {
+  return 0.2 * verification.factualContributionScore * verification.factualConfidence;
+}
