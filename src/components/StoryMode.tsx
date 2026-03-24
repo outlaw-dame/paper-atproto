@@ -14,21 +14,24 @@
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { StoryEntry } from '../App';
-import { useSessionStore } from '../store/sessionStore';
-import { atpCall } from '../lib/atproto/client';
-import { mapFeedViewPost } from '../atproto/mappers';
-import type { MockPost } from '../data/mockData';
-import { formatTime } from '../data/mockData';
+import type { StoryEntry } from '../App.js';
+import { useSessionStore } from '../store/sessionStore.js';
+import { atpCall } from '../lib/atproto/client.js';
+import { mapFeedViewPost } from '../atproto/mappers.js';
+import type { MockPost } from '../data/mockData.js';
+import { formatTime } from '../data/mockData.js';
 import {
   resolveThread, extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
-} from '../lib/resolver/atproto';
+} from '../lib/resolver/atproto.js';
 import {
   useThreadStore,
-  heuristicScoreReply, buildRollingSummary,
-  type ContributionRole, type ReplyScore,
-} from '../store/threadStore';
+  type ContributionRole,
+} from '../store/threadStore.js';
+import {
+  runInterpolatorPipeline,
+  type ContributionScore,
+} from '../intelligence/index.js';
 import {
   promptHero as phTokens,
   interpolator as intTokens,
@@ -43,7 +46,7 @@ import {
   space,
   transitions,
   slideUpVariants,
-} from '../design';
+} from '../design/index.js';
 
 interface Props {
   entry: StoryEntry;
@@ -93,9 +96,9 @@ function RichText({ text, facets, baseColor }: { text: string; facets?: Resolved
   for (const f of sorted) {
     if (f.byteStart > cursor) nodes.push(<span key={`t${cursor}`} style={{ color: baseColor }}>{dec.decode(bytes.slice(cursor, f.byteStart))}</span>);
     const seg = dec.decode(bytes.slice(f.byteStart, f.byteEnd));
-    if (f.type === 'mention') nodes.push(<span key={`m${f.byteStart}`} style={{ color: '#BF8FFF', fontWeight: 500 }}>{seg}</span>);
-    else if (f.type === 'hashtag') nodes.push(<span key={`h${f.byteStart}`} style={{ color: accent.blue500, fontWeight: 500 }}>{seg}</span>);
-    else if (f.type === 'link') nodes.push(<a key={`l${f.byteStart}`} href={f.uri} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{f.uri ? (() => { try { return new URL(f.uri!).hostname.replace(/^www\./, ''); } catch { return seg; } })() : seg}</a>);
+    if (f.kind === 'mention') nodes.push(<span key={`m${f.byteStart}`} style={{ color: '#BF8FFF', fontWeight: 500 }}>{seg}</span>);
+    else if (f.kind === 'hashtag') nodes.push(<span key={`h${f.byteStart}`} style={{ color: accent.blue500, fontWeight: 500 }}>{seg}</span>);
+    else if (f.kind === 'link') nodes.push(<a key={`l${f.byteStart}`} href={f.uri} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{f.uri ? (() => { try { return new URL(f.uri!).hostname.replace(/^www\./, ''); } catch { return seg; } })() : seg}</a>);
     cursor = f.byteEnd;
   }
   if (cursor < bytes.length) nodes.push(<span key={`t${cursor}`} style={{ color: baseColor }}>{dec.decode(bytes.slice(cursor))}</span>);
@@ -146,7 +149,7 @@ function HostBar({ onClose }: { onClose: () => void }) {
 
 // ─── PromptHeroCard ───────────────────────────────────────────────────────
 function PromptHeroCard({ post, participantCount }: { post: MockPost; participantCount: number }) {
-  const img = post.images?.[0] ?? post.embed?.thumbnail;
+  const img = post.media?.[0]?.url ?? post.embed?.thumb;
   return (
     <div style={{
       borderRadius: phTokens.radius,
@@ -210,7 +213,7 @@ function PromptHeroCard({ post, participantCount }: { post: MockPost; participan
         </p>
 
         {/* Embed source */}
-        {post.embed?.url && (
+        {post.embed && (post.embed.type === 'external' || post.embed.type === 'video') && (
           <div style={{
             padding: `${space[4]}px ${space[6]}px`,
             background: 'rgba(255,255,255,0.06)',
@@ -219,7 +222,7 @@ function PromptHeroCard({ post, participantCount }: { post: MockPost; participan
             marginBottom: 16,
           }}>
             <span style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta }}>
-              {(() => { try { return new URL(post.embed.url!).hostname.replace(/^www\./, ''); } catch { return post.embed.url; } })()}
+              {(() => { try { return new URL(post.embed.url).hostname.replace(/^www\./, ''); } catch { return post.embed.url; } })()}
             </span>
           </div>
         )}
@@ -551,18 +554,18 @@ function ContributionCard({
   onFeedback, isFollowed,
 }: {
   node: ThreadNode;
-  score?: ReplyScore;
+  score?: ContributionScore;
   rootUri: string;
   featured?: boolean;
   nested?: boolean;
   isFollowed?: boolean;   // only distinction: slightly bolder display name
-  onFeedback: (uri: string, fb: ReplyScore['userFeedback']) => void;
+  onFeedback: (uri: string, fb: ContributionScore['userFeedback']) => void;
 }) {
-  const [feedbackGiven, setFeedbackGiven] = useState<ReplyScore['userFeedback']>(score?.userFeedback);
+  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScore['userFeedback']>(score?.userFeedback);
   // Never dim any reply — every contribution is equally important
   const isRepetitive = false;
 
-  const handleFeedback = (fb: ReplyScore['userFeedback']) => {
+  const handleFeedback = (fb: ContributionScore['userFeedback']) => {
     setFeedbackGiven(fb);
     onFeedback(node.uri, fb);
   };
@@ -650,6 +653,12 @@ function ContributionCard({
           }}
         >
           {node.embed.thumb && <img src={node.embed.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
+          {(node.embed as any).authorName && (
+            <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, marginBottom: 4 }}>
+              <span style={{ fontWeight: 700, color: 'var(--teal)' }}>Featured author:</span> {(node.embed as any).authorName}
+              {(node.embed as any).publisher && <span style={{ marginLeft: 8, color: 'var(--label-4)' }}>· {(node.embed as any).publisher}</span>}
+            </p>
+          )}
           <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{node.embed.title}</p>
           <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
             {(() => { try { return new URL(node.embed.uri).hostname.replace(/^www\./, ''); } catch { return node.embed.uri; } })()}
@@ -760,7 +769,7 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 // ─── Main component ────────────────────────────────────────────────────────
 export default function StoryMode({ entry, onClose }: Props) {
   const { agent, session } = useSessionStore();
-  const { initThread, updateSummary, setReplyScore, setUserFeedback, getThread } = useThreadStore();
+  const { initThread, setInterpolatorState, setUserFeedback, getThread } = useThreadStore();
   const [rootPost, setRootPost] = useState<MockPost | null>(null);
   const [replies, setReplies] = useState<ThreadNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -802,26 +811,21 @@ export default function StoryMode({ entry, onClose }: Props) {
           setRootPost(mapped);
           setReplies(rootNode.replies ?? []);
 
-          // Score replies
-          const allTexts = (rootNode.replies ?? []).map(r => r.text);
-          const scores: Record<string, ReplyScore> = {};
-          for (const reply of rootNode.replies ?? []) {
-            const s = heuristicScoreReply(reply.text, allTexts, 0);
-            s.uri = reply.uri;
-            scores[reply.uri] = s;
-            setReplyScore(entry.id, s);
-          }
-
-          // Build rolling summary
-          const summary = buildRollingSummary(rootNode.text, rootNode.replies ?? [], scores);
-          updateSummary(entry.id, summary);
+          // Run the Interpolator pipeline (entity-aware, evidence-aware)
+          const newState = runInterpolatorPipeline({
+            rootUri: entry.id,
+            rootText: rootNode.text,
+            replies: rootNode.replies ?? [],
+            existingState: getThread(entry.id),
+          });
+          setInterpolatorState(entry.id, newState);
         }
       })
       .catch(e => setError(e.message ?? 'Failed to load thread'))
       .finally(() => setLoading(false));
   }, [entry.id, session]);
 
-  const handleFeedback = useCallback((replyUri: string, fb: ReplyScore['userFeedback']) => {
+  const handleFeedback = useCallback((replyUri: string, fb: ContributionScore['userFeedback']) => {
     setUserFeedback(entry.id, replyUri, fb);
   }, [entry.id]);
 

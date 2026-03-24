@@ -1,7 +1,7 @@
 // ─── Glympse Motion Presets ───────────────────────────────────────────────
 // Pre-built Framer Motion transition objects for consistent animation.
 
-import { motion as motionTokens, ease } from './foundation';
+import { motion as motionTokens, ease } from './foundation.js';
 
 export const transitions = {
   // Chip tap / state change

@@ -1,6 +1,6 @@
-import { paperDB } from './db';
-import { migratePostsTable } from './db/migrations';
-// import { inferenceClient } from './workers/InferenceClient';
+import { paperDB } from './db.js';
+import { migratePostsTable } from './db/migrations.js';
+// import { inferenceClient } from './workers/InferenceClient.js';
 
 /**
  * Initializes the application infrastructure.

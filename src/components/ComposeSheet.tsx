@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
-import { useAtp } from '../atproto/AtpContext';
+import { useAtp } from '../atproto/AtpContext.js';
 import { RichText } from '@atproto/api';
 
 interface Props {

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore';
-import { atpCall } from '../lib/atproto/client';
-import { mapNotification } from '../atproto/mappers';
-import type { LiveNotification } from '../atproto/mappers';
-import { formatTime } from '../data/mockData';
+import { useSessionStore } from '../store/sessionStore.js';
+import { atpCall } from '../lib/atproto/client.js';
+import { mapNotification } from '../atproto/mappers.js';
+import type { LiveNotification } from '../atproto/mappers.js';
+import { formatTime } from '../data/mockData.js';
 
 const NOTIF_CONFIG: Record<string, { symbol: string; color: string; bg: string }> = {
   like:    { symbol: '♥', color: 'var(--red)',    bg: 'rgba(255,69,58,0.12)' },

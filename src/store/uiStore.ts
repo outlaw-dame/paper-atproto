@@ -3,7 +3,7 @@
 // search story query, and prompt composer.
 
 import { create } from 'zustand';
-import type { TabId, StoryEntry } from '../App';
+import type { TabId, StoryEntry } from '../App.js';
 
 interface UiState {
   activeTab: TabId;
@@ -13,6 +13,7 @@ interface UiState {
   story: StoryEntry | null;
   searchStoryQuery: string | null;
   unreadCount: number;
+  profileDid: string | null;
 
   // Actions
   setTab: (id: TabId) => void;
@@ -25,6 +26,7 @@ interface UiState {
   openSearchStory: (query: string) => void;
   closeSearchStory: () => void;
   setUnreadCount: (n: number) => void;
+  openProfile: (did: string) => void;
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
@@ -35,6 +37,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   story: null,
   searchStoryQuery: null,
   unreadCount: 0,
+  profileDid: null,
 
   setTab: (id) => set({ prevTab: get().activeTab, activeTab: id }),
   openCompose: () => set({ showCompose: true }),
@@ -46,4 +49,5 @@ export const useUiStore = create<UiState>((set, get) => ({
   openSearchStory: (query) => set({ searchStoryQuery: query }),
   closeSearchStory: () => set({ searchStoryQuery: null }),
   setUnreadCount: (n) => set({ unreadCount: n }),
+  openProfile: (did) => set(s => ({ profileDid: did, prevTab: s.activeTab, activeTab: 'profile' as TabId })),
 }));

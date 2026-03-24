@@ -10,8 +10,7 @@ import {
   AppBskyEmbedRecord,
   AppBskyEmbedRecordWithMedia,
 } from '@atproto/api';
-import { type PostView } from '@atproto/api/dist/client/types/app/bsky/feed/defs';
-import type { MockPost, ChipType } from '../data/mockData';
+import type { MockPost, ChipType } from '../data/mockData.js';
 
 /**
  * A simplified, recursive function to map a `PostView` to a `MockPost`.
@@ -19,9 +18,9 @@ import type { MockPost, ChipType } from '../data/mockData';
  * @param post The `PostView` object from the ATProto API.
  * @returns A `MockPost` object.
  */
-export function mapPostViewToMockPost(post: PostView): MockPost {
+export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
   const record = post.record as any; // Cast to access text, etc.
-  const embed = post.embed;
+  const embed: any = post.embed;
 
   let media;
   if (AppBskyEmbedImages.isView(embed)) {
@@ -49,6 +48,9 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
       description: embed.external.description,
       thumb: embed.external.thumb,
       domain: new URL(embed.external.uri).hostname,
+      authorName: (embed.external as any).author || (embed.external as any).authorName,
+      authorUrl: (embed.external as any).authorUrl,
+      publisher: (embed.external as any).siteName || (embed.external as any).publisher,
     };
   } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView(embed.record)) {
     embedData = {
@@ -68,7 +70,7 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
       did: post.author.did,
       handle: post.author.handle,
       displayName: post.author.displayName || post.author.handle,
-      avatar: post.author.avatar,
+      ...(post.author.avatar && { avatar: post.author.avatar }),
       verified: !!post.author.viewer?.followedBy,
     },
     content: record.text,
@@ -95,7 +97,7 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
       mockPost.replyTo = mapPostViewToMockPost(item.reply.parent);
     }
     // Show thread root only if it's not the same as the direct parent
-    if (AppBskyFeedDefs.isPostView(item.reply.root) && item.reply.parent?.uri !== item.reply.root.uri) {
+    if (AppBskyFeedDefs.isPostView(item.reply.root) && AppBskyFeedDefs.isPostView(item.reply.parent) && item.reply.parent.uri !== item.reply.root.uri) {
       mockPost.threadRoot = mapPostViewToMockPost(item.reply.root);
     }
   }

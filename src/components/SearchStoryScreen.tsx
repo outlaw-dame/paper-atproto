@@ -14,11 +14,11 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
-import { useSessionStore } from '../store/sessionStore';
-import { atpCall } from '../lib/atproto/client';
-import { mapFeedViewPost } from '../atproto/mappers';
-import type { MockPost } from '../data/mockData';
-import type { StoryEntry } from '../App';
+import { useSessionStore } from '../store/sessionStore.js';
+import { atpCall } from '../lib/atproto/client.js';
+import { mapFeedViewPost, mapPostViewToMockPost } from '../atproto/mappers.js';
+import type { MockPost } from '../data/mockData.js';
+import type { StoryEntry } from '../App.js';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
@@ -31,7 +31,7 @@ import {
   space,
   transitions,
   storyCardVariants,
-} from '../design';
+} from '../design/index.js';
 
 interface Props {
   query: string;
@@ -215,7 +215,7 @@ function BestSourceCard({ posts }: { posts: MockPost[] }) {
       </p>
 
       {/* Embed if present */}
-      {top.embed?.url && (
+      {top.embed && (top.embed.type === 'external' || top.embed.type === 'video') && (
         <a
           href={top.embed.url}
           target="_blank"
@@ -230,10 +230,10 @@ function BestSourceCard({ posts }: { posts: MockPost[] }) {
             border: `0.5px solid ${disc.lineSubtle}`,
           }}
         >
-          {top.embed.thumbnail && (
-            <img src={top.embed.thumbnail} alt="" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: radius[12], marginBottom: 8 }} />
+          {top.embed.thumb && (
+            <img src={top.embed.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: radius[12], marginBottom: 8 }} />
           )}
-          <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 4 }}>{top.embed.title}</p>
+          {top.embed.title && <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 4 }}>{top.embed.title}</p>}
           <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
             {(() => { try { return new URL(top.embed.url).hostname.replace(/^www\./, ''); } catch { return top.embed.url; } })()}
           </p>
@@ -346,8 +346,8 @@ function RelatedConversationCard({ posts, onOpenStory }: { posts: MockPost[]; on
               {post.content}
             </p>
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replies}</span>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>❤️ {post.likes}</span>
+              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
+              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>❤️ {post.likeCount}</span>
             </div>
           </motion.div>
         ))}
@@ -426,7 +426,7 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
           setPosts(
             res.data.posts
               .filter((p: any) => p?.record?.text)
-              .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }))
+              .map((p: any) => mapPostViewToMockPost(p))
           );
         }
       })

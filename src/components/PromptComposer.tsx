@@ -16,8 +16,8 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore';
-import { atpMutate } from '../lib/atproto/client';
+import { useSessionStore } from '../store/sessionStore.js';
+import { atpMutate } from '../lib/atproto/client.js';
 import {
   promptHero as phTokens,
   discussion as disc,
@@ -27,7 +27,7 @@ import {
   space,
   transitions,
   slideUpVariants,
-} from '../design';
+} from '../design/index.js';
 
 interface Props {
   onClose: () => void;

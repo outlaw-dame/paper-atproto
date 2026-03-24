@@ -3,11 +3,11 @@
 
 import React from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { useUiStore } from '../store/uiStore';
-import ComposeSheet from '../components/ComposeSheet';
-import StoryMode from '../components/StoryMode';
-import SearchStoryScreen from '../components/SearchStoryScreen';
-import PromptComposer from '../components/PromptComposer';
+import { useUiStore } from '../store/uiStore.js';
+import ComposeSheet from '../components/ComposeSheet.js';
+import StoryMode from '../components/StoryMode.js';
+import SearchStoryScreen from '../components/SearchStoryScreen.js';
+import PromptComposer from '../components/PromptComposer.js';
 
 export default function OverlayHost() {
   const {

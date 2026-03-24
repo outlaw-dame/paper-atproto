@@ -187,8 +187,7 @@ src/
 │   └── threadStore.ts      — Zustand: Pipeline B rolling thread state
 │
 ├── atproto/
-│   ├── AtpContext.tsx      — React context (delegates to sessionStore)
-│   └── mappers.ts          — FeedViewPost → MockPost adapter
+│   └── AtpContext.tsx      — React context (delegates to sessionStore)
 │
 ├── shell/
 │   ├── TabBar.tsx          — bottom nav with unread badge

@@ -1,14 +1,15 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
-import PostCard from '../components/PostCard';
-import ContextPost from '../components/ContextPost';
-import { useSessionStore } from '../store/sessionStore';
-import { mapFeedViewPost } from '../atproto/mappers';
-import { atpCall } from '../lib/atproto/client';
-import { qk } from '../lib/atproto/queries';
-import type { MockPost } from '../data/mockData';
-import type { StoryEntry } from '../App';
+import PostCard from '../components/PostCard.js';
+import ContextPost from '../components/ContextPost.js';
+import { useSessionStore } from '../store/sessionStore.js';
+import { useUiStore } from '../store/uiStore.js';
+import { mapFeedViewPost } from '../atproto/mappers.js';
+import { atpCall, atpMutate } from '../lib/atproto/client.js';
+import { qk } from '../lib/atproto/queries.js';
+import type { MockPost } from '../data/mockData.js';
+import type { StoryEntry } from '../App.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -46,6 +47,7 @@ function EmptyState({ label }: { label: string }) {
 
 export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
+  const { openProfile } = useUiStore();
   const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>('Following');
   const [posts, setPosts] = useState<MockPost[]>([]);
@@ -65,15 +67,18 @@ export default function HomeTab({ onOpenStory }: Props) {
       let nextCursor: string | undefined;
 
       if (m === 'Following') {
-        const res = await atpCall(s => agent.getTimeline({ limit: 30, cursor: cur }));
+        const params: any = { limit: 30, ...(cur ? { cursor: cur } : {}) };
+        const res = await atpCall(s => agent.getTimeline(params));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else if (m === 'Discover') {
-        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 30, cursor: cur }));
+        const params: any = { feed: DISCOVER_FEED_URI, limit: 30, ...(cur ? { cursor: cur } : {}) };
+        const res = await atpCall(s => agent.app.bsky.feed.getFeed(params));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else {
-        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, cursor: cur }));
+        const params: any = { actor: session.did, limit: 30, ...(cur ? { cursor: cur } : {}) };
+        const res = await atpCall(s => agent.getAuthorFeed(params));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       }
@@ -112,6 +117,65 @@ export default function HomeTab({ onOpenStory }: Props) {
   }, [fetchFeed, mode, cursor, loadingMore]);
 
   const avatarInitial = profile?.displayName?.[0] ?? profile?.handle?.[0] ?? 'Y';
+
+  // ─── Actions ─────────────────────────────────────────────────────────────
+  
+  const handleToggleRepost = useCallback(async (p: MockPost) => {
+    if (!session || !p.cid) return;
+    
+    const isReposted = !!p.viewer?.repost;
+    
+    // Optimistic update
+    setPosts(prev => prev.map(item => item.id === p.id ? {
+      ...item,
+      repostCount: item.repostCount + (isReposted ? -1 : 1),
+      viewer: { ...item.viewer, repost: isReposted ? undefined : 'pending' }
+    } : item));
+
+    try {
+      if (isReposted) {
+        await atpMutate(() => agent.deleteRepost(p.viewer!.repost!));
+      } else {
+        const res = await atpMutate(() => agent.repost(p.id, p.cid!));
+        // Update with real URI on success
+        if (res) {
+          setPosts(prev => prev.map(item => item.id === p.id ? {
+            ...item, viewer: { ...item.viewer, repost: res.uri }
+          } : item));
+        }
+      }
+    } catch {
+      // Revert on failure
+      setPosts(prev => prev.map(item => item.id === p.id ? p : item));
+    }
+  }, [agent, session]);
+
+  const handleToggleLike = useCallback(async (p: MockPost) => {
+    if (!session || !p.cid) return;
+    
+    const isLiked = !!p.viewer?.like;
+    
+    setPosts(prev => prev.map(item => item.id === p.id ? {
+      ...item,
+      likeCount: item.likeCount + (isLiked ? -1 : 1),
+      viewer: { ...item.viewer, like: isLiked ? undefined : 'pending' }
+    } : item));
+
+    try {
+      if (isLiked) {
+        await atpMutate(() => agent.deleteLike(p.viewer!.like!));
+      } else {
+        const res = await atpMutate(() => agent.like(p.id, p.cid!));
+        if (res) {
+          setPosts(prev => prev.map(item => item.id === p.id ? {
+            ...item, viewer: { ...item.viewer, like: res.uri }
+          } : item));
+        }
+      }
+    } catch {
+      setPosts(prev => prev.map(item => item.id === p.id ? p : item));
+    }
+  }, [agent, session]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
@@ -201,7 +265,15 @@ export default function HomeTab({ onOpenStory }: Props) {
                   {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" />}
                   {/* Only show direct parent if it's not the same as the thread root */}
                   {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" />}
-                  <PostCard post={post} onOpenStory={onOpenStory} index={i} />
+                  <PostCard 
+                    post={post} 
+                    onOpenStory={onOpenStory} 
+                    onViewProfile={openProfile} 
+                    onToggleRepost={handleToggleRepost}
+                    onToggleLike={handleToggleLike}
+                    // onReply={handleReply} // TODO: Implement reply composer
+                    index={i} 
+                  />
                 </div>
               ))}
               {loadingMore && (

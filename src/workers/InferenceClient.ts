@@ -3,7 +3,7 @@
 // All callers use this instead of importing from search.ts or linking.ts.
 //
 // Usage:
-//   import { inferenceClient } from '../workers/InferenceClient';
+//   import { inferenceClient } from '../workers/InferenceClient.js';
 //   const embedding = await inferenceClient.embed('hello world');
 //   const batch     = await inferenceClient.embedBatch(['a', 'b', 'c']);
 

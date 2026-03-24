@@ -156,7 +156,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
     return {
       kind: 'images',
       images: imgs.map(i => ({
-        url: i.fullsize ?? i.thumb ?? i.url ?? '',
+        url: i.fullsize ?? i.thumb ?? '',
         alt: i.alt ?? '',
         aspectRatio: i.aspectRatio,
       })),

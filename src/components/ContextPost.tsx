@@ -1,5 +1,6 @@
 import React from 'react';
-import type { MockPost } from '../data/mockData';
+import type { MockPost } from '../data/mockData.js';
+import TwemojiText from './TwemojiText.js';
 
 export const ContextPost = ({ post, type }: { post: MockPost, type: 'reply' | 'thread' }) => (
   <div style={{
@@ -30,7 +31,7 @@ export const ContextPost = ({ post, type }: { post: MockPost, type: 'reply' | 't
 
     {/* Content preview */}
     <p style={{ margin: 0, fontSize: '14px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--label-2)', lineHeight: 1.3, maxHeight: '3.9em', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-      {post.content}
+      <TwemojiText text={post.content} />
     </p>
   </div>
 );

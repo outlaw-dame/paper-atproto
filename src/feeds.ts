@@ -1,6 +1,6 @@
 import { parseFeed, generateRssFeed, generateAtomFeed, generateJsonFeed } from 'feedsmith';
-import { paperDB } from './db';
-import { hybridSearch } from './search';
+import { paperDB } from './db.js';
+import { hybridSearch } from './search.js';
 
 /**
  * Feed Service for consuming and generating ATOM, RSS, and JSON feeds.

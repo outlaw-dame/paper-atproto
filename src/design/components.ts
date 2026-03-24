@@ -2,7 +2,7 @@
 // Layer C: component-specific token mappings.
 // Import these directly in the component that needs them.
 
-import { radius, space, shadow, shadowDark, blur, accent, discovery, discussion, intel, signal, neutralLight } from './foundation';
+import { radius, space, shadow, shadowDark, blur, accent, discovery, discussion, intel, signal, neutralLight } from './foundation.js';
 
 // ─── SearchHeroField ──────────────────────────────────────────────────────
 export const searchHeroField = {

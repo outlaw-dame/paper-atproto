@@ -1,7 +1,7 @@
 // ─── Glympse Design System ────────────────────────────────────────────────
 // Barrel export — import everything from here.
 
-export * from './foundation';
-export * from './semantic';
-export * from './components';
-export * from './motion';
+export * from './foundation.js';
+export * from './semantic.js';
+export * from './components.js';
+export * from './motion.js';

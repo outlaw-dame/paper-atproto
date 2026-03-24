@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import type { EntityEntry, StoryEntry } from '../App';
-import { MOCK_POSTS } from '../data/mockData';
+import type { EntityEntry, StoryEntry } from '../App.js';
+import { MOCK_POSTS } from '../data/mockData.js';
 
 interface Props {
   entity: EntityEntry;

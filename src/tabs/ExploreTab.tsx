@@ -9,13 +9,13 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore';
-import { atpCall, atpMutate } from '../lib/atproto/client';
-import { mapFeedViewPost } from '../atproto/mappers';
-import type { MockPost } from '../data/mockData';
+import { useSessionStore } from '../store/sessionStore.js';
+import { atpCall, atpMutate } from '../lib/atproto/client.js';
+import { mapFeedViewPost } from '../atproto/mappers.js';
+import type { MockPost } from '../data/mockData.js';
 import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
-import type { StoryEntry } from '../App';
-import { useUiStore } from '../store/uiStore';
+import type { StoryEntry } from '../App.js';
+import { useUiStore } from '../store/uiStore.js';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -32,7 +32,7 @@ import {
   transitions,
   fadeVariants,
   slideUpVariants,
-} from '../design';
+} from '../design/index.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -44,6 +44,9 @@ const DISCOVERY_PHRASES = [
   "Explore the conversation",
   "Find what matters",
 ];
+
+const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
+const QUIET_FEED_URI    = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/quiet-posters';
 
 const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Packs', 'Sources'] as const;
 type QuickFilter = typeof QUICK_FILTERS[number];
@@ -79,10 +82,38 @@ function SynopsisChip({ label }: { label: string }) {
   );
 }
 
-// ─── FeaturedSearchStoryCard ──────────────────────────────────────────────
-function FeaturedSearchStoryCard({ post, onTap }: { post: MockPost; onTap: () => void }) {
-  const img = post.images?.[0] ?? post.embed?.thumbnail;
-  const domain = post.embed?.url ? (() => { try { return new URL(post.embed!.url!).hostname.replace(/^www\./, ''); } catch { return ''; } })() : '';
+// ─── RichPostText — inline #hashtag linkification ────────────────────────
+function RichPostText({ text, onHashtag, style }: {
+  text: string;
+  onHashtag?: (tag: string) => void;
+  style?: React.CSSProperties;
+}) {
+  const parts = text.split(/(#\w+)/g);
+  return (
+    <span style={style}>
+      {parts.map((part, i) =>
+        part.startsWith('#') ? (
+          <span
+            key={i}
+            onClick={e => { e.stopPropagation(); onHashtag?.(part.slice(1)); }}
+            style={{ color: accent.cyan400, fontWeight: 700, cursor: onHashtag ? 'pointer' : 'default' }}
+          >{part}</span>
+        ) : part
+      )}
+    </span>
+  );
+}
+
+// ─── FeaturedSearchStoryCard — Gist-inspired flush link story card ────────
+function FeaturedSearchStoryCard({ post, onTap, onHashtag }: {
+  post: MockPost;
+  onTap: () => void;
+  onHashtag?: (tag: string) => void;
+}) {
+  const embed = post.embed?.type === 'external' ? post.embed : null;
+  const img = post.media?.[0]?.url ?? embed?.thumb;
+  const domain = embed?.domain ?? '';
+  const hashtags: string[] = Array.from(new Set((post.content.match(/#\w+/g) ?? []) as string[])).slice(0, 5);
 
   return (
     <motion.div
@@ -97,68 +128,220 @@ function FeaturedSearchStoryCard({ post, onTap }: { post: MockPost; onTap: () =>
         border: `0.5px solid ${disc.lineSubtle}`,
       }}
     >
-      {/* Hero media */}
-      <div style={{ height: fscTokens.mediaHeight, background: disc.surfaceFocus, overflow: 'hidden', position: 'relative' }}>
-        {img
-          ? <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          : <div style={{
-              width: '100%', height: '100%',
-              background: `radial-gradient(circle at 30% 50%, rgba(91,124,255,0.3), transparent 60%), ${disc.surfaceCard2}`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth={1.5} strokeLinecap="round">
-                <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
-                <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+      {/* ── Hero zone: image + gradient scrim that bleeds into card bg ── */}
+      <div style={{ position: 'relative', height: 210, background: disc.surfaceFocus, overflow: 'hidden' }}>
+        {img ? (
+          <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <div style={{
+            width: '100%', height: '100%',
+            background: `radial-gradient(ellipse at 20% 60%, rgba(91,124,255,0.35) 0%, transparent 55%),
+                         radial-gradient(ellipse at 78% 20%, rgba(124,233,255,0.15) 0%, transparent 50%),
+                         ${disc.surfaceCard}`,
+          }} />
+        )}
+        {/* Gradient scrim: fades to exact card bg so there is NO hard edge */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: `linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.05) 45%, ${fscTokens.bg} 100%)`,
+        }} />
+        {/* Domain pill overlaid in lower-left of hero */}
+        {domain && (
+          <div style={{
+            position: 'absolute', bottom: 14, left: 14,
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            background: 'rgba(7,11,18,0.76)',
+            backdropFilter: 'blur(14px)',
+            WebkitBackdropFilter: 'blur(14px)',
+            border: '0.5px solid rgba(255,255,255,0.09)',
+            borderRadius: radius.full,
+            padding: '4px 10px 4px 7px',
+          }}>
+            <div style={{ width: 14, height: 14, borderRadius: 4, background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth={2.5} strokeLinecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
               </svg>
             </div>
-        }
-        {/* Gradient scrim */}
-        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, transparent 40%, rgba(18,24,36,0.7) 100%)' }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.75)', letterSpacing: '0.01em' }}>{domain}</span>
+          </div>
+        )}
+        {/* Open-link pill: upper-right corner */}
+        <div style={{
+          position: 'absolute', top: 12, right: 12,
+          background: 'rgba(7,11,18,0.6)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          border: '0.5px solid rgba(255,255,255,0.09)',
+          borderRadius: radius.full,
+          padding: '4px 9px',
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={accent.cyan400} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+          <span style={{ fontSize: 11, fontWeight: 600, color: accent.cyan400 }}>Open</span>
+        </div>
       </div>
 
-      {/* Content */}
-      <div style={{ padding: `${space[8]}px ${space[10]}px ${space[10]}px` }}>
-        <div style={{ marginBottom: 8 }}>
-          <SynopsisChip label="Glympse Synopsis" />
-        </div>
+      {/* ── Content zone — seamlessly attached below hero ── */}
+      <div style={{ padding: `14px ${space[10]}px ${space[10]}px` }}>
+
+        {/* Hashtag chips */}
+        {hashtags.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            {hashtags.map(tag => (
+              <button
+                key={tag}
+                onClick={e => { e.stopPropagation(); onHashtag?.(tag.slice(1)); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center',
+                  padding: '3px 9px', borderRadius: radius.full,
+                  background: 'rgba(91,124,255,0.13)',
+                  border: '0.5px solid rgba(91,124,255,0.3)',
+                  color: accent.primary,
+                  fontSize: 12, fontWeight: 600, letterSpacing: '0.01em',
+                  cursor: 'pointer',
+                }}
+              >{tag}</button>
+            ))}
+          </div>
+        )}
+
+        {/* Post text with inline hashtag linkification */}
         <p style={{
-          fontSize: typeScale.titleMd[0], lineHeight: `${typeScale.titleMd[1]}px`,
-          fontWeight: typeScale.titleMd[2], letterSpacing: typeScale.titleMd[3],
+          fontSize: typeScale.titleSm[0], lineHeight: `${typeScale.titleSm[1]}px`,
+          fontWeight: 600, letterSpacing: typeScale.titleSm[3],
           color: disc.textPrimary, marginBottom: 8,
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-        }}>
-          {post.content}
-        </p>
-        <p style={{
-          fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
-          fontWeight: typeScale.bodySm[2],
-          color: disc.textSecondary, marginBottom: 12,
           display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          {post.embed?.description ?? post.content}
+          <RichPostText text={post.content} {...(onHashtag ? { onHashtag } : {})} />
         </p>
 
-        {/* Source strip */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: `${space[4]}px ${space[6]}px`,
-          background: overviewCard.sourceStrip.bg,
-          borderRadius: radius[12],
-        }}>
-          <div style={{ width: 20, height: 20, borderRadius: 6, background: disc.surfaceFocus, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={overviewCard.sourceStrip.iconTint} strokeWidth={2} strokeLinecap="round">
-              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
-            </svg>
+        {/* Article title from embed (if different from post text) */}
+        {embed?.title && embed.title.trim() !== post.content.trim() && (
+          <p style={{
+            fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
+            color: disc.textSecondary, marginBottom: 8,
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>{embed.title}</p>
+        )}
+
+        {/* Article author / publisher row */}
+        {(embed?.authorName || embed?.publisher) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center',
+              padding: '2px 8px', borderRadius: radius.full,
+              background: 'rgba(124,233,255,0.10)',
+              border: `0.5px solid rgba(124,233,255,0.22)`,
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', color: accent.cyan400,
+              textTransform: 'uppercase',
+            }}>Featured</span>
+            {embed?.authorName && (
+              <span style={{ fontSize: 12, color: disc.textSecondary, fontWeight: 500 }}>
+                By <span style={{ color: disc.textPrimary, fontWeight: 600 }}>{embed.authorName}</span>
+              </span>
+            )}
+            {embed?.publisher && (
+              <span style={{ fontSize: 12, color: disc.textTertiary }}>
+                · {embed.publisher}
+              </span>
+            )}
           </div>
-          <span style={{
-            fontSize: typeScale.metaSm[0], lineHeight: `${typeScale.metaSm[1]}px`,
-            fontWeight: typeScale.metaSm[2], letterSpacing: typeScale.metaSm[3],
-            color: overviewCard.sourceStrip.text,
-          }}>
-            {domain || `@${post.author.handle}`}
+        )}
+
+        {/* Footer: author avatar + name + engagement */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, borderTop: `0.5px solid ${disc.lineSubtle}`, marginTop: 12 }}>
+          <div style={{ width: 22, height: 22, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
+            {post.author.avatar
+              ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 9, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+            }
+          </div>
+          <span style={{ fontSize: 12, fontWeight: 500, color: disc.textSecondary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {post.author.displayName}
           </span>
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: disc.textTertiary }}>→</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, color: disc.textTertiary }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+              {post.likeCount.toLocaleString()}
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, color: disc.textTertiary }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+              {post.replyCount.toLocaleString()}
+            </span>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── LinkedPostMiniCard — horizontal strip of popular link posts ──────────
+function LinkedPostMiniCard({ post, onTap, onHashtag }: {
+  post: MockPost;
+  onTap: () => void;
+  onHashtag?: (tag: string) => void;
+}) {
+  const embed = post.embed?.type === 'external' ? post.embed : null;
+  const img = post.media?.[0]?.url ?? embed?.thumb;
+  const domain = embed?.domain ?? '';
+
+  return (
+    <motion.div
+      whileTap={{ scale: 0.96 }}
+      onClick={onTap}
+      style={{
+        flexShrink: 0, width: 182,
+        borderRadius: radius[20],
+        overflow: 'hidden',
+        background: disc.surfaceCard2,
+        border: `0.5px solid ${disc.lineSubtle}`,
+        cursor: 'pointer',
+        display: 'flex', flexDirection: 'column',
+      }}
+    >
+      {/* Thumbnail with gradient scrim */}
+      <div style={{ height: 96, background: disc.surfaceFocus, position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
+        {img ? (
+          <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <div style={{ width: '100%', height: '100%', background: `radial-gradient(circle at 50% 60%, rgba(91,124,255,0.22), ${disc.surfaceCard2})` }} />
+        )}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: `linear-gradient(to bottom, rgba(0,0,0,0) 30%, ${disc.surfaceCard2} 100%)`,
+        }} />
+      </div>
+      {/* Text content */}
+      <div style={{ padding: '8px 12px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <p style={{
+          fontSize: 13, fontWeight: 600, lineHeight: '18px', color: disc.textPrimary,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>
+          <RichPostText text={post.content} {...(onHashtag ? { onHashtag } : {})} />
+        </p>
+        {domain && (
+          <span style={{
+            fontSize: 11, color: disc.textTertiary, fontWeight: 500,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{domain}</span>
+        )}
+        {(embed?.authorName || embed?.publisher) && (
+          <span style={{
+            fontSize: 11, color: disc.textSecondary, fontWeight: 500,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {embed?.authorName ? `By ${embed.authorName}` : embed?.publisher}
+            {embed?.authorName && embed?.publisher ? ` · ${embed.publisher}` : ''}
+          </span>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: disc.textTertiary }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            {post.likeCount.toLocaleString()}
+          </span>
         </div>
       </div>
     </motion.div>
@@ -374,10 +557,14 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const [suggestedFeeds, setSuggestedFeeds] = useState<AppBskyFeedDefs.GeneratorView[]>([]);
   const [suggestedActors, setSuggestedActors] = useState<AppBskyActorDefs.ProfileView[]>([]);
   const [featuredPost, setFeaturedPost] = useState<MockPost | null>(null);
+  const [linkPosts, setLinkPosts] = useState<MockPost[]>([]);
   const [trendingPosts, setTrendingPosts] = useState<MockPost[]>([]);
   const [loading, setLoading] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(true);
   const [focused, setFocused] = useState(false);
+  const [featuredIdx, setFeaturedIdx] = useState(0);
+  const [sidePosts, setSidePosts] = useState<MockPost[]>([]);
+  const carouselIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const phraseIdx = useRef(Math.floor(Math.random() * DISCOVERY_PHRASES.length));
 
@@ -414,19 +601,75 @@ export default function ExploreTab({ onOpenStory }: Props) {
     Promise.all([
       atpCall(() => agent.app.bsky.feed.getSuggestedFeeds({ limit: 10 })).catch(() => null),
       atpCall(() => agent.getSuggestions({ limit: 10 })).catch(() => null),
-      atpCall(() => agent.app.bsky.feed.searchPosts({ q: 'technology OR science OR culture', limit: 12 })).catch(() => null),
-    ]).then(([feedsRes, actorsRes, postsRes]) => {
+      atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 40 })).catch(() => null),
+      atpCall(() => agent.app.bsky.feed.getFeed({ feed: QUIET_FEED_URI, limit: 20 })).catch(() => null),
+    ]).then(([feedsRes, actorsRes, discoverRes, quietRes]) => {
       if (feedsRes?.data?.feeds) setSuggestedFeeds(feedsRes.data.feeds);
       if (actorsRes?.data?.actors) setSuggestedActors(actorsRes.data.actors);
-      if (postsRes?.data?.posts?.length) {
-        const mapped = postsRes.data.posts
-          .filter((p: any) => p?.record?.text)
-          .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }));
-        setFeaturedPost(mapped[0] ?? null);
-        setTrendingPosts(mapped.slice(1, 6));
+      if (discoverRes?.data?.feed?.length) {
+        const mapped = discoverRes.data.feed
+          .filter((item: any) => item.post?.record?.text)
+          .map((item: any) => mapFeedViewPost(item));
+
+        // Sort by engagement score
+        const byEngagement = [...mapped].sort(
+          (a, b) => (b.likeCount + b.repostCount * 2 + b.replyCount) - (a.likeCount + a.repostCount * 2 + a.replyCount)
+        );
+
+        // Link posts: only those with an external embed, top 6 by engagement
+        const withLinks = byEngagement.filter(p => p.embed?.type === 'external').slice(0, 6);
+        setLinkPosts(withLinks);
+        setFeaturedPost(withLinks[0] ?? byEngagement[0] ?? null);
+        setTrendingPosts(byEngagement.slice(0, 10));
+
+        // Side strip: mid-tier trending + underdogs from quiet posters feed
+        const topIds = new Set(withLinks.map(p => p.id));
+
+        // Mid-tier: trending posts not in top stories (with or without links, by engagement rank)
+        const midTier = byEngagement.filter(p => !topIds.has(p.id)).slice(0, 4);
+
+        // Underdogs: low-engagement link posts from the hot feed, not already featured
+        const underdogs = byEngagement
+          .filter(p => p.embed?.type === 'external' && !topIds.has(p.id))
+          .sort((a, b) => (a.likeCount + a.repostCount) - (b.likeCount + b.repostCount))
+          .slice(0, 3);
+
+        // Quiet posters: map if available, keep only posts with some substance
+        const quietMapped = quietRes?.data?.feed?.length
+          ? quietRes.data.feed
+              .filter((item: any) => item.post?.record?.text?.length > 40)
+              .map((item: any) => mapFeedViewPost(item))
+              .slice(0, 4)
+          : [];
+
+        // Interleave: midTier → quietMapped → underdogs, dedupe by id
+        const seen = new Set(topIds);
+        const combined: MockPost[] = [];
+        for (const p of [...midTier, ...quietMapped, ...underdogs]) {
+          if (!seen.has(p.id)) { seen.add(p.id); combined.push(p); }
+          if (combined.length >= 10) break;
+        }
+        setSidePosts(combined);
       }
     }).finally(() => setDiscoverLoading(false));
   }, [agent, session]);
+
+  // Reset carousel index when link posts refresh
+  useEffect(() => { setFeaturedIdx(0); }, [linkPosts]);
+
+  // Auto-advance carousel — restarts on manual tap
+  const restartCarousel = useCallback(() => {
+    if (carouselIntervalRef.current) clearInterval(carouselIntervalRef.current);
+    if (linkPosts.length <= 1) return;
+    carouselIntervalRef.current = setInterval(() => {
+      setFeaturedIdx(i => (i + 1) % linkPosts.length);
+    }, 5000);
+  }, [linkPosts.length]);
+
+  useEffect(() => {
+    restartCarousel();
+    return () => { if (carouselIntervalRef.current) clearInterval(carouselIntervalRef.current); };
+  }, [restartCarousel]);
 
   const handleFollow = useCallback(async (did: string) => {
     if (!session) return;
@@ -735,14 +978,83 @@ export default function ExploreTab({ onOpenStory }: Props) {
               ) : (
                 <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 28 }}>
 
-                  {/* Featured Search Story Card */}
-                  {featuredPost && (
-                    <div>
-                      <SectionHeader title="Featured Story" />
-                      <FeaturedSearchStoryCard
-                        post={featuredPost}
-                        onTap={() => onOpenStory({ type: 'post', id: featuredPost.id, title: featuredPost.content.slice(0, 80) })}
-                      />
+                  {/* Featured Story Carousel */}
+                  {linkPosts.length > 0 && (
+                    <div style={{ marginBottom: 24 }}>
+                      <SectionHeader title="Top Stories" />
+
+                      {/* Hero card — crossfades between link posts */}
+                      <div style={{ position: 'relative' }}>
+                        <AnimatePresence mode="wait" initial={false}>
+                          <motion.div
+                            key={linkPosts[featuredIdx]?.id ?? featuredIdx}
+                            initial={{ opacity: 0, scale: 0.975 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.38, ease: [0.25, 0.1, 0.25, 1] }}
+                          >
+                            <FeaturedSearchStoryCard
+                              post={linkPosts[featuredIdx]}
+                              onTap={() => {
+                                const p = linkPosts[featuredIdx];
+                                onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) });
+                              }}
+                              onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                            />
+                          </motion.div>
+                        </AnimatePresence>
+                      </div>
+
+                      {/* Progress dots — tap to jump, active pill fills over 5s */}
+                      {linkPosts.length > 1 && (
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 5, marginTop: 10, marginBottom: 2 }}>
+                          {linkPosts.map((_, i) => (
+                            <button
+                              key={i}
+                              onClick={() => { setFeaturedIdx(i); restartCarousel(); }}
+                              style={{ background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                            >
+                              <motion.div
+                                animate={{ width: i === featuredIdx ? 20 : 6 }}
+                                transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+                                style={{
+                                  height: 4, borderRadius: 2,
+                                  overflow: 'hidden', position: 'relative',
+                                  background: disc.lineSubtle,
+                                }}
+                              >
+                                {i === featuredIdx && (
+                                  <motion.div
+                                    key={`fill-${featuredIdx}`}
+                                    initial={{ scaleX: 0 }}
+                                    animate={{ scaleX: 1 }}
+                                    transition={{ duration: 5, ease: 'linear' }}
+                                    style={{
+                                      position: 'absolute', inset: 0,
+                                      background: accent.primary,
+                                      transformOrigin: 'left center',
+                                    }}
+                                  />
+                                )}
+                              </motion.div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Side strip: trending non-top + quiet posters + underdogs */}
+                      {sidePosts.length > 0 && (
+                        <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2, marginTop: 12 }}>
+                          {sidePosts.map(p => (
+                            <LinkedPostMiniCard
+                              key={p.id}
+                              post={p}
+                              onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
+                              onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -13,11 +13,11 @@ import {
   useQueryClient,
   type InfiniteData,
 } from '@tanstack/react-query';
-import { useSessionStore } from '../../store/sessionStore';
-import { atpCall, atpMutate } from './client';
-import { mapFeedViewPost, mapNotification } from '../../atproto/mappers';
-import type { MockPost } from '../../data/mockData';
-import type { LiveNotification } from '../../atproto/mappers';
+import { useSessionStore } from '../../store/sessionStore.js';
+import { atpCall, atpMutate } from './client.js';
+import { mapFeedViewPost, mapNotification } from '../../atproto/mappers.js';
+import type { MockPost } from '../../data/mockData.js';
+import type { LiveNotification } from '../../atproto/mappers.js';
 
 // ─── Query key factory ─────────────────────────────────────────────────────
 export const qk = {

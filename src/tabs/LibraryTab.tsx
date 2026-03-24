@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore';
-import { atpCall } from '../lib/atproto/client';
-import { mapFeedViewPost } from '../atproto/mappers';
-import type { MockPost } from '../data/mockData';
-import { formatTime, formatCount } from '../data/mockData';
+import { useSessionStore } from '../store/sessionStore.js';
+import { atpCall } from '../lib/atproto/client.js';
+import { mapFeedViewPost } from '../atproto/mappers.js';
+import type { MockPost } from '../data/mockData.js';
+import { formatTime, formatCount } from '../data/mockData.js';
 import type { AppBskyFeedDefs, AppBskyActorDefs } from '@atproto/api';
-import type { StoryEntry } from '../App';
+import type { StoryEntry } from '../App.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -186,6 +186,12 @@ function CompactSavedCard({ post, index, onOpenStory }: { post: MockPost; index:
           </div>
           {externalEmbed ? (
             <>
+              {externalEmbed.authorName && (
+                <p style={{ fontSize: 12, color: 'var(--label-3)', marginBottom: 4 }}>
+                  <span style={{ fontWeight: 700, color: 'var(--teal)' }}>Featured author:</span> {externalEmbed.authorName}
+                  {externalEmbed.publisher && <span style={{ marginLeft: 8, color: 'var(--label-4)' }}>· {externalEmbed.publisher}</span>}
+                </p>
+              )}
               <p style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.3, letterSpacing: -0.4, color: 'var(--label-1)', marginBottom: 4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{externalEmbed.title}</p>
               <p style={{ fontSize: 13, lineHeight: 1.35, color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{externalEmbed.description}</p>
             </>

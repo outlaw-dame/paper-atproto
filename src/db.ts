@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { drizzle } from 'drizzle-orm/pglite';
-import * as schema from './schema';
+import * as schema from './schema.js';
 
 /**
  * Database Utility using PGlite and Drizzle ORM.

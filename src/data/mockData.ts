@@ -1,5 +1,6 @@
 export interface MockPost {
   id: string;
+  cid?: string;
   author: {
     did: string;
     handle: string;
@@ -9,16 +10,28 @@ export interface MockPost {
   };
   content: string;
   createdAt: string;
+  timestamp?: string;
   likeCount: number;
   replyCount: number;
   repostCount: number;
   media?: { type: 'image'; url: string; alt?: string; aspectRatio?: number }[];
+  images?: string[];
   embed?: {
     type: 'external';
     url: string;
     title: string;
     description: string;
     thumb?: string;
+    domain: string;
+    authorName?: string;
+    authorUrl?: string;
+    publisher?: string;
+  } | {
+    type: 'video';
+    url: string;
+    thumb?: string;
+    title?: string;
+    description?: string;
     domain: string;
   } | {
     type: 'quote';
@@ -28,6 +41,10 @@ export interface MockPost {
   threadCount?: number;
   replyTo?: MockPost;
   threadRoot?: MockPost;
+  viewer?: {
+    like?: string;
+    repost?: string;
+  };
 }
 
 export type ChipType = 'thread' | 'topic' | 'feed' | 'pack' | 'related' | 'story';
@@ -92,6 +109,9 @@ export const MOCK_POSTS: MockPost[] = [
       description: 'How RSS almost became the foundation of social media, and why it didn\'t — and what we can learn from that failure today.',
       thumb: 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=600&q=80',
       domain: 'example.com',
+      authorName: 'Alex Rivera',
+      authorUrl: 'https://example.com/authors/alex-rivera',
+      publisher: 'Example Insights',
     },
     chips: ['topic', 'related', 'story'],
   },
@@ -200,6 +220,28 @@ export const MOCK_POSTS: MockPost[] = [
       repostCount: 567,
       chips: ['feed', 'topic', 'story'],
     },
+  },
+  {
+    id: 'post-8',
+    author: {
+      did: 'did:plc:hannah101',
+      handle: 'hannah.bsky.social',
+      displayName: 'Hannah Davis',
+      avatar: 'https://api.dicebear.com/9.x/avataaars/svg?seed=hannah&backgroundColor=ffd5dc',
+    },
+    content: 'This breakdown of the AT Protocol architecture is absolutely essential viewing for anyone building in this space. The explanation of MSTs specifically is top tier.',
+    createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+    likeCount: 432,
+    replyCount: 21,
+    repostCount: 89,
+    chips: ['topic', 'story'],
+    embed: {
+      type: 'video',
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', // Using a known ID for stability, usually would be ATProto tech talk
+      title: 'Understanding Merkle Search Trees',
+      description: 'A deep dive into the data structures powering Bluesky.',
+      domain: 'youtube.com',
+    }
   },
 ];
 

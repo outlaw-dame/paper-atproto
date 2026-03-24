@@ -7,15 +7,15 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AtpProvider, useAtp } from './atproto/AtpContext';
-import { useUiStore } from './store/uiStore';
-import TabBar from './shell/TabBar';
-import OverlayHost from './shell/OverlayHost';
-import HomeTab from './tabs/HomeTab';
-import ExploreTab from './tabs/ExploreTab';
-import InboxTab from './tabs/InboxTab';
-import ProfileTab from './tabs/ProfileTab';
-import LoginScreen from './components/LoginScreen';
+import { AtpProvider, useAtp } from './atproto/AtpContext.js';
+import { useUiStore } from './store/uiStore.js';
+import TabBar from './shell/TabBar.js';
+import OverlayHost from './shell/OverlayHost.js';
+import HomeTab from './tabs/HomeTab.js';
+import ExploreTab from './tabs/ExploreTab.js';
+import InboxTab from './tabs/InboxTab.js';
+import ProfileTab from './tabs/ProfileTab.js';
+import LoginScreen from './components/LoginScreen.js';
 
 export type TabId = 'home' | 'explore' | 'compose' | 'inbox' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
@@ -33,7 +33,7 @@ export default function App() {
 // ─── AppShell ──────────────────────────────────────────────────────────────
 function AppShell() {
   const { session, isLoading } = useAtp();
-  const { activeTab, prevTab, openStory } = useUiStore();
+  const { activeTab, prevTab, openStory, profileDid } = useUiStore();
 
   // Loading splash while restoring persisted session
   if (isLoading) {
@@ -81,7 +81,7 @@ function AppShell() {
             {activeTab === 'home'    && <HomeTab onOpenStory={openStory} />}
             {activeTab === 'explore' && <ExploreTab onOpenStory={openStory} />}
             {activeTab === 'inbox'   && <InboxTab />}
-            {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} />}
+            {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} actorDid={profileDid ?? undefined} />}
           </motion.div>
         </AnimatePresence>
       </div>

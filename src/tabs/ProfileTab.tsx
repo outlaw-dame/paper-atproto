@@ -6,13 +6,14 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppBskyFeedDefs, AppBskyActorDefs, AppBskyGraphDefs } from '@atproto/api';
-import { useSessionStore } from '../store/sessionStore';
-import { atpCall } from '../lib/atproto/client';
-import { mapFeedViewPost } from '../atproto/mappers';
-import PostCard from '../components/PostCard';
-import type { MockPost } from '../data/mockData';
-import { formatCount, formatTime } from '../data/mockData';
-import type { StoryEntry } from '../App';
+import { useSessionStore } from '../store/sessionStore.js';
+import { useUiStore } from '../store/uiStore.js';
+import { atpCall } from '../lib/atproto/client.js';
+import { mapFeedViewPost } from '../atproto/mappers.js';
+import PostCard from '../components/PostCard.js';
+import type { MockPost } from '../data/mockData.js';
+import { formatCount, formatTime } from '../data/mockData.js';
+import type { StoryEntry } from '../App.js';
 
 // ─── Sub-tabs ──────────────────────────────────────────────────────────────
 const PROFILE_TABS = ['Posts', 'Library', 'Media', 'Feeds', 'Starter Packs', 'Lists'] as const;
@@ -38,7 +39,7 @@ function shortenUrl(raw: string): string {
 // ─── Bio text (linkified hashtags + URLs) ──────────────────────────────────
 const BIO_SEGMENT_RE = /(https?:\/\/[^\s]+|#[\w]+)/g;
 
-function BioText({ text }: { text: string }) {
+function BioText({ text, onHashtagClick }: { text: string; onHashtagClick?: (tag: string) => void }) {
   const segments = useMemo(() => {
     const parts: { key: number; type: 'text' | 'url' | 'tag'; value: string }[] = [];
     let last = 0, match: RegExpExecArray | null, i = 0;
@@ -57,7 +58,7 @@ function BioText({ text }: { text: string }) {
     <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--label-2)', textAlign: 'center', padding: '10px 24px 0', maxWidth: 340 }}>
       {segments.map(({ key, type, value }) => {
         if (type === 'tag') return (
-          <span key={key} style={{ color: 'var(--blue)', fontWeight: 600 }}>{value}</span>
+          <span key={key} onClick={() => onHashtagClick?.(value.slice(1))} style={{ color: 'var(--blue)', fontWeight: 600, cursor: onHashtagClick ? 'pointer' : 'default' }}>{value}</span>
         );
         if (type === 'url') return (
           <a key={key} href={value} target="_blank" rel="noopener noreferrer"
@@ -272,6 +273,7 @@ function LikedPostRow({ post, index, onOpenStory }: { post: MockPost; index: num
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const { agent, session, profile: sessionProfile } = useSessionStore();
+  const { openSearchStory, setTab: setAppTab } = useUiStore();
   const did = actorDid ?? session?.did ?? '';
   const isOwnProfile = !actorDid || actorDid === session?.did;
 
@@ -289,6 +291,16 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const [profileLoading, setProfileLoading] = useState(!isOwnProfile || !sessionProfile);
 
   const tabBarRef = useRef<HTMLDivElement>(null);
+
+  // Reset content when switching to a different user
+  useEffect(() => {
+    setPosts([]);
+    setLiked([]);
+    setFeeds([]);
+    setLists([]);
+    setProfile(isOwnProfile ? sessionProfile : null);
+    setTab('Posts');
+  }, [did]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load profile ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -424,7 +436,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
           {/* Left — empty or back button */}
           <div style={{ width: 36, flexShrink: 0 }}>
             {!isOwnProfile && (
-              <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--blue)' }}>
+              <button onClick={() => setAppTab('home')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--blue)' }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="15 18 9 12 15 6"/>
                 </svg>
@@ -517,7 +529,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               </p>
 
               {/* Bio — linkified */}
-              {bio && <BioText text={bio} />}
+              {bio && <BioText text={bio} onHashtagClick={tag => openSearchStory(tag)} />}
 
               {/* Stats row */}
               <div style={{

@@ -10,8 +10,8 @@
 
 import React, { createContext, useContext, useEffect, useCallback } from 'react';
 import type { AppBskyActorDefs } from '@atproto/api';
-import { useSessionStore, SESSION_KEY, type SessionData } from '../store/sessionStore';
-import { atpCall } from '../lib/atproto/client';
+import { useSessionStore, SESSION_KEY, type SessionData } from '../store/sessionStore.js';
+import { atpCall } from '../lib/atproto/client.js';
 
 // ─── Public context shape ──────────────────────────────────────────────────
 export interface AtpContextValue {

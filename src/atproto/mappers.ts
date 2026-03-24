@@ -9,7 +9,7 @@ import {
   AppBskyNotificationListNotifications,
 } from '@atproto/api';
 import { type PostView } from '@atproto/api/dist/client/types/app/bsky/feed/defs';
-import type { MockPost, ChipType } from '../data/mockData';
+import type { MockPost, ChipType } from '../data/mockData.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -37,11 +37,16 @@ function deriveChips(view: AppBskyFeedDefs.FeedViewPost | PostView, isReplyConte
   return chips;
 }
 
+function isVideoUrl(url: string): boolean {
+  const pattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com|twitch\.tv)\/.+$/;
+  return pattern.test(url);
+}
+
 // ─── Post View Mapper ──────────────────────────────────────────────────────
 
 export function mapPostViewToMockPost(post: PostView): MockPost {
   const record = post.record as any; // Cast to access text, etc.
-  const embed = post.embed;
+  const embed: any = post.embed;
 
   let media;
   if (AppBskyEmbedImages.isView(embed)) {
@@ -63,13 +68,26 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
   let embedData;
   if (AppBskyEmbedExternal.isView(embed)) {
     embedData = {
-      type: 'external' as const,
+      type: isVideoUrl(embed.external.uri) ? 'video' as const : 'external' as const,
       url: embed.external.uri,
       title: embed.external.title,
       description: embed.external.description,
       thumb: embed.external.thumb,
-      domain: new URL(embed.external.uri).hostname,
+      domain: extractDomain(embed.external.uri),
     };
+
+    // Add extra fields for external links if not a video (or shared fields)
+    if (embedData.type === 'external') {
+      Object.assign(embedData, {
+        authorName: (embed.external as any).author || (embed.external as any).authorName,
+        authorUrl: (embed.external as any).authorUrl,
+        publisher: (embed.external as any).siteName || (embed.external as any).publisher,
+      });
+    } else {
+      // Video-specific adjustments can go here if needed
+      // e.g. forcing youtube.com domain display
+    }
+
   } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView(embed.record)) {
     embedData = {
       type: 'quote' as const,
@@ -84,6 +102,7 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
 
   return {
     id: post.uri,
+    cid: post.cid,
     author: {
       did: post.author.did,
       handle: post.author.handle,
@@ -98,6 +117,10 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
     repostCount: post.repostCount || 0,
     chips: [] as ChipType[], // Chips are determined by higher-level logic
     media,
+    viewer: {
+      like: post.viewer?.like,
+      repost: post.viewer?.repost,
+    },
     embed: embedData,
   };
 }
@@ -164,7 +187,7 @@ export function mapNotification(n: AppBskyNotificationListNotifications.Notifica
       did: n.author.did,
       handle: n.author.handle,
       displayName: n.author.displayName ?? n.author.handle,
-      avatar: n.author.avatar,
+      ...(n.author.avatar && { avatar: n.author.avatar }),
     },
     subjectUri: (n.reasonSubject as string | undefined),
   };

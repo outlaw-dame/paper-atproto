@@ -1,9 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Card } from 'konsta/react';
-import { Markdown } from './Markdown';
-import { Gif } from './Gif';
-import { LinkPreview } from './LinkPreview';
+import { Markdown } from './Markdown.js';
+import { Gif } from './Gif.js';
+import { LinkPreview } from './LinkPreview.js';
 
 interface FeedItemProps {
   post: {

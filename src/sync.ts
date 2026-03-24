@@ -63,49 +63,46 @@ export class PaperSync {
       const response = await atpCall(() => this.agent.getTimeline({ limit: 20 }));
       
       const feed = response.data.feed;
-      const pg = paperDB.getPG();
+      const pg = paperDB.getPG();      
+      
+      const postsToProcess = feed
+        .map(item => FeedViewPostSchema.safeParse(item))
+        .filter(result => result.success)
+        .map(result => (result as any).data)
+        .filter(item => item.post.record.text && item.post.record.text.trim() !== '');
 
-      for (const item of feed as AppBskyFeedDefs.FeedViewPost[]) {
-        const validated = FeedViewPostSchema.safeParse(item);
-        if (!validated.success) {
-          console.warn('Skipping invalid post from feed:', validated.error);
-          continue;
-        }
-
-        const { post, reply } = validated.data;
-        const postId = post.cid;
-        const sanitizedContent = sanitize(post.record.text);
-        if (!sanitizedContent) continue;
-
-        // Generate embedding via worker (non-blocking relative to UI)
-        const embedding = await inferenceClient.embed(sanitizedContent);
-
-        // Resolve deterministic ATProto signals
-        const facets = resolveFacets(post.record.facets);
-        const embed = resolveEmbed(post.record.embed);
-        const signals = extractClusterSignals(sanitizedContent, facets, embed, []);
-
-        await pg.query(
-          // NOTE: This assumes the 'posts' table has been migrated to include 'uri', 'reply_to', and 'reply_root' columns.
-          `INSERT INTO posts (id, uri, author_did, content, created_at, embedding, embed, reply_to, reply_root)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (id) DO NOTHING`,
-          [
-            postId,
-            post.uri,
-            post.author.did,
-            sanitizedContent,
-            post.record.createdAt,
-            embedding.length ? `[${embedding.join(',')}]` : null,
-            JSON.stringify({
-              ...post.record.embed,
-              _signals: signals,   // store cluster signals alongside embed
-            }),
-            reply?.parent?.uri ?? null,
-            reply?.root?.uri ?? null,
-          ]
-        );
+      if (postsToProcess.length === 0) {
+        console.log('[sync] No new posts to process.');
+        return;
       }
+
+      const textsToEmbed = postsToProcess.map(item => sanitize(item.post.record.text));
+      const embeddings = await inferenceClient.embedBatch(textsToEmbed);
+
+      await pg.transaction(async (trx) => {
+        for (let i = 0; i < postsToProcess.length; i++) {
+          const { post, reply } = postsToProcess[i];
+          const embedding = embeddings[i];
+          const sanitizedContent = textsToEmbed[i];
+
+          const facets = resolveFacets(post.record.facets);
+          const embed = resolveEmbed(post.record.embed);
+          const signals = extractClusterSignals(sanitizedContent, facets, embed, []);
+
+          await trx.query(
+            `INSERT INTO posts (id, uri, author_did, content, created_at, embedding, embed, reply_to, reply_root)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              post.cid, post.uri, post.author.did, sanitizedContent, post.record.createdAt,
+              embedding.length ? `[${embedding.join(',')}]` : null,
+              JSON.stringify({ ...post.record.embed, _signals: signals }),
+              reply?.parent?.uri ?? null,
+              reply?.root?.uri ?? null,
+            ]
+          );
+        }
+      });
 
       console.log(`[sync] Synced ${feed.length} posts (embeddings via worker, deterministic signals only)`);
     } catch (error) {

@@ -4,7 +4,7 @@
 //
 // Formula:  sleep = min(cap, random_between(base, prev_sleep * 3))
 
-import { normalizeError, isRetryable, type AtpError } from './errors';
+import { normalizeError, isRetryable, type AtpError } from './errors.js';
 
 export interface RetryOptions {
   maxAttempts?: number;   // default 3

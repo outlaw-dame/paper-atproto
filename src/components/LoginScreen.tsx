@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { useAtp } from '../atproto/AtpContext';
+import { useAtp } from '../atproto/AtpContext.js';
 
 export default function LoginScreen() {
   const { login, isLoading, error } = useAtp();
