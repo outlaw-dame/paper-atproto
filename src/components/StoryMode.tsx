@@ -227,26 +227,6 @@ function PromptHeroCard({ post, participantCount }: { post: MockPost; participan
           </div>
         )}
 
-        {/* Divider */}
-        <div style={{ height: 0.5, background: phTokens.line, marginBottom: 16 }} />
-
-        {/* CTA */}
-        <button style={{
-          width: '100%',
-          height: phTokens.cta.height,
-          borderRadius: phTokens.cta.radius,
-          background: phTokens.cta.bg,
-          color: phTokens.cta.text,
-          fontSize: typeScale.buttonMd[0], fontWeight: typeScale.buttonMd[2],
-          letterSpacing: typeScale.buttonMd[3],
-          border: 'none', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={phTokens.cta.icon} strokeWidth={2.5} strokeLinecap="round">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-          </svg>
-          Share your point of view
-        </button>
       </div>
     </div>
   );
@@ -691,35 +671,81 @@ function ContributionCard({
         </div>
       )}
 
-      {/* Footer: timestamp + feedback */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+      {/* Footer: timestamp */}
+      <div style={{ display: 'flex', alignItems: 'center', marginTop: 4, marginBottom: nested ? 0 : 8 }}>
         <span style={{
           fontSize: typeScale.metaSm[0], color: disc.textTertiary,
           textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 500,
         }}>
           {node.createdAt ? formatTime(node.createdAt) : ''}
         </span>
-        <div style={{ flex: 1 }} />
-        {!nested && !isRepetitive && (
-          <div style={{ display: 'flex', gap: 6 }}>
-            {(['clarifying', 'new_to_me', 'provocative', 'aha'] as const).map(fb => {
-              const labels = { clarifying: '💡', new_to_me: '✨', provocative: '🔥', aha: '🎯' };
-              return (
-                <button
-                  key={fb}
-                  onClick={() => handleFeedback(fb)}
-                  style={{
-                    width: 28, height: 28, borderRadius: '50%',
-                    background: feedbackGiven === fb ? 'rgba(91,124,255,0.15)' : 'transparent',
-                    border: `0.5px solid ${feedbackGiven === fb ? accent.primary : disc.lineSubtle}`,
-                    cursor: 'pointer', fontSize: 13,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >{labels[fb]}</button>
-              );
-            })}
-          </div>
-        )}
+      </div>
+
+      {/* Narwhal-style feedback row: count + label pills */}
+      {!nested && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {([
+            { fb: 'provocative' as const, label: 'Provocative' },
+            { fb: 'clarifying' as const, label: 'Clarifying' },
+            { fb: 'new_to_me' as const, label: 'New to me' },
+          ]).map(({ fb, label }) => {
+            const isActive = feedbackGiven === fb;
+            return (
+              <button
+                key={fb}
+                onClick={() => handleFeedback(fb)}
+                style={{
+                  height: 28, padding: '0 12px',
+                  borderRadius: 14,
+                  background: isActive ? 'rgba(218,165,32,0.15)' : 'transparent',
+                  border: `0.5px solid ${isActive ? '#C49A00' : disc.lineStrong}`,
+                  color: isActive ? '#9A7200' : disc.textSecondary,
+                  fontSize: typeScale.metaLg[0], fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  letterSpacing: '0.01em',
+                }}
+              >
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>0</span>
+                <span style={{ opacity: 0.5 }}>—</span>
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ReplyBar ─────────────────────────────────────────────────────────────
+function ReplyBar({ userAvatar }: { userAvatar?: string }) {
+  return (
+    <div style={{
+      flexShrink: 0,
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '10px 16px',
+      paddingBottom: 'calc(var(--safe-bottom, 0px) + 10px)',
+      background: disc.bgBase,
+      borderTop: `0.5px solid ${disc.lineSubtle}`,
+    }}>
+      <div style={{
+        width: 32, height: 32, borderRadius: '50%',
+        overflow: 'hidden', flexShrink: 0,
+        background: disc.surfaceCard2,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {userAvatar && <img src={userAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+      </div>
+      <div style={{
+        flex: 1, height: 36, borderRadius: 18,
+        background: disc.surfaceCard2,
+        border: `0.5px solid ${disc.lineStrong}`,
+        display: 'flex', alignItems: 'center',
+        padding: '0 14px',
+        cursor: 'text',
+      }}>
+        <span style={{ fontSize: typeScale.bodyMd[0], color: disc.textTertiary }}>Write your reply…</span>
       </div>
     </div>
   );
@@ -768,7 +794,7 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function StoryMode({ entry, onClose }: Props) {
-  const { agent, session } = useSessionStore();
+  const { agent, session, profile } = useSessionStore();
   const { initThread, setInterpolatorState, setUserFeedback, getThread } = useThreadStore();
   const [rootPost, setRootPost] = useState<MockPost | null>(null);
   const [replies, setReplies] = useState<ThreadNode[]>([]);
@@ -869,7 +895,7 @@ export default function StoryMode({ entry, onClose }: Props) {
       <HostBar onClose={onClose} />
 
       {/* Scrollable body */}
-      <div className="scroll-y" style={{ flex: 1 }}>
+      <div className="scroll-y" style={{ flex: 1, overflowY: 'auto' }}>
         {loading ? (
           <Spinner />
         ) : error ? (
@@ -938,10 +964,13 @@ export default function StoryMode({ entry, onClose }: Props) {
 
             {/* Related footer */}
             <RelatedFooter onClose={onClose} />
-            <div style={{ height: 32 }} />
+            <div style={{ height: 16 }} />
           </div>
         )}
       </div>
+
+      {/* Static reply bar — always visible, Bluesky-style */}
+      <ReplyBar {...(profile?.avatar !== undefined ? { userAvatar: profile.avatar } : {})} />
     </motion.div>
   );
 }
