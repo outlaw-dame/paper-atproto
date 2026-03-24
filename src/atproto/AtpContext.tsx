@@ -66,18 +66,31 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    agent.resumeSession({
-      did: saved.did,
-      handle: saved.handle,
-      accessJwt: saved.accessJwt,
-      refreshJwt: saved.refreshJwt,
-      active: true,
-    }).then(() => {
-      setSession(saved);
+    // Optimistically show the UI immediately — no waiting for network
+    setSession(saved);
+    setLoading(false);
+
+    // Verify / refresh the session in the background with a hard timeout
+    const TIMEOUT_MS = 10_000;
+    const raceTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('session-restore-timeout')), TIMEOUT_MS)
+    );
+
+    Promise.race([
+      agent.resumeSession({
+        did: saved.did,
+        handle: saved.handle,
+        accessJwt: saved.accessJwt,
+        refreshJwt: saved.refreshJwt,
+        active: true,
+      }),
+      raceTimeout,
+    ]).then(() => {
       fetchProfile(saved.did);
     }).catch(() => {
-      localStorage.removeItem(SESSION_KEY);
-    }).finally(() => setLoading(false));
+      // Either invalid tokens or unreachable — keep the session so the app
+      // stays usable offline; next API call will surface the real error.
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Login ────────────────────────────────────────────────────────────────

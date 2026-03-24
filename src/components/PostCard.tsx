@@ -126,7 +126,7 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
               <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)' }}>
                 Replying to{' '}
                 <span style={{ color: 'var(--blue)', fontWeight: 500 }}>
-                  @{post.replyTo.handle.replace('.bsky.social', '')}
+                  @{(post.replyTo.author?.handle ?? '').replace('.bsky.social', '')}
                 </span>
               </span>
             </div>
@@ -137,13 +137,13 @@ export default function PostCard({ post, onOpenStory, index = 0 }: Props) {
             <div style={{ width: 38, height: 38, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: 'var(--fill-2)' }}>
               {post.author.avatar
                 ? <img src={post.author.avatar} alt={post.author.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--blue)', color: '#fff', fontSize: 15, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+                : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--blue)', color: '#fff', fontSize: 15, fontWeight: 700 }}>{post.author.displayName?.[0] ?? '?'}</div>
               }
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 5, flexWrap: 'wrap' }}>
                 <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-label-lg-track)' }}>{post.author.displayName}</span>
-                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', color: 'var(--label-3)', letterSpacing: 'var(--type-meta-md-track)' }}>@{post.author.handle.replace('.bsky.social', '')}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 'var(--type-meta-md-weight)', color: 'var(--label-3)', letterSpacing: 'var(--type-meta-md-track)' }}>@{(post.author.handle ?? '').replace('.bsky.social', '')}</span>
                 <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', color: 'var(--label-3)', letterSpacing: 'var(--type-meta-sm-track)', fontVariantNumeric: 'tabular-nums' }}>· {formatTime(post.createdAt)}</span>
               </div>
             </div>
