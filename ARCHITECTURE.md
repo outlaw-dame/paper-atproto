@@ -174,6 +174,7 @@ src/
 │   │   ├── client.ts       — atpCall / atpMutate (all API calls)
 │   │   └── queries.ts      — TanStack Query hooks
 │   └── resolver/
+│       ├── mappers.ts      — ATProto object to UI model mappers
 │       └── atproto.ts      — Pipeline A Tier 1: deterministic resolver
 │
 ├── workers/

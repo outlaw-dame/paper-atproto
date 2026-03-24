@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
 import PostCard from '../components/PostCard';
+import ContextPost from '../components/ContextPost';
 import { useSessionStore } from '../store/sessionStore';
 import { mapFeedViewPost } from '../atproto/mappers';
 import { atpCall } from '../lib/atproto/client';
@@ -194,9 +195,14 @@ export default function HomeTab({ onOpenStory }: Props) {
               <EmptyState label={mode === 'Following' ? "Nothing new from people you follow." : "No posts found."} />
             </motion.div>
           ) : (
-            <motion.div key={mode} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
+            <motion.div key={mode} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} style={{ paddingBottom: 'var(--safe-bottom)' }}>
               {posts.map((post, i) => (
-                <PostCard key={post.id} post={post} onOpenStory={onOpenStory} index={i} />
+                <div key={post.id} style={{ borderBottom: '1px solid var(--stroke-light)', paddingBottom: 12, marginBottom: 12 }}>
+                  {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" />}
+                  {/* Only show direct parent if it's not the same as the thread root */}
+                  {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" />}
+                  <PostCard post={post} onOpenStory={onOpenStory} index={i} />
+                </div>
               ))}
               {loadingMore && (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>

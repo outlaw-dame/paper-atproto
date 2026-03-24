@@ -22,11 +22,12 @@ export interface MockPost {
     domain: string;
   } | {
     type: 'quote';
-    post: Omit<MockPost, 'embed'>;
+    post: Omit<MockPost, 'embed' | 'replyTo' | 'threadRoot'>;
   };
   chips: ChipType[];
   threadCount?: number;
-  replyTo?: { handle: string; displayName: string } | undefined;
+  replyTo?: MockPost;
+  threadRoot?: MockPost;
 }
 
 export type ChipType = 'thread' | 'topic' | 'feed' | 'pack' | 'related' | 'story';
@@ -169,6 +170,36 @@ export const MOCK_POSTS: MockPost[] = [
       },
     ],
     chips: ['feed', 'topic'],
+  },
+  {
+    id: 'post-7',
+    author: {
+      did: 'did:plc:grace901',
+      handle: 'grace.bsky.social',
+      displayName: 'Grace Kim',
+      avatar: 'https://api.dicebear.com/9.x/avataaars/svg?seed=grace&backgroundColor=b6e3f4',
+    },
+    content: 'Replying to Bob here. This is a great point, the signal-to-noise ratio is so much better.',
+    createdAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+    likeCount: 15,
+    replyCount: 2,
+    repostCount: 1,
+    chips: ['thread'],
+    replyTo: {
+      id: 'post-2',
+      author: {
+        did: 'did:plc:bob456',
+        handle: 'bob.bsky.social',
+        displayName: 'Bob Nakamura',
+        avatar: 'https://api.dicebear.com/9.x/avataaars/svg?seed=bob&backgroundColor=c0aede',
+      },
+      content: 'Just shipped a new custom feed algorithm that surfaces posts based on semantic similarity rather than engagement. The difference in content quality is remarkable.',
+      createdAt: new Date(Date.now() - 1000 * 60 * 23).toISOString(),
+      likeCount: 2341,
+      replyCount: 89,
+      repostCount: 567,
+      chips: ['feed', 'topic', 'story'],
+    },
   },
 ];
 

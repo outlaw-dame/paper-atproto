@@ -1,53 +1,31 @@
 # Technology Stack
 
-This document outlines the core technologies and frameworks selected for the local-first ATProto application, inspired by Facebook Paper.
+**paper-atproto** (Product Name: *Glimpse*) is a local-first SPA built for performance and privacy.
 
-## Core Principles
+## Frontend Runtime
 
-*   **Local-First Software:** Prioritizing local data storage and computation, enabling offline functionality and fast user interfaces. Conflict resolution and synchronization will be handled gracefully.
-*   **ATProto Integration:** Leveraging the Authenticated Transfer Protocol (ATProto) for decentralized data storage, identity, and social graph management.
-*   **Modern Web Technologies:** Utilizing contemporary web development practices for a performant, scalable, and maintainable application.
-*   **User Experience (UX):** Emphasizing a fluid, intuitive, and visually appealing user interface, drawing inspiration from Facebook Paper's innovative design.
+*   **Framework:** React 19 + Vite 8
+*   **Language:** TypeScript 5.9
+*   **Build Tool:** Vite
 
-## Proposed Technologies
+## Data & State
 
-### Frontend
+*   **Local Database:** PGlite (Postgres WASM) with `pgvector`
+    *   Persistence: IndexedDB / OPFS
+*   **State Management:**
+    *   **Server State:** TanStack Query (v5)
+    *   **Client State:** Zustand (v5)
+*   **ORM:** Drizzle ORM
 
-*   **Framework:** React (with Next.js for SSR/SSG) - For building dynamic and responsive user interfaces.
-*   **Styling:** Tailwind CSS - For utility-first CSS styling, enabling rapid UI development and consistency.
-*   **UI Components:** Konsta UI - For mobile-first, iOS-style UI components that follow Apple's design guidelines.
-*   **Emoji Support:** Twemoji - For consistent, high-quality emoji rendering across all platforms.
-*   **Markdown Rendering:** `react-markdown` with `remark-gfm` and Discord-flavored extensions - For rich, expressive, and secure content display.
-*   **Hashtag Support:** Custom regex-based linkification with integrated search - For interactive and discoverable content.
-*   **GIF Support:** Tenor API - For high-quality GIF search and selection, integrated with ATProto embeds.
-*   **Link Previews:** OpenGraph fetching with proxy support - For rich, interactive link displays in the feed and post details.
-*   **Feed Support:** Feedsmith - All-in-one parser and generator for ATOM, RSS, and JSON feeds, supporting news, podcasts, and video content.
-*   **State Management:** Zustand or Jotai - Lightweight and performant state management solutions for local-first data.
-*   **Offline-First/Data Persistence:** PGlite (Postgres WASM) - For robust client-side data storage with full SQL support, persisting to IndexedDB or OPFS.
-*   **Entity Mapping:** Drizzle ORM & Zod - For type-safe schema management, migrations, and robust data validation of ATProto records.
-*   **Entity Linking:** Transformers.js & Wikidata API - For browser-side Named Entity Recognition (NER) and linking entities to a global knowledge base.
-*   **Hybrid Search:** PGlite with `pgvector` and `transformers.js` - Combining Full-Text Search (GIN indexes) and Semantic Search (HNSW indexes) using **Reciprocal Rank Fusion (RRF)** for high-performance, intent-aware discovery entirely in the browser.
-*   **ATProto Client:** `@atproto/api` - Official ATProto client library for interacting with the ATProto network.
+## Inference & Intelligence
 
-### Backend (Optional/Minimal)
+*   **Engine:** Transformers.js (v2)
+*   **Execution:** Web Worker (off-main-thread)
+*   **Models:** `Xenova/all-MiniLM-L6-v2` (Embeddings)
 
-Given the local-first and ATProto-centric nature, a traditional backend might be minimal or entirely absent for core functionalities. However, a small serverless function layer might be considered for:
+## UI & Interaction
 
-*   **ATProto Relay/PDS Proxy:** To handle certain ATProto interactions or act as a personal data server (PDS) if self-hosting is desired.
-*   **Image/Media Processing:** For optimizing and serving media content.
-
-### Data Storage
-
-*   **Local:** IndexedDB - Primary local data store.
-*   **Decentralized:** ATProto Personal Data Server (PDS) - For decentralized and federated data storage.
-
-### Development Tools
-
-*   **Package Manager:** pnpm - For efficient dependency management.
-*   **TypeScript:** For type safety and improved developer experience.
-*   **Linting/Formatting:** ESLint, Prettier - For code quality and consistency.
-*   **Testing:** Jest, React Testing Library - For unit and integration testing.
-
-## Justification
-
-This stack is chosen to balance the requirements of a local-first application with the decentralized nature of ATProto, while providing a modern and efficient development experience. React and Next.js offer a powerful frontend foundation, while IndexedDB and ATProto provide the necessary data persistence and decentralization capabilities. Tailwind CSS will enable rapid iteration on the UI, aiming for the polished feel of Facebook Paper.
+*   **Styling:** Tailwind CSS 4
+*   **Components:** Konsta UI (iOS theme)
+*   **Motion:** Framer Motion
+*   **Gestures:** @use-gesture/react

@@ -14,10 +14,10 @@ import OverlayHost from './shell/OverlayHost';
 import HomeTab from './tabs/HomeTab';
 import ExploreTab from './tabs/ExploreTab';
 import InboxTab from './tabs/InboxTab';
-import LibraryTab from './tabs/LibraryTab';
+import ProfileTab from './tabs/ProfileTab';
 import LoginScreen from './components/LoginScreen';
 
-export type TabId = 'home' | 'explore' | 'compose' | 'inbox' | 'library';
+export type TabId = 'home' | 'explore' | 'compose' | 'inbox' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
 export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; name: string; reason: string }
 
@@ -81,7 +81,7 @@ function AppShell() {
             {activeTab === 'home'    && <HomeTab onOpenStory={openStory} />}
             {activeTab === 'explore' && <ExploreTab onOpenStory={openStory} />}
             {activeTab === 'inbox'   && <InboxTab />}
-            {activeTab === 'library' && <LibraryTab onOpenStory={openStory} />}
+            {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} />}
           </motion.div>
         </AnimatePresence>
       </div>

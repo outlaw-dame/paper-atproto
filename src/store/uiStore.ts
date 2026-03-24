@@ -28,8 +28,8 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
-  activeTab: 'home',
-  prevTab: 'home',
+  activeTab: 'home' as TabId,
+  prevTab: 'home' as TabId,
   showCompose: false,
   showPromptComposer: false,
   story: null,
