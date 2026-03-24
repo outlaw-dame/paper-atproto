@@ -19,7 +19,7 @@ import { useSessionStore } from '../store/sessionStore.js';
 import { atpCall } from '../lib/atproto/client.js';
 import { mapFeedViewPost } from '../atproto/mappers.js';
 import type { MockPost } from '../data/mockData.js';
-import { formatTime } from '../data/mockData.js';
+import { formatTime, formatCount } from '../data/mockData.js';
 import {
   resolveThread, extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
@@ -531,24 +531,50 @@ function RolePill({ role }: { role: ContributionRole }) {
 // ─── ContributionCard ─────────────────────────────────────────────────────
 function ContributionCard({
   node, score, rootUri, featured, nested,
-  onFeedback, isFollowed,
+  onFeedback, onQuoteComment, isFollowed,
 }: {
   node: ThreadNode;
   score?: ContributionScore;
   rootUri: string;
   featured?: boolean;
   nested?: boolean;
-  isFollowed?: boolean;   // only distinction: slightly bolder display name
+  isFollowed?: boolean;
   onFeedback: (uri: string, fb: ContributionScore['userFeedback']) => void;
+  onQuoteComment?: (node: ThreadNode) => void;
 }) {
   const [feedbackGiven, setFeedbackGiven] = useState<ContributionScore['userFeedback']>(score?.userFeedback);
-  // Never dim any reply — every contribution is equally important
-  const isRepetitive = false;
+  const [liked, setLiked] = useState(false);
+  const [likeCount, setLikeCount] = useState(node.likeCount);
+  const [reposted, setReposted] = useState(false);
+  const [repostCount, setRepostCount] = useState(node.repostCount);
+  const [bookmarked, setBookmarked] = useState(false);
+  const [showRepostMenu, setShowRepostMenu] = useState(false);
 
   const handleFeedback = (fb: ContributionScore['userFeedback']) => {
     setFeedbackGiven(fb);
     onFeedback(node.uri, fb);
   };
+
+  const handleLike = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLiked(v => !v);
+    setLikeCount(c => liked ? c - 1 : c + 1);
+  };
+
+  const handleRepost = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setReposted(v => !v);
+    setRepostCount(c => reposted ? c - 1 : c + 1);
+    setShowRepostMenu(false);
+  };
+
+  const handleBookmark = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBookmarked(v => !v);
+  };
+
+  // Never dim any reply — every contribution is equally important
+  const isRepetitive = false;
 
   const cardStyle: React.CSSProperties = {
     borderRadius: nested ? ncTokens.radius : contTokens.radius,
@@ -683,7 +709,7 @@ function ContributionCard({
 
       {/* Narwhal-style feedback row: count + label pills */}
       {!nested && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
           {([
             { fb: 'provocative' as const, label: 'Provocative' },
             { fb: 'clarifying' as const, label: 'Clarifying' },
@@ -714,6 +740,213 @@ function ContributionCard({
           })}
         </div>
       )}
+
+      {/* Action bar — reply / repost+quote / like / bookmark */}
+      {!nested && (
+        <div style={{
+          display: 'flex', alignItems: 'center',
+          gap: 0, marginTop: 2,
+          borderTop: `0.5px solid ${disc.lineSubtle}`,
+          paddingTop: 10,
+          position: 'relative',
+        }}>
+          {/* Reply */}
+          <button style={actionBtnStyle} onClick={e => e.stopPropagation()}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={disc.textTertiary} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+            </svg>
+            <span style={actionCountStyle}>{formatCount(node.replyCount)}</span>
+          </button>
+
+          {/* Repost / Quote — with dropdown */}
+          <div style={{ position: 'relative' }}>
+            <button
+              style={{ ...actionBtnStyle, color: reposted ? 'var(--green)' : disc.textTertiary }}
+              onClick={e => { e.stopPropagation(); setShowRepostMenu(v => !v); }}
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={reposted ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                <path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+              </svg>
+              <span style={{ ...actionCountStyle, color: reposted ? 'var(--green)' : disc.textTertiary }}>{formatCount(repostCount)}</span>
+            </button>
+
+            {/* Repost dropdown */}
+            <AnimatePresence>
+              {showRepostMenu && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.95 }}
+                  transition={{ duration: 0.12 }}
+                  style={{
+                    position: 'absolute', bottom: 'calc(100% + 6px)', left: 0,
+                    background: disc.surfaceCard,
+                    border: `0.5px solid ${disc.lineStrong}`,
+                    borderRadius: radius[16],
+                    overflow: 'hidden',
+                    zIndex: 300,
+                    minWidth: 160,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                  }}
+                >
+                  <button
+                    onClick={handleRepost}
+                    style={dropdownItemStyle}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={disc.textPrimary} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                      <path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+                    </svg>
+                    <span style={{ fontSize: typeScale.bodyMd[0], fontWeight: 600, color: disc.textPrimary }}>
+                      {reposted ? 'Undo repost' : 'Repost'}
+                    </span>
+                  </button>
+                  <div style={{ height: 0.5, background: disc.lineSubtle }} />
+                  <button
+                    onClick={e => { e.stopPropagation(); setShowRepostMenu(false); onQuoteComment?.(node); }}
+                    style={dropdownItemStyle}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={disc.textPrimary} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/>
+                      <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/>
+                    </svg>
+                    <span style={{ fontSize: typeScale.bodyMd[0], fontWeight: 600, color: disc.textPrimary }}>Quote post</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Like */}
+          <button style={{ ...actionBtnStyle, color: liked ? 'var(--red)' : disc.textTertiary }} onClick={handleLike}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill={liked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={liked ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+            </svg>
+            <span style={{ ...actionCountStyle, color: liked ? 'var(--red)' : disc.textTertiary }}>{formatCount(likeCount)}</span>
+          </button>
+
+          {/* Bookmark */}
+          <button style={{ ...actionBtnStyle, color: bookmarked ? accent.primary : disc.textTertiary }} onClick={handleBookmark}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill={bookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={bookmarked ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
+            </svg>
+          </button>
+
+          {/* Dismiss repost menu on outside click */}
+          {showRepostMenu && (
+            <div
+              style={{ position: 'fixed', inset: 0, zIndex: 299 }}
+              onClick={e => { e.stopPropagation(); setShowRepostMenu(false); }}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const actionBtnStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 5,
+  background: 'none', border: 'none', padding: '2px 10px 2px 0',
+  cursor: 'pointer', color: 'inherit',
+};
+
+const actionCountStyle: React.CSSProperties = {
+  fontSize: 13, fontWeight: 500,
+};
+
+const dropdownItemStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10,
+  width: '100%', padding: '12px 16px',
+  background: 'none', border: 'none',
+  cursor: 'pointer', textAlign: 'left',
+};
+
+// ─── QuoteComposer ────────────────────────────────────────────────────────
+function QuoteComposer({ node, onClose }: { node: ThreadNode; onClose: () => void }) {
+  const [text, setText] = useState('');
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0,
+      background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'flex-end',
+      zIndex: 400,
+    }} onClick={onClose}>
+      <div
+        style={{
+          width: '100%',
+          background: disc.bgBase,
+          borderRadius: `${radius[24]}px ${radius[24]}px 0 0`,
+          padding: '20px 16px',
+          paddingBottom: 'calc(var(--safe-bottom, 0px) + 20px)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: disc.textSecondary, fontSize: typeScale.bodyMd[0] }}
+          >Cancel</button>
+          <span style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary }}>Quote post</span>
+          <button
+            style={{
+              height: 32, padding: '0 16px', borderRadius: radius.full,
+              background: accent.primary, border: 'none', cursor: 'pointer',
+              color: '#fff', fontSize: typeScale.chip[0], fontWeight: 700,
+              opacity: text.trim().length === 0 ? 0.45 : 1,
+            }}
+            disabled={text.trim().length === 0}
+          >Post</button>
+        </div>
+
+        {/* Composer input */}
+        <textarea
+          autoFocus
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="Add a comment…"
+          style={{
+            width: '100%', minHeight: 72,
+            background: 'transparent', border: 'none', outline: 'none', resize: 'none',
+            fontSize: typeScale.bodyMd[0], lineHeight: `${typeScale.bodyMd[1]}px`,
+            color: disc.textPrimary,
+            fontFamily: 'inherit',
+            marginBottom: 12,
+          }}
+        />
+
+        {/* Quoted comment preview */}
+        <div style={{
+          border: `0.5px solid ${disc.lineStrong}`,
+          borderRadius: radius[16],
+          padding: `${space[6]}px ${space[8]}px`,
+          background: disc.surfaceCard2,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <div style={{ width: 18, height: 18, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0 }}>
+              {node.authorAvatar
+                ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <div style={{ width: '100%', height: '100%', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 9, fontWeight: 700 }}>{(node.authorName ?? node.authorHandle ?? '?')[0].toUpperCase()}</div>
+              }
+            </div>
+            <span style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: disc.textPrimary }}>
+              {node.authorName ?? node.authorHandle}
+            </span>
+            <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+              @{node.authorHandle}
+            </span>
+          </div>
+          <p style={{
+            fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
+            color: disc.textSecondary,
+            overflow: 'hidden', display: '-webkit-box',
+            WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+          }}>{node.text}</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -801,6 +1034,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<ThreadFilter>('Top');
+  const [quoteTarget, setQuoteTarget] = useState<ThreadNode | null>(null);
   // Set of DIDs the current user follows — used only for bold username treatment
   const [followedDids, setFollowedDids] = useState<Set<string>>(new Set());
 
@@ -929,31 +1163,39 @@ export default function StoryMode({ entry, onClose }: Props) {
             )}
 
             {/* Featured contribution */}
-            {featuredReply && activeFilter === 'Top' && (
-              <ContributionCard
-                key={`featured-${featuredReply.uri}`}
-                node={featuredReply}
-                score={getThread(entry.id)?.replyScores[featuredReply.uri]}
-                rootUri={entry.id}
-                featured
-                isFollowed={followedDids.has(featuredReply.authorDid ?? '')}
-                onFeedback={handleFeedback}
-              />
-            )}
+            {featuredReply && activeFilter === 'Top' && (() => {
+              const featuredScore = getThread(entry.id)?.replyScores[featuredReply.uri];
+              return (
+                <ContributionCard
+                  key={`featured-${featuredReply.uri}`}
+                  node={featuredReply}
+                  {...(featuredScore !== undefined ? { score: featuredScore } : {})}
+                  rootUri={entry.id}
+                  featured
+                  {...(followedDids.has(featuredReply.authorDid ?? '') ? { isFollowed: true } : {})}
+                  onFeedback={handleFeedback}
+                  onQuoteComment={setQuoteTarget}
+                />
+              );
+            })()}
 
             {/* Contribution stack */}
             {filteredReplies
               .filter(r => r.uri !== featuredReply?.uri || activeFilter !== 'Top')
-              .map(node => (
-                <ContributionCard
-                  key={node.uri}
-                  node={node}
-                  score={getThread(entry.id)?.replyScores[node.uri]}
-                  rootUri={entry.id}
-                  isFollowed={followedDids.has(node.authorDid ?? '')}
-                  onFeedback={handleFeedback}
-                />
-              ))
+              .map(node => {
+                const nodeScore = getThread(entry.id)?.replyScores[node.uri];
+                return (
+                  <ContributionCard
+                    key={node.uri}
+                    node={node}
+                    {...(nodeScore !== undefined ? { score: nodeScore } : {})}
+                    rootUri={entry.id}
+                    {...(followedDids.has(node.authorDid ?? '') ? { isFollowed: true } : {})}
+                    onFeedback={handleFeedback}
+                    onQuoteComment={setQuoteTarget}
+                  />
+                );
+              })
             }
 
             {replies.length === 0 && !loading && (
@@ -971,6 +1213,13 @@ export default function StoryMode({ entry, onClose }: Props) {
 
       {/* Static reply bar — always visible, Bluesky-style */}
       <ReplyBar {...(profile?.avatar !== undefined ? { userAvatar: profile.avatar } : {})} />
+
+      {/* Quote composer overlay */}
+      <AnimatePresence>
+        {quoteTarget && (
+          <QuoteComposer node={quoteTarget} onClose={() => setQuoteTarget(null)} />
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
