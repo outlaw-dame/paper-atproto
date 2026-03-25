@@ -110,6 +110,9 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
           rootVerification: payload.rootVerification ?? null,
           ...(payload.confidence !== undefined ? { confidence: payload.confidence } : {}),
           ...(payload.summaryMode !== undefined ? { summaryMode: payload.summaryMode } : {}),
+          // Clear stale writerResult so InterpolatorCard falls back to the heuristic
+          // summaryText until the fresh async writer call completes.
+          writerResult: null,
           lastComputedAt: new Date().toISOString(),
           error: null,
           isLoading: false,
