@@ -11,9 +11,18 @@ import { useUiStore } from '../store/uiStore.js';
 import { atpCall } from '../lib/atproto/client.js';
 import { mapFeedViewPost } from '../atproto/mappers.js';
 import PostCard from '../components/PostCard.js';
+import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
 import type { MockPost } from '../data/mockData.js';
 import { formatCount, formatTime } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
+import { usePlatform, getButtonTokens } from '../hooks/usePlatform.js';
+import {
+  useMuteActor,
+  useUnmuteActor,
+  useBlockActor,
+  useUnblockActor,
+} from '../lib/atproto/queries.js';
 
 // ─── Sub-tabs ──────────────────────────────────────────────────────────────
 const PROFILE_TABS = ['Posts', 'Library', 'Media', 'Feeds', 'Starter Packs', 'Lists'] as const;
@@ -274,6 +283,9 @@ function LikedPostRow({ post, index, onOpenStory }: { post: MockPost; index: num
 export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const { agent, session, profile: sessionProfile } = useSessionStore();
   const { openSearchStory, setTab: setAppTab } = useUiStore();
+  const platform = usePlatform();
+  const btnTokens = getButtonTokens(platform);
+  const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
   const did = actorDid ?? session?.did ?? '';
   const isOwnProfile = !actorDid || actorDid === session?.did;
 
@@ -289,6 +301,15 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const [lists, setLists]       = useState<AppBskyGraphDefs.ListView[]>([]);
   const [loading, setLoading]   = useState(false);
   const [profileLoading, setProfileLoading] = useState(!isOwnProfile || !sessionProfile);
+  const [showTranslationSettings, setShowTranslationSettings] = useState(false);
+  const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const [viewerMutedOverride, setViewerMutedOverride] = useState<boolean | null>(null);
+  const [viewerBlockedOverride, setViewerBlockedOverride] = useState<boolean | null>(null);
+
+  const muteActor = useMuteActor();
+  const unmuteActor = useUnmuteActor();
+  const blockActor = useBlockActor();
+  const unblockActor = useUnblockActor();
 
   const tabBarRef = useRef<HTMLDivElement>(null);
 
@@ -300,6 +321,8 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     setLists([]);
     setProfile(isOwnProfile ? sessionProfile : null);
     setTab('Posts');
+    setViewerMutedOverride(null);
+    setViewerBlockedOverride(null);
   }, [did]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load profile ──────────────────────────────────────────────────────────
@@ -391,22 +414,70 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   };
 
   // ── Render sub-tab content ─────────────────────────────────────────────────
+  const profileVisiblePool = useMemo(() => {
+    const merged = [...posts, ...likedPosts];
+    const byId = new Map<string, MockPost>();
+    for (const p of merged) byId.set(p.id, p);
+    return [...byId.values()];
+  }, [posts, likedPosts]);
+  const filterResults = usePostFilterResults(profileVisiblePool, 'profile');
+
   function renderContent() {
     if (loading) return <Spinner />;
 
     switch (tab) {
       case 'Posts':
-        return posts.length === 0
+        return posts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length === 0
           ? <EmptyState message="No posts yet." />
-          : posts.map((p, i) => <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} index={i} />);
+          : posts.map((p, i) => {
+              const matches = filterResults[p.id] ?? [];
+              const isHidden = matches.some((m) => m.action === 'hide');
+              const isWarned = matches.some((m) => m.action === 'warn');
+              const isRevealed = !!revealedFilteredPosts[p.id];
+              if (isHidden) return null;
+              if (isWarned && !isRevealed) {
+                const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                return (
+                  <div key={p.id} style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', marginBottom: 8, background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
+                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
+                      Matches filter: {titles.join(', ')}
+                    </p>
+                    <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
+                      Show post
+                    </button>
+                  </div>
+                );
+              }
+              return <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} index={i} />;
+            });
 
       case 'Library':
-        return likedPosts.length === 0
+        return likedPosts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length === 0
           ? <EmptyState message="Liked posts will appear here." />
-          : likedPosts.map((p, i) => <LikedPostRow key={p.id} post={p} index={i} onOpenStory={onOpenStory} />);
+          : likedPosts.map((p, i) => {
+              const matches = filterResults[p.id] ?? [];
+              const isHidden = matches.some((m) => m.action === 'hide');
+              const isWarned = matches.some((m) => m.action === 'warn');
+              const isRevealed = !!revealedFilteredPosts[p.id];
+              if (isHidden) return null;
+              if (isWarned && !isRevealed) {
+                const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                return (
+                  <div key={p.id} style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', marginBottom: 8, background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
+                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
+                      Matches filter: {titles.join(', ')}
+                    </p>
+                    <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
+                      Show post
+                    </button>
+                  </div>
+                );
+              }
+              return <LikedPostRow key={p.id} post={p} index={i} onOpenStory={onOpenStory} />;
+            });
 
       case 'Media':
-        return <MediaGrid posts={posts} />;
+        return <MediaGrid posts={posts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide')))} />;
 
       case 'Feeds':
         return feeds.length === 0
@@ -432,6 +503,46 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const followersCount = profile?.followersCount ?? 0;
   const followsCount   = profile?.followsCount ?? 0;
   const postsCount     = profile?.postsCount ?? 0;
+  const isMuted = viewerMutedOverride ?? !!profile?.viewer?.muted;
+  const isBlocked = viewerBlockedOverride ?? !!profile?.viewer?.blocking;
+
+  function handleToggleMute() {
+    if (!did || isOwnProfile) return;
+    if (isMuted) {
+      unmuteActor.mutate(
+        { did },
+        {
+          onSuccess: () => setViewerMutedOverride(false),
+        },
+      );
+      return;
+    }
+    muteActor.mutate(
+      { did, durationMs: null },
+      {
+        onSuccess: () => setViewerMutedOverride(true),
+      },
+    );
+  }
+
+  function handleToggleBlock() {
+    if (!did || isOwnProfile) return;
+    if (isBlocked) {
+      unblockActor.mutate(
+        { did },
+        {
+          onSuccess: () => setViewerBlockedOverride(false),
+        },
+      );
+      return;
+    }
+    blockActor.mutate(
+      { did },
+      {
+        onSuccess: () => setViewerBlockedOverride(true),
+      },
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
@@ -472,6 +583,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
           <div style={{ width: 36, flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
             <button
               aria-label="Settings"
+              onClick={() => setShowTranslationSettings(true)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--label-2)' }}
             >
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
@@ -571,20 +683,41 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               </div>
 
               {/* Action buttons */}
-              <div style={{ display: 'flex', flexDirection: 'row', gap: 10, padding: '14px 16px', width: '100%', boxSizing: 'border-box' }}>
+              <div style={{
+                display: 'flex', flexDirection: 'row', gap: 10,
+                flexWrap: !isOwnProfile && touchLike ? 'wrap' : 'nowrap',
+                padding: `${platform.isMobile ? 16 : 14}px 16px`,
+                width: '100%', boxSizing: 'border-box',
+              }}>
                 {isOwnProfile ? (
                   <>
                     <button style={{
-                      flex: 1, height: 36, borderRadius: 10,
-                      background: 'var(--fill-2)', border: 'none', cursor: 'pointer',
-                      fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2,
+                      flex: 1,
+                      height: btnTokens.height,
+                      borderRadius: btnTokens.borderRadius,
+                      background: 'var(--fill-2)',
+                      border: 'none', cursor: 'pointer',
+                      fontSize: btnTokens.fontSize,
+                      fontWeight: btnTokens.fontWeight,
+                      color: 'var(--label-1)',
+                      letterSpacing: -0.2,
+                      WebkitTapHighlightColor: 'transparent',
+                      transition: 'opacity 0.12s',
                     }}>
                       Edit Profile
                     </button>
                     <button style={{
-                      flex: 1, height: 36, borderRadius: 10,
-                      background: 'var(--fill-2)', border: 'none', cursor: 'pointer',
-                      fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2,
+                      flex: 1,
+                      height: btnTokens.height,
+                      borderRadius: btnTokens.borderRadius,
+                      background: 'var(--fill-2)',
+                      border: 'none', cursor: 'pointer',
+                      fontSize: btnTokens.fontSize,
+                      fontWeight: btnTokens.fontWeight,
+                      color: 'var(--label-1)',
+                      letterSpacing: -0.2,
+                      WebkitTapHighlightColor: 'transparent',
+                      transition: 'opacity 0.12s',
                     }}>
                       Share Profile
                     </button>
@@ -592,18 +725,79 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                 ) : (
                   <>
                     <button style={{
-                      flex: 2, height: 36, borderRadius: 10,
-                      background: 'var(--blue)', border: 'none', cursor: 'pointer',
-                      fontSize: 14, fontWeight: 600, color: '#fff', letterSpacing: -0.2,
+                      flex: 1,
+                      minWidth: !isOwnProfile && touchLike ? 'calc(50% - 5px)' : undefined,
+                      height: btnTokens.height,
+                      borderRadius: btnTokens.borderRadius,
+                      background: 'var(--blue)',
+                      border: 'none', cursor: 'pointer',
+                      fontSize: btnTokens.fontSize,
+                      fontWeight: btnTokens.fontWeight,
+                      color: '#fff',
+                      letterSpacing: -0.2,
+                      WebkitTapHighlightColor: 'transparent',
+                      transition: 'opacity 0.12s',
                     }}>
                       Follow
                     </button>
                     <button style={{
-                      flex: 1, height: 36, borderRadius: 10,
-                      background: 'var(--fill-2)', border: 'none', cursor: 'pointer',
-                      fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2,
+                      flex: 1,
+                      minWidth: !isOwnProfile && touchLike ? 'calc(50% - 5px)' : undefined,
+                      height: btnTokens.height,
+                      borderRadius: btnTokens.borderRadius,
+                      background: 'var(--fill-2)',
+                      border: 'none', cursor: 'pointer',
+                      fontSize: btnTokens.fontSize,
+                      fontWeight: btnTokens.fontWeight,
+                      color: 'var(--label-1)',
+                      letterSpacing: -0.2,
+                      WebkitTapHighlightColor: 'transparent',
+                      transition: 'opacity 0.12s',
+                      opacity: muteActor.isPending || unmuteActor.isPending ? 0.65 : 1,
                     }}>
                       Message
+                    </button>
+                    <button
+                      onClick={handleToggleMute}
+                      disabled={muteActor.isPending || unmuteActor.isPending}
+                      style={{
+                        flex: 1,
+                        minWidth: !isOwnProfile && touchLike ? 'calc(50% - 5px)' : undefined,
+                        height: btnTokens.height,
+                        borderRadius: btnTokens.borderRadius,
+                        background: isMuted ? 'color-mix(in srgb, var(--orange) 18%, var(--fill-2))' : 'var(--fill-2)',
+                        border: 'none', cursor: 'pointer',
+                        fontSize: btnTokens.fontSize,
+                        fontWeight: btnTokens.fontWeight,
+                        color: isMuted ? 'var(--orange)' : 'var(--label-1)',
+                        letterSpacing: -0.2,
+                        WebkitTapHighlightColor: 'transparent',
+                        transition: 'opacity 0.12s',
+                        opacity: muteActor.isPending || unmuteActor.isPending ? 0.65 : 1,
+                      }}
+                    >
+                      {isMuted ? 'Unmute' : 'Mute'}
+                    </button>
+                    <button
+                      onClick={handleToggleBlock}
+                      disabled={blockActor.isPending || unblockActor.isPending}
+                      style={{
+                        flex: 1,
+                        minWidth: !isOwnProfile && touchLike ? 'calc(50% - 5px)' : undefined,
+                        height: btnTokens.height,
+                        borderRadius: btnTokens.borderRadius,
+                        background: isBlocked ? 'color-mix(in srgb, var(--red) 18%, var(--fill-2))' : 'var(--fill-2)',
+                        border: 'none', cursor: 'pointer',
+                        fontSize: btnTokens.fontSize,
+                        fontWeight: btnTokens.fontWeight,
+                        color: isBlocked ? 'var(--red)' : 'var(--label-1)',
+                        letterSpacing: -0.2,
+                        WebkitTapHighlightColor: 'transparent',
+                        transition: 'opacity 0.12s',
+                        opacity: blockActor.isPending || unblockActor.isPending ? 0.65 : 1,
+                      }}
+                    >
+                      {isBlocked ? 'Unblock' : 'Block'}
                     </button>
                   </>
                 )}
@@ -637,9 +831,11 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                   onClick={() => { setTab(t); scrollTabIntoView(i); }}
                   style={{
                     flexShrink: 0,
-                    padding: '13px 14px 11px',
+                    minHeight: touchLike ? 44 : 40,
+                    padding: touchLike ? '14px 16px 12px' : '13px 14px 11px',
                     border: 'none', background: 'none', cursor: 'pointer',
-                    fontSize: 14, fontWeight: active ? 700 : 500,
+                    fontSize: touchLike ? 15 : 14,
+                    fontWeight: active ? 700 : 500,
                     color: active ? 'var(--blue)' : 'var(--label-3)',
                     letterSpacing: -0.2,
                     position: 'relative',
@@ -683,6 +879,8 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
         {/* Safe area bottom padding */}
         <div style={{ height: 32 }} />
       </div>
+
+      <TranslationSettingsSheet open={showTranslationSettings} onClose={() => setShowTranslationSettings(false)} />
     </div>
   );
 }
