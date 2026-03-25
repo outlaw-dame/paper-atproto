@@ -167,6 +167,38 @@ function PromptHeroCard({
   participantCount: number;
   rootVerification?: VerificationOutcome | null;
 }) {
+  const [showOriginal, setShowOriginal] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
+  const translation = translationById[post.id];
+  const rootText = translation && !showOriginal ? translation.translatedText : post.content;
+
+  const handleTranslate = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (translation) {
+      setShowOriginal((prev) => !prev);
+      return;
+    }
+
+    if (!post.content.trim()) return;
+    setTranslating(true);
+    try {
+      const result = await translationClient.translateInline({
+        id: post.id,
+        sourceText: post.content,
+        targetLang: translationPolicy.userLanguage,
+        mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+      });
+      upsertTranslation(result);
+      setShowOriginal(false);
+    } catch {
+      // Keep original text visible.
+    } finally {
+      setTranslating(false);
+    }
+  };
+
   const img = post.media?.[0]?.url ?? post.embed?.thumb;
   return (
     <div style={{
@@ -227,8 +259,32 @@ function PromptHeroCard({
           fontWeight: typeScale.titleXl[2], letterSpacing: typeScale.titleXl[3],
           color: phTokens.text, marginBottom: 12,
         }}>
-          {post.content}
+          {rootText}
         </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <button
+            onClick={handleTranslate}
+            disabled={translating}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: '#7CE9FF',
+              fontSize: typeScale.metaSm[0],
+              fontWeight: 600,
+              padding: 0,
+              cursor: translating ? 'default' : 'pointer',
+              opacity: translating ? 0.7 : 1,
+            }}
+          >
+            {translation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
+          </button>
+          {translation && (
+            <span style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta }}>
+              from {translation.sourceLang}
+            </span>
+          )}
+        </div>
 
         {/* Embed source */}
         {post.embed && (post.embed.type === 'external' || post.embed.type === 'video') && (
@@ -316,6 +372,7 @@ type InterpolatorState = 'collapsed' | 'expanded' | 'emerging' | 'updating' | 's
 
 function InterpolatorCard({
   rootUri, summaryText, writerSummary, summaryMode,
+  writerWhatChanged, writerContributorBlurbs,
   clarifications, newAngles,
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
@@ -325,8 +382,12 @@ function InterpolatorCard({
   summaryText: string;
   /** Model-written summary — takes precedence over heuristic summaryText when present. */
   writerSummary?: string | undefined;
-  /** Summary mode from confidence routing — shown as a subtle badge in fallback modes. */
+  /** Summary mode from confidence routing. */
   summaryMode?: SummaryMode | undefined;
+  /** Model-written what-changed signals — takes precedence over heuristic clarifications/newAngles. */
+  writerWhatChanged?: string[] | undefined;
+  /** Model-written per-contributor blurbs for the expanded Key Voices section. */
+  writerContributorBlurbs?: Array<{ handle: string; blurb: string }> | undefined;
   clarifications: string[];
   newAngles: string[];
   heatLevel: number;
@@ -488,22 +549,36 @@ function InterpolatorCard({
             transition={transitions.interpolatorToggle}
             style={{ overflow: 'hidden' }}
           >
-            {/* What changed */}
-            {(clarifications.length > 0 || newAngles.length > 0) && (
+            {/* What changed — prefer model output, fall back to heuristic */}
+            {((writerWhatChanged && writerWhatChanged.length > 0) || clarifications.length > 0 || newAngles.length > 0) && (
               <div style={{ marginBottom: 14 }}>
                 <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>What changed</p>
-                {clarifications.slice(0, 2).map((c, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                    <span style={{ color: intTokens.accent.cyan, fontSize: 13, flexShrink: 0 }}>•</span>
-                    <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{c}</span>
-                  </div>
-                ))}
-                {newAngles.slice(0, 2).map((a, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                    <span style={{ color: intTokens.accent.lime, fontSize: 13, flexShrink: 0 }}>↗</span>
-                    <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{a}</span>
-                  </div>
-                ))}
+                {writerWhatChanged && writerWhatChanged.length > 0 ? (
+                  writerWhatChanged.map((signal, i) => {
+                    const isNewAngle = signal.startsWith('new angle:') || signal.startsWith('new info:') || signal.startsWith('counterpoint:');
+                    return (
+                      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                        <span style={{ color: isNewAngle ? intTokens.accent.lime : intTokens.accent.cyan, fontSize: 13, flexShrink: 0 }}>{isNewAngle ? '↗' : '•'}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{signal}</span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <>
+                    {clarifications.slice(0, 2).map((c, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                        <span style={{ color: intTokens.accent.cyan, fontSize: 13, flexShrink: 0 }}>•</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{c}</span>
+                      </div>
+                    ))}
+                    {newAngles.slice(0, 2).map((a, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                        <span style={{ color: intTokens.accent.lime, fontSize: 13, flexShrink: 0 }}>↗</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{a}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             )}
 
@@ -571,12 +646,13 @@ function InterpolatorCard({
               </div>
             )}
 
-            {/* Key voices */}
+            {/* Key voices — show writer blurbs when available, fall back to heuristic role labels */}
             {topContributors.length > 0 && (
               <div style={{ marginBottom: 14 }}>
                 <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Key voices</p>
                 {topContributors.slice(0, 3).map((c, i) => {
                   const label = c.handle ? `@${c.handle}` : `${c.did.slice(8, 18)}…`;
+                  const blurb = writerContributorBlurbs?.find(b => b.handle === c.handle)?.blurb;
                   const roleLabel: Record<string, string> = {
                     clarifying: 'Clarifying', new_information: 'New info',
                     direct_response: 'Direct', useful_counterpoint: 'Counterpoint',
@@ -585,26 +661,35 @@ function InterpolatorCard({
                     provocative: 'Provocative', unknown: 'Contributor',
                   };
                   return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: blurb ? 10 : 6 }}>
                       <div style={{
                         width: 24, height: 24, borderRadius: '50%',
                         background: 'rgba(255,255,255,0.12)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 10, fontWeight: 700, color: intTokens.text.secondary, flexShrink: 0,
+                        fontSize: 10, fontWeight: 700, color: intTokens.text.secondary, flexShrink: 0, marginTop: 1,
                       }}>{label.slice(1, 2).toUpperCase()}</div>
-                      <span style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary, flex: 1 }}>{label}</span>
-                      <span style={{
-                        padding: '2px 8px', borderRadius: radius.full,
-                        background: 'rgba(255,255,255,0.08)',
-                        fontSize: typeScale.metaSm[0], fontWeight: 600, color: intTokens.text.meta,
-                      }}>{roleLabel[c.dominantRole] ?? 'Contributor'}</span>
-                      {c.factualContributions > 0 && (
-                        <span style={{
-                          padding: '2px 7px', borderRadius: radius.full,
-                          background: 'rgba(99,220,180,0.12)', border: '0.5px solid rgba(99,220,180,0.25)',
-                          fontSize: typeScale.metaSm[0], fontWeight: 600, color: '#63DCB4',
-                        }}>{c.factualContributions} factual</span>
-                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary }}>{label}</span>
+                          {!blurb && (
+                            <span style={{
+                              padding: '2px 8px', borderRadius: radius.full,
+                              background: 'rgba(255,255,255,0.08)',
+                              fontSize: typeScale.metaSm[0], fontWeight: 600, color: intTokens.text.meta,
+                            }}>{roleLabel[c.dominantRole] ?? 'Contributor'}</span>
+                          )}
+                          {c.factualContributions > 0 && (
+                            <span style={{
+                              padding: '2px 7px', borderRadius: radius.full,
+                              background: 'rgba(99,220,180,0.12)', border: '0.5px solid rgba(99,220,180,0.25)',
+                              fontSize: typeScale.metaSm[0], fontWeight: 600, color: '#63DCB4',
+                            }}>{c.factualContributions} factual</span>
+                          )}
+                        </div>
+                        {blurb && (
+                          <p style={{ fontSize: typeScale.metaLg[0], color: intTokens.text.meta, margin: '2px 0 0', lineHeight: '1.4' }}>{blurb}</p>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -1506,6 +1591,8 @@ export default function StoryMode({ entry, onClose }: Props) {
               summaryText={thread?.interpolator?.summaryText ?? ''}
               writerSummary={thread?.writerResult?.collapsedSummary}
               summaryMode={thread?.summaryMode ?? undefined}
+              writerWhatChanged={thread?.writerResult?.whatChanged}
+              writerContributorBlurbs={thread?.writerResult?.contributorBlurbs}
               clarifications={thread?.interpolator?.clarificationsAdded ?? []}
               newAngles={thread?.interpolator?.newAnglesAdded ?? []}
               heatLevel={thread?.interpolator?.heatLevel ?? 0}
