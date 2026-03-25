@@ -19,6 +19,7 @@ import { useUiStore } from '../store/uiStore.js';
 import { useTranslationStore } from '../store/translationStore.js';
 import { translationClient } from '../lib/i18n/client.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
+import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
 import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
 import {
   searchHeroField as shfTokens,
@@ -1292,12 +1293,20 @@ export default function ExploreTab({ onOpenStory }: Props) {
                             const isRevealed = !!revealedFilteredPosts[post.id];
                             if (isHidden) return null;
                             if (isWarned && !isRevealed) {
-                              const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                              const reasons = warnMatchReasons(matches);
                               return (
                                 <div key={post.id} style={{ border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[16], padding: '10px 12px', background: 'rgba(255,149,0,0.08)' }}>
-                                  <p style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>
-                                    Matches filter: {titles.join(', ')}
-                                  </p>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                                    {reasons.map((entry) => (
+                                      <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: `0.5px solid ${disc.lineSubtle}`, padding: '3px 8px', background: disc.surfaceCard }}>
+                                        <span style={{ fontSize: 11, color: disc.textPrimary, fontWeight: 700 }}>{entry.phrase}</span>
+                                        <span style={{ fontSize: 10, color: disc.textSecondary, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                          {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                                        </span>
+                                      </span>
+                                    ))}
+                                  </div>
                                   <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [post.id]: true }))} style={{ border: 'none', background: 'transparent', color: accent.primary, fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
                                     Show post
                                   </button>
@@ -1472,12 +1481,20 @@ export default function ExploreTab({ onOpenStory }: Props) {
                               const isWarned = matches.some((m) => m.action === 'warn');
                               const isRevealed = !!revealedFilteredPosts[p.id];
                               if (isWarned && !isRevealed) {
-                                const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                                const reasons = warnMatchReasons(matches);
                                 return (
                                   <div style={{ border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[20], padding: '12px 14px', background: 'rgba(255,149,0,0.08)' }}>
-                                    <p style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 7 }}>
-                                      Matches filter: {titles.join(', ')}
-                                    </p>
+                                    <div style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                                      {reasons.map((entry) => (
+                                        <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: `0.5px solid ${disc.lineSubtle}`, padding: '3px 8px', background: disc.surfaceCard }}>
+                                          <span style={{ fontSize: 11, color: disc.textPrimary, fontWeight: 700 }}>{entry.phrase}</span>
+                                          <span style={{ fontSize: 10, color: disc.textSecondary, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                            {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                                          </span>
+                                        </span>
+                                      ))}
+                                    </div>
                                     <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: accent.primary, fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
                                       Show post
                                     </button>
@@ -1548,12 +1565,20 @@ export default function ExploreTab({ onOpenStory }: Props) {
                             const isWarned = matches.some((m) => m.action === 'warn');
                             const isRevealed = !!revealedFilteredPosts[p.id];
                             if (isWarned && !isRevealed) {
-                              const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                              const reasons = warnMatchReasons(matches);
                               return (
                                 <div key={p.id} style={{ flexShrink: 0, width: 182, border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[20], padding: '10px 12px', background: 'rgba(255,149,0,0.08)' }}>
-                                  <p style={{ fontSize: 11, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>
-                                    Matches filter: {titles.join(', ')}
-                                  </p>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
+                                    {reasons.map((entry) => (
+                                      <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, borderRadius: 999, border: `0.5px solid ${disc.lineSubtle}`, padding: '2px 7px', background: disc.surfaceCard }}>
+                                        <span style={{ fontSize: 10, color: disc.textPrimary, fontWeight: 700 }}>{entry.phrase}</span>
+                                        <span style={{ fontSize: 9, color: disc.textSecondary, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                          {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                                        </span>
+                                      </span>
+                                    ))}
+                                  </div>
                                   <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: accent.primary, fontSize: 11, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
                                     Show post
                                   </button>

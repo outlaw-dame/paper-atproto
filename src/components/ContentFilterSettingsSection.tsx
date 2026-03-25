@@ -65,6 +65,11 @@ function sanitizeForConfirmLabel(value: string): string {
   return cleaned.length > 80 ? `${cleaned.slice(0, 80)}...` : cleaned;
 }
 
+function previewPhrase(value: string): string {
+  const cleaned = sanitizeForConfirmLabel(value);
+  return cleaned === 'this filter' ? 'keyword' : cleaned;
+}
+
 function sortableCreatedAt(value: string | undefined): number {
   if (!value) return 0;
   const parsed = Date.parse(value);
@@ -109,10 +114,12 @@ export default function ContentFilterSettingsSection() {
     if (!editingId) return null;
     const index = sortedRules.findIndex((rule) => rule.id === editingId);
     if (index === -1) return null;
+    const activeRule = sortedRules[index];
+    if (!activeRule) return null;
     return {
       index: index + 1,
       total: sortedRules.length,
-      phrase: sanitizeForConfirmLabel(sortedRules[index].phrase),
+      phrase: sanitizeForConfirmLabel(activeRule.phrase),
     };
   }, [editingId, sortedRules]);
 
@@ -412,6 +419,38 @@ export default function ContentFilterSettingsSection() {
         >
           Add filter
         </button>
+
+        <div
+          style={{
+            border: '1px solid var(--sep)',
+            borderRadius: 10,
+            padding: '8px 10px',
+            background: 'var(--fill-1)',
+          }}
+        >
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+            Preview
+          </div>
+          {action === 'warn' ? (
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 4 }}>
+                Matches filter: {previewPhrase(phrase)}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--label-3)' }}>
+                The post is collapsed and shows a Show post button in selected contexts.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 4 }}>
+                Hidden by filter: {previewPhrase(phrase)}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--label-3)' }}>
+                Matching posts are removed from the feed in selected contexts.
+              </p>
+            </div>
+          )}
+        </div>
 
         {createError && (
           <div style={{ fontSize: 11, color: 'var(--red)' }}>{createError}</div>

@@ -16,6 +16,7 @@ import type { MockPost } from '../data/mockData.js';
 import { formatCount, formatTime } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
+import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
 import { usePlatform, getButtonTokens } from '../hooks/usePlatform.js';
 import {
   useMuteActor,
@@ -436,12 +437,20 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               const isRevealed = !!revealedFilteredPosts[p.id];
               if (isHidden) return null;
               if (isWarned && !isRevealed) {
-                const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                const reasons = warnMatchReasons(matches);
                 return (
                   <div key={p.id} style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', marginBottom: 8, background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
-                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
-                      Matches filter: {titles.join(', ')}
-                    </p>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Matches filter:</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                      {reasons.map((entry) => (
+                        <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--sep)', padding: '3px 8px', background: 'var(--fill-1)' }}>
+                          <span style={{ fontSize: 11, color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
+                          <span style={{ fontSize: 10, color: 'var(--label-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                            {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
                     <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
                       Show post
                     </button>
@@ -461,12 +470,20 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               const isRevealed = !!revealedFilteredPosts[p.id];
               if (isHidden) return null;
               if (isWarned && !isRevealed) {
-                const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                const reasons = warnMatchReasons(matches);
                 return (
                   <div key={p.id} style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', marginBottom: 8, background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
-                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
-                      Matches filter: {titles.join(', ')}
-                    </p>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Matches filter:</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                      {reasons.map((entry) => (
+                        <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--sep)', padding: '3px 8px', background: 'var(--fill-1)' }}>
+                          <span style={{ fontSize: 11, color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
+                          <span style={{ fontSize: 10, color: 'var(--label-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                            {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
                     <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
                       Show post
                     </button>
