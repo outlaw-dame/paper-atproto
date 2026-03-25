@@ -59,6 +59,12 @@ function ActionChip({ action }: { action: FilterAction }) {
   );
 }
 
+function sanitizeForConfirmLabel(value: string): string {
+  const cleaned = value.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (!cleaned) return 'this filter';
+  return cleaned.length > 80 ? `${cleaned.slice(0, 80)}...` : cleaned;
+}
+
 export default function ContentFilterSettingsSection() {
   const { rules, addRule, removeRule, toggleRule, updateRule } = useContentFilterStore();
   const { session } = useSessionStore();
@@ -190,6 +196,36 @@ export default function ContentFilterSettingsSection() {
       contexts: rule.contexts,
       expiresAt: rule.expiresAt,
     });
+  };
+
+  const confirmDeleteRule = (id: string) => {
+    const rule = rules.find((it) => it.id === id);
+    if (!rule) return;
+    const label = sanitizeForConfirmLabel(rule.phrase);
+    const confirmMessage = `Are you sure you want to delete the filter "${label}"? This cannot be undone.`;
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      removeRule(id);
+      return;
+    }
+    const confirmed = window.confirm(
+      confirmMessage,
+    );
+    if (!confirmed) return;
+    removeRule(id);
+  };
+
+  const confirmDisableAllRules = () => {
+    const enabledCount = rules.filter((rule) => rule.enabled).length;
+    if (enabledCount === 0) return;
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      disableAllRules();
+      return;
+    }
+    const confirmed = window.confirm(
+      `Are you sure you want to disable ${enabledCount} active filter${enabledCount === 1 ? '' : 's'}? You can re-enable them later.`,
+    );
+    if (!confirmed) return;
+    disableAllRules();
   };
 
   const disableAllRules = () => {
@@ -365,7 +401,7 @@ export default function ContentFilterSettingsSection() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           <button
             type="button"
-            onClick={disableAllRules}
+            onClick={confirmDisableAllRules}
             style={{
               border: 'none',
               background: 'transparent',
@@ -511,7 +547,7 @@ export default function ContentFilterSettingsSection() {
                     <button type="button" onClick={() => beginEdit(rule.id)} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
                       Edit
                     </button>
-                    <button type="button" onClick={() => removeRule(rule.id)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+                    <button type="button" onClick={() => confirmDeleteRule(rule.id)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
                       Delete
                     </button>
                   </div>

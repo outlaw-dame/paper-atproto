@@ -11,6 +11,20 @@ export default function SensitiveMediaSection() {
     return () => clearInterval(timer);
   }, []);
 
+  const confirmResetReveals = () => {
+    const revealedCount = Object.keys(revealedPostIds).length;
+    if (revealedCount === 0) return;
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      clearReveals();
+      return;
+    }
+    const confirmed = window.confirm(
+      `Are you sure you want to reset ${revealedCount} reveal${revealedCount === 1 ? '' : 's'} for this device?`,
+    );
+    if (!confirmed) return;
+    clearReveals();
+  };
+
   return (
     <div>
       <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }}>
@@ -70,7 +84,7 @@ export default function SensitiveMediaSection() {
         </span>
         <button
           type="button"
-          onClick={clearReveals}
+          onClick={confirmResetReveals}
           style={{
             border: '1px solid var(--sep)',
             borderRadius: 8,
