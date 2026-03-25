@@ -20,6 +20,17 @@ type Mode = typeof MODES[number];
 
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 
+function dedupePostsById(items: MockPost[]): MockPost[] {
+  const seen = new Set<string>();
+  const deduped: MockPost[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
 function Spinner({ small }: { small?: boolean }) {
   const s = small ? 18 : 28;
   return (
@@ -88,10 +99,10 @@ export default function HomeTab({ onOpenStory }: Props) {
         .map(mapFeedViewPost);
 
       if (isInitial) {
-        setPosts(mapped);
+        setPosts(dedupePostsById(mapped));
         scrollRef.current?.scrollTo({ top: 0 });
       } else {
-        setPosts(prev => [...prev, ...mapped]);
+        setPosts(prev => dedupePostsById([...prev, ...mapped]));
       }
       setCursor(nextCursor);
     } catch (err: any) {
@@ -177,6 +188,21 @@ export default function HomeTab({ onOpenStory }: Props) {
     }
   }, [agent, session]);
 
+  const handleBookmark = useCallback(async (p: MockPost) => {
+    // Placeholder for bookmark functionality
+    // For now, just toggle the state locally
+    setPosts(prev => prev.map(item => item.id === p.id ? {
+      ...item,
+      bookmarkCount: item.bookmarkCount + (item.viewer?.bookmark ? -1 : 1),
+      viewer: { ...item.viewer, bookmark: item.viewer?.bookmark ? undefined : 'bookmarked' }
+    } : item));
+  }, []);
+
+  const handleMore = useCallback((p: MockPost) => {
+    // Placeholder for more menu
+    console.log('More menu for post:', p.id);
+  }, []);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
       {/* Nav bar */}
@@ -260,22 +286,59 @@ export default function HomeTab({ onOpenStory }: Props) {
             </motion.div>
           ) : (
             <motion.div key={mode} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} style={{ paddingBottom: 'var(--safe-bottom)' }}>
-              {posts.map((post, i) => (
-                <div key={post.id} style={{ borderBottom: '1px solid var(--stroke-light)', paddingBottom: 12, marginBottom: 12 }}>
-                  {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" />}
+              {posts.map((post, i) => {
+                const storyRootId = post.threadRoot?.id ?? post.id;
+                const storyTitle = (post.threadRoot?.content ?? post.content).slice(0, 80);
+                const openThreadStory = () => {
+                  onOpenStory({ id: storyRootId, type: 'post', title: storyTitle });
+                };
+                const openContextTarget = (target?: MockPost) => {
+                  if (!target?.id) {
+                    // If parent context is missing (blocked, deleted, or filtered),
+                    // still open the visible thread anchored on the current post.
+                    openThreadStory();
+                    return;
+                  }
+                  onOpenStory({
+                    id: target.id,
+                    type: 'post',
+                    title: target.content?.slice(0, 80) || storyTitle,
+                  });
+                };
+
+                // A reply-in-thread gets a subtle tinted background so it reads as
+                // a distinct unit from adjacent standalone posts
+                const isReply = !!(post.threadRoot ?? post.replyTo);
+                return (
+                <div key={post.id} style={{
+                  borderBottom: '1px solid var(--stroke-dim)',
+                  paddingBottom: 12, marginBottom: 0,
+                  ...(isReply ? {
+                    background: 'var(--surface-card)',
+                    borderRadius: 12,
+                    margin: '4px 8px',
+                    padding: '10px 10px 12px',
+                    border: '0.5px solid var(--stroke-dim)',
+                  } : { padding: '4px 0 12px' }),
+                }}>
+                  {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
                   {/* Only show direct parent if it's not the same as the thread root */}
-                  {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" />}
-                  <PostCard 
-                    post={post} 
-                    onOpenStory={onOpenStory} 
-                    onViewProfile={openProfile} 
+                  {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" onClick={() => openContextTarget(post.replyTo)} />}
+                  <PostCard
+                    post={post}
+                    onOpenStory={onOpenStory}
+                    onViewProfile={openProfile}
                     onToggleRepost={handleToggleRepost}
                     onToggleLike={handleToggleLike}
+                    onBookmark={handleBookmark}
+                    onMore={handleMore}
                     // onReply={handleReply} // TODO: Implement reply composer
-                    index={i} 
+                    index={i}
+                    replyingTo={post.replyTo?.author.handle ?? post.threadRoot?.author.handle}
                   />
                 </div>
-              ))}
+                );
+              })}
               {loadingMore && (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
                   <Spinner small />

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
@@ -11,18 +11,33 @@ interface PostCardProps {
   onViewProfile?: (handle: string) => void;
   onToggleRepost?: (post: MockPost) => void;
   onToggleLike?: (post: MockPost) => void;
+  onQuote?: (post: MockPost) => void;
   onReply?: (post: MockPost) => void;
+  onBookmark?: (post: MockPost) => void;
+  onMore?: (post: MockPost) => void;
   index: number;
+  /** Handle of the post being replied to — shown as "↳ Replying to @handle" */
+  replyingTo?: string | undefined;
 }
 
-export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onReply, index }: PostCardProps) {
+export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo }: PostCardProps) {
+  const [showRepostMenu, setShowRepostMenu] = useState(false);
+
+  const storyRootId = post.threadRoot?.id ?? post.id;
+  const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
+
   // Handle "open story" click
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't trigger if clicking interactive elements
     if ((e.target as HTMLElement).closest('button, a, .video-player-wrapper')) {
       return;
     }
-    onOpenStory({ id: post.id, type: 'post' });
+    onOpenStory({ id: storyRootId, type: 'post', title: storyTitle });
+  };
+
+  const handleRepostToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowRepostMenu(prev => !prev);
   };
 
   return (
@@ -72,6 +87,13 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           </div>
         </div>
       </div>
+
+      {/* Reply-to attribution */}
+      {replyingTo && (
+        <p style={{ fontSize: 13, color: 'var(--label-3)', margin: '0 0 6px', fontWeight: 500 }}>
+          ↳ Replying to <span style={{ color: 'var(--blue)' }}>@{replyingTo}</span>
+        </p>
+      )}
 
       {/* Content */}
       {post.content && (
@@ -208,14 +230,24 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           active={!!post.viewer?.like}
           onClick={() => onToggleLike?.(post)}
         />
-        <div style={{ width: 24 }} /> {/* Spacer for Share/More */}
+        <ActionButton 
+          icon="bookmark" 
+          count={post.bookmarkCount || 0} 
+          active={!!post.viewer?.bookmark}
+          onClick={() => onBookmark?.(post)}
+        />
+        <ActionButton 
+          icon="more" 
+          count={0}
+          onClick={() => onMore?.(post)}
+        />
       </div>
     </motion.div>
   );
 }
 
 // ─── Action Button ────────────────────────────────────────────────────────
-function ActionButton({ icon, count, active, onClick }: { icon: 'reply' | 'repost' | 'like', count: number, active?: boolean, onClick?: () => void }) {
+function ActionButton({ icon, count, active, onClick }: { icon: 'reply' | 'repost' | 'like' | 'bookmark' | 'more', count: number, active?: boolean, onClick?: () => void }) {
   const color = active 
     ? (icon === 'like' ? 'var(--red)' : 'var(--green)')
     : 'var(--label-3)';
@@ -248,7 +280,19 @@ function ActionButton({ icon, count, active, onClick }: { icon: 'reply' | 'repos
           <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"></path>
         </svg>
       )}
-      <span style={{ fontSize: 13, fontWeight: 500, color: active ? color : 'var(--label-3)' }}>{formatCount(count)}</span>
+      {icon === 'bookmark' && (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth={active ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+        </svg>
+      )}
+      {icon === 'more' && (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="1"></circle>
+          <circle cx="12" cy="5" r="1"></circle>
+          <circle cx="12" cy="19" r="1"></circle>
+        </svg>
+      )}
+      {icon !== 'more' && <span style={{ fontSize: 13, fontWeight: 500, color: active ? color : 'var(--label-3)' }}>{formatCount(count)}</span>}
     </button>
   );
 }

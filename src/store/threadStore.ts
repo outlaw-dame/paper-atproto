@@ -1,161 +1,158 @@
-// ─── Rolling Thread State Store (Pipeline B) ─────────────────────────────
-// Now powered by the Glympse Intelligence layer (src/intelligence/).
-//
-// Scoring and summary-building have moved out of this file:
-//   • Scoring  → src/intelligence/scoreThread.ts
-//   • Summary  → src/intelligence/buildInterpolatorSummary.ts
-//   • Pipeline → src/intelligence/atprotoInterpolatorAdapter.ts
-//
-// This store owns persistence and provides reactive Zustand access to
-// InterpolatorState. StoryMode calls runInterpolatorPipeline() and then
-// calls setInterpolatorState() to commit the result here.
-
 import { create } from 'zustand';
-import type { InterpolatorState, ContributionScore, ContributionRole } from '../intelligence/index.js';
+import type { AtUri, ContributionScores, ThreadInterpolatorState } from '../intelligence/interpolatorTypes';
+import type { VerificationOutcome } from '../intelligence/verification';
+import type { ConfidenceState, SummaryMode, InterpolatorWriteResult } from '../intelligence/llmContracts';
 
-// ─── Legacy type aliases (backward compatibility) ─────────────────────────
-// Existing callers that imported ReplyScore or ThreadState from this module
-// continue to work without changes.
-export type { ContributionRole, ContributionScore, InterpolatorState };
-/** @deprecated Use ContributionScore */
-export type ReplyScore = ContributionScore;
-/** @deprecated Use InterpolatorState */
-export type ThreadState = InterpolatorState;
+type ThreadSlice = {
+  interpolator: ThreadInterpolatorState | null;
+  scores: Record<AtUri, ContributionScores>;
+  verificationByPost: Record<AtUri, VerificationOutcome>;
+  rootVerification: VerificationOutcome | null;
+  /** Three-axis confidence computed after Phase 1/3 pipeline. */
+  confidence: ConfidenceState | null;
+  /** Summary mode chosen from confidence — normal / descriptive_fallback / minimal_fallback. */
+  summaryMode: SummaryMode | null;
+  /** Final writer result from Qwen3-4B. null until writer has responded. */
+  writerResult: InterpolatorWriteResult | null;
+  lastComputedAt?: string | undefined;
+  error?: string | null | undefined;
+  isLoading: boolean;
+};
 
-// ─── Store interface ──────────────────────────────────────────────────────
-interface ThreadStoreState {
-  threads: Record<string, InterpolatorState>;
-
-  /** Initialize an empty state when a thread is first opened. */
-  initThread: (rootUri: string) => void;
-
-  /**
-   * Replace the full InterpolatorState for a thread.
-   * This is the primary write path — called after runInterpolatorPipeline().
-   */
-  setInterpolatorState: (rootUri: string, state: InterpolatorState) => void;
-
-  /**
-   * Patch the rolling summary fields only.
-   * @deprecated Prefer setInterpolatorState via runInterpolatorPipeline.
-   */
-  updateSummary: (
-    rootUri: string,
-    patch: Partial<Omit<InterpolatorState, 'rootUri' | 'version'>>
+type ThreadStore = {
+  byThread: Record<string, ThreadSlice>;
+  ensureThread: (threadId: string) => void;
+  setLoading: (threadId: string, isLoading: boolean) => void;
+  setError: (threadId: string, error: string | null) => void;
+  upsertThreadResult: (
+    threadId: string,
+    payload: {
+      interpolator: ThreadInterpolatorState;
+      scores: Record<AtUri, ContributionScores>;
+      verificationByPost?: Record<AtUri, VerificationOutcome>;
+      rootVerification?: VerificationOutcome | null;
+      confidence?: ConfidenceState;
+      summaryMode?: SummaryMode;
+    },
   ) => void;
-
-  /**
-   * Record a single reply score.
-   * @deprecated Prefer setInterpolatorState via runInterpolatorPipeline.
-   */
-  setReplyScore: (rootUri: string, score: ContributionScore) => void;
-
-  /** Record user feedback on a reply — always meaningful, updates version. */
+  setWriterResult: (threadId: string, writerResult: InterpolatorWriteResult) => void;
   setUserFeedback: (
-    rootUri: string,
-    replyUri: string,
-    feedback: ContributionScore['userFeedback']
+    threadId: string,
+    replyUri: AtUri,
+    feedback: ContributionScores['userFeedback'],
   ) => void;
+  getThread: (threadId: string) => ThreadSlice | null;
+};
 
-  /** Get the current state for a thread, or null if not yet initialised. */
-  getThread: (rootUri: string) => InterpolatorState | null;
-}
-
-// ─── Empty state factory ──────────────────────────────────────────────────
-function emptyState(rootUri: string): InterpolatorState {
+function emptyThreadSlice(): ThreadSlice {
   return {
-    rootUri,
-    summaryText: '',
-    salientClaims: [],
-    salientContributors: [],
-    clarificationsAdded: [],
-    newAnglesAdded: [],
-    repetitionLevel: 0,
-    heatLevel: 0,
-    sourceSupportPresent: false,
-    replyScores: {},
-    entityLandscape: [],
-    topContributors: [],
-    evidencePresent: false,
-    factualSignalPresent: false,
-    lastTrigger: null,
-    triggerHistory: [],
-    updatedAt: new Date().toISOString(),
-    version: 0,
+    interpolator: null,
+    scores: {},
+    verificationByPost: {},
+    rootVerification: null,
+    confidence: null,
+    summaryMode: null,
+    writerResult: null,
+    error: null,
+    isLoading: false,
   };
 }
 
-// ─── Store ────────────────────────────────────────────────────────────────
-export const useThreadStore = create<ThreadStoreState>((set, get) => ({
-  threads: {},
+export const useThreadStore = create<ThreadStore>((set, get) => ({
+  byThread: {},
 
-  initThread: (rootUri) => {
-    set(state => {
-      if (state.threads[rootUri]) return state;
-      return { threads: { ...state.threads, [rootUri]: emptyState(rootUri) } };
-    });
-  },
-
-  setInterpolatorState: (rootUri, newState) => {
-    set(s => ({ threads: { ...s.threads, [rootUri]: newState } }));
-  },
-
-  updateSummary: (rootUri, patch) => {
-    set(state => {
-      const existing = state.threads[rootUri] ?? emptyState(rootUri);
+  ensureThread: (threadId) => {
+    set((state) => {
+      if (state.byThread[threadId]) return state;
       return {
-        threads: {
-          ...state.threads,
-          [rootUri]: {
-            ...existing,
-            ...patch,
-            updatedAt: new Date().toISOString(),
-            version: existing.version + 1,
-          },
+        byThread: {
+          ...state.byThread,
+          [threadId]: emptyThreadSlice(),
         },
       };
     });
   },
 
-  setReplyScore: (rootUri, score) => {
-    set(state => {
-      const existing = state.threads[rootUri] ?? emptyState(rootUri);
-      return {
-        threads: {
-          ...state.threads,
-          [rootUri]: {
-            ...existing,
-            replyScores: { ...existing.replyScores, [score.uri]: score },
-            updatedAt: new Date().toISOString(),
-            version: existing.version + 1,
-          },
+  setLoading: (threadId, isLoading) => {
+    set((state) => ({
+      byThread: {
+        ...state.byThread,
+        [threadId]: {
+          ...(state.byThread[threadId] ?? emptyThreadSlice()),
+          isLoading,
         },
-      };
-    });
+      },
+    }));
   },
 
-  setUserFeedback: (rootUri, replyUri, feedback) => {
-    set(state => {
-      const existing = state.threads[rootUri];
-      if (!existing) return state;
-      const existingScore = existing.replyScores[replyUri];
-      if (!existingScore) return state;
+  setError: (threadId, error) => {
+    set((state) => ({
+      byThread: {
+        ...state.byThread,
+        [threadId]: {
+          ...(state.byThread[threadId] ?? emptyThreadSlice()),
+          error,
+          isLoading: false,
+        },
+      },
+    }));
+  },
+
+  upsertThreadResult: (threadId, payload) => {
+    set((state) => ({
+      byThread: {
+        ...state.byThread,
+        [threadId]: {
+          ...(state.byThread[threadId] ?? emptyThreadSlice()),
+          interpolator: payload.interpolator,
+          scores: payload.scores,
+          verificationByPost: payload.verificationByPost ?? {},
+          rootVerification: payload.rootVerification ?? null,
+          ...(payload.confidence !== undefined ? { confidence: payload.confidence } : {}),
+          ...(payload.summaryMode !== undefined ? { summaryMode: payload.summaryMode } : {}),
+          lastComputedAt: new Date().toISOString(),
+          error: null,
+          isLoading: false,
+        },
+      },
+    }));
+  },
+
+  setWriterResult: (threadId, writerResult) => {
+    set((state) => ({
+      byThread: {
+        ...state.byThread,
+        [threadId]: {
+          ...(state.byThread[threadId] ?? emptyThreadSlice()),
+          writerResult,
+        },
+      },
+    }));
+  },
+
+  setUserFeedback: (threadId, replyUri, feedback) => {
+    set((state) => {
+      const current = state.byThread[threadId] ?? emptyThreadSlice();
+      const score = current.scores[replyUri];
+      if (!score) return state;
+
       return {
-        threads: {
-          ...state.threads,
-          [rootUri]: {
-            ...existing,
-            replyScores: {
-              ...existing.replyScores,
-              [replyUri]: { ...existingScore, userFeedback: feedback } as ContributionScore,
+        byThread: {
+          ...state.byThread,
+          [threadId]: {
+            ...current,
+            scores: {
+              ...current.scores,
+              [replyUri]: {
+                ...score,
+                ...(feedback !== undefined ? { userFeedback: feedback } : {}),
+              },
             },
-            updatedAt: new Date().toISOString(),
-            version: existing.version + 1,
-          } as InterpolatorState,
+          },
         },
       };
     });
   },
 
-  getThread: (rootUri) => get().threads[rootUri] ?? null,
+  getThread: (threadId) => get().byThread[threadId] ?? null,
 }));

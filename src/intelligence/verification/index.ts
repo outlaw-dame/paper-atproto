@@ -14,10 +14,12 @@
 
 export * from './types.js';
 export * from './errors.js';
-export * from './retry.js';
+// retry.js exports withRetry/RetryOptions which conflict with the top-level
+// intelligence/retry.js re-export — keep it internal to the verification module.
 export * from './cache.js';
 export * from './utils.js';
 export * from './noopProviders.js';
 export * from './httpProviders.js';
 export * from './verifyEvidence.js';
 export * from './mergeVerificationIntoScore.js';
+export * from './providerFactory.js';

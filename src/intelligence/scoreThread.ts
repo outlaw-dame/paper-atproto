@@ -17,11 +17,11 @@ import type {
   ContributionScore,
   ContributionRole,
   EvidenceSignal,
-  EntityImpact,
   EntityKind,
   ContributorImpact,
 } from './interpolatorTypes.js';
 import type { ThreadNode, ResolvedFacet, ResolvedEmbed } from '../lib/resolver/atproto.js';
+import { linkAndMatchEntities, type EntityCatalog } from './entityLinking.js';
 
 // ─── Evidence extraction ──────────────────────────────────────────────────
 
@@ -90,82 +90,9 @@ function extractEvidenceSignals(
   return signals;
 }
 
-// ─── Entity extraction ────────────────────────────────────────────────────
-// Sources: @mentions in facets, a fixed concept vocabulary, and proper-noun
-// sequences (Title Case). All lightweight — no NLP model required.
-
-const CONCEPT_VOCAB: Record<string, EntityKind> = {
-  'climate': 'concept', 'democracy': 'concept', 'ai': 'concept',
-  'blockchain': 'concept', 'privacy': 'concept', 'censorship': 'concept',
-  'election': 'concept', 'vaccine': 'concept', 'inflation': 'concept',
-  'regulation': 'concept', 'algorithm': 'concept', 'moderation': 'concept',
-  'misinformation': 'concept', 'disinformation': 'concept', 'fediverse': 'concept',
-  'decentralisation': 'concept', 'decentralization': 'concept',
-};
-
-const PROPER_NOUN_RE = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)\b/g;
-
-function extractEntityImpacts(
-  text: string,
-  facets: ResolvedFacet[],
-  knownEntities: Set<string>,
-): EntityImpact[] {
-  const impacts: EntityImpact[] = [];
-  const lower = text.toLowerCase();
-  const seen = new Set<string>();
-
-  // ── Mention facets → person ───────────────────────────────────────────
-  for (const f of facets) {
-    if (f.kind === 'mention' && f.did) {
-      const key = f.did.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      // Extract display text from the facet byte range via the text string
-      impacts.push({
-        entityText: `@${key.split(':').pop() ?? key}`,
-        entityKind: 'person',
-        sentimentShift: 0,
-        isNewEntity: !knownEntities.has(key),
-        mentionCount: 1,
-      });
-    }
-  }
-
-  // ── Concept vocabulary ────────────────────────────────────────────────
-  for (const [kw, kind] of Object.entries(CONCEPT_VOCAB)) {
-    if (!lower.includes(kw) || seen.has(kw)) continue;
-    seen.add(kw);
-    impacts.push({
-      entityText: kw,
-      entityKind: kind,
-      sentimentShift: 0,
-      isNewEntity: !knownEntities.has(kw),
-      mentionCount: (lower.match(new RegExp(`\\b${kw}\\b`, 'g')) ?? []).length,
-    });
-  }
-
-  // ── Proper nouns (Title Case runs) ────────────────────────────────────
-  for (const m of text.matchAll(PROPER_NOUN_RE)) {
-    const name = m[1];
-    if (!name) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    // Skip very short matches and very common stop words
-    if (name.length < 4) continue;
-    seen.add(key);
-    // Multi-word → org; single-word → person heuristic
-    const kind: EntityKind = name.includes(' ') ? 'org' : 'person';
-    impacts.push({
-      entityText: name,
-      entityKind: kind,
-      sentimentShift: 0,
-      isNewEntity: !knownEntities.has(key),
-      mentionCount: 1,
-    });
-  }
-
-  return impacts.slice(0, 8);  // cap per reply
-}
+// ─── Entity extraction and matching ──────────────────────────────────────
+// Uses deterministic candidates (mentions, hashtags, concept aliases,
+// proper nouns) and resolves them against a thread-local entity catalog.
 
 // ─── Factual contribution ─────────────────────────────────────────────────
 // Evidence-derived POSITIVE signal. Speculation reduces it slightly.
@@ -274,6 +201,8 @@ function computeUsefulnessScore(
     new_information:     0.78,
     clarifying:          0.70,
     direct_response:     0.62,
+    rule_source:         0.82,
+    source_bringer:      0.80,
     unknown:             0.45,
     provocative:         0.35,
     repetitive:          0.10,
@@ -298,7 +227,7 @@ export function scoreReply(
   reply: ThreadNode,
   rootText: string,
   allReplies: ThreadNode[],
-  knownEntities: Set<string>,
+  entityCatalog: EntityCatalog,
   allCitedUrls: Set<string>,
 ): ContributionScore {
   const text = reply.text ?? '';
@@ -308,7 +237,7 @@ export function scoreReply(
     .map(r => r.text ?? '');
 
   const evidenceSignals = extractEvidenceSignals(text, reply.facets, reply.embed);
-  const entityImpacts = extractEntityImpacts(text, reply.facets, knownEntities);
+  const entityImpacts = linkAndMatchEntities(text, reply.facets, entityCatalog);
   const factualContribution = computeFactualContribution(evidenceSignals);
   const role = assignRole(text, threadTexts, evidenceSignals, reply.likeCount, factualContribution);
   const usefulnessScore = computeUsefulnessScore(role, factualContribution, reply.likeCount, words);
@@ -350,15 +279,12 @@ export function scoreAllReplies(
   }
 
   // Pass 2 — score, accumulating entity knowledge as we go
-  const knownEntities = new Set<string>();
+  const entityCatalog: EntityCatalog = new Map();
   const scores: Record<string, ContributionScore> = {};
 
   for (const reply of replies) {
-    const score = scoreReply(reply, rootText, replies, knownEntities, allCitedUrls);
+    const score = scoreReply(reply, rootText, replies, entityCatalog, allCitedUrls);
     scores[reply.uri] = score;
-    for (const e of score.entityImpacts) {
-      knownEntities.add(e.entityText.toLowerCase().replace(/^@/, ''));
-    }
   }
 
   return scores;

@@ -24,14 +24,21 @@ import {
   resolveThread, extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
 } from '../lib/resolver/atproto.js';
+import { useThreadStore } from '../store/threadStore.js';
 import {
-  useThreadStore,
+  runVerifiedThreadPipeline,
+  nodeToThreadPost,
   type ContributionRole,
-} from '../store/threadStore.js';
-import {
-  runInterpolatorPipeline,
-  type ContributionScore,
+  type ContributionScores,
+  type ContributorImpact,
+  type EntityImpact,
+  type VerificationOutcome,
 } from '../intelligence/index.js';
+import { createVerificationProviders } from '../intelligence/verification/providerFactory.js';
+import { InMemoryVerificationCache } from '../intelligence/verification/cache.js';
+import { buildThreadStateForWriter } from '../intelligence/writerInput.js';
+import { callInterpolatorWriter } from '../intelligence/modelClient.js';
+import type { SummaryMode } from '../intelligence/llmContracts.js';
 import {
   promptHero as phTokens,
   interpolator as intTokens,
@@ -53,7 +60,7 @@ interface Props {
   onClose: () => void;
 }
 
-type ThreadFilter = 'Top' | 'Latest' | 'Clarifying' | 'New angles' | 'Open Story';
+type ThreadFilter = 'Top' | 'Latest' | 'Clarifying' | 'New angles' | 'Source-backed' | 'Open Story';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -148,7 +155,15 @@ function HostBar({ onClose }: { onClose: () => void }) {
 }
 
 // ─── PromptHeroCard ───────────────────────────────────────────────────────
-function PromptHeroCard({ post, participantCount }: { post: MockPost; participantCount: number }) {
+function PromptHeroCard({
+  post,
+  participantCount,
+  rootVerification,
+}: {
+  post: MockPost;
+  participantCount: number;
+  rootVerification?: VerificationOutcome | null;
+}) {
   const img = post.media?.[0]?.url ?? post.embed?.thumb;
   return (
     <div style={{
@@ -227,21 +242,88 @@ function PromptHeroCard({ post, participantCount }: { post: MockPost; participan
           </div>
         )}
 
+        {/* Factual chips from root verification */}
+        {rootVerification && (() => {
+          const chips: Array<{ label: string; color: string }> = [];
+          if (rootVerification.factCheck?.matched) chips.push({ label: 'Fact-checked', color: '#22C55E' });
+          if (rootVerification.sourcePresence > 0.3 && rootVerification.sourceQuality > 0.4) chips.push({ label: 'Source-backed', color: accent.blue500 });
+          if (rootVerification.quoteFidelity >= 0.65) chips.push({ label: 'Direct quote', color: '#BF8FFF' });
+          if (rootVerification.contradictionLevel >= 0.45) chips.push({ label: 'Contested', color: '#F97316' });
+          if (chips.length === 0) return null;
+          return (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {chips.map(chip => (
+                <span key={chip.label} style={{
+                  padding: '3px 10px', borderRadius: radius.full,
+                  background: 'rgba(255,255,255,0.08)',
+                  border: `0.5px solid ${chip.color}40`,
+                  color: chip.color,
+                  fontSize: typeScale.metaSm[0], fontWeight: 600,
+                }}>{chip.label}</span>
+              ))}
+            </div>
+          );
+        })()}
+
       </div>
     </div>
   );
+}
+
+// ─── renderSummaryText ────────────────────────────────────────────────────
+// Splits summaryText on @mentions and #hashtags, returning a React node array
+// with linkified, slightly-bold handles and linkified tags.
+function renderSummaryText(text: string): React.ReactNode[] {
+  const parts = text.split(/(@[\w.:-]+|#[\w]+)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('@')) {
+      const handle = part.slice(1);
+      return (
+        <a
+          key={i}
+          href={`https://bsky.app/profile/${handle}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontWeight: 600, color: 'inherit', textDecoration: 'none' }}
+        >
+          {part}
+        </a>
+      );
+    }
+    if (part.startsWith('#')) {
+      const tag = part.slice(1);
+      return (
+        <a
+          key={i}
+          href={`https://bsky.app/search?q=%23${tag}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: 'inherit', textDecoration: 'none' }}
+        >
+          {part}
+        </a>
+      );
+    }
+    return part;
+  });
 }
 
 // ─── InterpolatorCard ─────────────────────────────────────────────────────
 type InterpolatorState = 'collapsed' | 'expanded' | 'emerging' | 'updating' | 'stale';
 
 function InterpolatorCard({
-  rootUri, summaryText, clarifications, newAngles,
+  rootUri, summaryText, writerSummary, summaryMode,
+  clarifications, newAngles,
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
+  topContributors, entityLandscape, factualSignalPresent,
 }: {
   rootUri: string;
   summaryText: string;
+  /** Model-written summary — takes precedence over heuristic summaryText when present. */
+  writerSummary?: string | undefined;
+  /** Summary mode from confidence routing — shown as a subtle badge in fallback modes. */
+  summaryMode?: SummaryMode | undefined;
   clarifications: string[];
   newAngles: string[];
   heatLevel: number;
@@ -249,11 +331,16 @@ function InterpolatorCard({
   sourceSupportPresent: boolean;
   replyCount: number;
   updatedAt: string;
+  topContributors: ContributorImpact[];
+  entityLandscape: EntityImpact[];
+  factualSignalPresent: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const state: InterpolatorState = summaryText === '' ? 'emerging'
-    : replyCount < 3 ? 'emerging'
-    : 'collapsed';
+  // Use writer summary if available, otherwise fall back to heuristic
+  const displaySummary = writerSummary || summaryText;
+  // Only show "emerging" when there is genuinely nothing to display —
+  // the model can write a summary for even a 1-reply thread.
+  const state: InterpolatorState = displaySummary === '' ? 'emerging' : 'collapsed';
 
   const updatedAgo = (() => {
     try {
@@ -337,9 +424,16 @@ function InterpolatorCard({
           ? replyCount === 0
             ? 'This discussion is just beginning. Be the first to contribute.'
             : `This discussion is forming around ${replyCount} early response${replyCount > 1 ? 's' : ''}. Early voices are shaping the conversation.`
-          : summaryText || 'Analyzing conversation…'
+          : displaySummary ? renderSummaryText(displaySummary) : 'Analyzing conversation…'
         }
       </p>
+
+      {/* Fallback mode badge */}
+      {writerSummary && summaryMode && summaryMode !== 'normal' && (
+        <p style={{ fontSize: 11, color: intTokens.text.secondary, opacity: 0.5, margin: '-10px 0 10px', fontStyle: 'italic' }}>
+          {summaryMode === 'descriptive_fallback' ? 'Descriptive analysis' : 'Summary'}
+        </p>
+      )}
 
       {/* Evidence row */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: expanded ? 16 : 0 }}>
@@ -369,6 +463,15 @@ function InterpolatorCard({
             color: intTokens.evidenceChip.text,
             fontSize: typeScale.metaLg[0], fontWeight: 600,
           }}>source cited</span>
+        )}
+        {factualSignalPresent && (
+          <span style={{
+            padding: '4px 10px', borderRadius: radius.full,
+            background: 'rgba(99,220,180,0.12)',
+            border: '0.5px solid rgba(99,220,180,0.30)',
+            color: '#63DCB4',
+            fontSize: typeScale.metaLg[0], fontWeight: 600,
+          }}>evidence verified</span>
         )}
       </div>
 
@@ -431,13 +534,82 @@ function InterpolatorCard({
               </div>
             )}
 
+            {/* Entities */}
+            {entityLandscape.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Entities</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {[...entityLandscape]
+                    .sort((a, b) => b.mentionCount - a.mentionCount)
+                    .slice(0, 5)
+                    .map((e, i) => (
+                      <span key={i} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        padding: '3px 9px', borderRadius: radius.full,
+                        background: 'rgba(255,255,255,0.07)',
+                        border: '0.5px solid rgba(255,255,255,0.14)',
+                        fontSize: typeScale.metaLg[0], color: intTokens.text.secondary,
+                      }}>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, letterSpacing: '0.04em',
+                          color: intTokens.text.meta, textTransform: 'uppercase',
+                        }}>{e.entityKind}</span>
+                        <span style={{ fontWeight: 600 }}>{e.canonicalLabel ?? e.entityText}</span>
+                        {e.mentionCount > 1 && (
+                          <span style={{ color: intTokens.text.meta, fontSize: 11 }}>×{e.mentionCount}</span>
+                        )}
+                        {e.matchConfidence !== undefined && e.matchConfidence < 0.99 && (
+                          <span style={{ color: intTokens.text.meta, fontSize: 11 }}>{Math.round(e.matchConfidence * 100)}%</span>
+                        )}
+                      </span>
+                    ))
+                  }
+                </div>
+              </div>
+            )}
+
+            {/* Key voices */}
+            {topContributors.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Key voices</p>
+                {topContributors.slice(0, 3).map((c, i) => {
+                  const label = c.handle ? `@${c.handle}` : `${c.did.slice(8, 18)}…`;
+                  const roleLabel: Record<string, string> = {
+                    clarifying: 'Clarifying', new_information: 'New info',
+                    direct_response: 'Direct', useful_counterpoint: 'Counterpoint',
+                    story_worthy: 'Story-worthy', rule_source: 'Rule source',
+                    source_bringer: 'Source', repetitive: 'Repetitive',
+                    provocative: 'Provocative', unknown: 'Contributor',
+                  };
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <div style={{
+                        width: 24, height: 24, borderRadius: '50%',
+                        background: 'rgba(255,255,255,0.12)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 10, fontWeight: 700, color: intTokens.text.secondary, flexShrink: 0,
+                      }}>{label.slice(1, 2).toUpperCase()}</div>
+                      <span style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary, flex: 1 }}>{label}</span>
+                      <span style={{
+                        padding: '2px 8px', borderRadius: radius.full,
+                        background: 'rgba(255,255,255,0.08)',
+                        fontSize: typeScale.metaSm[0], fontWeight: 600, color: intTokens.text.meta,
+                      }}>{roleLabel[c.dominantRole] ?? 'Contributor'}</span>
+                      {c.factualContributions > 0 && (
+                        <span style={{
+                          padding: '2px 7px', borderRadius: radius.full,
+                          background: 'rgba(99,220,180,0.12)', border: '0.5px solid rgba(99,220,180,0.25)',
+                          fontSize: typeScale.metaSm[0], fontWeight: 600, color: '#63DCB4',
+                        }}>{c.factualContributions} factual</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Footer actions */}
             <div style={{ display: 'flex', gap: 10 }}>
-              <button style={{
-                padding: '6px 14px', borderRadius: radius.full,
-                background: 'rgba(255,255,255,0.10)', border: 'none', cursor: 'pointer',
-                color: intTokens.text.secondary, fontSize: typeScale.metaLg[0], fontWeight: 600,
-              }}>Key voices</button>
               <button style={{
                 padding: '6px 14px', borderRadius: radius.full,
                 background: intTokens.link.color, border: 'none', cursor: 'pointer',
@@ -452,7 +624,7 @@ function InterpolatorCard({
 }
 
 // ─── ThreadControls ───────────────────────────────────────────────────────
-const THREAD_FILTERS: ThreadFilter[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Open Story'];
+const THREAD_FILTERS: ThreadFilter[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Source-backed', 'Open Story'];
 
 function ThreadControls({ active, onChange }: { active: ThreadFilter; onChange: (f: ThreadFilter) => void }) {
   return (
@@ -510,6 +682,8 @@ const ROLE_LABELS: Record<ContributionRole, string> = {
   provocative:          'Provocative',
   useful_counterpoint:  'Counterpoint',
   story_worthy:         'Opinion',
+  rule_source:          'Rule source',
+  source_bringer:       'Source',
   unknown:              'Reply',
 };
 
@@ -534,15 +708,15 @@ function ContributionCard({
   onFeedback, onQuoteComment, isFollowed,
 }: {
   node: ThreadNode;
-  score?: ContributionScore;
+  score?: ContributionScores;
   rootUri: string;
   featured?: boolean;
   nested?: boolean;
   isFollowed?: boolean;
-  onFeedback: (uri: string, fb: ContributionScore['userFeedback']) => void;
+  onFeedback: (uri: string, fb: ContributionScores['userFeedback']) => void;
   onQuoteComment?: (node: ThreadNode) => void;
 }) {
-  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScore['userFeedback']>(score?.userFeedback);
+  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(score?.userFeedback);
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(node.likeCount);
   const [reposted, setReposted] = useState(false);
@@ -550,7 +724,7 @@ function ContributionCard({
   const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
 
-  const handleFeedback = (fb: ContributionScore['userFeedback']) => {
+  const handleFeedback = (fb: ContributionScores['userFeedback']) => {
     setFeedbackGiven(fb);
     onFeedback(node.uri, fb);
   };
@@ -601,7 +775,7 @@ function ContributionCard({
         <div style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0 }}>
           {node.authorAvatar
             ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{(node.authorName ?? node.authorHandle ?? '?')[0].toUpperCase()}</div>
+            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
           }
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -631,6 +805,16 @@ function ContributionCard({
           </div>
         )}
       </div>
+
+      {/* "↳ replying to @X" — only on nested replies where the parent isn't the root poster */}
+      {nested && node.parentAuthorHandle && (
+        <p style={{
+          fontSize: typeScale.metaSm[0], color: disc.textTertiary,
+          marginBottom: 4, fontWeight: 500,
+        }}>
+          ↳ replying to @{node.parentAuthorHandle}
+        </p>
+      )}
 
       {/* Body */}
       <p style={{
@@ -929,7 +1113,7 @@ function QuoteComposer({ node, onClose }: { node: ThreadNode; onClose: () => voi
             <div style={{ width: 18, height: 18, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0 }}>
               {node.authorAvatar
                 ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : <div style={{ width: '100%', height: '100%', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 9, fontWeight: 700 }}>{(node.authorName ?? node.authorHandle ?? '?')[0].toUpperCase()}</div>
+                : <div style={{ width: '100%', height: '100%', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 9, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
               }
             </div>
             <span style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: disc.textPrimary }}>
@@ -1028,7 +1212,8 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 // ─── Main component ────────────────────────────────────────────────────────
 export default function StoryMode({ entry, onClose }: Props) {
   const { agent, session, profile } = useSessionStore();
-  const { initThread, setInterpolatorState, setUserFeedback, getThread } = useThreadStore();
+  const { ensureThread, upsertThreadResult, setWriterResult, setUserFeedback, getThread } = useThreadStore();
+  const verificationCache = React.useRef(new InMemoryVerificationCache());
   const [rootPost, setRootPost] = useState<MockPost | null>(null);
   const [replies, setReplies] = useState<ThreadNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1049,66 +1234,140 @@ export default function StoryMode({ entry, onClose }: Props) {
       .catch(() => {}); // non-critical, fail silently
   }, [session?.did]);
 
-  const threadState = getThread(entry.id);
+  const thread = getThread(entry.id);
 
-  // ── Fetch thread ─────────────────────────────────────────────────────────
+  // ── Fetch thread + polling ────────────────────────────────────────────────
+  // Initial load shows the loading spinner; background re-polls at 60s are
+  // silent — detectTrigger short-circuits if nothing meaningful changed.
+  const pollInFlight = React.useRef(false);
+  const providersRef = React.useRef(createVerificationProviders());
+
   useEffect(() => {
     if (!session) return;
-    setLoading(true);
-    setError(null);
-    initThread(entry.id);
+    ensureThread(entry.id);
 
-    atpCall(() => agent.getPostThread({ uri: entry.id, depth: 6 }))
-      .then(res => {
-        const thread = res?.data?.thread;
-        if (!thread || thread.$type !== 'app.bsky.feed.defs#threadViewPost') {
-          setError('Thread not found'); return;
+    const controller = new AbortController();
+
+    async function fetchAndRun(isInitial: boolean): Promise<void> {
+      if (pollInFlight.current) return;
+      pollInFlight.current = true;
+      if (isInitial) { setLoading(true); setError(null); }
+
+      try {
+        const res = await atpCall(
+          () => agent.getPostThread({ uri: entry.id, depth: 6 }),
+          { signal: controller.signal },
+        );
+        const threadData = res?.data?.thread;
+        if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') {
+          if (isInitial) setError('Thread not found');
+          return;
         }
-        // Map root post
-        const rootNode = resolveThread(thread as any);
-        if (rootNode) {
-          const mapped = mapFeedViewPost({ post: (thread as any).post, reply: undefined, reason: undefined });
+        const rootNode = resolveThread(threadData as any);
+        if (!rootNode) return;
+
+        if (isInitial) {
+          const mapped = mapFeedViewPost({ post: (threadData as any).post, reply: undefined, reason: undefined });
           setRootPost(mapped);
           setReplies(rootNode.replies ?? []);
+        } else {
+          // On re-polls only update reply list if count changed
+          setReplies(prev => {
+            const next = rootNode.replies ?? [];
+            return next.length !== prev.length ? next : prev;
+          });
+        }
 
-          // Run the Interpolator pipeline (entity-aware, evidence-aware)
-          const newState = runInterpolatorPipeline({
+        const result = await runVerifiedThreadPipeline({
+          input: {
             rootUri: entry.id,
             rootText: rootNode.text,
+            rootPost: nodeToThreadPost(rootNode),
             replies: rootNode.replies ?? [],
-            existingState: getThread(entry.id),
+          },
+          previous: getThread(entry.id)?.interpolator ?? null,
+          providers: providersRef.current,
+          cache: verificationCache.current,
+          signal: controller.signal,
+        });
+
+        if (result.didMeaningfullyChange) {
+          upsertThreadResult(entry.id, {
+            interpolator: result.interpolator,
+            scores: result.scores,
+            verificationByPost: result.verificationByPost,
+            rootVerification: result.rootVerification,
+            confidence: result.confidence,
+            summaryMode: result.summaryMode,
           });
-          setInterpolatorState(entry.id, newState);
+
+          // ── Writer call (Qwen3-4B) ─────────────────────────────────────
+          // Fire-and-forget after storing deterministic results.
+          // Failure falls back silently to heuristic summaryText.
+          try {
+            const writerInput = buildThreadStateForWriter(
+              entry.id,
+              rootNode.text,
+              result.interpolator,
+              result.scores,
+              rootNode.replies ?? [],
+              result.confidence,
+            );
+            const writerResult = await callInterpolatorWriter(writerInput, controller.signal);
+            if (!writerResult.abstained) {
+              setWriterResult(entry.id, writerResult);
+            }
+          } catch (writerErr) {
+            // Writer failure is non-fatal — heuristic summary remains visible
+            console.warn('[StoryMode] writer call failed:', writerErr);
+          }
         }
-      })
-      .catch(e => setError(e.message ?? 'Failed to load thread'))
-      .finally(() => setLoading(false));
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+        if (isInitial) setError(e?.message ?? 'Failed to load thread');
+      } finally {
+        pollInFlight.current = false;
+        if (isInitial) setLoading(false);
+      }
+    }
+
+    fetchAndRun(true);
+    const pollInterval = setInterval(() => fetchAndRun(false), 60_000);
+
+    return () => {
+      clearInterval(pollInterval);
+      controller.abort();
+    };
   }, [entry.id, session]);
 
-  const handleFeedback = useCallback((replyUri: string, fb: ContributionScore['userFeedback']) => {
+  const handleFeedback = useCallback((replyUri: string, fb: ContributionScores['userFeedback']) => {
     setUserFeedback(entry.id, replyUri, fb);
   }, [entry.id]);
 
   // ── Filter replies ────────────────────────────────────────────────────────
   const filteredReplies = useMemo(() => {
-    const state = getThread(entry.id);
-    const scores = state?.replyScores ?? {};
+    const scores = getThread(entry.id)?.scores ?? {};
     let sorted = [...replies];
     if (activeFilter === 'Top') {
-      sorted.sort((a, b) => (scores[b.uri]?.usefulnessScore ?? 0) - (scores[a.uri]?.usefulnessScore ?? 0));
+      sorted.sort((a, b) => (scores[b.uri]?.finalInfluenceScore ?? 0) - (scores[a.uri]?.finalInfluenceScore ?? 0));
     } else if (activeFilter === 'Latest') {
       sorted.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
     } else if (activeFilter === 'Clarifying') {
       sorted = sorted.filter(r => scores[r.uri]?.role === 'clarifying');
     } else if (activeFilter === 'New angles') {
       sorted = sorted.filter(r => ['new_information', 'useful_counterpoint'].includes(scores[r.uri]?.role ?? ''));
+    } else if (activeFilter === 'Source-backed') {
+      sorted = sorted.filter(r => {
+        const s = scores[r.uri];
+        return (s?.factual?.factualContributionScore ?? 0) > 0.4 && (s?.factual?.factualConfidence ?? 0) > 0.5;
+      });
     }
     return sorted;
-  }, [replies, activeFilter, entry.id, threadState?.version]);
+  }, [replies, activeFilter, entry.id, thread?.lastComputedAt]);
 
   const featuredReply = filteredReplies.find(r => {
-    const s = getThread(entry.id)?.replyScores[r.uri];
-    return (s?.usefulnessScore ?? 0) > 0.75;
+    const s = getThread(entry.id)?.scores[r.uri];
+    return (s?.finalInfluenceScore ?? 0) > 0.75;
   });
 
   return (
@@ -1141,20 +1400,29 @@ export default function StoryMode({ entry, onClose }: Props) {
 
             {/* PromptHeroCard */}
             {rootPost && (
-              <PromptHeroCard post={rootPost} participantCount={replies.length} />
+              <PromptHeroCard
+                post={rootPost}
+                participantCount={replies.length}
+                {...(thread?.rootVerification !== undefined ? { rootVerification: thread.rootVerification } : {})}
+              />
             )}
 
             {/* InterpolatorCard */}
             <InterpolatorCard
               rootUri={entry.id}
-              summaryText={threadState?.summaryText ?? ''}
-              clarifications={threadState?.clarificationsAdded ?? []}
-              newAngles={threadState?.newAnglesAdded ?? []}
-              heatLevel={threadState?.heatLevel ?? 0}
-              repetitionLevel={threadState?.repetitionLevel ?? 0}
-              sourceSupportPresent={threadState?.sourceSupportPresent ?? false}
+              summaryText={thread?.interpolator?.summaryText ?? ''}
+              writerSummary={thread?.writerResult?.collapsedSummary}
+              summaryMode={thread?.summaryMode ?? undefined}
+              clarifications={thread?.interpolator?.clarificationsAdded ?? []}
+              newAngles={thread?.interpolator?.newAnglesAdded ?? []}
+              heatLevel={thread?.interpolator?.heatLevel ?? 0}
+              repetitionLevel={thread?.interpolator?.repetitionLevel ?? 0}
+              sourceSupportPresent={thread?.interpolator?.sourceSupportPresent ?? false}
               replyCount={replies.length}
-              updatedAt={threadState?.updatedAt ?? new Date().toISOString()}
+              updatedAt={thread?.interpolator?.updatedAt ?? new Date().toISOString()}
+              topContributors={thread?.interpolator?.topContributors ?? []}
+              entityLandscape={thread?.interpolator?.entityLandscape ?? []}
+              factualSignalPresent={thread?.interpolator?.factualSignalPresent ?? false}
             />
 
             {/* ThreadControls */}
@@ -1164,7 +1432,7 @@ export default function StoryMode({ entry, onClose }: Props) {
 
             {/* Featured contribution */}
             {featuredReply && activeFilter === 'Top' && (() => {
-              const featuredScore = getThread(entry.id)?.replyScores[featuredReply.uri];
+              const featuredScore = getThread(entry.id)?.scores[featuredReply.uri];
               return (
                 <ContributionCard
                   key={`featured-${featuredReply.uri}`}
@@ -1183,7 +1451,7 @@ export default function StoryMode({ entry, onClose }: Props) {
             {filteredReplies
               .filter(r => r.uri !== featuredReply?.uri || activeFilter !== 'Top')
               .map(node => {
-                const nodeScore = getThread(entry.id)?.replyScores[node.uri];
+                const nodeScore = getThread(entry.id)?.scores[node.uri];
                 return (
                   <ContributionCard
                     key={node.uri}

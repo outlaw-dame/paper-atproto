@@ -18,7 +18,8 @@
 // fetch that feeds this pipeline lives in retry.ts and is the caller's
 // responsibility (see StoryMode.tsx).
 
-import type { InterpolatorState, InterpolatorInput } from './interpolatorTypes.js';
+import type { InterpolatorState, InterpolatorInput, ThreadPost, ThreadMediaItem } from './interpolatorTypes.js';
+import type { ThreadNode } from '../lib/resolver/atproto.js';
 import { scoreAllReplies } from './scoreThread.js';
 import { buildInterpolatorSummary } from './buildInterpolatorSummary.js';
 import { detectTrigger, applyTriggerToState } from './updateInterpolatorState.js';
@@ -77,4 +78,78 @@ export function runInterpolatorPipeline(input: InterpolatorInput): InterpolatorS
   };
 
   return applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+}
+
+// ─── Phase 3: ATProto → ThreadPost adapter ────────────────────────────────
+
+/**
+ * Extracts image media from a resolved ThreadNode embed.
+ * Handles both 'images' and 'recordWithMedia' embed kinds.
+ */
+export function extractMedia(node: ThreadNode): ThreadPost['media'] {
+  const media: NonNullable<ThreadPost['media']> = [];
+
+  if (node.embed?.kind === 'images' && node.embed.images?.length) {
+    for (const image of node.embed.images) {
+      media.push({
+        url: image.url,
+        ...(image.alt ? { alt: image.alt } : {}),
+        ...(image.aspectRatio?.width !== undefined ? { width: image.aspectRatio.width } : {}),
+        ...(image.aspectRatio?.height !== undefined ? { height: image.aspectRatio.height } : {}),
+      });
+    }
+  }
+
+  if (node.embed?.kind === 'recordWithMedia' && node.embed.mediaImages?.length) {
+    for (const image of node.embed.mediaImages) {
+      media.push({
+        url: image.url,
+        ...(image.alt ? { alt: image.alt } : {}),
+      });
+    }
+  }
+
+  return media.length > 0 ? media : undefined;
+}
+
+/**
+ * Converts a resolved ATProto ThreadNode into a ThreadPost suitable for
+ * the Phase 3 verification pipeline.
+ */
+export function nodeToThreadPost(node: ThreadNode): ThreadPost {
+  const media = extractMedia(node);
+
+  const embeds: NonNullable<ThreadPost['embeds']> = [];
+  if (node.embed?.kind === 'external' && node.embed.external) {
+    const ext = node.embed.external;
+    embeds.push({
+      url: ext.uri,
+      ...(ext.domain !== undefined ? { domain: ext.domain } : {}),
+      ...(ext.title !== undefined ? { title: ext.title } : {}),
+      ...(ext.description !== undefined ? { description: ext.description } : {}),
+    });
+  }
+
+  const facets: NonNullable<ThreadPost['facets']> = node.facets
+    .filter(f => f.kind === 'link' || f.kind === 'mention' || f.kind === 'hashtag')
+    .map(f => ({
+      type: (f.kind === 'hashtag' ? 'tag' : f.kind) as 'link' | 'mention' | 'tag',
+      // ResolvedFacet has no raw text — derive a usable label from available fields
+      text: f.kind === 'link' ? (f.domain ?? f.uri ?? '') : f.kind === 'mention' ? (f.did ?? '') : '',
+      ...(f.uri !== undefined ? { uri: f.uri } : {}),
+    }));
+
+  return {
+    uri: node.uri,
+    did: node.authorDid ?? '',
+    ...(node.authorHandle !== undefined ? { handle: node.authorHandle } : {}),
+    ...(node.authorName !== undefined ? { displayName: node.authorName } : {}),
+    text: node.text ?? '',
+    ...(node.createdAt !== undefined ? { indexedAt: node.createdAt } : {}),
+    likeCount: node.likeCount,
+    replyCount: node.replyCount,
+    ...(embeds.length > 0 ? { embeds } : {}),
+    ...(media !== undefined ? { media } : {}),
+    ...(facets.length > 0 ? { facets } : {}),
+  };
 }
