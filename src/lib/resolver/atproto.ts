@@ -65,7 +65,7 @@ export function parseHandle(s: string): string | null {
 }
 
 // ─── Facets ───────────────────────────────────────────────────────────────
-export type FacetKind = 'mention' | 'hashtag' | 'link';
+export type FacetKind = 'mention' | 'hashtag' | 'link' | 'cashtag';
 
 export interface ResolvedFacet {
   kind: FacetKind;
@@ -75,8 +75,9 @@ export interface ResolvedFacet {
   did?: string;
   // hashtag
   tag?: string;
-  // link
+  // cashtag / link
   uri?: string;
+  cashtag?: string;
   domain?: string;
 }
 
@@ -90,7 +91,13 @@ export function resolveFacets(facets: AppBskyRichtextFacet.Main[] | undefined): 
       if (feat.$type === 'app.bsky.richtext.facet#mention') {
         out.push({ kind: 'mention', byteStart, byteEnd, did: (feat as any).did });
       } else if (feat.$type === 'app.bsky.richtext.facet#tag') {
-        out.push({ kind: 'hashtag', byteStart, byteEnd, tag: (feat as any).tag });
+        // Check if this is a cashtag (tag starting with $) or regular hashtag
+        const tag = (feat as any).tag as string;
+        if (tag.startsWith('$')) {
+          out.push({ kind: 'cashtag', byteStart, byteEnd, cashtag: tag });
+        } else {
+          out.push({ kind: 'hashtag', byteStart, byteEnd, tag });
+        }
       } else if (feat.$type === 'app.bsky.richtext.facet#link') {
         const uri = (feat as any).uri as string;
         out.push({ kind: 'link', byteStart, byteEnd, uri, domain: canonicalDomain(uri) });

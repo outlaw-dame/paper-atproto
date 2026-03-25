@@ -642,6 +642,20 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                     </div>
                   )
                 }
+                
+                {/* Live badge */}
+                {(profile as any)?.status?.["com.atproto.server#userStatus"]?.status === 'LIVE' && (
+                  <div style={{
+                    position: 'absolute', bottom: 0, right: 0,
+                    width: 28, height: 28,
+                    background: '#FF0000', borderRadius: '50%',
+                    border: '2.5px solid white',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 12, fontWeight: 700, color: 'white',
+                  }}>
+                    ●
+                  </div>
+                )}
               </div>
 
               {/* Name */}

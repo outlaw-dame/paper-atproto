@@ -10,14 +10,16 @@ const escapeHtml = (str: string) => str.replace(/[&<>"']/g, (m) => ({
 
 type OnMention = (handle: string) => void;
 type OnHashtag = (tag: string) => void;
+type OnCashtag = (cashtag: string) => void;
 
 type Token = {
-  type: 'text' | 'mention' | 'hashtag' | 'link';
+  type: 'text' | 'mention' | 'hashtag' | 'cashtag' | 'link';
   text: string;
 };
 
 function tokenizeRichText(text: string): Token[] {
-  const pattern = /(https?:\/\/[^\s]+|@[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*|#[a-zA-Z0-9_]+)/g;
+  // Pattern: URLs, cashtags ($AAPL), @mentions, #hashtags
+  const pattern = /(https?:\/\/[^\s]+|\$[A-Za-z][A-Za-z0-9]{0,4}|@[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*|#[a-zA-Z0-9_]+)/g;
   const tokens: Token[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -29,6 +31,9 @@ function tokenizeRichText(text: string): Token[] {
     const tokenText = match[0];
     if (tokenText.startsWith('@')) {
       tokens.push({ type: 'mention', text: tokenText });
+    } else if (tokenText.startsWith('$')) {
+      // Normalize cashtag to uppercase for consistency with AT Protocol
+      tokens.push({ type: 'cashtag', text: tokenText.toUpperCase() });
     } else if (tokenText.startsWith('#')) {
       tokens.push({ type: 'hashtag', text: tokenText });
     } else {
@@ -49,9 +54,10 @@ interface Props {
   style?: React.CSSProperties;
   onMention?: OnMention;
   onHashtag?: OnHashtag;
+  onCashtag?: OnCashtag;
 }
 
-export default function TwemojiText({ text, className, style, onMention, onHashtag }: Props) {
+export default function TwemojiText({ text, className, style, onMention, onHashtag, onCashtag }: Props) {
   const renderText = useCallback((raw: string) => {
     const encoded = escapeHtml(raw);
     const parsed = twemoji.parse(encoded, {
@@ -109,6 +115,28 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
               key={index}
               onClick={(e) => { e.stopPropagation(); onHashtag?.(token.text.slice(1)); }}
               style={{ color: 'var(--blue)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              {renderText(token.text)}
+            </button>
+          );
+        }
+
+        if (token.type === 'cashtag') {
+          if (!onCashtag) {
+            return (
+              <span
+                key={index}
+                style={{ color: 'var(--teal)', fontWeight: 600 }}
+              >
+                {renderText(token.text)}
+              </span>
+            );
+          }
+          return (
+            <button
+              key={index}
+              onClick={(e) => { e.stopPropagation(); onCashtag?.(token.text.slice(1)); }}
+              style={{ color: 'var(--teal)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               {renderText(token.text)}
             </button>

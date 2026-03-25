@@ -23,6 +23,14 @@ interface ComposeMediaItem {
   alt: string;
   width: number;
   height: number;
+  mediaType: 'image' | 'video'; // support images and videos
+  // Video-specific fields
+  captions?: Array<{
+    lang: string; // ISO 639-1 code (e.g., 'en', 'pt', 'es')
+    label: string; // human-readable label
+    content: string; // caption content
+  }>;
+  videoDuration?: number; // in seconds, if video
 }
 
 const MAX_MEDIA = 4;
@@ -91,10 +99,14 @@ async function loadImageDimensions(file: File): Promise<{ width: number; height:
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function linkifyText(text: string): React.ReactNode[] {
-  const parts = text.split(/(#\w+|@\w+(?:\.\w+)*)/g);
+  const parts = text.split(/(#\w+|\$[A-Z][A-Z0-9]{0,4}|@\w+(?:\.\w+)*)/g);
   return parts.map((part, i) => {
     if (part.startsWith('#')) {
       return <span key={i} style={{ color: 'var(--blue)', fontWeight: 500 }}>{part}</span>;
+    }
+    if (part.startsWith('$')) {
+      // Cashtag for financial ticker
+      return <span key={i} style={{ color: 'var(--teal)', fontWeight: 600 }}>{part}</span>;
     }
     if (part.startsWith('@')) {
       return <span key={i} style={{ color: 'var(--purple)', fontWeight: 500 }}>{part}</span>;
@@ -106,6 +118,40 @@ function linkifyText(text: string): React.ReactNode[] {
 function detectLinks(text: string): string[] {
   const urlRe = /https?:\/\/[^\s]+/g;
   return text.match(urlRe) ?? [];
+}
+
+// Add captions to a video media item (for AT Protocol video embed)
+function addCaptionToVideo(
+  mediaItem: ComposeMediaItem,
+  lang: string,
+  label: string,
+  content: string
+): ComposeMediaItem {
+  if (mediaItem.mediaType !== 'video') {
+    console.warn('Captions can only be added to video media items');
+    return mediaItem;
+  }
+  return {
+    ...mediaItem,
+    captions: [
+      ...(mediaItem.captions ?? []),
+      { lang, label, content },
+    ],
+  };
+}
+
+// Remove a caption from a video media item
+function removeCaptionFromVideo(
+  mediaItem: ComposeMediaItem,
+  index: number
+): ComposeMediaItem {
+  if (mediaItem.mediaType !== 'video' || !mediaItem.captions) {
+    return mediaItem;
+  }
+  return {
+    ...mediaItem,
+    captions: mediaItem.captions.filter((_, i) => i !== index),
+  };
 }
 
 // ─── Character ring ────────────────────────────────────────────────────────
@@ -572,6 +618,8 @@ export default function ComposeSheet({ onClose }: Props) {
           alt: '',
           width,
           height,
+          mediaType: 'image' as const,
+          captions: undefined, // captions only for videos
         } satisfies ComposeMediaItem;
       })
     );
