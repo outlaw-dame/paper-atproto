@@ -904,12 +904,16 @@ export default function ExploreTab({ onOpenStory }: Props) {
   }, [restartCarousel]);
 
   useEffect(() => {
-    sportsStore.loadSampleGames();
-    for (const game of sportsStore.getGames()) {
-      sportsStore.startPolling(game.id, 'mock');
+    const enableMockSports = ((import.meta as any).env?.VITE_ENABLE_MOCK_SPORTS === 'true');
+    if (enableMockSports) {
+      sportsStore.loadSampleGames();
+      for (const game of sportsStore.getGames()) {
+        sportsStore.startPolling(game.id, 'mock');
+      }
     }
     return () => {
       sportsStore.stopAllPolling();
+      if (enableMockSports) sportsStore.clear();
     };
   }, []);
 
