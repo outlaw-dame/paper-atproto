@@ -30,3 +30,6 @@ Thumbs.db
 
 # ML model weights (large binary files — download via scripts/download-translation-models.sh)
 server/models/
+
+# Local research/benchmark config variants
+vite.config.research*.ts
