@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { TranslationResult } from '../lib/i18n/types.js';
 import {
   DEFAULT_TRANSLATION_POLICY,
@@ -13,22 +14,31 @@ type TranslationStoreState = {
   clearTranslation: (id: string) => void;
 };
 
-export const useTranslationStore = create<TranslationStoreState>((set) => ({
-  policy: DEFAULT_TRANSLATION_POLICY,
-  byId: {},
-  setPolicy: (partial) =>
-    set((state) => ({ policy: { ...state.policy, ...partial } })),
-  upsertTranslation: (result) =>
-    set((state) => ({
-      byId: {
-        ...state.byId,
-        [result.id]: result,
-      },
-    })),
-  clearTranslation: (id) =>
-    set((state) => {
-      const next = { ...state.byId };
-      delete next[id];
-      return { byId: next };
+export const useTranslationStore = create<TranslationStoreState>()(
+  persist(
+    (set) => ({
+      policy: DEFAULT_TRANSLATION_POLICY,
+      byId: {},
+      setPolicy: (partial) =>
+        set((state) => ({ policy: { ...state.policy, ...partial } })),
+      upsertTranslation: (result) =>
+        set((state) => ({
+          byId: {
+            ...state.byId,
+            [result.id]: result,
+          },
+        })),
+      clearTranslation: (id) =>
+        set((state) => {
+          const next = { ...state.byId };
+          delete next[id];
+          return { byId: next };
+        }),
     }),
-}));
+    {
+      name: 'glympse.translation.policy.v1',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ policy: state.policy }),
+    },
+  ),
+);
