@@ -24,9 +24,8 @@ export const LiveSportsMoments: React.FC<LiveSportsMomentsProps> = ({
 
   useEffect(() => {
     // Subscribe to live game updates
-    const unsubscribe = sportsStore.subscribe((games) => {
-      const liveOnly = games.filter((g) => g.status === 'live');
-      setLiveGames(liveOnly);
+    const unsubscribe = sportsStore.subscribe(() => {
+      setLiveGames(sportsStore.getLiveGames());
     });
 
     return () => unsubscribe();

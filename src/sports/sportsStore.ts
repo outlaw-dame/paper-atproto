@@ -7,6 +7,34 @@ import type { LiveGame, LiveEventUpdate } from './types.js';
 class SportsStore {
   private liveGames = new Map<string, LiveGame>();
 
+  private getNow(): number {
+    return Date.now();
+  }
+
+  private toEpoch(value?: string): number | null {
+    if (!value) return null;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  private isActuallyLive(game: LiveGame): boolean {
+    if (game.status !== 'live') return false;
+
+    const now = this.getNow();
+    const start = this.toEpoch(game.startTime);
+    const end = this.toEpoch(game.endTime);
+    const updated = this.toEpoch(game.lastUpdated);
+
+    // A game cannot be live before start or after an explicit end.
+    if (start !== null && now < start) return false;
+    if (end !== null && now >= end) return false;
+
+    // If updates are stale for too long, suppress the live badge.
+    if (updated !== null && now - updated > 20 * 60 * 1000) return false;
+
+    return true;
+  }
+
   /**
    * Game update subscribers
    */
@@ -52,27 +80,42 @@ class SportsStore {
    * Get currently live games
    */
   getLiveGames(): LiveGame[] {
-    return this.getGames().filter((g) => g.status === 'live');
+    return this.getGames().filter((g) => this.isActuallyLive(g));
   }
 
   /**
    * Add or update a game
    */
   setGame(game: LiveGame): void {
-    const previous = this.liveGames.get(game.id);
-    this.liveGames.set(game.id, game);
+    const normalized = { ...game };
+    const now = this.getNow();
+    const start = this.toEpoch(normalized.startTime);
+    const end = this.toEpoch(normalized.endTime);
+
+    // Normalize impossible states from upstream/mock providers.
+    if (normalized.status === 'live' && start !== null && now < start) {
+      normalized.status = 'scheduled';
+      normalized.period = 1;
+      normalized.clock = '0:00';
+    } else if (normalized.status === 'live' && end !== null && now >= end) {
+      normalized.status = 'final';
+      normalized.clock = '0:00';
+    }
+
+    const previous = this.liveGames.get(normalized.id);
+    this.liveGames.set(normalized.id, normalized);
 
     // Track changes
     if (
       previous &&
-      (previous.homeTeam.score !== game.homeTeam.score || previous.awayTeam.score !== game.awayTeam.score)
+      (previous.homeTeam.score !== normalized.homeTeam.score || previous.awayTeam.score !== normalized.awayTeam.score)
     ) {
       const update: LiveEventUpdate = {
         updateType: 'score',
-        gameId: game.id,
+        gameId: normalized.id,
         details: {
-          homeScore: game.homeTeam.score,
-          awayScore: game.awayTeam.score,
+          homeScore: normalized.homeTeam.score,
+          awayScore: normalized.awayTeam.score,
           previousHomeScore: previous.homeTeam.score,
           previousAwayScore: previous.awayTeam.score,
         },
@@ -81,12 +124,12 @@ class SportsStore {
       this.recordUpdate(update);
     }
 
-    if (previous && previous.status !== game.status) {
+    if (previous && previous.status !== normalized.status) {
       const update: LiveEventUpdate = {
-        updateType: game.status === 'live' ? 'start-game' : game.status === 'final' ? 'end-game' : 'period-change',
-        gameId: game.id,
+        updateType: normalized.status === 'live' ? 'start-game' : normalized.status === 'final' ? 'end-game' : 'period-change',
+        gameId: normalized.id,
         details: {
-          status: game.status,
+          status: normalized.status,
           previousStatus: previous.status,
         },
         timestamp: new Date().toISOString(),
@@ -221,7 +264,7 @@ class SportsStore {
     if (!game) return null;
 
     // Simulate dynamic score updates for live games
-    if (game.status === 'live') {
+    if (this.isActuallyLive(game)) {
       const updated = { ...game };
 
       // Random score update (small probability)
@@ -266,7 +309,7 @@ class SportsStore {
   loadSampleGames(): void {
     const now = new Date();
     const inTenMinutes = new Date(now.getTime() + 10 * 60000);
-    const inTwoHours = new Date(now.getTime() + 2 * 60 * 60000);
+    const startedNinetyMinutesAgo = new Date(now.getTime() - 90 * 60000);
 
     const sampleGames: LiveGame[] = [
       {
@@ -288,8 +331,8 @@ class SportsStore {
         clock: '5:32',
         venue: 'TD Garden',
         hashtags: ['LakersCeltics', 'NBA', 'NBARegularSeason'],
-        startTime: inTwoHours.toISOString(),
-        endTime: new Date(inTwoHours.getTime() + 2.5 * 60 * 60000).toISOString(),
+        startTime: startedNinetyMinutesAgo.toISOString(),
+        endTime: new Date(now.getTime() + 60 * 60000).toISOString(),
         lastUpdated: now.toISOString(),
       },
       {
