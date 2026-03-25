@@ -39,6 +39,9 @@ import { InMemoryVerificationCache } from '../intelligence/verification/cache.js
 import { buildThreadStateForWriter } from '../intelligence/writerInput.js';
 import { callInterpolatorWriter } from '../intelligence/modelClient.js';
 import type { SummaryMode } from '../intelligence/llmContracts.js';
+import { translateWriterInput } from '../lib/i18n/threadTranslation.js';
+import { useTranslationStore } from '../store/translationStore.js';
+import { translationClient } from '../lib/i18n/client.js';
 import {
   promptHero as phTokens,
   interpolator as intTokens,
@@ -723,6 +726,10 @@ function ContributionCard({
   const [repostCount, setRepostCount] = useState(node.repostCount);
   const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
+  const translation = translationById[node.uri];
 
   const handleFeedback = (fb: ContributionScores['userFeedback']) => {
     setFeedbackGiven(fb);
@@ -747,6 +754,32 @@ function ContributionCard({
     setBookmarked(v => !v);
   };
 
+  const handleTranslate = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (translation) {
+      setShowOriginal((prev) => !prev);
+      return;
+    }
+
+    if (!node.text.trim()) return;
+    setTranslating(true);
+    try {
+      const result = await translationClient.translateInline({
+        id: node.uri,
+        sourceText: node.text,
+        targetLang: translationPolicy.userLanguage,
+        mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+      });
+      upsertTranslation(result);
+      setShowOriginal(false);
+    } catch {
+      // Keep rendering original on translation failure.
+    } finally {
+      setTranslating(false);
+    }
+  };
+
   // Never dim any reply — every contribution is equally important
   const isRepetitive = false;
 
@@ -767,6 +800,7 @@ function ContributionCard({
     : score?.role === 'provocative' ? 'provocative'
     : score?.role === 'useful_counterpoint' ? 'counterpoint'
     : null;
+  const bodyText = translation && !showOriginal ? translation.translatedText : node.text;
 
   return (
     <div style={cardStyle}>
@@ -824,8 +858,32 @@ function ContributionCard({
         color: disc.textPrimary,
         marginBottom: contTokens.gap,
       }}>
-        <RichText text={node.text} facets={node.facets} baseColor={disc.textPrimary} />
+        <RichText text={bodyText} facets={node.facets} baseColor={disc.textPrimary} />
       </p>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: contTokens.gap }}>
+        <button
+          onClick={handleTranslate}
+          disabled={translating}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--blue)',
+            fontSize: typeScale.metaSm[0],
+            fontWeight: 600,
+            padding: 0,
+            cursor: translating ? 'default' : 'pointer',
+            opacity: translating ? 0.7 : 1,
+          }}
+        >
+          {translation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
+        </button>
+        {translation && (
+          <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+            from {translation.sourceLang}
+          </span>
+        )}
+      </div>
 
       {/* Embed */}
       {node.embed?.kind === 'external' && node.embed.uri && (
@@ -1212,6 +1270,7 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 // ─── Main component ────────────────────────────────────────────────────────
 export default function StoryMode({ entry, onClose }: Props) {
   const { agent, session, profile } = useSessionStore();
+  const translationPolicy = useTranslationStore((state) => state.policy);
   const { ensureThread, upsertThreadResult, setWriterResult, setUserFeedback, getThread } = useThreadStore();
   const verificationCache = React.useRef(new InMemoryVerificationCache());
   const [rootPost, setRootPost] = useState<MockPost | null>(null);
@@ -1305,6 +1364,37 @@ export default function StoryMode({ entry, onClose }: Props) {
           // Fire-and-forget after storing deterministic results.
           // Failure falls back silently to heuristic summaryText.
           try {
+            const translationOutput = await translateWriterInput({
+              rootPost: {
+                id: rootNode.uri,
+                text: rootNode.text,
+              },
+              selectedComments: (rootNode.replies ?? []).map((reply) => ({
+                id: reply.uri,
+                text: reply.text,
+              })),
+              targetLang: translationPolicy.userLanguage,
+              mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+            });
+
+            const translationById = {
+              [translationOutput.rootPost.id]: {
+                ...(translationOutput.rootPost.translatedText
+                  ? { translatedText: translationOutput.rootPost.translatedText }
+                  : {}),
+                sourceLang: translationOutput.rootPost.sourceLang,
+              },
+              ...Object.fromEntries(
+                translationOutput.selectedComments.map((comment) => [
+                  comment.id,
+                  {
+                    ...(comment.translatedText ? { translatedText: comment.translatedText } : {}),
+                    sourceLang: comment.sourceLang,
+                  },
+                ]),
+              ),
+            };
+
             const writerInput = buildThreadStateForWriter(
               entry.id,
               rootNode.text,
@@ -1312,13 +1402,16 @@ export default function StoryMode({ entry, onClose }: Props) {
               result.scores,
               rootNode.replies ?? [],
               result.confidence,
+              translationById,
             );
             const writerResult = await callInterpolatorWriter(writerInput, controller.signal);
             if (!writerResult.abstained) {
               setWriterResult(entry.id, writerResult);
             }
           } catch (writerErr) {
-            // Writer failure is non-fatal — heuristic summary remains visible
+            // AbortError is expected on unmount — not a real failure
+            if (writerErr instanceof Error && writerErr.name === 'AbortError') return;
+            // All other writer failures are non-fatal — heuristic summary remains visible
             console.warn('[StoryMode] writer call failed:', writerErr);
           }
         }
@@ -1338,7 +1431,7 @@ export default function StoryMode({ entry, onClose }: Props) {
       clearInterval(pollInterval);
       controller.abort();
     };
-  }, [entry.id, session]);
+  }, [entry.id, session, translationPolicy.localOnlyMode, translationPolicy.userLanguage]);
 
   const handleFeedback = useCallback((replyUri: string, fb: ContributionScores['userFeedback']) => {
     setUserFeedback(entry.id, replyUri, fb);

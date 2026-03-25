@@ -16,6 +16,8 @@ import type { MockPost } from '../data/mockData.js';
 import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
 import type { StoryEntry } from '../App.js';
 import { useUiStore } from '../store/uiStore.js';
+import { useTranslationStore } from '../store/translationStore.js';
+import { translationClient } from '../lib/i18n/client.js';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -105,15 +107,17 @@ function RichPostText({ text, onHashtag, style }: {
 }
 
 // ─── FeaturedSearchStoryCard — Gist-inspired flush link story card ────────
-function FeaturedSearchStoryCard({ post, onTap, onHashtag }: {
+function FeaturedSearchStoryCard({ post, onTap, onHashtag, displayText }: {
   post: MockPost;
   onTap: () => void;
   onHashtag?: (tag: string) => void;
+  displayText?: string;
 }) {
   const embed = post.embed?.type === 'external' ? post.embed : null;
   const img = post.media?.[0]?.url ?? embed?.thumb;
   const domain = embed?.domain ?? '';
-  const hashtags: string[] = Array.from(new Set((post.content.match(/#\w+/g) ?? []) as string[])).slice(0, 5);
+  const bodyText = displayText ?? post.content;
+  const hashtags: string[] = Array.from(new Set((bodyText.match(/#\w+/g) ?? []) as string[])).slice(0, 5);
 
   return (
     <motion.div
@@ -215,11 +219,11 @@ function FeaturedSearchStoryCard({ post, onTap, onHashtag }: {
           color: disc.textPrimary, marginBottom: 8,
           display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          <RichPostText text={post.content} {...(onHashtag ? { onHashtag } : {})} />
+          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} />
         </p>
 
         {/* Article title from embed (if different from post text) */}
-        {embed?.title && embed.title.trim() !== post.content.trim() && (
+        {embed?.title && embed.title.trim() !== bodyText.trim() && (
           <p style={{
             fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
             color: disc.textSecondary, marginBottom: 8,
@@ -279,14 +283,17 @@ function FeaturedSearchStoryCard({ post, onTap, onHashtag }: {
 }
 
 // ─── LinkedPostMiniCard — horizontal strip of popular link posts ──────────
-function LinkedPostMiniCard({ post, onTap, onHashtag }: {
+function LinkedPostMiniCard({ post, onTap, onHashtag, displayText }: {
   post: MockPost;
   onTap: () => void;
   onHashtag?: (tag: string) => void;
+  displayText?: string;
 }) {
   const embed = post.embed?.type === 'external' ? post.embed : null;
   const img = post.media?.[0]?.url ?? embed?.thumb;
   const domain = embed?.domain ?? '';
+
+  const bodyText = displayText ?? post.content;
 
   return (
     <motion.div
@@ -320,7 +327,7 @@ function LinkedPostMiniCard({ post, onTap, onHashtag }: {
           fontSize: 13, fontWeight: 600, lineHeight: '18px', color: disc.textPrimary,
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          <RichPostText text={post.content} {...(onHashtag ? { onHashtag } : {})} />
+          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} />
         </p>
         {domain && (
           <span style={{
@@ -548,7 +555,8 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ExploreTab({ onOpenStory }: Props) {
-  const { agent, session } = useSessionStore();
+  const { agent, session, sessionReady } = useSessionStore();
+  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<QuickFilter | null>(null);
@@ -577,7 +585,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
   // Live search
   useEffect(() => {
     if (!debouncedQuery.trim()) { setSearchPosts([]); setSearchActors([]); return; }
-    if (!session) return;
+    if (!sessionReady) return;
     setLoading(true);
     Promise.all([
       atpCall(() => agent.app.bsky.feed.searchPosts({ q: debouncedQuery, limit: 20 })).catch(() => null),
@@ -592,17 +600,26 @@ export default function ExploreTab({ onOpenStory }: Props) {
       }
       if (actorsRes?.data?.actors) setSearchActors(actorsRes.data.actors);
     }).finally(() => setLoading(false));
-  }, [debouncedQuery, agent, session]);
+  }, [debouncedQuery, agent, session, sessionReady]);
 
   // Discover content
   useEffect(() => {
-    if (!session) return;
+    if (!sessionReady) return;
     setDiscoverLoading(true);
+    const catchWithLog = (label: string) => (err: unknown) => {
+      const e = err as any;
+      console.warn(`[Explore] ${label} failed — status: ${e?.status ?? '?'}, error: ${e?.error ?? e?.message ?? String(err)}`, err);
+      return null;
+    };
+
     Promise.all([
-      atpCall(() => agent.app.bsky.feed.getSuggestedFeeds({ limit: 10 })).catch(() => null),
-      atpCall(() => agent.getSuggestions({ limit: 10 })).catch(() => null),
-      atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 40 })).catch(() => null),
-      atpCall(() => agent.app.bsky.feed.getFeed({ feed: QUIET_FEED_URI, limit: 20 })).catch(() => null),
+      atpCall(() => agent.app.bsky.feed.getSuggestedFeeds({ limit: 10 })).catch(catchWithLog('getSuggestedFeeds')),
+      (session?.did
+        ? atpCall(() => agent.getSuggestions({ limit: 10, relativeToDid: session.did }))
+        : Promise.resolve(null)
+      ).catch(catchWithLog('getSuggestions')),
+      atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 40 })).catch(catchWithLog('getFeed:whats-hot')),
+      atpCall(() => agent.app.bsky.feed.getFeed({ feed: QUIET_FEED_URI, limit: 20 })).catch(catchWithLog('getFeed:quiet-posters')),
     ]).then(([feedsRes, actorsRes, discoverRes, quietRes]) => {
       if (feedsRes?.data?.feeds) setSuggestedFeeds(feedsRes.data.feeds);
       if (actorsRes?.data?.actors) setSuggestedActors(actorsRes.data.actors);
@@ -625,16 +642,13 @@ export default function ExploreTab({ onOpenStory }: Props) {
         // Side strip: mid-tier trending + underdogs from quiet posters feed
         const topIds = new Set(withLinks.map(p => p.id));
 
-        // Mid-tier: trending posts not in top stories (with or without links, by engagement rank)
         const midTier = byEngagement.filter(p => !topIds.has(p.id)).slice(0, 4);
 
-        // Underdogs: low-engagement link posts from the hot feed, not already featured
         const underdogs = byEngagement
           .filter(p => p.embed?.type === 'external' && !topIds.has(p.id))
           .sort((a, b) => (a.likeCount + a.repostCount) - (b.likeCount + b.repostCount))
           .slice(0, 3);
 
-        // Quiet posters: map if available, keep only posts with some substance
         const quietMapped = quietRes?.data?.feed?.length
           ? quietRes.data.feed
               .filter((item: any) => item.post?.record?.text?.length > 40)
@@ -642,7 +656,6 @@ export default function ExploreTab({ onOpenStory }: Props) {
               .slice(0, 4)
           : [];
 
-        // Interleave: midTier → quietMapped → underdogs, dedupe by id
         const seen = new Set(topIds);
         const combined: MockPost[] = [];
         for (const p of [...midTier, ...quietMapped, ...underdogs]) {
@@ -652,7 +665,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
         setSidePosts(combined);
       }
     }).finally(() => setDiscoverLoading(false));
-  }, [agent, session]);
+  }, [agent, session, sessionReady]);
 
   // Reset carousel index when link posts refresh
   useEffect(() => { setFeaturedIdx(0); }, [linkPosts]);
@@ -707,6 +720,56 @@ export default function ExploreTab({ onOpenStory }: Props) {
     .filter(Boolean)
     .filter((v, i, a) => a.findIndex(x => x?.domain === v?.domain) === i)
     .slice(0, 6) as { domain: string; description: string }[];
+
+  const getTranslatedText = useCallback((post: MockPost): string => {
+    return translationById[post.id]?.translatedText ?? post.content;
+  }, [translationById]);
+
+  useEffect(() => {
+    if (!translationPolicy.autoTranslateExplore) return;
+    if (!sessionReady) return;
+
+    const visible = [
+      ...(featuredPost ? [featuredPost] : []),
+      ...linkPosts.slice(0, 3),
+      ...sidePosts.slice(0, 4),
+    ];
+
+    const unique = new Map<string, MockPost>();
+    for (const post of visible) unique.set(post.id, post);
+
+    const missing = [...unique.values()].filter((post) => {
+      if (!post.content.trim()) return false;
+      return !translationById[post.id];
+    });
+
+    if (missing.length === 0) return;
+
+    Promise.allSettled(
+      missing.map((post) =>
+        translationClient.translateInline({
+          id: post.id,
+          sourceText: post.content,
+          targetLang: translationPolicy.userLanguage,
+          mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+        }).then((result) => {
+          upsertTranslation(result);
+        }),
+      ),
+    ).catch(() => {
+      // Translation failure should not break Explore rendering.
+    });
+  }, [
+    featuredPost,
+    linkPosts,
+    sidePosts,
+    sessionReady,
+    translationById,
+    translationPolicy.autoTranslateExplore,
+    translationPolicy.localOnlyMode,
+    translationPolicy.userLanguage,
+    upsertTranslation,
+  ]);
 
   return (
     <div style={{
@@ -995,6 +1058,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                           >
                             <FeaturedSearchStoryCard
                               post={linkPosts[featuredIdx]}
+                              displayText={getTranslatedText(linkPosts[featuredIdx])}
                               onTap={() => {
                                 const p = linkPosts[featuredIdx];
                                 onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) });
@@ -1042,13 +1106,14 @@ export default function ExploreTab({ onOpenStory }: Props) {
                         </div>
                       )}
 
-                      {/* Side strip: trending non-top + quiet posters + underdogs */}
+                      {/* Side strip: trending + underdogs */}
                       {sidePosts.length > 0 && (
                         <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2, marginTop: 12 }}>
                           {sidePosts.map(p => (
                             <LinkedPostMiniCard
                               key={p.id}
                               post={p}
+                              displayText={getTranslatedText(p)}
                               onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
                               onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
                             />
