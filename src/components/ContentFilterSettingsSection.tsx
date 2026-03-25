@@ -65,6 +65,12 @@ function sanitizeForConfirmLabel(value: string): string {
   return cleaned.length > 80 ? `${cleaned.slice(0, 80)}...` : cleaned;
 }
 
+function sortableCreatedAt(value: string | undefined): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export default function ContentFilterSettingsSection() {
   const { rules, addRule, removeRule, toggleRule, updateRule } = useContentFilterStore();
   const { session } = useSessionStore();
@@ -91,9 +97,24 @@ export default function ContentFilterSettingsSection() {
   const [editError, setEditError] = useState<string | null>(null);
 
   const sortedRules = useMemo(
-    () => [...rules].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+    () => [...rules].sort((a, b) => {
+      const delta = sortableCreatedAt(b.createdAt) - sortableCreatedAt(a.createdAt);
+      if (delta !== 0) return delta;
+      return a.id.localeCompare(b.id);
+    }),
     [rules],
   );
+
+  const editingMeta = useMemo(() => {
+    if (!editingId) return null;
+    const index = sortedRules.findIndex((rule) => rule.id === editingId);
+    if (index === -1) return null;
+    return {
+      index: index + 1,
+      total: sortedRules.length,
+      phrase: sanitizeForConfirmLabel(sortedRules[index].phrase),
+    };
+  }, [editingId, sortedRules]);
 
   const canCreate = phrase.trim().length > 0 && contexts.length > 0;
 
@@ -418,11 +439,26 @@ export default function ContentFilterSettingsSection() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {editingMeta && (
+          <div
+            style={{
+              border: '1px solid rgba(0,122,255,0.35)',
+              borderRadius: 10,
+              padding: '8px 10px',
+              background: 'rgba(0,122,255,0.08)',
+              color: 'var(--blue)',
+              fontSize: 11,
+              fontWeight: 700,
+            }}
+          >
+            Editing filter {editingMeta.index} of {editingMeta.total}: "{editingMeta.phrase}". Other filters remain unchanged until you save.
+          </div>
+        )}
         {sortedRules.length === 0 && (
           <div style={{ fontSize: 12, color: 'var(--label-4)' }}>No filters yet.</div>
         )}
         {sortedRules.map((rule) => (
-          <div key={rule.id} style={{ border: editingId === rule.id ? '1px solid var(--blue)' : '1px solid var(--sep)', borderRadius: 12, padding: '8px 10px', background: 'var(--fill-1)', opacity: editingId && editingId !== rule.id ? 0.6 : 1 }}>
+          <div key={rule.id} style={{ border: editingId === rule.id ? '1px solid var(--blue)' : '1px solid var(--sep)', borderRadius: 12, padding: '8px 10px', background: 'var(--fill-1)' }}>
             {editingId === rule.id ? (
               <>
                 <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
