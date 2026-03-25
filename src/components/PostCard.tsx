@@ -8,6 +8,13 @@ import { useTranslationStore } from '../store/translationStore.js';
 import { translationClient } from '../lib/i18n/client.js';
 import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge.js';
 import { sportsFeedService } from '../services/sportsFeed.js';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
+import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia.js';
+import {
+  recordSensitiveMediaImpression,
+  recordSensitiveMediaReveal,
+  recordSensitiveMediaRehide,
+} from '../perf/sensitiveMediaTelemetry.js';
 
 interface PostCardProps {
   post: MockPost;
@@ -31,8 +38,15 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [translationError, setTranslationError] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
   const { policy, byId, upsertTranslation, clearTranslation } = useTranslationStore();
+  const {
+    policy: sensitivePolicy,
+    revealedPostIds,
+    revealPost,
+    hidePost,
+  } = useSensitiveMediaStore();
   const translation = byId[post.id];
   const autoAttemptedRef = useRef(false);
+  const sensitiveImpressionLoggedRef = useRef(false);
 
   const storyRootId = post.threadRoot?.id ?? post.id;
   const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
@@ -95,6 +109,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     : post.content;
 
   const sportsMetadata = useMemo(() => sportsFeedService.extractSportsMetadata(post), [post]);
+  const sensitiveMedia = useMemo(() => detectSensitiveMedia(post), [post]);
+  const isSensitiveMedia = sensitiveMedia.isSensitive;
+  const isSensitiveMediaRevealed = !!revealedPostIds[post.id];
+  const shouldBlurSensitiveMedia = sensitivePolicy.blurSensitiveMedia && isSensitiveMedia && !isSensitiveMediaRevealed;
+  const sensitiveReasonLabel = sensitiveMedia.reasons.slice(0, 2).join(', ');
 
   const canAutoInlineTranslate = useMemo(() => {
     const hasEmbed = !!post.embed;
@@ -130,6 +149,30 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       setTranslating(false);
     });
   }, [canAutoInlineTranslate, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.content, post.id, translation, translating, upsertTranslation]);
+
+  useEffect(() => {
+    if (!shouldBlurSensitiveMedia || sensitiveImpressionLoggedRef.current) return;
+    sensitiveImpressionLoggedRef.current = true;
+    recordSensitiveMediaImpression(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+  }, [shouldBlurSensitiveMedia, sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn]);
+
+  useEffect(() => {
+    if (shouldBlurSensitiveMedia) return;
+    sensitiveImpressionLoggedRef.current = false;
+  }, [shouldBlurSensitiveMedia]);
+
+  const handleRevealSensitiveMedia = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!sensitivePolicy.allowReveal) return;
+    revealPost(post.id);
+    recordSensitiveMediaReveal(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+  };
+
+  const handleHideSensitiveMedia = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    hidePost(post.id);
+    recordSensitiveMediaRehide(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+  };
 
   return (
     <motion.div
@@ -299,18 +342,89 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
 
       {/* Embeds */}
+      {shouldBlurSensitiveMedia && (
+        <div style={{
+          marginBottom: 10,
+          border: '1px solid color-mix(in srgb, var(--orange) 35%, var(--sep))',
+          borderRadius: 10,
+          background: 'color-mix(in srgb, var(--surface-card) 82%, var(--orange) 10%)',
+          padding: '9px 10px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div>
+              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
+                Sensitive content warning
+              </p>
+              <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)' }}>
+                {sensitiveReasonLabel ? `Label: ${sensitiveReasonLabel}` : 'This media is flagged for sexual content, nudity, or graphic violence.'}
+              </p>
+            </div>
+
+            {sensitivePolicy.allowReveal && (
+              <button
+                onClick={handleRevealSensitiveMedia}
+                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+              >
+                Show media
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isSensitiveMedia && isSensitiveMediaRevealed && sensitivePolicy.blurSensitiveMedia && sensitivePolicy.allowReveal && (
+        <div style={{ marginBottom: 10 }}>
+          <button
+            onClick={handleHideSensitiveMedia}
+            style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+          >
+            Hide sensitive media
+          </button>
+        </div>
+      )}
+
       {/* 1. Video Embed */}
       {post.embed?.type === 'video' && (
-        <div className="video-player-wrapper" onClick={e => e.stopPropagation()}>
-          <VideoPlayer
-            url={post.embed.url}
-            {...(post.embed.thumb ? { thumb: post.embed.thumb } : {})}
-            autoplay={false}
-          />
-          {post.embed.title && (
-            <div style={{ marginTop: 8 }}>
-              <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--label-1)' }}>{post.embed.title}</p>
-              <p style={{ fontSize: 13, color: 'var(--label-3)' }}>{post.embed.domain}</p>
+        <div style={{ position: 'relative', marginTop: 8 }}>
+          <div
+            className="video-player-wrapper"
+            onClick={e => e.stopPropagation()}
+            style={{
+              filter: shouldBlurSensitiveMedia ? 'blur(28px)' : 'none',
+              transition: 'filter 0.18s ease',
+              pointerEvents: shouldBlurSensitiveMedia ? 'none' : 'auto',
+            }}
+            aria-hidden={shouldBlurSensitiveMedia}
+          >
+            <VideoPlayer
+              url={post.embed.url}
+              {...(post.embed.thumb ? { thumb: post.embed.thumb } : {})}
+              autoplay={false}
+            />
+            {post.embed.title && (
+              <div style={{ marginTop: 8 }}>
+                <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--label-1)' }}>{post.embed.title}</p>
+                <p style={{ fontSize: 13, color: 'var(--label-3)' }}>{post.embed.domain}</p>
+              </div>
+            )}
+          </div>
+
+          {shouldBlurSensitiveMedia && (
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 12,
+              background: 'linear-gradient(180deg, rgba(0,0,0,0.42), rgba(0,0,0,0.6))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 700,
+              textAlign: 'center',
+              padding: 12,
+            }}>
+              Sensitive video hidden
             </div>
           )}
         </div>
@@ -318,12 +432,15 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
       {/* 2. Image Grid */}
       {post.media && post.media.length > 0 && (
-        <>
+        <div style={{ position: 'relative' }}>
           <div style={{
             display: 'grid',
             gridTemplateColumns: post.media.length > 1 ? '1fr 1fr' : '1fr',
             gap: 4, borderRadius: 12, overflow: 'hidden',
-            marginTop: 8
+            marginTop: 8,
+            filter: shouldBlurSensitiveMedia ? 'blur(22px)' : 'none',
+            transition: 'filter 0.18s ease',
+            pointerEvents: shouldBlurSensitiveMedia ? 'none' : 'auto',
           }}>
             {post.media.map((img, i) => {
               const alt = (img.alt ?? '').trim();
@@ -363,7 +480,26 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             })}
           </div>
 
-          {expandedAltIndex !== null && post.media[expandedAltIndex] && (
+          {shouldBlurSensitiveMedia && (
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 12,
+              background: 'linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.56))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 700,
+              textAlign: 'center',
+              padding: 12,
+            }}>
+              Sensitive images hidden
+            </div>
+          )}
+
+          {expandedAltIndex !== null && post.media[expandedAltIndex] && !shouldBlurSensitiveMedia && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
@@ -393,7 +529,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               </p>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* 3. External Link */}

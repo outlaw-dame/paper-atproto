@@ -9,6 +9,7 @@ import {
   AppBskyNotificationListNotifications,
 } from '@atproto/api';
 import type { MockPost, ChipType } from '../data/mockData.js';
+import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -49,6 +50,9 @@ function isVideoUrl(url: string): boolean {
 export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
   const record = post.record as any; // Cast to access text, etc.
   const embed = post.embed as any;
+  const postLabelValues = mapRawLabelValues((post as any).labels);
+  const recordLabelValues = mapRawLabelValues(record?.labels?.values);
+  const contentLabels = [...new Set([...postLabelValues, ...recordLabelValues])].slice(0, 20);
 
   let media: MockPost['media'];
   if (AppBskyEmbedImages.isView(embed)) {
@@ -124,7 +128,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     ...(post.viewer?.repost ? { repost: post.viewer.repost } : {}),
   };
 
-  return {
+  const mapped: MockPost = {
     id: post.uri,
     cid: post.cid,
     author,
@@ -137,8 +141,19 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     chips: [] as ChipType[], // Chips are determined by higher-level logic
     ...(media ? { media } : {}),
     viewer,
+    ...(contentLabels.length > 0 ? { contentLabels } : {}),
     ...(embedData ? { embed: embedData } : {}),
   };
+
+  const sensitiveMedia = detectSensitiveMedia(mapped);
+  if (sensitiveMedia.isSensitive) {
+    mapped.sensitiveMedia = {
+      isSensitive: true,
+      reasons: sensitiveMedia.reasons,
+    };
+  }
+
+  return mapped;
 }
 
 // ─── Feed Item Mapper ──────────────────────────────────────────────────────

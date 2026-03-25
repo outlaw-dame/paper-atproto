@@ -40,6 +40,11 @@ export interface MockPost {
     externalLink?: { url: string; title?: string; description?: string; thumb?: string; domain: string };
   };
   chips: ChipType[];
+  contentLabels?: string[];
+  sensitiveMedia?: {
+    isSensitive: boolean;
+    reasons: string[];
+  };
   threadCount?: number;
   replyTo?: MockPost;
   threadRoot?: MockPost;

@@ -276,7 +276,7 @@ export default function HomeTab({ onOpenStory }: Props) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
-              aria-label="Translation settings"
+              aria-label="Settings"
               onClick={() => setShowTranslationSettings(true)}
               style={{
                 width: iconTokens.size,

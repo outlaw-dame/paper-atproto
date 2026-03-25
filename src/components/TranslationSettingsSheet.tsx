@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslationStore } from '../store/translationStore.js';
 import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
 import BlueskyPrefsSection from './BlueskyPrefsSection.js';
-import ModerationSection from './ModerationSection.js';
+import ModerationSettingsPage from './ModerationSettingsPage.js';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
 import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry.js';
 
@@ -16,6 +16,8 @@ type LanguageOption = {
   code: string;
   label: string;
 };
+
+type SettingsPage = 'translation' | 'moderation';
 
 const BASE_LANG_OPTIONS = [
   'en',
@@ -135,6 +137,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const { policy, setPolicy } = useTranslationStore();
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
+  const [page, setPage] = useState<SettingsPage>('translation');
   const [altMetrics, setAltMetrics] = useState(() => getAltTextMetricsSnapshot());
 
   const systemLang = useMemo(() => {
@@ -154,6 +157,11 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
     refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setPage('translation');
   }, [open]);
 
   return (
@@ -203,8 +211,12 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
               borderBottom: '1px solid var(--sep)',
             }}>
               <div>
-                <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>Post translation</h3>
-                <p style={{ fontSize: 12, color: 'var(--label-3)' }}>Phanpy-style inline + auto translation</p>
+                <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>Settings</h3>
+                <p style={{ fontSize: 12, color: 'var(--label-3)' }}>
+                  {page === 'translation'
+                    ? 'Phanpy-style inline + auto translation'
+                    : 'Sensitive media, filters, and moderation controls'}
+                </p>
               </div>
               <button
                 type="button"
@@ -230,135 +242,170 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
             </div>
 
             <div style={{ padding: '12px 16px 16px', maxHeight: '64vh', overflowY: 'auto' }}>
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }}>
-                  Translate to
-                </label>
-                <select
-                  value={policy.userLanguage}
-                  onChange={(e) => setPolicy({ userLanguage: e.target.value })}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => setPage('translation')}
                   style={{
-                    width: '100%',
-                    height: platform.prefersCoarsePointer ? 44 : 40,
-                    borderRadius: 12,
-                    border: '1px solid var(--sep)',
-                    background: 'var(--fill-1)',
-                    color: 'var(--label-1)',
-                    padding: '0 12px',
-                    fontSize: 14,
-                    fontWeight: 500,
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 10,
+                    border: 'none',
+                    background: page === 'translation' ? 'var(--blue)' : 'var(--fill-2)',
+                    color: page === 'translation' ? '#fff' : 'var(--label-2)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
                   }}
                 >
-                  {languageOptions.map((lang) => (
-                    <option key={lang.code} value={lang.code}>
-                      {lang.label}
-                    </option>
-                  ))}
-                </select>
+                  Translation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPage('moderation')}
+                  style={{
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 10,
+                    border: 'none',
+                    background: page === 'moderation' ? 'var(--blue)' : 'var(--fill-2)',
+                    color: page === 'moderation' ? '#fff' : 'var(--label-2)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Moderation
+                </button>
               </div>
 
-              <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' }} />
-
-              <ToggleRow
-                label="Auto inline translation"
-                helper="Automatically translate short timeline posts without media or embeds."
-                checked={policy.autoTranslateFeed}
-                onChange={(checked) => setPolicy({ autoTranslateFeed: checked })}
-                touchLike={platform.prefersCoarsePointer || platform.isMobile}
-              />
-              <ToggleRow
-                label="Auto translate Explore"
-                helper="Translate discovery snippets in Explore cards."
-                checked={policy.autoTranslateExplore}
-                onChange={(checked) => setPolicy({ autoTranslateExplore: checked })}
-                touchLike={platform.prefersCoarsePointer || platform.isMobile}
-              />
-              <ToggleRow
-                label="Auto translate Story threads"
-                helper="Pre-translate thread content used by Story Mode."
-                checked={policy.autoTranslateThreads}
-                onChange={(checked) => setPolicy({ autoTranslateThreads: checked })}
-                touchLike={platform.prefersCoarsePointer || platform.isMobile}
-              />
-              <ToggleRow
-                label="Local/private mode"
-                helper="Prefer local translation path when available."
-                checked={policy.localOnlyMode}
-                onChange={(checked) => setPolicy({ localOnlyMode: checked })}
-                touchLike={platform.prefersCoarsePointer || platform.isMobile}
-              />
-
-              <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 10, lineHeight: 1.35 }}>
-                Note: translation may use external services depending on the selected mode and language pair.
-              </p>
-
-              <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
-
-              <ContentFilterSettingsSection />
-
-              <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
-
-              <BlueskyPrefsSection />
-
-              <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
-
-              <ModerationSection />
-
-              <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
-
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>ALT telemetry (debug)</h4>
-                  <button
-                    type="button"
-                    onClick={() => setAltMetrics(getAltTextMetricsSnapshot())}
-                    style={{
-                      border: '1px solid var(--sep)',
-                      borderRadius: 8,
-                      background: 'var(--fill-1)',
-                      color: 'var(--label-2)',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Refresh
-                  </button>
-                </div>
-                <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }}>
-                  Mirrors window.__GLYMPSE_ALT_METRICS__ for quick QA checks.
-                </p>
-
-                <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Completion Rate</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{(altMetrics.completionRate * 100).toFixed(0)}%</div>
+              {page === 'translation' && (
+                <>
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }}>
+                      Translate to
+                    </label>
+                    <select
+                      value={policy.userLanguage}
+                      onChange={(e) => setPolicy({ userLanguage: e.target.value })}
+                      style={{
+                        width: '100%',
+                        height: platform.prefersCoarsePointer ? 44 : 40,
+                        borderRadius: 12,
+                        border: '1px solid var(--sep)',
+                        background: 'var(--fill-1)',
+                        color: 'var(--label-1)',
+                        padding: '0 12px',
+                        fontSize: 14,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {languageOptions.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Bulk Success Rate</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{(altMetrics.bulkSuccessRate * 100).toFixed(0)}%</div>
-                  </div>
-                  <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Posts With Full ALT</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{altMetrics.postsWithFullAlt}</div>
-                  </div>
-                  <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Posts Missing ALT</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{altMetrics.postsWithMissingAlt}</div>
-                  </div>
-                  <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Bulk Runs</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{altMetrics.bulkRuns}</div>
-                  </div>
-                  <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Bulk Generated / Requested</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>
-                      {altMetrics.bulkGeneratedItems}/{altMetrics.bulkRequestedItems}
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' }} />
+
+                  <ToggleRow
+                    label="Auto inline translation"
+                    helper="Automatically translate short timeline posts without media or embeds."
+                    checked={policy.autoTranslateFeed}
+                    onChange={(checked) => setPolicy({ autoTranslateFeed: checked })}
+                    touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                  />
+                  <ToggleRow
+                    label="Auto translate Explore"
+                    helper="Translate discovery snippets in Explore cards."
+                    checked={policy.autoTranslateExplore}
+                    onChange={(checked) => setPolicy({ autoTranslateExplore: checked })}
+                    touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                  />
+                  <ToggleRow
+                    label="Auto translate Story threads"
+                    helper="Pre-translate thread content used by Story Mode."
+                    checked={policy.autoTranslateThreads}
+                    onChange={(checked) => setPolicy({ autoTranslateThreads: checked })}
+                    touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                  />
+                  <ToggleRow
+                    label="Local/private mode"
+                    helper="Prefer local translation path when available."
+                    checked={policy.localOnlyMode}
+                    onChange={(checked) => setPolicy({ localOnlyMode: checked })}
+                    touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                  />
+
+                  <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 10, lineHeight: 1.35 }}>
+                    Note: translation may use external services depending on the selected mode and language pair.
+                  </p>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
+                  <BlueskyPrefsSection />
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>ALT telemetry (debug)</h4>
+                      <button
+                        type="button"
+                        onClick={() => setAltMetrics(getAltTextMetricsSnapshot())}
+                        style={{
+                          border: '1px solid var(--sep)',
+                          borderRadius: 8,
+                          background: 'var(--fill-1)',
+                          color: 'var(--label-2)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }}>
+                      Mirrors window.__GLYMPSE_ALT_METRICS__ for quick QA checks.
+                    </p>
+
+                    <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Completion Rate</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{(altMetrics.completionRate * 100).toFixed(0)}%</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Bulk Success Rate</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{(altMetrics.bulkSuccessRate * 100).toFixed(0)}%</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Posts With Full ALT</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{altMetrics.postsWithFullAlt}</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Posts Missing ALT</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{altMetrics.postsWithMissingAlt}</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Bulk Runs</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{altMetrics.bulkRuns}</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Bulk Generated / Requested</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>
+                          {altMetrics.bulkGeneratedItems}/{altMetrics.bulkRequestedItems}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
+                </>
+              )}
+
+              {page === 'moderation' && <ModerationSettingsPage />}
             </div>
           </motion.div>
         </>
