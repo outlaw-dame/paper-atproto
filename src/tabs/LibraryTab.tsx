@@ -7,6 +7,7 @@ import type { MockPost } from '../data/mockData.js';
 import { formatTime, formatCount } from '../data/mockData.js';
 import type { AppBskyFeedDefs, AppBskyActorDefs } from '@atproto/api';
 import type { StoryEntry } from '../App.js';
+import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -45,7 +46,7 @@ function Spinner() {
 }
 
 // ─── Hero card ─────────────────────────────────────────────────────────────
-function HeroSavedCard({ post, onOpenStory }: { post: MockPost; onOpenStory: (e: StoryEntry) => void }) {
+function HeroSavedCard({ post, onOpenStory, touchLike, iconButtonSize }: { post: MockPost; onOpenStory: (e: StoryEntry) => void; touchLike: boolean; iconButtonSize: number }) {
   const [saved, setSaved] = useState(true);
   const chip = post.chips[0];
   const typeConfig = chip ? CONTENT_TYPE_CONFIG[chip] : null;
@@ -83,7 +84,8 @@ function HeroSavedCard({ post, onOpenStory }: { post: MockPost; onOpenStory: (e:
         {typeConfig && (
           <div style={{
             position: 'absolute', top: 12, left: 12, display: 'inline-flex', alignItems: 'center', gap: 5,
-            padding: '5px 10px', borderRadius: 100, background: 'rgba(0,0,0,0.45)',
+            minHeight: touchLike ? 32 : undefined,
+            padding: touchLike ? '6px 12px' : '5px 10px', borderRadius: 100, background: 'rgba(0,0,0,0.45)',
             backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
             color: '#fff', fontSize: 12, fontWeight: 600,
           }}>
@@ -94,7 +96,7 @@ function HeroSavedCard({ post, onOpenStory }: { post: MockPost; onOpenStory: (e:
           onClick={e => { e.stopPropagation(); setSaved(v => !v); }}
           aria-label={saved ? 'Unsave' : 'Save'}
           style={{
-            position: 'absolute', top: 10, right: 10, width: 34, height: 34, borderRadius: '50%',
+            position: 'absolute', top: 10, right: 10, width: iconButtonSize, height: iconButtonSize, borderRadius: '50%',
             background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: saved ? '#FFD60A' : 'rgba(255,255,255,0.85)', border: 'none', cursor: 'pointer',
@@ -140,7 +142,7 @@ function HeroSavedCard({ post, onOpenStory }: { post: MockPost; onOpenStory: (e:
 }
 
 // ─── Compact card ──────────────────────────────────────────────────────────
-function CompactSavedCard({ post, index, onOpenStory }: { post: MockPost; index: number; onOpenStory: (e: StoryEntry) => void }) {
+function CompactSavedCard({ post, index, onOpenStory, touchLike }: { post: MockPost; index: number; onOpenStory: (e: StoryEntry) => void; touchLike: boolean }) {
   const [saved, setSaved] = useState(true);
   const chip = post.chips[0];
   const typeConfig = chip ? CONTENT_TYPE_CONFIG[chip] : null;
@@ -200,7 +202,7 @@ function CompactSavedCard({ post, index, onOpenStory }: { post: MockPost; index:
           )}
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
             {typeConfig && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 100, background: typeConfig.accentBg, color: typeConfig.accentColor, fontSize: 11, fontWeight: 600 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minHeight: touchLike ? 28 : undefined, padding: touchLike ? '4px 9px' : '3px 8px', borderRadius: 100, background: typeConfig.accentBg, color: typeConfig.accentColor, fontSize: 11, fontWeight: 600 }}>
                 {typeConfig.icon}{typeConfig.label}
               </span>
             )}
@@ -208,7 +210,7 @@ function CompactSavedCard({ post, index, onOpenStory }: { post: MockPost; index:
               <ClockIcon size={11} /> {readTime}
             </span>
             <div style={{ flex: 1 }} />
-            <button onClick={e => { e.stopPropagation(); setSaved(v => !v); }} aria-label={saved ? 'Unsave' : 'Save'} style={{ color: saved ? 'var(--blue)' : 'var(--label-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+            <button onClick={e => { e.stopPropagation(); setSaved(v => !v); }} aria-label={saved ? 'Unsave' : 'Save'} style={{ color: saved ? 'var(--blue)' : 'var(--label-3)', background: 'none', border: 'none', cursor: 'pointer', minWidth: touchLike ? 32 : 24, minHeight: touchLike ? 32 : 24, borderRadius: '50%' }}>
               <BookmarkIcon filled={saved} size={16} />
             </button>
           </div>
@@ -234,6 +236,10 @@ function SectionHeader({ title, count }: { title: string; count?: number }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function LibraryTab({ onOpenStory }: Props) {
+  const platform = usePlatform();
+  const buttonTokens = getButtonTokens(platform);
+  const iconBtnTokens = getIconBtnTokens(platform);
+  const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
   const { agent, session } = useSessionStore();
   const [tab, setTab] = useState<Tab>('Saved');
   const [savedPosts, setSavedPosts] = useState<MockPost[]>([]);
@@ -300,8 +306,9 @@ export default function LibraryTab({ onOpenStory }: Props) {
         <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 12px', gap: 8, overflowX: 'auto' }}>
           {TABS.map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
-              padding: '6px 16px', borderRadius: 100, flexShrink: 0,
-              fontSize: 14, fontWeight: tab === t ? 700 : 400,
+              minHeight: touchLike ? 42 : buttonTokens.height,
+              padding: touchLike ? '0 18px' : '6px 16px', borderRadius: 100, flexShrink: 0,
+              fontSize: touchLike ? 15 : 14, fontWeight: tab === t ? 700 : 500,
               color: tab === t ? '#fff' : 'var(--label-2)',
               background: tab === t ? 'var(--blue)' : 'var(--fill-2)',
               border: 'none', cursor: 'pointer', transition: 'all 0.18s',
@@ -326,9 +333,9 @@ export default function LibraryTab({ onOpenStory }: Props) {
               ) : (
                 <>
                   <SectionHeader title="Liked Posts" count={savedPosts.length} />
-                  {savedPosts[0] != null && <HeroSavedCard post={savedPosts[0]} onOpenStory={onOpenStory} />}
+                  {savedPosts[0] != null && <HeroSavedCard post={savedPosts[0]} onOpenStory={onOpenStory} touchLike={touchLike} iconButtonSize={iconBtnTokens.size} />}
                   {savedPosts.slice(1).map((post, i) => (
-                    <CompactSavedCard key={post.id} post={post} index={i} onOpenStory={onOpenStory} />
+                    <CompactSavedCard key={post.id} post={post} index={i} onOpenStory={onOpenStory} touchLike={touchLike} />
                   ))}
                 </>
               )}

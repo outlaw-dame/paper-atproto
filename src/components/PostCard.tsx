@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
@@ -26,11 +26,19 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
+  const [translationError, setTranslationError] = useState(false);
+  const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
   const { policy, byId, upsertTranslation, clearTranslation } = useTranslationStore();
   const translation = byId[post.id];
+  const autoAttemptedRef = useRef(false);
 
   const storyRootId = post.threadRoot?.id ?? post.id;
   const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
+
+  const handleProfileClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onViewProfile?.(post.author.did);
+  };
 
   // Handle "open story" click
   const handleCardClick = (e: React.MouseEvent) => {
@@ -56,6 +64,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
     if (!post.content.trim()) return;
     setTranslating(true);
+    setTranslationError(false);
     try {
       const result = await translationClient.translateInline({
         id: post.id,
@@ -67,6 +76,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       setShowOriginal(false);
     } catch (err) {
       console.warn('[PostCard] translation failed', err);
+      setTranslationError(true);
     } finally {
       setTranslating(false);
     }
@@ -81,6 +91,41 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const displayContent = translation && !showOriginal
     ? translation.translatedText
     : post.content;
+
+  const canAutoInlineTranslate = useMemo(() => {
+    const hasEmbed = !!post.embed;
+    const hasMedia = !!post.media?.length;
+    const textLength = post.content.trim().length;
+    if (textLength === 0 || textLength > 280) return false;
+    if (hasEmbed || hasMedia) return false;
+    return true;
+  }, [post.content, post.embed, post.media]);
+
+  useEffect(() => {
+    if (translation || translating) return;
+    if (!policy.autoTranslateFeed) return;
+    if (!canAutoInlineTranslate) return;
+    if (autoAttemptedRef.current) return;
+
+    autoAttemptedRef.current = true;
+    setTranslating(true);
+    setTranslationError(false);
+
+    translationClient.translateInline({
+      id: post.id,
+      sourceText: post.content,
+      targetLang: policy.userLanguage,
+      mode: policy.localOnlyMode ? 'local_private' : 'server_default',
+    }).then((result) => {
+      upsertTranslation(result);
+      setShowOriginal(false);
+    }).catch((err) => {
+      console.warn('[PostCard] auto translation failed', err);
+      setTranslationError(true);
+    }).finally(() => {
+      setTranslating(false);
+    });
+  }, [canAutoInlineTranslate, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.content, post.id, translation, translating, upsertTranslation]);
 
   return (
     <motion.div
@@ -105,7 +150,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div
-            onClick={(e) => { e.stopPropagation(); onViewProfile?.(post.author.did); }}
+            onClick={handleProfileClick}
             style={{
               width: 40, height: 40, borderRadius: '50%',
               background: 'var(--fill-2)', overflow: 'hidden',
@@ -120,7 +165,18 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               </div>
             )}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div
+            onClick={handleProfileClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onViewProfile?.(post.author.did);
+              }
+            }}
+            style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer' }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>{post.author.displayName || post.author.handle}</span>
               <span style={{ fontSize: 14, color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
@@ -149,7 +205,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
 
       {post.content.trim().length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, marginTop: -2 }}>
           <button
             onClick={handleTranslate}
             disabled={translating}
@@ -164,28 +220,66 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               opacity: translating ? 0.65 : 1,
             }}
           >
-            {translation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
+            {translation
+              ? (showOriginal ? 'Show translation' : 'Show original')
+              : (translating
+                ? 'Translating...'
+                : 'Translate')}
           </button>
-          {translation && (
-            <>
-              <span style={{ fontSize: 12, color: 'var(--label-3)' }}>
-                Translated from {translation.sourceLang}
+          {translationError && !translation && (
+            <span style={{ fontSize: 12, color: 'var(--red)' }}>Failed to translate</span>
+          )}
+        </div>
+      )}
+
+      {translation && !showOriginal && (
+        <div style={{
+          marginBottom: 10,
+          border: '1px solid var(--stroke-dim)',
+          borderRadius: 10,
+          background: 'color-mix(in srgb, var(--surface-card) 80%, var(--blue) 6%)',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            padding: '7px 9px',
+            borderBottom: '1px solid var(--stroke-dim)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 8l6 6" />
+                <path d="M4 14l6-6 2-3" />
+                <path d="M2 5h12" />
+                <path d="M7 2h1" />
+                <path d="M22 22l-5-10-5 10" />
+                <path d="M14 18h6" />
+              </svg>
+              <span style={{ fontSize: 11, color: 'var(--label-2)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {policy.autoTranslateFeed && canAutoInlineTranslate
+                  ? `Auto-translated from ${translation.sourceLang}`
+                  : `Translated from ${translation.sourceLang}`}
               </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <button
+                onClick={handleTranslate}
+                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 11, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+              >
+                Show original
+              </button>
               <button
                 onClick={handleClearTranslation}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--label-3)',
-                  fontSize: 12,
-                  padding: 0,
-                  cursor: 'pointer',
-                }}
+                style={{ border: 'none', background: 'transparent', color: 'var(--label-3)', fontSize: 11, fontWeight: 600, padding: 0, cursor: 'pointer' }}
               >
                 Clear
               </button>
-            </>
-          )}
+            </div>
+          </div>
+
         </div>
       )}
 
@@ -195,7 +289,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <div className="video-player-wrapper" onClick={e => e.stopPropagation()}>
           <VideoPlayer
             url={post.embed.url}
-            thumb={post.embed.thumb}
+            {...(post.embed.thumb ? { thumb: post.embed.thumb } : {})}
             autoplay={false}
           />
           {post.embed.title && (
@@ -209,21 +303,82 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
       {/* 2. Image Grid */}
       {post.media && post.media.length > 0 && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: post.media.length > 1 ? '1fr 1fr' : '1fr',
-          gap: 4, borderRadius: 12, overflow: 'hidden',
-          marginTop: 8
-        }}>
-          {post.media.map((img, i) => (
-            <div key={i} style={{
-              aspectRatio: img.aspectRatio ? String(img.aspectRatio) : '16/9',
-              position: 'relative', background: 'var(--fill-2)'
-            }}>
-              <img src={img.url} alt={img.alt} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+        <>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: post.media.length > 1 ? '1fr 1fr' : '1fr',
+            gap: 4, borderRadius: 12, overflow: 'hidden',
+            marginTop: 8
+          }}>
+            {post.media.map((img, i) => {
+              const alt = (img.alt ?? '').trim();
+              const hasAlt = alt.length > 0;
+              return (
+                <div key={i} style={{
+                  aspectRatio: img.aspectRatio ? String(img.aspectRatio) : '16/9',
+                  position: 'relative', background: 'var(--fill-2)'
+                }}>
+                  <img src={img.url} alt={img.alt ?? ''} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+
+                  {hasAlt && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedAltIndex(prev => (prev === i ? null : i));
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: 8,
+                        bottom: 8,
+                        border: 'none',
+                        background: 'rgba(0,0,0,0.56)',
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        borderRadius: 999,
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ALT
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {expandedAltIndex !== null && post.media[expandedAltIndex] && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                marginTop: 8,
+                border: '1px solid var(--stroke-dim)',
+                borderRadius: 10,
+                background: 'var(--fill-1)',
+                padding: '9px 10px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--label-3)' }}>
+                  Media description {expandedAltIndex + 1}/{post.media.length}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedAltIndex(null);
+                  }}
+                  style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 11, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                >
+                  Hide
+                </button>
+              </div>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: 'var(--label-2)', whiteSpace: 'pre-wrap' }}>
+                {(post.media[expandedAltIndex].alt ?? '').trim()}
+              </p>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {/* 3. External Link */}

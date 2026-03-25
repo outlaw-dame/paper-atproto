@@ -3,11 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
 import PostCard from '../components/PostCard.js';
 import ContextPost from '../components/ContextPost.js';
+import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { mapFeedViewPost } from '../atproto/mappers.js';
 import { atpCall, atpMutate } from '../lib/atproto/client.js';
 import { qk } from '../lib/atproto/queries.js';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
+import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
 import type { MockPost } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
 
@@ -59,6 +62,9 @@ function EmptyState({ label }: { label: string }) {
 export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
   const { openProfile } = useUiStore();
+  const platform = usePlatform();
+  const buttonTokens = getButtonTokens(platform);
+  const iconTokens = getIconBtnTokens(platform);
   const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>('Following');
   const [posts, setPosts] = useState<MockPost[]>([]);
@@ -66,7 +72,10 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showTranslationSettings, setShowTranslationSettings] = useState(false);
+  const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const filterResults = usePostFilterResults(posts, 'home');
 
   const fetchFeed = useCallback(async (m: Mode, cur?: string) => {
     if (!session) return;
@@ -137,11 +146,23 @@ export default function HomeTab({ onOpenStory }: Props) {
     const isReposted = !!p.viewer?.repost;
     
     // Optimistic update
-    setPosts(prev => prev.map(item => item.id === p.id ? {
-      ...item,
-      repostCount: item.repostCount + (isReposted ? -1 : 1),
-      viewer: { ...item.viewer, repost: isReposted ? undefined : 'pending' }
-    } : item));
+    setPosts(prev => prev.map(item => {
+      if (item.id !== p.id) return item;
+      const viewer = item.viewer ?? {};
+      if (isReposted) {
+        const { repost: _repost, ...restViewer } = viewer;
+        return {
+          ...item,
+          repostCount: item.repostCount - 1,
+          viewer: restViewer,
+        };
+      }
+      return {
+        ...item,
+        repostCount: item.repostCount + 1,
+        viewer: { ...viewer, repost: 'pending' },
+      };
+    }));
 
     try {
       if (isReposted) {
@@ -166,11 +187,23 @@ export default function HomeTab({ onOpenStory }: Props) {
     
     const isLiked = !!p.viewer?.like;
     
-    setPosts(prev => prev.map(item => item.id === p.id ? {
-      ...item,
-      likeCount: item.likeCount + (isLiked ? -1 : 1),
-      viewer: { ...item.viewer, like: isLiked ? undefined : 'pending' }
-    } : item));
+    setPosts(prev => prev.map(item => {
+      if (item.id !== p.id) return item;
+      const viewer = item.viewer ?? {};
+      if (isLiked) {
+        const { like: _like, ...restViewer } = viewer;
+        return {
+          ...item,
+          likeCount: item.likeCount - 1,
+          viewer: restViewer,
+        };
+      }
+      return {
+        ...item,
+        likeCount: item.likeCount + 1,
+        viewer: { ...viewer, like: 'pending' },
+      };
+    }));
 
     try {
       if (isLiked) {
@@ -191,11 +224,24 @@ export default function HomeTab({ onOpenStory }: Props) {
   const handleBookmark = useCallback(async (p: MockPost) => {
     // Placeholder for bookmark functionality
     // For now, just toggle the state locally
-    setPosts(prev => prev.map(item => item.id === p.id ? {
-      ...item,
-      bookmarkCount: item.bookmarkCount + (item.viewer?.bookmark ? -1 : 1),
-      viewer: { ...item.viewer, bookmark: item.viewer?.bookmark ? undefined : 'bookmarked' }
-    } : item));
+    setPosts(prev => prev.map(item => {
+      if (item.id !== p.id) return item;
+      const viewer = item.viewer ?? {};
+      const isBookmarked = !!viewer.bookmark;
+      if (isBookmarked) {
+        const { bookmark: _bookmark, ...restViewer } = viewer;
+        return {
+          ...item,
+          bookmarkCount: item.bookmarkCount - 1,
+          viewer: restViewer,
+        };
+      }
+      return {
+        ...item,
+        bookmarkCount: item.bookmarkCount + 1,
+        viewer: { ...viewer, bookmark: 'bookmarked' },
+      };
+    }));
   }, []);
 
   const handleMore = useCallback((p: MockPost) => {
@@ -228,16 +274,46 @@ export default function HomeTab({ onOpenStory }: Props) {
           <div style={{ flex: 1, display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
             <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-ui-title-md-track)' }}>Glimpse</span>
           </div>
-          <button
-            aria-label="Refresh"
-            onClick={() => fetchFeed(mode)}
-            style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--fill-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', border: 'none', cursor: 'pointer' }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-            </svg>
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              aria-label="Translation settings"
+              onClick={() => setShowTranslationSettings(true)}
+              style={{
+                width: iconTokens.size,
+                height: iconTokens.size,
+                borderRadius: '50%',
+                background: 'var(--fill-2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--label-2)', border: 'none', cursor: 'pointer',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 8l6 6" />
+                <path d="M4 14l6-6 2-3" />
+                <path d="M2 5h12" />
+                <path d="M7 2h1" />
+                <path d="M22 22l-5-10-5 10" />
+                <path d="M14 18h6" />
+              </svg>
+            </button>
+            <button
+              aria-label="Refresh"
+              onClick={() => fetchFeed(mode)}
+              style={{
+                width: iconTokens.size,
+                height: iconTokens.size,
+                borderRadius: '50%',
+                background: 'var(--fill-2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--label-2)', border: 'none', cursor: 'pointer',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Mode pills */}
@@ -247,7 +323,9 @@ export default function HomeTab({ onOpenStory }: Props) {
               key={m}
               onClick={() => setMode(m)}
               style={{
-                padding: '6px 14px', borderRadius: 100,
+                minHeight: platform.prefersCoarsePointer ? 40 : 34,
+                padding: `0 ${buttonTokens.paddingH - 2}px`,
+                borderRadius: 100,
                 fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: mode === m ? 600 : 400, letterSpacing: 'var(--type-label-md-track)',
                 color: mode === m ? '#fff' : 'var(--label-2)',
                 background: mode === m ? 'var(--blue)' : 'var(--fill-2)',
@@ -287,6 +365,36 @@ export default function HomeTab({ onOpenStory }: Props) {
           ) : (
             <motion.div key={mode} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} style={{ paddingBottom: 'var(--safe-bottom)' }}>
               {posts.map((post, i) => {
+                const matches = filterResults[post.id] ?? [];
+                const isHidden = matches.some((m) => m.action === 'hide');
+                const isWarned = matches.some((m) => m.action === 'warn');
+                const isRevealed = !!revealedFilteredPosts[post.id];
+
+                if (isHidden) return null;
+
+                if (isWarned && !isRevealed) {
+                  const titles = [...new Set(matches.filter((m) => m.action === 'warn').map((m) => m.phrase))];
+                  return (
+                    <div key={post.id} style={{
+                      border: '1px solid var(--stroke-dim)',
+                      borderRadius: 12,
+                      padding: '10px 12px',
+                      marginBottom: 8,
+                      background: 'color-mix(in srgb, var(--surface-card) 90%, var(--orange) 10%)',
+                    }}>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
+                        Matches filter: {titles.join(', ')}
+                      </p>
+                      <button
+                        onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [post.id]: true }))}
+                        style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                      >
+                        Show post
+                      </button>
+                    </div>
+                  );
+                }
+
                 const storyRootId = post.threadRoot?.id ?? post.id;
                 const storyTitle = (post.threadRoot?.content ?? post.content).slice(0, 80);
                 const openThreadStory = () => {
@@ -356,6 +464,8 @@ export default function HomeTab({ onOpenStory }: Props) {
           )}
         </AnimatePresence>
       </div>
+
+      <TranslationSettingsSheet open={showTranslationSettings} onClose={() => setShowTranslationSettings(false)} />
     </div>
   );
 }

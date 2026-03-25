@@ -5,6 +5,7 @@
 import React from 'react';
 import { useUiStore } from '../store/uiStore.js';
 import type { TabId } from '../App.js';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
 
 const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNode }[] = [
   {
@@ -56,25 +57,31 @@ const tabBarStyle: React.CSSProperties = {
   paddingBottom: 'var(--safe-bottom)',
 };
 
-const tabBtnStyle: React.CSSProperties = {
-  flex: 1, display: 'flex', flexDirection: 'column',
-  alignItems: 'center', justifyContent: 'center',
-  paddingTop: 10, paddingBottom: 6,
-  gap: 3, minHeight: 50, cursor: 'pointer',
-  border: 'none', background: 'none',
-  WebkitTapHighlightColor: 'transparent',
-};
-
-const fabStyle: React.CSSProperties = {
-  width: 52, height: 52, borderRadius: '50%',
-  background: 'var(--blue)', display: 'flex',
-  alignItems: 'center', justifyContent: 'center',
-  boxShadow: '0 4px 16px rgba(0,122,255,0.4)',
-  marginTop: -8,
-};
-
 export default function TabBar() {
   const { activeTab, unreadCount, setTab, openCompose, openPromptComposer } = useUiStore();
+  const platform = usePlatform();
+  const iconTokens = getIconBtnTokens(platform);
+  const tabBtnStyle: React.CSSProperties = {
+    flex: 1, display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center',
+    paddingTop: platform.prefersCoarsePointer ? 10 : 8,
+    paddingBottom: platform.prefersCoarsePointer ? 8 : 6,
+    gap: 3,
+    minHeight: platform.prefersCoarsePointer ? 56 : 50,
+    cursor: 'pointer',
+    border: 'none', background: 'none',
+    WebkitTapHighlightColor: 'transparent',
+  };
+  const fabSize = platform.prefersCoarsePointer ? 56 : 52;
+  const fabStyle: React.CSSProperties = {
+    width: fabSize,
+    height: fabSize,
+    borderRadius: '50%',
+    background: 'var(--blue)', display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    boxShadow: '0 4px 16px rgba(0,122,255,0.4)',
+    marginTop: platform.prefersCoarsePointer ? -10 : -8,
+  };
   const pressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleFabPointerDown = () => {
@@ -124,7 +131,18 @@ export default function TabBar() {
             aria-label={label}
           >
             <div style={{ position: 'relative' }}>
-              {icon(active)}
+              <div
+                style={{
+                  width: iconTokens.size,
+                  height: iconTokens.size,
+                  borderRadius: iconTokens.borderRadius,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {icon(active)}
+              </div>
               {/* Unread badge on Inbox */}
               {id === 'inbox' && unreadCount > 0 && (
                 <span style={{

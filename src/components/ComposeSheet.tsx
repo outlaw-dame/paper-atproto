@@ -1,7 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence, useDragControls } from 'framer-motion';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAtp } from '../atproto/AtpContext.js';
 import { RichText } from '@atproto/api';
+import { inferenceClient } from '../workers/InferenceClient.js';
+import { getAltTextMetricsSnapshot, recordAltPostCoverage, recordBulkAltRun } from '../perf/altTextTelemetry.js';
 
 interface Props {
   onClose: () => void;
@@ -13,6 +15,79 @@ type AudienceOption = 'Everyone' | 'Following' | 'Mentioned';
 const AUDIENCE_OPTIONS: AudienceOption[] = ['Everyone', 'Following', 'Mentioned'];
 
 type ActiveTool = 'image' | 'gif' | 'link' | null;
+
+interface ComposeMediaItem {
+  id: string;
+  file: File;
+  previewUrl: string;
+  alt: string;
+  width: number;
+  height: number;
+}
+
+const MAX_MEDIA = 4;
+const ALT_REQUIREMENT_KEY = 'paper.compose.requireAltText';
+const ALT_MAX_CHARS = 500;
+
+type AltLintLevel = 'warning' | 'error';
+
+interface AltLintIssue {
+  level: AltLintLevel;
+  message: string;
+}
+
+function lintAltText(value: string): AltLintIssue[] {
+  const alt = value.trim();
+  if (!alt) return [];
+
+  const issues: AltLintIssue[] = [];
+  if (alt.length < 12) {
+    issues.push({ level: 'error', message: 'Too short. Add key details so screen-reader users get meaningful context.' });
+  }
+  if (alt.length >= 12 && alt.length < 24) {
+    issues.push({ level: 'warning', message: 'Consider adding more context such as action, subject, and important text.' });
+  }
+  if (/^(image|photo|picture|screenshot)\s+of\b/i.test(alt)) {
+    issues.push({ level: 'warning', message: 'Skip "image/photo of" and start directly with the important content.' });
+  }
+  if (/\bhttps?:\/\//i.test(alt)) {
+    issues.push({ level: 'warning', message: 'Avoid raw URLs in ALT text unless the link itself is the subject.' });
+  }
+  if (/#\w+|@\w+/i.test(alt)) {
+    issues.push({ level: 'warning', message: 'Avoid hashtags and mentions in ALT text. Describe the media itself.' });
+  }
+  if (/\b\w+\.(png|jpe?g|gif|webp|heic|svg)\b/i.test(alt)) {
+    issues.push({ level: 'warning', message: 'File names are usually not useful ALT text. Describe meaning and context.' });
+  }
+  if (alt.length > 90 && !/[.?!]$/.test(alt)) {
+    issues.push({ level: 'warning', message: 'Long ALT reads better with punctuation.' });
+  }
+
+  return issues;
+}
+
+function describeAltQuality(value: string): string | null {
+  const issues = lintAltText(value);
+  if (issues.length === 0) return null;
+  return issues[0].message;
+}
+
+async function loadImageDimensions(file: File): Promise<{ width: number; height: number }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const dims = await new Promise<{ width: number; height: number }>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        resolve({ width: img.naturalWidth || 1600, height: img.naturalHeight || 900 });
+      };
+      img.onerror = () => resolve({ width: 1600, height: 900 });
+      img.src = url;
+    });
+    return dims;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function linkifyText(text: string): React.ReactNode[] {
@@ -303,29 +378,139 @@ export default function ComposeSheet({ onClose }: Props) {
   const [activeTool, setActiveTool] = useState<ActiveTool>(null);
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
+  const [mediaItems, setMediaItems] = useState<ComposeMediaItem[]>([]);
+  const [editingAltId, setEditingAltId] = useState<string | null>(null);
+  const [altDraft, setAltDraft] = useState('');
+  const [altSuggestionError, setAltSuggestionError] = useState<string | null>(null);
+  const [isGeneratingAltSuggestion, setIsGeneratingAltSuggestion] = useState(false);
+  const [isGeneratingBulkAlt, setIsGeneratingBulkAlt] = useState(false);
+  const [bulkAltProgress, setBulkAltProgress] = useState<{ done: number; total: number } | null>(null);
+  const [bulkAltError, setBulkAltError] = useState<string | null>(null);
+  const [showMissingAltConfirm, setShowMissingAltConfirm] = useState(false);
+  const [showLowQualityAltConfirm, setShowLowQualityAltConfirm] = useState(false);
+  const [altMetrics, setAltMetrics] = useState(() => getAltTextMetricsSnapshot());
+  const [requireAltText, setRequireAltText] = useState<boolean>(() => {
+    if (typeof localStorage === 'undefined') return false;
+    return localStorage.getItem(ALT_REQUIREMENT_KEY) === '1';
+  });
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const altTaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const remaining = MAX - text.length;
-  const canPost = text.trim().length > 0 && remaining >= 0 && !posting;
+  const hasDraftContent = text.trim().length > 0 || mediaItems.length > 0;
+  const canPost = hasDraftContent && remaining >= 0 && !posting;
 
-  const handlePost = useCallback(async () => {
+  const missingAltCount = useMemo(
+    () => mediaItems.reduce((count, item) => count + (item.alt.trim().length === 0 ? 1 : 0), 0),
+    [mediaItems]
+  );
+  const describedMediaCount = mediaItems.length - missingAltCount;
+  const editingMedia = useMemo(
+    () => mediaItems.find((item) => item.id === editingAltId) ?? null,
+    [mediaItems, editingAltId]
+  );
+  const altQualityHint = useMemo(() => describeAltQuality(altDraft), [altDraft]);
+  const altLintIssues = useMemo(() => lintAltText(altDraft), [altDraft]);
+  const lowQualityAltCount = useMemo(
+    () => mediaItems.reduce((count, item) => {
+      if (!item.alt.trim()) return count;
+      return count + (lintAltText(item.alt).length > 0 ? 1 : 0);
+    }, 0),
+    [mediaItems]
+  );
+
+  useEffect(() => {
+    localStorage.setItem(ALT_REQUIREMENT_KEY, requireAltText ? '1' : '0');
+  }, [requireAltText]);
+
+  useEffect(() => {
+    return () => {
+      for (const item of mediaItems) URL.revokeObjectURL(item.previewUrl);
+    };
+  }, [mediaItems]);
+
+  const commitPost = useCallback(async () => {
     if (!canPost || !agent.session) return;
     setPosting(true);
     setPostError(null);
     try {
-      const rt = new RichText({ text: text.trim() });
-      await rt.detectFacets(agent);
+      const trimmedText = text.trim();
+      const rt = new RichText({ text: trimmedText });
+      if (trimmedText.length > 0) {
+        await rt.detectFacets(agent);
+      }
+
+      let embed:
+        | {
+            $type: 'app.bsky.embed.images';
+            images: Array<{
+              image: unknown;
+              alt: string;
+              aspectRatio?: { width: number; height: number };
+            }>;
+          }
+        | undefined;
+
+      if (mediaItems.length > 0) {
+        const uploadedImages: Array<{
+          image: unknown;
+          alt: string;
+          aspectRatio?: { width: number; height: number };
+        }> = [];
+        for (const item of mediaItems) {
+          const upload = await agent.uploadBlob(item.file, {
+            encoding: item.file.type || 'image/jpeg',
+          });
+          const alt = item.alt.trim();
+          uploadedImages.push({
+            image: upload.data.blob,
+            alt,
+            ...(item.width > 0 && item.height > 0 ? { aspectRatio: { width: item.width, height: item.height } } : {}),
+          });
+        }
+        embed = {
+          $type: 'app.bsky.embed.images',
+          images: uploadedImages,
+        };
+      }
+
       await agent.post({
         text: rt.text,
         facets: rt.facets,
         createdAt: new Date().toISOString(),
+        ...(embed ? { embed } : {}),
       });
+
+      if (mediaItems.length > 0) {
+        const describedItems = mediaItems.reduce((count, item) => count + (item.alt.trim().length > 0 ? 1 : 0), 0);
+        recordAltPostCoverage(mediaItems.length, describedItems);
+        setAltMetrics(getAltTextMetricsSnapshot());
+      }
+
       onClose();
     } catch (err: any) {
       setPostError(err?.message ?? 'Failed to post. Please try again.');
     } finally {
       setPosting(false);
     }
-  }, [canPost, agent, text, onClose]);
+  }, [agent, canPost, mediaItems, onClose, text]);
+
+  const handlePost = useCallback(() => {
+    if (!canPost) return;
+    if (missingAltCount > 0) {
+      if (requireAltText) {
+        setPostError(`Add ALT text for all media before posting (${missingAltCount} missing).`);
+        return;
+      }
+      setShowMissingAltConfirm(true);
+      return;
+    }
+    if (lowQualityAltCount > 0) {
+      setShowLowQualityAltConfirm(true);
+      return;
+    }
+    void commitPost();
+  }, [canPost, commitPost, missingAltCount, requireAltText, lowQualityAltCount]);
 
   useEffect(() => {
     const timer = setTimeout(() => taRef.current?.focus(), 120);
@@ -361,6 +546,191 @@ export default function ComposeSheet({ onClose }: Props) {
   const toggleTool = (tool: ActiveTool) => {
     setActiveTool(prev => prev === tool ? null : tool);
   };
+
+  const openMediaPicker = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleMediaSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    const slotsLeft = Math.max(0, MAX_MEDIA - mediaItems.length);
+    const acceptedFiles = files.filter((file) => file.type.startsWith('image/')).slice(0, slotsLeft);
+    if (acceptedFiles.length === 0) {
+      setPostError(`You can attach up to ${MAX_MEDIA} images.`);
+      e.target.value = '';
+      return;
+    }
+
+    const items = await Promise.all(
+      acceptedFiles.map(async (file) => {
+        const { width, height } = await loadImageDimensions(file);
+        return {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          alt: '',
+          width,
+          height,
+        } satisfies ComposeMediaItem;
+      })
+    );
+
+    setMediaItems(prev => [...prev, ...items]);
+    setActiveTool(null);
+    e.target.value = '';
+  };
+
+  const removeMedia = (id: string) => {
+    setMediaItems(prev => {
+      const target = prev.find((item) => item.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((item) => item.id !== id);
+    });
+    if (editingAltId === id) {
+      setEditingAltId(null);
+      setAltDraft('');
+    }
+  };
+
+  const openAltEditor = useCallback((id: string) => {
+    const item = mediaItems.find((entry) => entry.id === id);
+    if (!item) return;
+    setEditingAltId(id);
+    setAltDraft(item.alt);
+    setAltSuggestionError(null);
+  }, [mediaItems]);
+
+  const closeAltEditor = useCallback(() => {
+    setEditingAltId(null);
+    setAltDraft('');
+    setAltSuggestionError(null);
+  }, []);
+
+  const saveAltDraft = useCallback(() => {
+    if (!editingAltId) return;
+    setMediaItems(prev => prev.map((item) => (item.id === editingAltId ? { ...item, alt: altDraft } : item)));
+    closeAltEditor();
+  }, [altDraft, closeAltEditor, editingAltId]);
+
+  const openNextAltEditor = useCallback(() => {
+    if (mediaItems.length === 0) return;
+    const next = mediaItems.find((item) => item.alt.trim().length === 0) ?? mediaItems[0];
+    openAltEditor(next.id);
+  }, [mediaItems, openAltEditor]);
+
+  const suggestAltDraft = useCallback(async () => {
+    if (!editingMedia) return;
+    setIsGeneratingAltSuggestion(true);
+    setAltSuggestionError(null);
+    try {
+      const caption = await inferenceClient.captionImage(editingMedia.previewUrl);
+      const normalized = caption.trim();
+      if (!normalized) throw new Error('No caption generated');
+      setAltDraft(normalized.slice(0, ALT_MAX_CHARS));
+    } catch {
+      setAltSuggestionError('Suggestion failed. You can still write ALT manually.');
+    } finally {
+      setIsGeneratingAltSuggestion(false);
+    }
+  }, [editingMedia]);
+
+  const regenerateAltDraft = useCallback(async () => {
+    if (!editingMedia || isGeneratingAltSuggestion) return;
+    setIsGeneratingAltSuggestion(true);
+    setAltSuggestionError(null);
+    try {
+      const caption = await inferenceClient.captionImage(editingMedia.previewUrl);
+      const normalized = caption.trim();
+      if (!normalized) throw new Error('No caption generated');
+      setAltDraft(normalized.slice(0, ALT_MAX_CHARS));
+    } catch {
+      setAltSuggestionError('Regeneration failed. You can still edit ALT manually.');
+    } finally {
+      setIsGeneratingAltSuggestion(false);
+    }
+  }, [editingMedia, isGeneratingAltSuggestion]);
+
+  const generateMissingAltDrafts = useCallback(async () => {
+    const missing = mediaItems.filter((item) => item.alt.trim().length === 0);
+    if (missing.length === 0 || isGeneratingBulkAlt) return;
+
+    setIsGeneratingBulkAlt(true);
+    setBulkAltError(null);
+    setBulkAltProgress({ done: 0, total: missing.length });
+
+    const generated = new Map<string, string>();
+    let failures = 0;
+
+    try {
+      for (let i = 0; i < missing.length; i += 1) {
+        const item = missing[i];
+        try {
+          const caption = await inferenceClient.captionImage(item.previewUrl);
+          const normalized = caption.trim();
+          if (normalized) {
+            generated.set(item.id, normalized.slice(0, ALT_MAX_CHARS));
+          } else {
+            failures += 1;
+          }
+        } catch {
+          failures += 1;
+        }
+        setBulkAltProgress({ done: i + 1, total: missing.length });
+      }
+
+      if (generated.size > 0) {
+        setMediaItems((prev) => prev.map((item) => (
+          generated.has(item.id)
+            ? { ...item, alt: generated.get(item.id) ?? item.alt }
+            : item
+        )));
+      }
+
+      recordBulkAltRun(missing.length, generated.size, failures);
+      setAltMetrics(getAltTextMetricsSnapshot());
+
+      if (failures > 0) {
+        setBulkAltError(`Generated ${generated.size}/${missing.length}. ${failures} suggestion${failures > 1 ? 's' : ''} failed.`);
+      }
+    } finally {
+      setIsGeneratingBulkAlt(false);
+      setTimeout(() => setBulkAltProgress(null), 1200);
+    }
+  }, [isGeneratingBulkAlt, mediaItems]);
+
+  useEffect(() => {
+    if (!editingMedia) return;
+    const timer = setTimeout(() => altTaRef.current?.focus(), 30);
+    return () => clearTimeout(timer);
+  }, [editingMedia]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      const typingTarget = tag === 'INPUT' || tag === 'TEXTAREA';
+
+      if (event.altKey && (event.key === 'a' || event.key === 'A') && !typingTarget) {
+        event.preventDefault();
+        openNextAltEditor();
+      }
+
+      if (!editingMedia) return;
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAltEditor();
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        saveAltDraft();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [closeAltEditor, editingMedia, openNextAltEditor, saveAltDraft]);
 
   return (
     <>
@@ -497,6 +867,168 @@ export default function ComposeSheet({ onClose }: Props) {
                   <LivePreview text={text} audience={audience} />
                 )}
               </AnimatePresence>
+
+              {mediaItems.length > 0 && (
+                <div style={{
+                  marginTop: 12,
+                  border: '1px solid var(--sep)',
+                  borderRadius: 14,
+                  padding: 10,
+                  background: 'var(--fill-1)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', letterSpacing: 0.2 }}>
+                      Media ALT coverage: {describedMediaCount}/{mediaItems.length}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRequireAltText(prev => !prev)}
+                      style={{
+                        border: 'none',
+                        background: requireAltText ? 'rgba(0,122,255,0.14)' : 'transparent',
+                        color: requireAltText ? 'var(--blue)' : 'var(--label-3)',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        padding: '5px 10px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {requireAltText ? 'Require ALT: On' : 'Require ALT: Off'}
+                    </button>
+                  </div>
+
+                  <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--label-4)' }}>
+                    Session ALT completion {(altMetrics.completionRate * 100).toFixed(0)}% · Bulk success {(altMetrics.bulkSuccessRate * 100).toFixed(0)}%
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => { void generateMissingAltDrafts(); }}
+                      disabled={isGeneratingBulkAlt || missingAltCount === 0}
+                      style={{
+                        border: 'none',
+                        background: 'var(--blue)',
+                        color: '#fff',
+                        fontSize: 12,
+                        fontWeight: 800,
+                        borderRadius: 999,
+                        padding: '6px 12px',
+                        cursor: isGeneratingBulkAlt || missingAltCount === 0 ? 'default' : 'pointer',
+                        opacity: isGeneratingBulkAlt || missingAltCount === 0 ? 0.65 : 1,
+                      }}
+                    >
+                      {isGeneratingBulkAlt ? 'Generating ALT…' : 'Generate Missing ALT'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openNextAltEditor}
+                      style={{
+                        border: '1px solid var(--sep)',
+                        background: 'var(--surface)',
+                        color: 'var(--label-2)',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Edit Next ALT (Alt+A)
+                    </button>
+                    {bulkAltProgress && (
+                      <span style={{ fontSize: 11, color: 'var(--label-3)', fontWeight: 700 }}>
+                        {bulkAltProgress.done}/{bulkAltProgress.total}
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: mediaItems.length > 1 ? '1fr 1fr' : '1fr', gap: 6 }}>
+                    {mediaItems.map((item, idx) => {
+                      const hasAlt = item.alt.trim().length > 0;
+                      return (
+                        <div key={item.id} style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: `${item.width}/${item.height}` }}>
+                          <img src={item.previewUrl} alt={item.alt || ''} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+
+                          <button
+                            type="button"
+                            onClick={() => removeMedia(item.id)}
+                            style={{
+                              position: 'absolute',
+                              top: 6,
+                              right: 6,
+                              border: 'none',
+                              background: 'rgba(0,0,0,0.55)',
+                              color: '#fff',
+                              width: 22,
+                              height: 22,
+                              borderRadius: '50%',
+                              cursor: 'pointer',
+                              fontWeight: 700,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openAltEditor(item.id)}
+                            style={{
+                              position: 'absolute',
+                              left: 6,
+                              bottom: 6,
+                              border: 'none',
+                              background: hasAlt ? 'rgba(10,132,255,0.9)' : 'rgba(255,149,0,0.92)',
+                              color: '#fff',
+                              fontSize: 11,
+                              fontWeight: 800,
+                              borderRadius: 999,
+                              padding: '4px 8px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {hasAlt ? 'ALT' : 'Add ALT'}
+                          </button>
+
+                          <div style={{
+                            position: 'absolute',
+                            top: 6,
+                            left: 6,
+                            background: 'rgba(0,0,0,0.45)',
+                            color: '#fff',
+                            borderRadius: 999,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                          }}>
+                            {idx + 1}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {missingAltCount > 0 && (
+                    <p style={{ marginTop: 8, fontSize: 12, color: 'var(--orange)', lineHeight: 1.35 }}>
+                      {missingAltCount} image{missingAltCount > 1 ? 's are' : ' is'} missing ALT text.
+                    </p>
+                  )}
+
+                  {lowQualityAltCount > 0 && (
+                    <p style={{ marginTop: 6, fontSize: 12, color: 'var(--orange)', lineHeight: 1.35 }}>
+                      {lowQualityAltCount} ALT description{lowQualityAltCount > 1 ? 's need' : ' needs'} more detail.
+                    </p>
+                  )}
+
+                  {bulkAltError && (
+                    <p style={{ marginTop: 6, fontSize: 12, color: 'var(--red)', lineHeight: 1.35 }}>
+                      {bulkAltError}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -525,7 +1057,7 @@ export default function ComposeSheet({ onClose }: Props) {
             gap: 0,
           }}>
             {/* Media tools */}
-            <ToolBtn label="Add image" active={activeTool === 'image'} onPress={() => toggleTool('image')}>
+            <ToolBtn label="Add image" active={activeTool === 'image'} onPress={openMediaPicker}>
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2.5"/>
                 <circle cx="8.5" cy="8.5" r="1.5"/>
@@ -579,6 +1111,12 @@ export default function ComposeSheet({ onClose }: Props) {
 
             <div style={{ flex: 1 }} />
 
+            {mediaItems.length > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 700, color: missingAltCount > 0 ? 'var(--orange)' : 'var(--label-3)', marginRight: 8 }}>
+                ALT {describedMediaCount}/{mediaItems.length}
+              </span>
+            )}
+
             {/* Character ring */}
             <CharRing used={text.length} max={MAX} />
 
@@ -590,6 +1128,295 @@ export default function ComposeSheet({ onClose }: Props) {
           </div>
         </div>
       </motion.div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        onChange={handleMediaSelected}
+        style={{ display: 'none' }}
+      />
+
+      <AnimatePresence>
+        {editingMedia && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                closeAltEditor();
+              }}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 230 }}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+              style={{
+                position: 'fixed',
+                left: 16,
+                right: 16,
+                bottom: 'calc(var(--safe-bottom) + 16px)',
+                zIndex: 231,
+                background: 'var(--surface)',
+                borderRadius: 16,
+                border: '1px solid var(--sep)',
+                boxShadow: '0 12px 36px rgba(0,0,0,0.25)',
+                overflow: 'hidden',
+              }}
+            >
+              <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--sep)', background: 'var(--fill-1)' }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>Media description (ALT text)</div>
+                <div style={{ fontSize: 12, color: 'var(--label-3)', marginTop: 2 }}>Describe what matters in this image, not just the colors. Press Cmd/Ctrl+Enter to save.</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void suggestAltDraft();
+                    }}
+                    disabled={isGeneratingAltSuggestion}
+                    style={{
+                      border: 'none',
+                      background: 'var(--blue)',
+                      color: '#fff',
+                      fontSize: 11,
+                      fontWeight: 800,
+                      borderRadius: 999,
+                      padding: '5px 10px',
+                      cursor: isGeneratingAltSuggestion ? 'default' : 'pointer',
+                      opacity: isGeneratingAltSuggestion ? 0.7 : 1,
+                    }}
+                  >
+                    {isGeneratingAltSuggestion ? 'Generating…' : 'Suggest ALT (Open Source)'}
+                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void regenerateAltDraft();
+                      }}
+                      disabled={isGeneratingAltSuggestion}
+                      style={{
+                        border: '1px solid var(--sep)',
+                        background: 'var(--surface)',
+                        color: 'var(--label-2)',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        borderRadius: 999,
+                        padding: '5px 10px',
+                        cursor: isGeneratingAltSuggestion ? 'default' : 'pointer',
+                        opacity: isGeneratingAltSuggestion ? 0.7 : 1,
+                      }}
+                    >
+                      Regenerate ALT
+                    </button>
+                  </div>
+                  <span style={{ fontSize: 10, color: 'var(--label-4)', textAlign: 'right' }}>
+                    Inspired by Ice Cubes AI descriptions, but local/open-source.
+                  </span>
+                </div>
+              </div>
+              <div style={{ padding: 12 }}>
+                <textarea
+                  ref={altTaRef}
+                  value={altDraft}
+                  onChange={(e) => setAltDraft(e.target.value.slice(0, ALT_MAX_CHARS))}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                      e.preventDefault();
+                      saveAltDraft();
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      closeAltEditor();
+                    }
+                  }}
+                  placeholder="Example: Screenshot of a code editor showing a TypeScript function that builds a feed ranking list."
+                  rows={4}
+                  style={{
+                    width: '100%',
+                    borderRadius: 10,
+                    border: '1px solid var(--sep)',
+                    background: 'var(--bg)',
+                    color: 'var(--label-1)',
+                    fontSize: 14,
+                    lineHeight: 1.4,
+                    padding: '10px 12px',
+                    resize: 'vertical',
+                    minHeight: 90,
+                    maxHeight: 220,
+                    outline: 'none',
+                  }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setAltDraft('Decorative image.')}
+                    style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                  >
+                    Mark decorative
+                  </button>
+                  <span style={{ fontSize: 11, color: 'var(--label-4)', fontWeight: 600 }}>{altDraft.trim().length}/{ALT_MAX_CHARS}</span>
+                </div>
+                {altQualityHint && (
+                  <p style={{ marginTop: 8, fontSize: 11, color: 'var(--orange)', lineHeight: 1.35 }}>
+                    {altQualityHint}
+                  </p>
+                )}
+                {altLintIssues.length > 1 && (
+                  <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 16 }}>
+                    {altLintIssues.slice(1, 4).map((issue, index) => (
+                      <li key={`${issue.message}-${index}`} style={{ fontSize: 11, color: issue.level === 'error' ? 'var(--red)' : 'var(--orange)', lineHeight: 1.35, marginTop: 2 }}>
+                        {issue.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {altSuggestionError && (
+                  <p style={{ marginTop: 8, fontSize: 11, color: 'var(--red)', lineHeight: 1.35 }}>
+                    {altSuggestionError}
+                  </p>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: '0 12px 12px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeAltEditor();
+                  }}
+                  style={{ border: '1px solid var(--sep)', background: 'var(--surface)', color: 'var(--label-2)', borderRadius: 10, padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveAltDraft}
+                  style={{ border: 'none', background: 'var(--blue)', color: '#fff', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Save ALT
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showLowQualityAltConfirm && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowLowQualityAltConfirm(false)}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 242 }}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+              transition={{ duration: 0.16 }}
+              style={{
+                position: 'fixed',
+                left: 16,
+                right: 16,
+                bottom: 'calc(var(--safe-bottom) + 16px)',
+                zIndex: 243,
+                background: 'var(--surface)',
+                borderRadius: 16,
+                border: '1px solid var(--sep)',
+                boxShadow: '0 12px 36px rgba(0,0,0,0.26)',
+                padding: 14,
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--label-1)' }}>Post with weak ALT quality?</h3>
+              <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--label-2)', lineHeight: 1.45 }}>
+                {lowQualityAltCount} ALT description{lowQualityAltCount > 1 ? 's look' : ' looks'} incomplete. You can still post, but refining ALT improves screen-reader experience.
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLowQualityAltConfirm(false);
+                    openNextAltEditor();
+                  }}
+                  style={{ border: '1px solid var(--sep)', background: 'var(--surface)', color: 'var(--label-2)', borderRadius: 10, padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Improve ALT
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLowQualityAltConfirm(false);
+                    void commitPost();
+                  }}
+                  style={{ border: 'none', background: 'var(--orange)', color: '#fff', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Post anyway
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+
+        {showMissingAltConfirm && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowMissingAltConfirm(false)}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+              transition={{ duration: 0.16 }}
+              style={{
+                position: 'fixed',
+                left: 16,
+                right: 16,
+                bottom: 'calc(var(--safe-bottom) + 16px)',
+                zIndex: 241,
+                background: 'var(--surface)',
+                borderRadius: 16,
+                border: '1px solid var(--sep)',
+                boxShadow: '0 12px 36px rgba(0,0,0,0.26)',
+                padding: 14,
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--label-1)' }}>Post without ALT text?</h3>
+              <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--label-2)', lineHeight: 1.45 }}>
+                {missingAltCount} image{missingAltCount > 1 ? 's are' : ' is'} missing media descriptions. Mastodon-style clients usually warn here so you can add ALT before publishing.
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowMissingAltConfirm(false)}
+                  style={{ border: '1px solid var(--sep)', background: 'var(--surface)', color: 'var(--label-2)', borderRadius: 10, padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Go back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMissingAltConfirm(false);
+                    void commitPost();
+                  }}
+                  style={{ border: 'none', background: 'var(--orange)', color: '#fff', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Post anyway
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+
+      </AnimatePresence>
     </>
   );
 }
