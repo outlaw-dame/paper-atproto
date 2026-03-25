@@ -21,6 +21,7 @@ import type { MockPost } from '../../data/mockData.js';
 import type { LiveNotification } from '../../atproto/mappers.js';
 import { AtUri } from '@atproto/syntax';
 import { useModerationStore } from '../../store/moderationStore.js';
+import type { AppBskyFeedDefs, AppBskyGraphDefs } from '@atproto/api';
 
 // ─── Query key factory ─────────────────────────────────────────────────────
 export const qk = {
@@ -32,6 +33,9 @@ export const qk = {
   thread:        (uri: string)           => ['thread', uri] as const,
   likes:         (actor: string)         => ['likes', actor] as const,
   actorFeeds:    (actor: string)         => ['actorFeeds', actor] as const,
+  savedFeeds:    ()                      => ['savedFeeds'] as const,
+  listMutes:     ()                      => ['listMutes'] as const,
+  listBlocks:    ()                      => ['listBlocks'] as const,
   search:        (q: string)             => ['search', q] as const,
   suggestions:   ()                      => ['suggestions'] as const,
   suggestedFeeds: ()                     => ['suggestedFeeds'] as const,
@@ -168,6 +172,57 @@ export function useActorFeeds(actor: string | undefined) {
     enabled: !!session && !!actor,
     staleTime: 1000 * 60 * 10,
     gcTime: 1000 * 60 * 60,
+  });
+}
+
+// ─── Saved/subscribed feed generators (viewer) ───────────────────────────
+export function useSavedFeeds() {
+  const { agent, session } = useSessionStore();
+
+  return useQuery<AppBskyFeedDefs.GeneratorView[], Error>({
+    queryKey: qk.savedFeeds(),
+    queryFn: async ({ signal }) => {
+      const res = await atpCall(
+        s => agent.app.bsky.feed.getSavedFeeds({ limit: 100 }),
+        { signal, maxAttempts: 4, baseDelayMs: 250, capDelayMs: 8_000 },
+      );
+      return res.data.feeds ?? [];
+    },
+    enabled: !!session,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
+  });
+}
+
+// ─── Subscribed lists for moderation (viewer list mutes + blocks) ────────
+export function useSubscribedLists() {
+  const { agent, session } = useSessionStore();
+
+  return useQuery<{
+    muted: AppBskyGraphDefs.ListView[];
+    blocked: AppBskyGraphDefs.ListView[];
+  }, Error>({
+    queryKey: ['subscribedLists'],
+    queryFn: async ({ signal }) => {
+      const [mutedRes, blockedRes] = await Promise.all([
+        atpCall(
+          s => agent.app.bsky.graph.getListMutes({ limit: 100 }),
+          { signal, maxAttempts: 4, baseDelayMs: 250, capDelayMs: 8_000 },
+        ),
+        atpCall(
+          s => agent.app.bsky.graph.getListBlocks({ limit: 100 }),
+          { signal, maxAttempts: 4, baseDelayMs: 250, capDelayMs: 8_000 },
+        ),
+      ]);
+
+      return {
+        muted: mutedRes.data.lists ?? [],
+        blocked: blockedRes.data.lists ?? [],
+      };
+    },
+    enabled: !!session,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 }
 

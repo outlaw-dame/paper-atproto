@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSessionStore } from '../store/sessionStore.js';
-import { atpCall } from '../lib/atproto/client.js';
+import { atpCall, type AtpError } from '../lib/atproto/client.js';
+import { useSavedFeeds, useSubscribedLists } from '../lib/atproto/queries.js';
 import { mapFeedViewPost } from '../atproto/mappers.js';
 import type { MockPost } from '../data/mockData.js';
 import { formatTime, formatCount } from '../data/mockData.js';
-import type { AppBskyFeedDefs, AppBskyActorDefs } from '@atproto/api';
+import type { AppBskyGraphDefs } from '@atproto/api';
 import type { StoryEntry } from '../App.js';
 import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
 
@@ -13,8 +14,26 @@ interface Props {
   onOpenStory: (e: StoryEntry) => void;
 }
 
-const TABS = ['Saved', 'My Feeds', 'History'] as const;
+const TABS = ['Saved', 'My Feeds', 'Lists', 'History'] as const;
 type Tab = typeof TABS[number];
+
+function getSafeErrorMessage(error: unknown): string {
+  const normalized = error as Partial<AtpError>;
+  switch (normalized.kind) {
+    case 'auth':
+      return 'Your session has expired. Please sign in again.';
+    case 'forbidden':
+      return 'You do not have permission to view this data.';
+    case 'rate_limit':
+      return 'Request rate limit reached. Please retry in a moment.';
+    case 'network':
+      return 'Network issue while loading data. Check your connection and try again.';
+    case 'server':
+      return 'Service temporarily unavailable. Please retry shortly.';
+    default:
+      return 'Unable to load this section right now.';
+  }
+}
 
 // ─── Content-type palette ──────────────────────────────────────────────────
 const CONTENT_TYPE_CONFIG: Record<string, {
@@ -243,51 +262,68 @@ export default function LibraryTab({ onOpenStory }: Props) {
   const { agent, session } = useSessionStore();
   const [tab, setTab] = useState<Tab>('Saved');
   const [savedPosts, setSavedPosts] = useState<MockPost[]>([]);
-  const [myFeeds, setMyFeeds] = useState<AppBskyFeedDefs.GeneratorView[]>([]);
+  const savedFeedsQuery = useSavedFeeds();
+  const subscribedListsQuery = useSubscribedLists();
+  const myFeeds = savedFeedsQuery.data ?? [];
+  const mutedLists: AppBskyGraphDefs.ListView[] = subscribedListsQuery.data?.muted ?? [];
+  const blockedLists: AppBskyGraphDefs.ListView[] = subscribedListsQuery.data?.blocked ?? [];
   const [historyPosts, setHistoryPosts] = useState<MockPost[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingManual, setLoadingManual] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const fetchSaved = useCallback(async () => {
     if (!session) return;
-    setLoading(true);
+    setLoadingManual(true);
+    setErrorMessage(null);
     try {
       const res = await atpCall(s => agent.getActorLikes({ actor: session.did, limit: 30 }));
       const posts = res.data.feed
         .filter(item => (item.post?.record as any)?.text !== undefined)
         .map(mapFeedViewPost);
       setSavedPosts(posts);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, [agent, session]);
-
-  const fetchMyFeeds = useCallback(async () => {
-    if (!session) return;
-    setLoading(true);
-    try {
-      const res = await atpCall(s => agent.app.bsky.feed.getActorFeeds({ actor: session.did, limit: 50 }));
-      setMyFeeds(res.data.feeds);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+    } catch (error) {
+      setErrorMessage(getSafeErrorMessage(error));
+    }
+    finally { setLoadingManual(false); }
   }, [agent, session]);
 
   const fetchHistory = useCallback(async () => {
     if (!session) return;
-    setLoading(true);
+    setLoadingManual(true);
+    setErrorMessage(null);
     try {
       const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 20 }));
       const posts = res.data.feed
         .filter(item => (item.post?.record as any)?.text !== undefined)
         .map(mapFeedViewPost);
       setHistoryPosts(posts);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+    } catch (error) {
+      setErrorMessage(getSafeErrorMessage(error));
+    }
+    finally { setLoadingManual(false); }
   }, [agent, session]);
 
   useEffect(() => {
     if (tab === 'Saved') fetchSaved();
-    else if (tab === 'My Feeds') fetchMyFeeds();
     else if (tab === 'History') fetchHistory();
-  }, [tab, fetchSaved, fetchMyFeeds, fetchHistory]);
+  }, [tab, fetchSaved, fetchHistory]);
+
+  useEffect(() => {
+    if (tab === 'My Feeds') {
+      setErrorMessage(savedFeedsQuery.error ? getSafeErrorMessage(savedFeedsQuery.error) : null);
+      return;
+    }
+    if (tab === 'Lists') {
+      setErrorMessage(subscribedListsQuery.error ? getSafeErrorMessage(subscribedListsQuery.error) : null);
+    }
+  }, [tab, savedFeedsQuery.error, subscribedListsQuery.error]);
+
+  const isActiveTabLoading =
+    tab === 'My Feeds'
+      ? savedFeedsQuery.isLoading || savedFeedsQuery.isFetching
+      : tab === 'Lists'
+        ? subscribedListsQuery.isLoading || subscribedListsQuery.isFetching
+        : loadingManual;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
@@ -319,8 +355,13 @@ export default function LibraryTab({ onOpenStory }: Props) {
 
       {/* Content */}
       <div className="scroll-y" style={{ flex: 1, padding: '14px 12px 0' }}>
+        {errorMessage && (
+          <div style={{ marginBottom: 10, borderRadius: 12, border: '1px solid var(--sep)', background: 'color-mix(in srgb, var(--surface) 92%, var(--orange) 8%)', padding: '10px 12px' }}>
+            <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'var(--label-2)' }}>{errorMessage}</p>
+          </div>
+        )}
         <AnimatePresence mode="wait">
-          {loading ? (
+          {isActiveTabLoading ? (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <Spinner />
             </motion.div>
@@ -344,11 +385,11 @@ export default function LibraryTab({ onOpenStory }: Props) {
             <motion.div key="feeds" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
               {myFeeds.length === 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '48px 24px', gap: 12 }}>
-                  <p style={{ fontSize: 14, color: 'var(--label-3)' }}>You haven't created any feeds yet.</p>
+                  <p style={{ fontSize: 14, color: 'var(--label-3)' }}>No saved feeds yet.</p>
                 </div>
               ) : (
                 <>
-                  <SectionHeader title="My Feeds" count={myFeeds.length} />
+                  <SectionHeader title="Saved Feeds" count={myFeeds.length} />
                   {myFeeds.map((feed, i) => (
                     <motion.div
                       key={feed.uri}
@@ -373,6 +414,64 @@ export default function LibraryTab({ onOpenStory }: Props) {
                     </motion.div>
                   ))}
                 </>
+              )}
+            </motion.div>
+          ) : tab === 'Lists' ? (
+            <motion.div key="lists" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
+              <SectionHeader title="Muted Lists" count={mutedLists.length} />
+              {mutedLists.length === 0 ? (
+                <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 16px' }}>
+                  <p style={{ fontSize: 14, color: 'var(--label-3)' }}>No muted lists.</p>
+                </div>
+              ) : (
+                mutedLists.map((list, i) => (
+                  <motion.div
+                    key={list.uri}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    style={{ background: 'var(--surface)', borderRadius: 18, padding: '14px 16px', marginBottom: 10, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12, boxShadow: '0 1px 8px rgba(0,0,0,0.05)' }}
+                  >
+                    <div style={{ width: 50, height: 50, borderRadius: 15, overflow: 'hidden', background: 'linear-gradient(135deg, rgba(255,149,0,0.18) 0%, rgba(255,204,0,0.18) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {list.avatar
+                        ? <img src={list.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <span style={{ fontSize: 20 }}>🔕</span>
+                      }
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.3, marginBottom: 3 }}>{list.name}</p>
+                      <p style={{ fontSize: 12, color: 'var(--label-3)' }}>@{list.creator.handle}</p>
+                    </div>
+                  </motion.div>
+                ))
+              )}
+
+              <SectionHeader title="Blocked Lists" count={blockedLists.length} />
+              {blockedLists.length === 0 ? (
+                <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 16px' }}>
+                  <p style={{ fontSize: 14, color: 'var(--label-3)' }}>No blocked lists.</p>
+                </div>
+              ) : (
+                blockedLists.map((list, i) => (
+                  <motion.div
+                    key={list.uri}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    style={{ background: 'var(--surface)', borderRadius: 18, padding: '14px 16px', marginBottom: 10, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12, boxShadow: '0 1px 8px rgba(0,0,0,0.05)' }}
+                  >
+                    <div style={{ width: 50, height: 50, borderRadius: 15, overflow: 'hidden', background: 'linear-gradient(135deg, rgba(255,59,48,0.18) 0%, rgba(255,149,0,0.18) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {list.avatar
+                        ? <img src={list.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <span style={{ fontSize: 20 }}>⛔</span>
+                      }
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.3, marginBottom: 3 }}>{list.name}</p>
+                      <p style={{ fontSize: 12, color: 'var(--label-3)' }}>@{list.creator.handle}</p>
+                    </div>
+                  </motion.div>
+                ))
               )}
             </motion.div>
           ) : (
