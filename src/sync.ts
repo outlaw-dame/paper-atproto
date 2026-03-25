@@ -82,8 +82,8 @@ export class PaperSync {
       await pg.transaction(async (trx) => {
         for (let i = 0; i < postsToProcess.length; i++) {
           const { post, reply } = postsToProcess[i];
-          const embedding = embeddings[i];
-          const sanitizedContent = textsToEmbed[i];
+          const embedding = embeddings[i] ?? [];
+          const sanitizedContent = textsToEmbed[i] ?? '';
 
           const facets = resolveFacets(post.record.facets);
           const embed = resolveEmbed(post.record.embed);

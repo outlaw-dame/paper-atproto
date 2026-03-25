@@ -77,16 +77,16 @@ export async function translateWriterInput(input: WriterTranslationInput): Promi
       id: input.rootPost.id,
       text: input.rootPost.text,
       sourceLang: rootSourceLang,
-      ...(translatedById[input.rootPost.id]?.translatedText
-        ? { translatedText: translatedById[input.rootPost.id]?.translatedText }
+      ...(typeof translatedById[input.rootPost.id]?.translatedText === 'string'
+        ? { translatedText: translatedById[input.rootPost.id]!.translatedText }
         : {}),
     },
     selectedComments: selected.map(comment => ({
       id: comment.id,
       text: comment.text,
       sourceLang: comment.sourceLang ?? 'und',
-      ...(translatedById[comment.id]?.translatedText
-        ? { translatedText: translatedById[comment.id]?.translatedText }
+      ...(typeof translatedById[comment.id]?.translatedText === 'string'
+        ? { translatedText: translatedById[comment.id]!.translatedText }
         : {}),
     })),
   };

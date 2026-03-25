@@ -37,6 +37,9 @@ import {
   fadeVariants,
   slideUpVariants,
 } from '../design/index.js';
+import LiveSportsMoments from '../components/LiveSportsMoments.js';
+import { sportsStore } from '../sports/sportsStore.js';
+import { sportsFeedService } from '../services/sportsFeed.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -784,6 +787,13 @@ export default function ExploreTab({ onOpenStory }: Props) {
     [filterResults, sidePosts],
   );
 
+  const sportsPulsePosts = useMemo(() => {
+    const candidates = [...filteredLinkPosts, ...filteredSidePosts, ...trendingPosts];
+    return sportsFeedService
+      .filterPosts(candidates, { sortBy: 'engagement' }, sportsStore.getLiveGames())
+      .slice(0, 8);
+  }, [filteredLinkPosts, filteredSidePosts, trendingPosts]);
+
   // Debounce
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400);
@@ -891,6 +901,16 @@ export default function ExploreTab({ onOpenStory }: Props) {
     restartCarousel();
     return () => { if (carouselIntervalRef.current) clearInterval(carouselIntervalRef.current); };
   }, [restartCarousel]);
+
+  useEffect(() => {
+    sportsStore.loadSampleGames();
+    for (const game of sportsStore.getGames()) {
+      sportsStore.startPolling(game.id, 'mock');
+    }
+    return () => {
+      sportsStore.stopAllPolling();
+    };
+  }, []);
 
   const handleFollow = useCallback(async (did: string) => {
     if (!session) return;
@@ -1398,6 +1418,37 @@ export default function ExploreTab({ onOpenStory }: Props) {
                 <div style={{ padding: '0 20px' }}><DiscoverySpinner /></div>
               ) : (
                 <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 28 }}>
+
+                  <div>
+                    <SectionHeader title="Live Sports Moments" />
+                    <LiveSportsMoments
+                      maxGames={3}
+                      onGameClick={(gameId) => onOpenStory({ type: 'topic', id: gameId, title: 'Live Sports Moment' })}
+                    />
+                  </div>
+
+                  {sportsPulsePosts.length > 0 && (
+                    <div>
+                      <SectionHeader title="Sports Pulse" />
+                      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
+                        {sportsPulsePosts.map((p) => (
+                          <LinkedPostMiniCard
+                            key={p.id}
+                            post={p}
+                            translation={translationById[p.id]}
+                            showOriginal={!!showOriginalById[p.id]}
+                            translating={!!translatingById[p.id]}
+                            translationError={!!translationErrorById[p.id]}
+                            autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
+                            onToggleTranslate={(event) => handleToggleTranslate(event, p)}
+                            onClearTranslation={(event) => handleClearTranslation(event, p.id)}
+                            onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
+                            onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Featured Story Carousel */}
                   {filteredLinkPosts.length > 0 && (

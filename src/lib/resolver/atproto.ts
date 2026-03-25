@@ -37,7 +37,11 @@ const AT_URI_RE = /^at:\/\/([^/]+)\/([^/]+)\/([^/]+)$/;
 export function parseAtUri(uri: string): ParsedAtUri | null {
   const m = AT_URI_RE.exec(uri);
   if (!m) return null;
-  return { repo: m[1], collection: m[2], rkey: m[3], raw: uri };
+  const repo = m[1];
+  const collection = m[2];
+  const rkey = m[3];
+  if (!repo || !collection || !rkey) return null;
+  return { repo, collection, rkey, raw: uri };
 }
 
 export function isAtUri(s: string): boolean {

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import LiveGameWidget from './LiveGameWidget.js';
-import { LiveGame } from '../sports/types.js';
+import type { LiveGame } from '../sports/types.js';
 import { sportsStore } from '../sports/sportsStore.js';
 
 interface LiveSportsMomentsProps {
@@ -124,12 +124,12 @@ export const LiveSportsMoments: React.FC<LiveSportsMomentsProps> = ({
           >
             {displayedGames.map((game) => (
               <motion.div
-                key={game.gameId}
+                key={game.id}
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={{ duration: 0.3 }}
-                onClick={() => onGameClick?.(game.gameId)}
+                onClick={() => onGameClick?.(game.id)}
                 style={{ cursor: 'pointer' }}
               >
                 <LiveGameWidget game={game} compact={compact} />
@@ -171,8 +171,6 @@ export const LiveSportsMoments: React.FC<LiveSportsMomentsProps> = ({
   );
 };
 
-import FeedList from './FeedList.js';
-
 interface SportsMomentItemProps {
   post: any;
   game?: LiveGame;
@@ -183,6 +181,7 @@ interface SportsMomentItemProps {
  * Shows post with associated live game context
  */
 export const SportsMomentItem: React.FC<SportsMomentItemProps> = ({ post, game }) => {
+  const content = post?.content ?? post?.record?.text ?? '';
   return (
     <div
       style={{
@@ -192,7 +191,9 @@ export const SportsMomentItem: React.FC<SportsMomentItemProps> = ({ post, game }
       }}
     >
       {game && <LiveGameWidget game={game} compact={true} />}
-      {/* Post content would go here */}
+      {content ? (
+        <p style={{ marginTop: 8, fontSize: 13, color: 'var(--label-2)' }}>{content}</p>
+      ) : null}
     </div>
   );
 };

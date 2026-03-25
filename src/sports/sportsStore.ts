@@ -1,15 +1,11 @@
-import { reactive, ref, watch } from 'vue';
-import { LiveGame, LiveEventUpdate, PlayerStats } from '../sports/types.js';
+import type { LiveGame, LiveEventUpdate } from './types.js';
 
 /**
  * Real-time sports data store
  * Manages live game state and external API updates
  */
 class SportsStore {
-  /**
-   * Current active games
-   */
-  private liveGames = ref<Map<string, LiveGame>>(new Map());
+  private liveGames = new Map<string, LiveGame>();
 
   /**
    * Game update subscribers
@@ -19,9 +15,7 @@ class SportsStore {
   /**
    * Update history for replay/debugging
    */
-  private updateHistory = ref<Array<{ timestamp: number; update: LiveEventUpdate }>>(
-    []
-  );
+  private updateHistory: Array<{ timestamp: number; update: LiveEventUpdate }> = [];
 
   /**
    * Polling interval (milliseconds)
@@ -31,27 +25,27 @@ class SportsStore {
   /**
    * Active polling timers
    */
-  private pollingTimers = new Map<string, NodeJS.Timeout>();
+  private pollingTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   /**
    * Get all current live games
    */
   getGames(): LiveGame[] {
-    return Array.from(this.liveGames.value.values());
+    return Array.from(this.liveGames.values());
   }
 
   /**
    * Get a specific game by ID
    */
   getGame(gameId: string): LiveGame | undefined {
-    return this.liveGames.value.get(gameId);
+    return this.liveGames.get(gameId);
   }
 
   /**
    * Get games by league
    */
   getGamesByLeague(leagueId: string): LiveGame[] {
-    return this.getGames().filter((g) => g.leagueId === leagueId);
+    return this.getGames().filter((g) => g.league === leagueId.toLowerCase());
   }
 
   /**
@@ -65,36 +59,37 @@ class SportsStore {
    * Add or update a game
    */
   setGame(game: LiveGame): void {
-    const gameId = game.gameId;
-    const previous = this.liveGames.value.get(gameId);
-
-    this.liveGames.value.set(gameId, game);
+    const previous = this.liveGames.get(game.id);
+    this.liveGames.set(game.id, game);
 
     // Track changes
-    if (previous && previous.homeScore !== game.homeScore) {
+    if (
+      previous &&
+      (previous.homeTeam.score !== game.homeTeam.score || previous.awayTeam.score !== game.awayTeam.score)
+    ) {
       const update: LiveEventUpdate = {
-        type: 'score_change',
-        gameId,
-        data: {
-          homeScore: game.homeScore,
-          awayScore: game.awayScore,
-          previousHomeScore: previous.homeScore,
-          previousAwayScore: previous.awayScore,
+        updateType: 'score',
+        gameId: game.id,
+        details: {
+          homeScore: game.homeTeam.score,
+          awayScore: game.awayTeam.score,
+          previousHomeScore: previous.homeTeam.score,
+          previousAwayScore: previous.awayTeam.score,
         },
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
       };
       this.recordUpdate(update);
     }
 
     if (previous && previous.status !== game.status) {
       const update: LiveEventUpdate = {
-        type: 'status_change',
-        gameId,
-        data: {
+        updateType: game.status === 'live' ? 'start-game' : game.status === 'final' ? 'end-game' : 'period-change',
+        gameId: game.id,
+        details: {
           status: game.status,
           previousStatus: previous.status,
         },
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
       };
       this.recordUpdate(update);
     }
@@ -107,7 +102,10 @@ class SportsStore {
    * Update game state from external API
    * Example: ESPN API, official league API
    */
-  async updateFromExternalAPI(gameId: string, apiProvider: 'espn' | 'nfl' | 'nba'): Promise<void> {
+  async updateFromExternalAPI(
+    gameId: string,
+    apiProvider: 'espn' | 'nfl' | 'nba' | 'mock' = 'mock'
+  ): Promise<void> {
     try {
       // Mock API call - in production, fetch from actual provider
       const game = this.mockFetchGameState(gameId, apiProvider);
@@ -128,7 +126,7 @@ class SportsStore {
     }
 
     const pollOnce = async () => {
-      await this.updateFromExternalAPI(gameId, apiProvider as any);
+      await this.updateFromExternalAPI(gameId, apiProvider);
     };
 
     // Initial update
@@ -163,6 +161,7 @@ class SportsStore {
    */
   subscribe(callback: (games: LiveGame[]) => void): () => void {
     this.subscribers.add(callback);
+    callback(this.getGames());
     // Return unsubscribe function
     return () => {
       this.subscribers.delete(callback);
@@ -181,14 +180,14 @@ class SportsStore {
    * Record an update in history
    */
   private recordUpdate(update: LiveEventUpdate): void {
-    this.updateHistory.value.push({
+    this.updateHistory.push({
       timestamp: Date.now(),
       update,
     });
 
     // Keep last 1000 updates
-    if (this.updateHistory.value.length > 1000) {
-      this.updateHistory.value.shift();
+    if (this.updateHistory.length > 1000) {
+      this.updateHistory.shift();
     }
   }
 
@@ -196,7 +195,7 @@ class SportsStore {
    * Get update history (for debugging/replay)
    */
   getUpdateHistory(gameId?: string, limit: number = 100): Array<{ timestamp: number; update: LiveEventUpdate }> {
-    let history = this.updateHistory.value;
+    let history = this.updateHistory;
 
     if (gameId) {
       history = history.filter((h) => h.update.gameId === gameId);
@@ -210,15 +209,15 @@ class SportsStore {
    */
   clear(): void {
     this.stopAllPolling();
-    this.liveGames.value.clear();
-    this.updateHistory.value = [];
+    this.liveGames.clear();
+    this.updateHistory = [];
   }
 
   /**
    * Mock game state fetching (for development/testing)
    */
-  private mockFetchGameState(gameId: string, provider: string): LiveGame | null {
-    const game = this.liveGames.value.get(gameId);
+  private mockFetchGameState(gameId: string, _provider: string): LiveGame | null {
+    const game = this.liveGames.get(gameId);
     if (!game) return null;
 
     // Simulate dynamic score updates for live games
@@ -227,29 +226,33 @@ class SportsStore {
 
       // Random score update (small probability)
       if (Math.random() < 0.3) {
-        updated.homeScore += Math.random() > 0.5 ? 1 : 0;
+        updated.homeTeam.score += Math.random() > 0.5 ? 1 : 0;
       }
       if (Math.random() < 0.3) {
-        updated.awayScore += Math.random() > 0.5 ? 1 : 0;
+        updated.awayTeam.score += Math.random() > 0.5 ? 1 : 0;
       }
 
       // Random period/quarter advance
-      if (Math.random() < 0.1 && updated.period < 4) {
-        updated.period += 1;
+      const currentPeriod = updated.period ?? 1;
+      if (Math.random() < 0.1 && currentPeriod < 4) {
+        updated.period = currentPeriod + 1;
         updated.clock = '0:00';
       }
 
       // Update clock
-      const [minutes, seconds] = updated.clock.split(':').map(Number);
-      let newSeconds = seconds - 1;
-      let newMinutes = minutes;
+      const clockParts = (updated.clock ?? '0:00').split(':');
+      const safeMinutes = Number(clockParts[0] ?? 0);
+      const safeSeconds = Number(clockParts[1] ?? 0);
+      let newSeconds = safeSeconds - 1;
+      let newMinutes = safeMinutes;
 
       if (newSeconds < 0) {
         newSeconds = 59;
         newMinutes -= 1;
       }
 
-      updated.clock = `${newMinutes}:${newSeconds.toString().padStart(2, '0')}`;
+      updated.clock = `${Math.max(0, newMinutes)}:${newSeconds.toString().padStart(2, '0')}`;
+      updated.lastUpdated = new Date().toISOString();
 
       return updated;
     }
@@ -263,60 +266,54 @@ class SportsStore {
   loadSampleGames(): void {
     const now = new Date();
     const inTenMinutes = new Date(now.getTime() + 10 * 60000);
-    const inTwoHours = new Date(now.getTime() + 2 * 60000);
+    const inTwoHours = new Date(now.getTime() + 2 * 60 * 60000);
 
     const sampleGames: LiveGame[] = [
       {
-        gameId: 'nba-lakers-celtics-20240115',
-        leagueId: 'NBA',
+        id: 'nba-lakers-celtics-20240115',
+        league: 'nba',
         sport: 'basketball',
         homeTeam: {
           id: 'lakers',
           name: 'Los Angeles Lakers',
-          abbreviation: 'LAL',
-          logo: '🟣',
+          score: 98,
         },
         awayTeam: {
           id: 'celtics',
           name: 'Boston Celtics',
-          abbreviation: 'BOS',
-          logo: '🟢',
+          score: 102,
         },
-        homeScore: 98,
-        awayScore: 102,
         status: 'live',
         period: 3,
         clock: '5:32',
         venue: 'TD Garden',
-        hashtags: ['LakesCeltics', 'NBA', 'NBARegularSeason'],
-        startTime: inTwoHours,
-        expectedEndTime: new Date(inTwoHours.getTime() + 2.5 * 60 * 60000),
+        hashtags: ['LakersCeltics', 'NBA', 'NBARegularSeason'],
+        startTime: inTwoHours.toISOString(),
+        endTime: new Date(inTwoHours.getTime() + 2.5 * 60 * 60000).toISOString(),
+        lastUpdated: now.toISOString(),
       },
       {
-        gameId: 'nfl-chiefs-ravens-20240115',
-        leagueId: 'NFL',
+        id: 'nfl-chiefs-ravens-20240115',
+        league: 'nfl',
         sport: 'football',
         homeTeam: {
           id: 'chiefs',
           name: 'Kansas City Chiefs',
-          abbreviation: 'KC',
-          logo: '🏈',
+          score: 17,
         },
         awayTeam: {
           id: 'ravens',
           name: 'Baltimore Ravens',
-          abbreviation: 'BAL',
-          logo: '🏈',
+          score: 14,
         },
-        homeScore: 17,
-        awayScore: 14,
         status: 'scheduled',
         period: 1,
         clock: '0:00',
         venue: 'Arrowhead Stadium',
         hashtags: ['ChiefsRavens', 'NFL', 'NFLPlayoffs'],
-        startTime: inTenMinutes,
-        expectedEndTime: new Date(inTenMinutes.getTime() + 3.5 * 60 * 60000),
+        startTime: inTenMinutes.toISOString(),
+        endTime: new Date(inTenMinutes.getTime() + 3.5 * 60 * 60000).toISOString(),
+        lastUpdated: now.toISOString(),
       },
     ];
 

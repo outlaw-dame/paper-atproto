@@ -6,6 +6,8 @@ import VideoPlayer from './VideoPlayer';
 import TwemojiText from './TwemojiText';
 import { useTranslationStore } from '../store/translationStore.js';
 import { translationClient } from '../lib/i18n/client.js';
+import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge.js';
+import { sportsFeedService } from '../services/sportsFeed.js';
 
 interface PostCardProps {
   post: MockPost;
@@ -91,6 +93,8 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const displayContent = translation && !showOriginal
     ? translation.translatedText
     : post.content;
+
+  const sportsMetadata = useMemo(() => sportsFeedService.extractSportsMetadata(post), [post]);
 
   const canAutoInlineTranslate = useMemo(() => {
     const hasEmbed = !!post.embed;
@@ -179,6 +183,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>{post.author.displayName || post.author.handle}</span>
+              {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
               <span style={{ fontSize: 14, color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
             </div>
             <span style={{ fontSize: 14, color: 'var(--label-3)' }}>@{post.author.handle}</span>
@@ -203,6 +208,16 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           <TwemojiText text={displayContent} />
         </p>
       )}
+
+      {sportsMetadata.isSports ? (
+        <div style={{ marginBottom: 8 }}>
+          <SportsPostIndicator
+            postType={sportsMetadata.postType}
+            isLive={sportsMetadata.isLive}
+            hasVideo={post.embed?.type === 'video'}
+          />
+        </div>
+      ) : null}
 
       {post.content.trim().length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, marginTop: -2 }}>

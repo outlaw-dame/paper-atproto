@@ -226,7 +226,7 @@ export const SportsPostMetadata: React.FC<SportsPostMetadataProps> = ({
         marginTop: 8,
       }}
     >
-      {postType && <SportsPostIndicator postType={postType} isLive={isLive} />}
+      {postType && <SportsPostIndicator postType={postType} isLive={!!isLive} />}
       {authorDid && <OfficialSportsBadge authorDid={authorDid} size="small" />}
       {relatedGames && relatedGames.length > 0 && (
         <span

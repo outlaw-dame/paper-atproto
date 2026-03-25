@@ -1,11 +1,23 @@
 import { getLeagueByDid, getTeamByDid } from '../sports/leagueRegistry.js';
-import { LiveGame, SportsPost, SportsFeed, SportsFeedFilter } from '../sports/types.js';
+import type { LiveGame, SportsFeedFilter } from '../sports/types.js';
 
 /**
  * Custom feed generator for sports content
  * Filters posts by sports relevance and ranks by live status
  */
 export class SportsFeedService {
+  private getPostText(post: any): string {
+    return String(post?.record?.text ?? post?.content ?? '');
+  }
+
+  private getPostCreatedAt(post: any): string {
+    return String(post?.record?.createdAt ?? post?.createdAt ?? new Date(0).toISOString());
+  }
+
+  private hasVideo(post: any): boolean {
+    return post?.record?.embed?.type?.includes?.('video') || post?.embed?.type === 'video';
+  }
+
   /**
    * Extract cashtags from post text
    * Looks for $SYMBOL patterns
@@ -16,28 +28,13 @@ export class SportsFeedService {
   }
 
   /**
-   * Extract team mentions from post text
-   * Looks for common team abbreviations and names
-   */
-  private extractTeamMentions(text: string, teamNames: string[]): string[] {
-    const mentions: string[] = [];
-    for (const team of teamNames) {
-      if (text.toLowerCase().includes(team.toLowerCase())) {
-        mentions.push(team);
-      }
-    }
-    return mentions;
-  }
-
-  /**
    * Check if a post is sports-related
    */
   isSportsPost(post: any): boolean {
-    if (!post.record || !post.record.text) {
+    const text = this.getPostText(post);
+    if (!text.trim()) {
       return false;
     }
-
-    const text = post.record.text;
 
     // Check for live game indicators
     if (
@@ -90,7 +87,7 @@ export class SportsFeedService {
   scoreSportsPost(post: any, liveGames?: LiveGame[]): number {
     let score = 0;
 
-    const text = post.record?.text || '';
+    const text = this.getPostText(post);
     const authorDid = post.author?.did;
 
     // Official league/team posts get major boost
@@ -104,7 +101,7 @@ export class SportsFeedService {
     }
 
     // Highlight videos get boost
-    if (post.record?.embed?.type?.includes('video') || /highlight|clip|goal/i.test(text)) {
+    if (this.hasVideo(post) || /highlight|clip|goal/i.test(text)) {
       score += 300;
     }
 
@@ -135,7 +132,7 @@ export class SportsFeedService {
     score += like_count * 2 + reply_count * 4 + repost_count * 3;
 
     // Recent posts get slight boost
-    const postAge = Date.now() - new Date(post.record?.createdAt || 0).getTime();
+    const postAge = Date.now() - new Date(this.getPostCreatedAt(post)).getTime();
     const hoursOld = postAge / (1000 * 60 * 60);
     if (hoursOld < 1) {
       score += 100;
@@ -161,7 +158,7 @@ export class SportsFeedService {
           return false;
         }
 
-        const text = post.record?.text?.toLowerCase() || '';
+        const text = this.getPostText(post).toLowerCase();
 
         // Filter by leagues if specified
         if (filter.leagues && filter.leagues.length > 0) {
@@ -208,12 +205,16 @@ export class SportsFeedService {
             (b.replyCount || 0) * 2 +
             (b.repostCount || 0) * 3;
           return engagementB - engagementA;
-        } else if (filter.sortBy === 'recent') {
+        } else if (filter.sortBy === 'recency') {
           return (
-            new Date(b.record?.createdAt || 0).getTime() -
-            new Date(a.record?.createdAt || 0).getTime()
+            new Date(this.getPostCreatedAt(b)).getTime() -
+            new Date(this.getPostCreatedAt(a)).getTime()
           );
-        } else if (filter.sortBy === 'relevance') {
+        } else if (filter.sortBy === 'official-first') {
+          const officialDelta =
+            Number(!!(getLeagueByDid(b.author?.did) || getTeamByDid(b.author?.did))) -
+            Number(!!(getLeagueByDid(a.author?.did) || getTeamByDid(a.author?.did)));
+          if (officialDelta !== 0) return officialDelta;
           return (
             this.scoreSportsPost(b, liveGames) -
             this.scoreSportsPost(a, liveGames)
@@ -255,7 +256,7 @@ export class SportsFeedService {
    * Extract sports metadata from a post for display
    */
   extractSportsMetadata(post: any) {
-    const text = post.record?.text || '';
+    const text = this.getPostText(post);
     const authorDid = post.author?.did;
 
     return {
@@ -265,6 +266,7 @@ export class SportsFeedService {
       hasHighlight: /highlight|clip|goal|score|highlight-reel/i.test(text),
       cashtags: this.extractCashtags(text),
       isOfficial: !!(authorDid && (getLeagueByDid(authorDid) || getTeamByDid(authorDid))),
+      isSports: this.isSportsPost(post),
     };
   }
 

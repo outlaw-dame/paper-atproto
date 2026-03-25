@@ -8,7 +8,6 @@ import {
   AppBskyActorDefs,
   AppBskyNotificationListNotifications,
 } from '@atproto/api';
-import { type PostView } from '@atproto/api/dist/client/types/app/bsky/feed/defs';
 import type { MockPost, ChipType } from '../data/mockData.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -17,7 +16,10 @@ function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
 }
 
-function deriveChips(view: AppBskyFeedDefs.FeedViewPost | PostView, isReplyContext: boolean = false): ChipType[] {
+function deriveChips(
+  view: AppBskyFeedDefs.FeedViewPost | AppBskyFeedDefs.PostView,
+  isReplyContext: boolean = false
+): ChipType[] {
   const chips: ChipType[] = [];
   
   // Handle FeedViewPost (has .post, .reply) vs PostView (just the post)
@@ -44,20 +46,20 @@ function isVideoUrl(url: string): boolean {
 
 // ─── Post View Mapper ──────────────────────────────────────────────────────
 
-export function mapPostViewToMockPost(post: PostView): MockPost {
+export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
   const record = post.record as any; // Cast to access text, etc.
-  const embed: any = post.embed;
+  const embed = post.embed as any;
 
-  let media;
+  let media: MockPost['media'];
   if (AppBskyEmbedImages.isView(embed)) {
-    media = embed.images.map(img => ({
+    media = embed.images.map((img: any) => ({
       type: 'image' as const,
       url: img.fullsize,
       alt: img.alt,
       aspectRatio: img.aspectRatio ? img.aspectRatio.width / img.aspectRatio.height : undefined,
     }));
-  } else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedImages.isView(embed.media)) {
-    media = embed.media.images.map(img => ({
+  } else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedImages.isView((embed as any).media)) {
+    media = (embed as any).media.images.map((img: any) => ({
       type: 'image' as const,
       url: img.fullsize,
       alt: img.alt,
@@ -65,66 +67,77 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
     }));
   }
 
-  let embedData;
+  let embedData: MockPost['embed'];
   if (AppBskyEmbedExternal.isView(embed)) {
-    embedData = {
-      type: isVideoUrl(embed.external.uri) ? 'video' as const : 'external' as const,
-      url: embed.external.uri,
-      title: embed.external.title,
-      description: embed.external.description,
-      thumb: embed.external.thumb,
-      domain: extractDomain(embed.external.uri),
-    };
-
-    // Add extra fields for external links if not a video (or shared fields)
-    if (embedData.type === 'external') {
-      Object.assign(embedData, {
+    if (isVideoUrl(embed.external.uri)) {
+      embedData = {
+        type: 'video',
+        url: embed.external.uri,
+        title: embed.external.title,
+        description: embed.external.description,
+        thumb: embed.external.thumb,
+        domain: extractDomain(embed.external.uri),
+      };
+    } else {
+      embedData = {
+        type: 'external',
+        url: embed.external.uri,
+        title: embed.external.title,
+        description: embed.external.description,
+        thumb: embed.external.thumb,
+        domain: extractDomain(embed.external.uri),
         authorName: (embed.external as any).author || (embed.external as any).authorName,
         authorUrl: (embed.external as any).authorUrl,
         publisher: (embed.external as any).siteName || (embed.external as any).publisher,
-      });
-    } else {
-      // Video-specific adjustments can go here if needed
-      // e.g. forcing youtube.com domain display
+      };
     }
 
-  } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView(embed.record)) {
+  } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView((embed as any).record)) {
     embedData = {
       type: 'quote' as const,
-      post: mapPostViewToMockPost(embed.record as PostView),
+      post: mapPostViewToMockPost((embed as any).record as AppBskyFeedDefs.PostView),
     };
-  } else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedRecord.isView(embed.record) && AppBskyFeedDefs.isPostView(embed.record.record)) {
-    const quotedPost = mapPostViewToMockPost(embed.record.record as PostView);
+  } else if (
+    AppBskyEmbedRecordWithMedia.isView(embed) &&
+    AppBskyEmbedRecord.isView((embed as any).record) &&
+    AppBskyFeedDefs.isPostView((embed as any).record.record)
+  ) {
+    const quotedPost = mapPostViewToMockPost((embed as any).record.record as AppBskyFeedDefs.PostView);
     let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
-    if (AppBskyEmbedExternal.isView(embed.media)) {
-      const ext = embed.media.external;
+    if (AppBskyEmbedExternal.isView((embed as any).media)) {
+      const ext = (embed as any).media.external;
       externalLink = { url: ext.uri, title: ext.title, description: ext.description, thumb: ext.thumb, domain: extractDomain(ext.uri) };
     }
     embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
   }
 
+  const author: MockPost['author'] = {
+    did: post.author.did,
+    handle: post.author.handle,
+    displayName: post.author.displayName || post.author.handle,
+    ...(post.author.avatar ? { avatar: post.author.avatar } : {}),
+    verified: !!post.author.viewer?.followedBy,
+  };
+
+  const viewer: MockPost['viewer'] = {
+    ...(post.viewer?.like ? { like: post.viewer.like } : {}),
+    ...(post.viewer?.repost ? { repost: post.viewer.repost } : {}),
+  };
+
   return {
     id: post.uri,
     cid: post.cid,
-    author: {
-      did: post.author.did,
-      handle: post.author.handle,
-      displayName: post.author.displayName || post.author.handle,
-      avatar: post.author.avatar,
-      verified: !!post.author.viewer?.followedBy,
-    },
+    author,
     content: record.text,
     createdAt: record.createdAt,
     likeCount: post.likeCount || 0,
     replyCount: post.replyCount || 0,
     repostCount: post.repostCount || 0,
+    bookmarkCount: 0,
     chips: [] as ChipType[], // Chips are determined by higher-level logic
-    media,
-    viewer: {
-      like: post.viewer?.like,
-      repost: post.viewer?.repost,
-    },
-    embed: embedData,
+    ...(media ? { media } : {}),
+    viewer,
+    ...(embedData ? { embed: embedData } : {}),
   };
 }
 
@@ -180,6 +193,7 @@ export interface LiveNotification {
 }
 
 export function mapNotification(n: AppBskyNotificationListNotifications.Notification): LiveNotification {
+  const subjectUri = n.reasonSubject as string | undefined;
   return {
     uri: n.uri,
     cid: n.cid,
@@ -192,6 +206,6 @@ export function mapNotification(n: AppBskyNotificationListNotifications.Notifica
       displayName: n.author.displayName ?? n.author.handle,
       ...(n.author.avatar && { avatar: n.author.avatar }),
     },
-    subjectUri: (n.reasonSubject as string | undefined),
+    ...(subjectUri ? { subjectUri } : {}),
   };
 }

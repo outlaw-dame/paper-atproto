@@ -240,7 +240,7 @@ export const LiveGameWidget: React.FC<LiveGameWidgetProps> = ({
         </div>
 
         {/* Center: Score */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, px: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '0 16px' }}>
           <div
             style={{
               fontSize: 32,
