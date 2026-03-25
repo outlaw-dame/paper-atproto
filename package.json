@@ -6,7 +6,12 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite",
+    "server:dev": "npm --prefix ./server run dev",
     "build": "vite build",
+    "server:build": "npm --prefix ./server run build",
+    "start": "PORT=${PORT:-3011} npm --prefix ./server run start",
+    "server:start": "npm --prefix ./server run start",
+    "translation:download-models": "npm --prefix ./server run translation:download-models",
     "preview": "vite preview",
     "test": "echo \"Error: no test specified\" && exit 1",
     "deploy": "gh-pages -d dist"

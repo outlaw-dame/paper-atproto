@@ -52,7 +52,20 @@ button {
   justify-content: center;
   -webkit-tap-highlight-color: transparent;
 }
-button:active { opacity: 0.55; transition: opacity 0.05s; }
+
+@media (pointer: coarse) {
+  button:active {
+    opacity: 0.72;
+    transition: opacity 0.05s;
+  }
+}
+
+@media (pointer: fine) {
+  button:active {
+    opacity: 0.9;
+    transition: opacity 0.08s;
+  }
+}
 
 img { display: block; max-width: 100%; }
 input, textarea {

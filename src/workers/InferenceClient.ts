@@ -93,8 +93,14 @@ class InferenceClient {
   }
 
   /** Returns the worker's current model status. */
-  async getStatus(): Promise<{ status: string; error: string | null }> {
+  async getStatus(): Promise<{ status: string; error: string | null; captionStatus?: string; captionError?: string | null }> {
     return this.send('status');
+  }
+
+  /** Generate an ALT-style caption for an image URL using an open-source model in the worker. */
+  async captionImage(imageUrl: string): Promise<string> {
+    const res = await this.send<{ caption: string }>('caption_image', { imageUrl });
+    return res.caption;
   }
 
   /** Warm up the worker (pre-loads the model). Call once at app start. */

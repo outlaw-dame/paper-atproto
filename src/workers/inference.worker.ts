@@ -20,7 +20,7 @@ env.backends.onnx.wasm.numThreads = 2;
 
 type WorkerMsg = {
   id: string;
-  type: 'embed' | 'embed_batch' | 'status';
+  type: 'embed' | 'embed_batch' | 'caption_image' | 'status';
   payload?: any;
 };
 
@@ -32,8 +32,11 @@ type WorkerReply = {
 };
 
 let extractor: any = null;
+let captioner: any = null;
 let modelStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
 let modelError: string | null = null;
+let captionStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+let captionError: string | null = null;
 
 async function ensureModel(): Promise<void> {
   if (extractor) return;
@@ -63,6 +66,56 @@ async function ensureModel(): Promise<void> {
   }
 }
 
+async function ensureCaptionModel(): Promise<void> {
+  if (captioner) return;
+  if (captionStatus === 'loading') {
+    await new Promise<void>((resolve, reject) => {
+      const check = setInterval(() => {
+        if (captionStatus === 'ready') {
+          clearInterval(check);
+          resolve();
+        }
+        if (captionStatus === 'error') {
+          clearInterval(check);
+          reject(new Error(captionError ?? 'Caption model load failed'));
+        }
+      }, 100);
+    });
+    return;
+  }
+
+  captionStatus = 'loading';
+  try {
+    captioner = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning', {
+      quantized: true,
+    });
+    captionStatus = 'ready';
+  } catch (err: any) {
+    captionStatus = 'error';
+    captionError = err?.message ?? 'Unknown caption model error';
+    throw err;
+  }
+}
+
+function normalizeCaptionText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+async function generateCaption(imageUrl: string): Promise<string> {
+  await ensureCaptionModel();
+  const output = await captioner(imageUrl, {
+    max_new_tokens: 48,
+  });
+
+  const raw = Array.isArray(output)
+    ? String(output[0]?.generated_text ?? '')
+    : String(output?.generated_text ?? '');
+
+  return normalizeCaptionText(raw);
+}
+
 async function generateEmbedding(text: string): Promise<number[]> {
   await ensureModel();
   const output = await extractor(text, { pooling: 'mean', normalize: true });
@@ -75,7 +128,12 @@ self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
 
   try {
     if (type === 'status') {
-      reply.result = { status: modelStatus, error: modelError };
+      reply.result = {
+        status: modelStatus,
+        error: modelError,
+        captionStatus,
+        captionError,
+      };
       self.postMessage(reply);
       return;
     }
@@ -98,6 +156,18 @@ self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
         texts.map(t => t.trim() ? generateEmbedding(t) : Promise.resolve([]))
       );
       reply.result = { embeddings };
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'caption_image') {
+      const imageUrl: string = payload?.imageUrl ?? '';
+      if (!imageUrl.trim()) {
+        reply.error = 'Missing imageUrl payload';
+      } else {
+        const caption = await generateCaption(imageUrl);
+        reply.result = { caption };
+      }
       self.postMessage(reply);
       return;
     }

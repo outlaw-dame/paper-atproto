@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
-import { initApp } from './bootstrap';
+import { scheduleRuntimePrefetches } from './prefetch/runtimePrefetch.js';
 import './styles/globals.css';
 
 // ─── TanStack Query client ─────────────────────────────────────────────────
@@ -26,13 +26,19 @@ const applyDark = (dark: boolean) => document.documentElement.classList.toggle('
 applyDark(window.matchMedia('(prefers-color-scheme: dark)').matches);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => applyDark(e.matches));
 
-// Initialize the app (DB, etc.) before rendering
-initApp().then(() => {
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </React.StrictMode>
-  );
-});
+// Render immediately, then initialize DB/bootstrap in the background.
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
+  </React.StrictMode>
+);
+
+scheduleRuntimePrefetches();
+
+void import('./bootstrap.js')
+  .then(({ initApp }) => initApp())
+  .catch((error) => {
+    console.error('[Bootstrap] Failed to initialize background services', error);
+  });

@@ -16,9 +16,41 @@ export default defineConfig({
     format: 'es',
   },
   build: {
+    modulePreload: {
+      resolveDependencies: (_url, deps) => {
+        // Avoid eagerly preloading very large vendor bundles.
+        // They will still load on demand when their importing chunks execute.
+        return deps.filter(
+          (dep) =>
+            !dep.includes('vendor-atproto') &&
+            !dep.includes('vendor-pglite') &&
+            !dep.includes('vendor-ml'),
+        );
+      },
+    },
     rollupOptions: {
       // Treat heavy Node.js-only deps as external so they don't crash the browser bundle
       external: [],
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/framer-motion')) {
+            return 'vendor-motion';
+          }
+          if (id.includes('node_modules/@atproto')) {
+            return 'vendor-atproto';
+          }
+          if (id.includes('node_modules/@electric-sql/pglite')) {
+            return 'vendor-pglite';
+          }
+          if (id.includes('node_modules/onnxruntime-web') || id.includes('node_modules/@xenova/transformers')) {
+            return 'vendor-ml';
+          }
+          return undefined;
+        },
+      },
     },
   },
   resolve: {
