@@ -28,6 +28,7 @@ import {
 // ─── Sub-tabs ──────────────────────────────────────────────────────────────
 const PROFILE_TABS = ['Posts', 'Library', 'Media', 'Feeds', 'Starter Packs', 'Lists'] as const;
 type ProfileTab = typeof PROFILE_TABS[number];
+type LibrarySort = 'Newest' | 'Oldest' | 'A-Z' | 'Z-A';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -200,83 +201,249 @@ function ListRow({ list, index }: { list: AppBskyGraphDefs.ListView; index: numb
 }
 
 // ─── Media grid ────────────────────────────────────────────────────────────
-function MediaGrid({ posts }: { posts: MockPost[] }) {
+function MediaGrid({ posts, onOpenStory }: { posts: MockPost[]; onOpenStory: (e: StoryEntry) => void }) {
   const mediaPosts = posts.filter(p => p.media && p.media.length > 0);
   if (mediaPosts.length === 0) return <EmptyState message="No photos or videos yet." />;
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2, margin: '0 -12px' }}>
-      {mediaPosts.map((post, i) => (
-        <motion.div
-          key={post.id}
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: i * 0.03 }}
-          style={{
-            position: 'relative', paddingTop: '100%',
-            background: 'var(--fill-3)', overflow: 'hidden', cursor: 'pointer',
-          }}
-        >
-          <img
-            src={post.media![0].url}
-            alt={post.media![0].alt ?? ''}
-            loading="lazy"
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-          />
-          {post.media!.length > 1 && (
-            <div style={{
-              position: 'absolute', top: 6, right: 6,
-              background: 'rgba(0,0,0,0.5)', borderRadius: 6,
-              padding: '2px 6px', color: '#fff', fontSize: 10, fontWeight: 700,
-            }}>
-              +{post.media!.length - 1}
-            </div>
-          )}
-        </motion.div>
-      ))}
+    <div style={{ maxWidth: 1120, margin: '0 auto', padding: '10px 0 14px' }}>
+      <style>{`
+        .media-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 12px;
+        }
+        .media-card {
+          position: relative;
+          paddingTop: 100%;
+          borderRadius: 12px;
+          overflow: hidden;
+          cursor: pointer;
+          border: 1px solid var(--sep);
+          background: var(--fill-1);
+          filter: drop-shadow(0 2px 6px rgb(0 0 0 / 5%));
+          transition: filter 0.2s ease, transform 0.2s ease;
+        }
+        .media-card:active {
+          filter: drop-shadow(0 4px 12px rgb(0 0 0 / 10%));
+          transform: scale(0.99);
+        }
+        .media-card img {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          objectFit: cover;
+          transition: transform 0.3s ease;
+        }
+        .media-card:active img {
+          transform: scale(1.02);
+        }
+        .media-overlay {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.2) 70%, transparent 100%);
+          color: white;
+          padding: 16px 12px 12px;
+          display: flex;
+          flexDirection: column;
+          gap: 6px;
+        }
+        .media-title {
+          fontFamily: Iowan Old Style, Georgia, Times New Roman, serif;
+          fontSize: 14px;
+          lineHeight: 1.28;
+          letterSpacing: -0.1px;
+          margin: 0;
+          display: -webkit-box;
+          webkitLineClamp: 2;
+          webkitBoxOrient: vertical;
+          overflow: hidden;
+        }
+        .media-byline {
+          fontSize: 12px;
+          fontWeight: 600;
+          opacity: 0.9;
+          display: flex;
+          alignItems: center;
+          gap: 6px;
+        }
+        .media-dot {
+          width: 2px;
+          height: 2px;
+          borderRadius: 50%;
+          background: currentColor;
+          opacity: 0.6;
+        }
+        @media (min-width: 640px) {
+          .media-grid { grid-template-columns: repeat(2, 1fr); gap: 14px; }
+          .media-title { fontSize: 15px; }
+        }
+        @media (min-width: 1024px) {
+          .media-grid { grid-template-columns: repeat(3, 1fr); gap: 16px; }
+          .media-title { fontSize: 15px; }
+        }
+      `}</style>
+      <div className="media-grid">
+        {mediaPosts.map((post, i) => {
+          const thumbUrl = post.media?.[0]?.url;
+          const byline = post.author.displayName || post.author.handle;
+          return (
+            <motion.button
+              key={post.id}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: i * 0.03 }}
+              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+              className="media-card"
+              style={{
+                position: 'relative',
+                paddingTop: '100%',
+                borderRadius: 12,
+                overflow: 'hidden',
+                cursor: 'pointer',
+                border: '1px solid var(--sep)',
+                background: 'var(--fill-1)',
+                filter: 'drop-shadow(0 2px 6px rgb(0 0 0 / 5%))',
+              }}
+            >
+              {thumbUrl ? (
+                <img src={thumbUrl} alt={post.media![0].alt ?? ''} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <div style={{ position: 'absolute', inset: 0, background: 'var(--fill-2)' }} />
+              )}
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.2) 70%, transparent 100%)', color: 'white', padding: '16px 12px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <p className="media-title" style={{ margin: 0, fontFamily: 'Iowan Old Style, Georgia, Times New Roman, serif', fontSize: 14, lineHeight: 1.28, letterSpacing: -0.1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {getLibraryStoryTitle(post)}
+                </p>
+                <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>{byline}</span>
+                  <span style={{ width: 2, height: 2, borderRadius: '50%', background: 'currentColor', opacity: 0.6 }} />
+                  <span style={{ flexShrink: 0, fontSize: 11 }}>{formatTime(post.createdAt)}</span>
+                  {post.media!.length > 1 && (
+                    <>
+                      <span style={{ width: 2, height: 2, borderRadius: '50%', background: 'currentColor', opacity: 0.6 }} />
+                      <span style={{ flexShrink: 0, fontSize: 11 }}>+{post.media!.length - 1}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </motion.button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-// ─── Liked post row (Library tab) ─────────────────────────────────────────
-function LikedPostRow({ post, index, onOpenStory }: { post: MockPost; index: number; onOpenStory: (e: StoryEntry) => void }) {
-  const thumbUrl = post.media?.[0]?.url ?? (post.embed?.type === 'external' ? (post.embed as any).thumb : null);
+function getLibraryStoryTitle(post: MockPost): string {
+  if (post.embed?.type === 'external') {
+    const title = (post.embed as { title?: string }).title;
+    if (title && title.trim().length > 0) return title.trim();
+  }
+  const text = post.content.trim();
+  if (!text) return 'Untitled story';
+  return text.length > 84 ? `${text.slice(0, 82)}...` : text;
+}
+
+function getLibraryStoryDescription(post: MockPost): string {
+  const text = post.content.trim();
+  if (!text) return 'No summary available.';
+  return text.length > 170 ? `${text.slice(0, 167)}...` : text;
+}
+
+function WePresentStoryCard({ post, index, onOpenStory }: { post: MockPost; index: number; onOpenStory: (e: StoryEntry) => void }) {
+  const thumbUrl = post.media?.[0]?.url ?? (post.embed?.type === 'external' ? (post.embed as { thumb?: string }).thumb : null);
+  const byline = post.author.displayName || post.author.handle;
+
   return (
     <motion.button
-      initial={{ opacity: 0, y: 6 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.04 }}
+      transition={{ delay: index * 0.03 }}
       onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+      className="wepresent-card"
       style={{
-        width: '100%', textAlign: 'left', background: 'var(--surface)', borderRadius: 16,
-        padding: 0, marginBottom: 8, overflow: 'hidden', display: 'flex', flexDirection: 'row',
-        border: 'none', cursor: 'pointer', boxShadow: '0 1px 6px rgba(0,0,0,0.04)',
+        width: '100%',
+        textAlign: 'left',
+        borderRadius: 14,
+        border: '1px solid var(--sep)',
+        cursor: 'pointer',
+        overflow: 'hidden',
+        padding: '12px 14px 12px 12px',
+        display: 'flex',
+        flexDirection: 'row',
         alignItems: 'stretch',
+        gap: 14,
+        background: 'var(--surface)',
+        color: 'var(--label-1)',
       }}
     >
-      <div style={{ flex: 1, padding: '12px 14px', minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
-          <div style={{ width: 22, height: 22, borderRadius: '50%', overflow: 'hidden', background: 'var(--fill-2)', flexShrink: 0 }}>
-            {post.author.avatar
-              ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--blue)', color: '#fff', fontSize: 9, fontWeight: 700 }}>{post.author.displayName[0]}</div>
-            }
-          </div>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--label-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {post.author.displayName}
-          </span>
-          <span style={{ fontSize: 11, color: 'var(--label-4)', flexShrink: 0 }}>{formatTime(post.createdAt)}</span>
-        </div>
-        <p style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.35, letterSpacing: -0.2, color: 'var(--label-1)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-          {post.content}
-        </p>
-        <p style={{ fontSize: 11, color: 'var(--label-3)', marginTop: 7 }}>{formatCount(post.likeCount)} likes · {formatCount(post.replyCount)} replies</p>
-      </div>
-      {thumbUrl && (
-        <div style={{ width: 80, flexShrink: 0, overflow: 'hidden' }}>
+      {/* Thumbnail */}
+      <div className="wepresent-card-media" style={{ flexShrink: 0, borderRadius: 8, overflow: 'hidden', background: 'var(--fill-1)' }}>
+        {thumbUrl ? (
           <img src={thumbUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+        ) : (
+          <div style={{ width: '100%', height: '100%', background: 'var(--fill-1)' }} />
+        )}
+      </div>
+
+      {/* Text */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4 }}>
+        <p className="wepresent-card-title" style={{ margin: 0, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {getLibraryStoryTitle(post)}
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--label-2)' }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>{byline}</span>
+          <span style={{ width: 2.5, height: 2.5, borderRadius: '50%', background: 'currentColor', opacity: 0.45, flexShrink: 0 }} />
+          <span style={{ flexShrink: 0 }}>{formatTime(post.createdAt)}</span>
+          <span style={{ width: 2.5, height: 2.5, borderRadius: '50%', background: 'currentColor', opacity: 0.45, flexShrink: 0 }} />
+          <span style={{ flexShrink: 0 }}>{formatCount(post.likeCount)} likes</span>
         </div>
-      )}
+      </div>
     </motion.button>
+  );
+}
+
+function WePresentWarningCard({
+  post,
+  reasons,
+  onReveal,
+}: {
+  post: MockPost;
+  reasons: Array<{ phrase: string; reason: 'exact' | 'semantic' | 'exact+semantic' }>;
+  onReveal: () => void;
+}) {
+  return (
+    <div
+      style={{
+        borderRadius: 16,
+        border: '1px solid color-mix(in srgb, var(--orange) 38%, #FFFFFF 62%)',
+        background: '#FFF4E9',
+        color: '#3A2A1B',
+        padding: '18px 18px 20px',
+        boxShadow: '0 10px 19px rgba(0,0,0,0.04)',
+      }}
+    >
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 10 }}>
+        Filtered Story
+      </div>
+      <p style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600 }}>{getLibraryStoryTitle(post)}</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        {reasons.map((entry) => (
+          <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid rgba(58,42,27,0.2)', padding: '3px 8px', background: 'rgba(255,255,255,0.75)' }}>
+            <span style={{ fontSize: 11, fontWeight: 700 }}>{entry.phrase}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', opacity: 0.72 }}>
+              {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+            </span>
+          </span>
+        ))}
+      </div>
+      <button onClick={onReveal} style={{ border: 'none', background: 'transparent', color: '#7A4200', fontSize: 12, fontWeight: 800, letterSpacing: '0.02em', padding: 0, cursor: 'pointer' }}>
+        Show story
+      </button>
+    </div>
   );
 }
 
@@ -291,6 +458,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const isOwnProfile = !actorDid || actorDid === session?.did;
 
   const [tab, setTab] = useState<ProfileTab>('Posts');
+  const [librarySort, setLibrarySort] = useState<LibrarySort>('Newest');
   const [profile, setProfile] = useState<AppBskyActorDefs.ProfileViewDetailed | null>(
     isOwnProfile ? sessionProfile : null
   );
@@ -461,40 +629,137 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
             });
 
       case 'Library':
-        return likedPosts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length === 0
-          ? <EmptyState message="Liked posts will appear here." />
-          : likedPosts.map((p, i) => {
-              const matches = filterResults[p.id] ?? [];
-              const isHidden = matches.some((m) => m.action === 'hide');
-              const isWarned = matches.some((m) => m.action === 'warn');
-              const isRevealed = !!revealedFilteredPosts[p.id];
-              if (isHidden) return null;
-              if (isWarned && !isRevealed) {
-                const reasons = warnMatchReasons(matches);
-                return (
-                  <div key={p.id} style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', marginBottom: 8, background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Matches filter:</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                      {reasons.map((entry) => (
-                        <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--sep)', padding: '3px 8px', background: 'var(--fill-1)' }}>
-                          <span style={{ fontSize: 11, color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
-                          <span style={{ fontSize: 10, color: 'var(--label-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                            {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
-                          </span>
-                        </span>
-                      ))}
-                    </div>
-                    <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [p.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
-                      Show post
-                    </button>
-                  </div>
-                );
-              }
-              return <LikedPostRow key={p.id} post={p} index={i} onOpenStory={onOpenStory} />;
-            });
+        {
+          const sorted = [...likedPosts].sort((a, b) => {
+            if (librarySort === 'Newest') return Date.parse(b.createdAt) - Date.parse(a.createdAt);
+            if (librarySort === 'Oldest') return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+            const aTitle = getLibraryStoryTitle(a).toLocaleLowerCase();
+            const bTitle = getLibraryStoryTitle(b).toLocaleLowerCase();
+            return librarySort === 'A-Z' ? aTitle.localeCompare(bTitle) : bTitle.localeCompare(aTitle);
+          });
+
+          const cards = sorted.flatMap((p) => {
+            const matches = filterResults[p.id] ?? [];
+            const isHidden = matches.some((m) => m.action === 'hide');
+            const isWarned = matches.some((m) => m.action === 'warn');
+            const isRevealed = !!revealedFilteredPosts[p.id];
+            if (isHidden) return [];
+            if (isWarned && !isRevealed) {
+              return [{ kind: 'warn' as const, post: p, reasons: warnMatchReasons(matches) }];
+            }
+            return [{ kind: 'post' as const, post: p }];
+          });
+
+          if (cards.length === 0) return <EmptyState message="Liked posts will appear here." />;
+
+          return (
+            <div style={{ maxWidth: 1120, margin: '0 auto', padding: '10px 0 14px' }}>
+              <style>{`
+                .wepresent-shell {
+                  --grid-gap: 8px;
+                }
+                .wepresent-grid {
+                  display: grid;
+                  grid-template-columns: 1fr;
+                  gap: var(--grid-gap);
+                }
+                .wepresent-card {
+                  filter: drop-shadow(0 2px 6px rgb(0 0 0 / 5%));
+                  transition: filter 0.2s ease, transform 0.2s ease;
+                }
+                .wepresent-card-media {
+                  width: 80px;
+                  height: 80px;
+                }
+                .wepresent-card-media img {
+                  transition: transform 0.4s ease;
+                }
+                .wepresent-list-title {
+                  font-family: Iowan Old Style, Georgia, Times New Roman, serif;
+                  font-size: 26px;
+                  line-height: 1.08;
+                  letter-spacing: -0.5px;
+                }
+                .wepresent-card-title {
+                  font-family: Iowan Old Style, Georgia, Times New Roman, serif;
+                  font-size: 15px;
+                  line-height: 1.28;
+                  letter-spacing: -0.1px;
+                }
+                .wepresent-sort {
+                  width: 100%;
+                  min-height: 44px;
+                  border-radius: 12px;
+                  border: 1px solid var(--sep);
+                  background: var(--surface);
+                  color: var(--label-1);
+                  padding: 0 12px;
+                  font-size: 14px;
+                  font-weight: 600;
+                }
+                .wepresent-card:hover {
+                  filter: drop-shadow(0 8px 16px rgb(0 0 0 / 10%));
+                  transform: translateY(-1px);
+                }
+                .wepresent-card:hover .wepresent-card-media img {
+                  transform: scale(1.08);
+                }
+                @media (min-width: 640px) {
+                  .wepresent-card-media { width: 88px; height: 88px; }
+                  .wepresent-list-title { font-size: 28px; }
+                  .wepresent-card-title { font-size: 15px; }
+                }
+                @media (min-width: 1024px) {
+                  .wepresent-shell { --grid-gap: 10px; }
+                  .wepresent-card-media { width: 96px; height: 96px; }
+                  .wepresent-list-title { font-size: 30px; }
+                }
+              `}</style>
+
+              <div className="wepresent-shell">
+              <div style={{ display: 'flex', flexDirection: platform.isMobile ? 'column' : 'row', alignItems: platform.isMobile ? 'stretch' : 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
+                <h2 className="wepresent-list-title" style={{ margin: 0, color: 'var(--label-1)' }}>
+                  Story Library
+                </h2>
+                <div style={{ width: platform.isMobile ? '100%' : 260 }}>
+                  <label htmlFor="profile-library-sort" style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--label-3)', marginBottom: 6 }}>
+                    Sort
+                  </label>
+                  <select
+                    id="profile-library-sort"
+                    value={librarySort}
+                    onChange={(e) => setLibrarySort(e.target.value as LibrarySort)}
+                    className="wepresent-sort"
+                  >
+                    <option value="Newest">Newest</option>
+                    <option value="Oldest">Oldest</option>
+                    <option value="A-Z">A-Z</option>
+                    <option value="Z-A">Z-A</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="wepresent-grid">
+                {cards.map((entry, i) => (
+                  entry.kind === 'warn'
+                    ? (
+                      <WePresentWarningCard
+                        key={entry.post.id}
+                        post={entry.post}
+                        reasons={entry.reasons}
+                        onReveal={() => setRevealedFilteredPosts((prev) => ({ ...prev, [entry.post.id]: true }))}
+                      />
+                    )
+                    : <WePresentStoryCard key={entry.post.id} post={entry.post} index={i} onOpenStory={onOpenStory} />
+                ))}
+              </div>
+              </div>
+            </div>
+          );
+        }
 
       case 'Media':
-        return <MediaGrid posts={posts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide')))} />;
+        return <MediaGrid posts={posts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide')))} onOpenStory={onOpenStory} />;
 
       case 'Feeds':
         return feeds.length === 0

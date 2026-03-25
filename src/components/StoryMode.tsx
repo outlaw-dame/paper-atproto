@@ -21,7 +21,7 @@ import { mapFeedViewPost } from '../atproto/mappers.js';
 import type { MockPost } from '../data/mockData.js';
 import { formatTime, formatCount } from '../data/mockData.js';
 import {
-  resolveThread, extractClusterSignals,
+  resolveThread, extractClusterSignals, isAtUri,
   type ThreadNode, type ResolvedFacet,
 } from '../lib/resolver/atproto.js';
 import { useThreadStore } from '../store/threadStore.js';
@@ -1653,6 +1653,10 @@ export default function StoryMode({ entry, onClose }: Props) {
       if (isInitial) { setLoading(true); setError(null); }
 
       try {
+        if (!isAtUri(entry.id)) {
+          if (isInitial) setError('This discussion is not linked to a Bluesky thread yet.');
+          return;
+        }
         const res = await atpCall(
           () => agent.getPostThread({ uri: entry.id, depth: 6 }),
           { signal: controller.signal },

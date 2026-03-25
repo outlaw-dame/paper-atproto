@@ -1432,7 +1432,13 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     <SectionHeader title="Live Sports Moments" />
                     <LiveSportsMoments
                       maxGames={3}
-                      onGameClick={(gameId) => onOpenStory({ type: 'topic', id: gameId, title: 'Live Sports Moment' })}
+                      onGameClick={(gameId) => {
+                        const game = sportsStore.getGame(gameId);
+                        const query = game
+                          ? (game.hashtags[0] ? `#${game.hashtags[0]}` : `${game.awayTeam.name} ${game.homeTeam.name}`)
+                          : gameId;
+                        useUiStore.getState().openSearchStory(query);
+                      }}
                     />
                   </div>
 
