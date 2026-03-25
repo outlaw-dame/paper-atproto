@@ -14,6 +14,7 @@ export interface MockPost {
   likeCount: number;
   replyCount: number;
   repostCount: number;
+  bookmarkCount: number;
   media?: { type: 'image'; url: string; alt?: string; aspectRatio?: number }[];
   images?: string[];
   embed?: {
@@ -36,6 +37,7 @@ export interface MockPost {
   } | {
     type: 'quote';
     post: Omit<MockPost, 'embed' | 'replyTo' | 'threadRoot'>;
+    externalLink?: { url: string; title?: string; description?: string; thumb?: string; domain: string };
   };
   chips: ChipType[];
   threadCount?: number;
@@ -44,6 +46,7 @@ export interface MockPost {
   viewer?: {
     like?: string;
     repost?: string;
+    bookmark?: string;
   };
 }
 
@@ -63,6 +66,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 847,
     replyCount: 124,
     repostCount: 312,
+    bookmarkCount: 45,
     chips: ['thread', 'topic', 'story'],
     threadCount: 12,
   },
@@ -79,6 +83,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 2341,
     replyCount: 89,
     repostCount: 567,
+    bookmarkCount: 123,
     media: [
       {
         type: 'image',
@@ -102,6 +107,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 1203,
     replyCount: 67,
     repostCount: 445,
+    bookmarkCount: 78,
     embed: {
       type: 'external',
       url: 'https://example.com/rss-history',
@@ -128,6 +134,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 3891,
     replyCount: 234,
     repostCount: 1102,
+    bookmarkCount: 256,
     chips: ['topic', 'story'],
   },
   {
@@ -143,6 +150,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 567,
     replyCount: 43,
     repostCount: 189,
+    bookmarkCount: 34,
     embed: {
       type: 'quote',
       post: {
@@ -157,6 +165,7 @@ export const MOCK_POSTS: MockPost[] = [
         likeCount: 1245,
         replyCount: 88,
         repostCount: 334,
+        bookmarkCount: 67,
         chips: ['pack'],
       }
     },
@@ -175,6 +184,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 892,
     replyCount: 56,
     repostCount: 201,
+    bookmarkCount: 45,
     media: [
       {
         type: 'image',
@@ -204,6 +214,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 15,
     replyCount: 2,
     repostCount: 1,
+    bookmarkCount: 0,
     chips: ['thread'],
     replyTo: {
       id: 'post-2',
@@ -218,6 +229,7 @@ export const MOCK_POSTS: MockPost[] = [
       likeCount: 2341,
       replyCount: 89,
       repostCount: 567,
+      bookmarkCount: 123,
       chips: ['feed', 'topic', 'story'],
     },
   },
@@ -234,6 +246,7 @@ export const MOCK_POSTS: MockPost[] = [
     likeCount: 432,
     replyCount: 21,
     repostCount: 89,
+    bookmarkCount: 12,
     chips: ['topic', 'story'],
     embed: {
       type: 'video',

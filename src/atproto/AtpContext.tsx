@@ -41,6 +41,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
     profile, setProfile,
     isLoading, setLoading,
     error, setError,
+    setSessionReady,
     resetAgent,
   } = useSessionStore();
 
@@ -86,6 +87,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
       }),
       raceTimeout,
     ]).then(() => {
+      setSessionReady(true);
       fetchProfile(saved.did);
     }).catch(() => {
       // Either invalid tokens or unreachable — keep the session so the app
@@ -108,6 +110,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
       };
       setSession(s);
       localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+      setSessionReady(true);
       await fetchProfile(s.did);
     } catch (err: unknown) {
       const msg = (err as any)?.message ?? 'Login failed';
@@ -120,7 +123,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [agent, fetchProfile, setError, setLoading, setSession]);
+  }, [agent, fetchProfile, setError, setLoading, setSession, setSessionReady]);
 
   // ── Logout ───────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {

@@ -33,6 +33,81 @@ pnpm dev
 
 Open `http://localhost:5173` and login with a Bluesky handle and **App Password**.
 
+## External Entity Linking (Enabled)
+
+The verification layer supports external entity linking/matching and is now configured to use **DBpedia Spotlight** by default on the server side.
+
+### 1. Start the Verify Server
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+The server reads `server/.env.example` keys:
+
+* `VERIFY_ENTITY_LINKING_PROVIDER` (`dbpedia` | `rel` | `heuristic`)
+* `VERIFY_ENTITY_LINKING_ENDPOINT`
+* `VERIFY_ENTITY_LINKING_TIMEOUT_MS`
+* `VERIFY_ENTITY_LINKING_API_KEY`
+
+Default mode is `dbpedia` using `https://api.dbpedia-spotlight.org/en/annotate`.
+
+### 2. Point the Client to the Verify Server
+
+Set root env values (see `.env.example`):
+
+* `VITE_GLYMPSE_VERIFY_BASE_URL=http://localhost:3001/verification`
+* `VITE_GLYMPSE_VERIFY_TIMEOUT_MS=6000`
+
+Then run the app:
+
+```bash
+pnpm dev
+```
+
+### 3. Optional: Switch to REL
+
+In `server/.env` set:
+
+```bash
+VERIFY_ENTITY_LINKING_PROVIDER=rel
+VERIFY_ENTITY_LINKING_ENDPOINT=http://localhost:5555
+```
+
+Start REL locally with Docker:
+
+```bash
+docker pull informagi/rel
+docker run \
+    -p 5555:5555 \
+    --rm -it informagi/rel \
+    python -m REL.server --bind 0.0.0.0 --port 5555 /workspace/data wiki_2019
+```
+
+If you do not have REL data mounted yet, follow REL docs to download and mount
+the `generic` and `wiki_2019` data directories into `/workspace/data`.
+
+### 4. Verify Active Provider at Runtime
+
+Health check:
+
+```bash
+curl http://localhost:3001/health
+```
+
+Verification provider status:
+
+```bash
+curl http://localhost:3001/api/verify/status
+```
+
+The status endpoint reports active entity-linking provider, endpoint, timeout,
+and whether external linking is currently enabled.
+
+If external calls fail or time out, the pipeline safely falls back to deterministic heuristics.
+
 ## Current Status
 
 🚧 **Active Prototype / Refactoring**

@@ -41,6 +41,10 @@ const EnvSchema = z.object({
       .transform((v) => v === 'true')
       .default('false'),
   ),
+  TRANSLATION_PYTHON_BIN: z.string().default('python3'),
+  TRANSLATION_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+  TRANSLATION_MODELS_DIR: z.string().optional(),
+  TRANSLATION_WORKER_PATH: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(3001),
 });
 

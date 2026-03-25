@@ -365,6 +365,23 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     // Starter Packs: load when API is available
   }, [tab, loadPosts, loadLiked, loadFeeds, loadLists]);
 
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleToggleRepost = useCallback(async (p: MockPost) => {
+    // Similar to HomeTab
+  }, [agent, session]);
+
+  const handleToggleLike = useCallback(async (p: MockPost) => {
+    // Similar to HomeTab
+  }, [agent, session]);
+
+  const handleBookmark = useCallback(async (p: MockPost) => {
+    // Placeholder
+  }, []);
+
+  const handleMore = useCallback((p: MockPost) => {
+    // Placeholder
+  }, []);
+
   // Scroll active sub-tab into view
   const scrollTabIntoView = (idx: number) => {
     const bar = tabBarRef.current;
@@ -381,7 +398,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
       case 'Posts':
         return posts.length === 0
           ? <EmptyState message="No posts yet." />
-          : posts.map((p, i) => <PostCard key={p.id} post={p} onOpenStory={onOpenStory} index={i} />);
+          : posts.map((p, i) => <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} index={i} />);
 
       case 'Library':
         return likedPosts.length === 0

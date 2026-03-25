@@ -14,11 +14,13 @@ interface UiState {
   searchStoryQuery: string | null;
   unreadCount: number;
   profileDid: string | null;
+  composeDraft: string;
 
   // Actions
   setTab: (id: TabId) => void;
   openCompose: () => void;
   closeCompose: () => void;
+  setComposeDraft: (text: string) => void;
   openPromptComposer: () => void;
   closePromptComposer: () => void;
   openStory: (entry: StoryEntry) => void;
@@ -40,8 +42,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   profileDid: null,
 
   setTab: (id) => set({ prevTab: get().activeTab, activeTab: id }),
+  composeDraft: '',
   openCompose: () => set({ showCompose: true }),
-  closeCompose: () => set({ showCompose: false }),
+  closeCompose: () => set({ showCompose: false, composeDraft: '' }),
+  setComposeDraft: (text) => set({ composeDraft: text }),
   openPromptComposer: () => set({ showPromptComposer: true }),
   closePromptComposer: () => set({ showPromptComposer: false }),
   openStory: (entry) => set({ story: entry }),
@@ -50,4 +54,5 @@ export const useUiStore = create<UiState>((set, get) => ({
   closeSearchStory: () => set({ searchStoryQuery: null }),
   setUnreadCount: (n) => set({ unreadCount: n }),
   openProfile: (did) => set(s => ({ profileDid: did, prevTab: s.activeTab, activeTab: 'profile' as TabId })),
+
 }));

@@ -51,6 +51,7 @@ import {
   nestedContribution as ncTokens,
   discussion as disc,
   accent,
+  intel,
   type as typeScale,
   radius,
   space,
@@ -169,6 +170,12 @@ function PromptHeroCard({
 }) {
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
+  const [liked, setLiked] = useState(!!post.viewer?.like);
+  const [likeCount, setLikeCount] = useState(post.likeCount);
+  const [reposted, setReposted] = useState(!!post.viewer?.repost);
+  const [repostCount, setRepostCount] = useState(post.repostCount);
+  const [bookmarked, setBookmarked] = useState(false);
+  const [showRepostMenu, setShowRepostMenu] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const translation = translationById[post.id];
   const rootText = translation && !showOriginal ? translation.translatedText : post.content;
@@ -301,6 +308,81 @@ function PromptHeroCard({
           </div>
         )}
 
+        {/* Quote post embed */}
+        {post.embed?.type === 'quote' && post.embed.post && (
+          <div style={{
+            padding: `${space[6]}px ${space[8]}px`,
+            background: 'rgba(255,255,255,0.06)',
+            borderRadius: radius[12],
+            border: `0.5px solid ${phTokens.line}`,
+            marginBottom: 16,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta }}>
+                {post.embed.post.author.displayName || post.embed.post.author.handle}
+              </span>
+              <span style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6 }}>
+                @{post.embed.post.author.handle}
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: phTokens.meta, opacity: 0.85, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              {post.embed.post.content}
+            </p>
+          </div>
+        )}
+
+        {/* External link preview (standalone or from recordWithMedia) */}
+        {post.embed?.type === 'quote' && post.embed.externalLink && (
+          <a
+            href={post.embed.externalLink.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginBottom: 16,
+              background: 'rgba(255,255,255,0.06)',
+              borderRadius: radius[12],
+              border: `0.5px solid ${phTokens.line}`,
+              textDecoration: 'none', overflow: 'hidden',
+            }}
+          >
+            {post.embed.externalLink.thumb && (
+              <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
+            )}
+            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+              {post.embed.externalLink.title && (
+                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.externalLink.title}</p>
+              )}
+              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.externalLink.domain}</p>
+            </div>
+          </a>
+        )}
+        {post.embed?.type === 'external' && (
+          <a
+            href={post.embed.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginBottom: 16,
+              background: 'rgba(255,255,255,0.06)',
+              borderRadius: radius[12],
+              border: `0.5px solid ${phTokens.line}`,
+              textDecoration: 'none', overflow: 'hidden',
+            }}
+          >
+            {post.embed.thumb && (
+              <img src={post.embed.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
+            )}
+            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+              {post.embed.title && (
+                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.title}</p>
+              )}
+              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.domain}</p>
+            </div>
+          </a>
+        )}
+
         {/* Factual chips from root verification */}
         {rootVerification && (() => {
           const chips: Array<{ label: string; color: string }> = [];
@@ -323,6 +405,97 @@ function PromptHeroCard({
             </div>
           );
         })()}
+
+        {/* Action bar */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 0,
+          borderTop: `0.5px solid rgba(255,255,255,0.1)`,
+          paddingTop: 12, marginTop: 8,
+        }}>
+          {/* Reply */}
+          <button style={heroActionBtnStyle} onClick={e => e.stopPropagation()}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+            </svg>
+            <span style={heroActionCountStyle}>{formatCount(post.replyCount)}</span>
+          </button>
+
+          {/* Repost / Quote */}
+          <div style={{ position: 'relative' }}>
+            <button
+              style={{ ...heroActionBtnStyle, color: reposted ? 'var(--green)' : 'rgba(255,255,255,0.55)' }}
+              onClick={e => { e.stopPropagation(); setShowRepostMenu(v => !v); }}
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={reposted ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                <path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+              </svg>
+              <span style={{ ...heroActionCountStyle, color: reposted ? 'var(--green)' : 'rgba(255,255,255,0.55)' }}>{formatCount(repostCount)}</span>
+            </button>
+            <AnimatePresence>
+              {showRepostMenu && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.95 }}
+                  transition={{ duration: 0.12 }}
+                  style={{
+                    position: 'absolute', bottom: 'calc(100% + 6px)', left: 0,
+                    background: disc.surfaceCard,
+                    border: `0.5px solid ${disc.lineStrong}`,
+                    borderRadius: radius[16], overflow: 'hidden',
+                    zIndex: 300, minWidth: 160,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                  }}
+                >
+                  <button
+                    onClick={e => { e.stopPropagation(); setReposted(v => !v); setRepostCount(c => reposted ? c - 1 : c + 1); setShowRepostMenu(false); }}
+                    style={dropdownItemStyle}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={disc.textPrimary} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                      <path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+                    </svg>
+                    <span style={{ fontSize: typeScale.bodyMd[0], fontWeight: 600, color: disc.textPrimary }}>{reposted ? 'Undo repost' : 'Repost'}</span>
+                  </button>
+                  <div style={{ height: 0.5, background: disc.lineSubtle }} />
+                  <button onClick={e => { e.stopPropagation(); setShowRepostMenu(false); }} style={dropdownItemStyle}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={disc.textPrimary} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/>
+                      <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/>
+                    </svg>
+                    <span style={{ fontSize: typeScale.bodyMd[0], fontWeight: 600, color: disc.textPrimary }}>Quote post</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Like */}
+          <button
+            style={{ ...heroActionBtnStyle, color: liked ? 'var(--red)' : 'rgba(255,255,255,0.55)' }}
+            onClick={e => { e.stopPropagation(); setLiked(v => !v); setLikeCount(c => liked ? c - 1 : c + 1); }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill={liked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={liked ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+            </svg>
+            <span style={{ ...heroActionCountStyle, color: liked ? 'var(--red)' : 'rgba(255,255,255,0.55)' }}>{formatCount(likeCount)}</span>
+          </button>
+
+          {/* Bookmark */}
+          <button
+            style={{ ...heroActionBtnStyle, color: bookmarked ? accent.primary : 'rgba(255,255,255,0.55)' }}
+            onClick={e => { e.stopPropagation(); setBookmarked(v => !v); }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill={bookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={bookmarked ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
+            </svg>
+          </button>
+
+          {showRepostMenu && (
+            <div style={{ position: 'fixed', inset: 0, zIndex: 299 }} onClick={e => { e.stopPropagation(); setShowRepostMenu(false); }} />
+          )}
+        </div>
 
       </div>
     </div>
@@ -558,7 +731,7 @@ function InterpolatorCard({
                     const isNewAngle = signal.startsWith('new angle:') || signal.startsWith('new info:') || signal.startsWith('counterpoint:');
                     return (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                        <span style={{ color: isNewAngle ? intTokens.accent.lime : intTokens.accent.cyan, fontSize: 13, flexShrink: 0 }}>{isNewAngle ? '↗' : '•'}</span>
+                        <span style={{ color: isNewAngle ? intel.accentLime : intel.accentCyan, fontSize: 13, flexShrink: 0 }}>{isNewAngle ? '↗' : '•'}</span>
                         <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{signal}</span>
                       </div>
                     );
@@ -567,13 +740,13 @@ function InterpolatorCard({
                   <>
                     {clarifications.slice(0, 2).map((c, i) => (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                        <span style={{ color: intTokens.accent.cyan, fontSize: 13, flexShrink: 0 }}>•</span>
+                        <span style={{ color: intel.accentCyan, fontSize: 13, flexShrink: 0 }}>•</span>
                         <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{c}</span>
                       </div>
                     ))}
                     {newAngles.slice(0, 2).map((a, i) => (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                        <span style={{ color: intTokens.accent.lime, fontSize: 13, flexShrink: 0 }}>↗</span>
+                        <span style={{ color: intel.accentLime, fontSize: 13, flexShrink: 0 }}>↗</span>
                         <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{a}</span>
                       </div>
                     ))}
@@ -999,6 +1172,57 @@ function ContributionCard({
         </a>
       )}
 
+      {/* Quote post embed */}
+      {(node.embed?.kind === 'record' || node.embed?.kind === 'recordWithMedia') && node.embed.quotedText && (
+        <div style={{
+          marginBottom: contTokens.gap,
+          background: disc.surfaceCard2,
+          borderRadius: radius[12],
+          padding: `${space[6]}px ${space[8]}px`,
+          border: `0.5px solid ${disc.lineSubtle}`,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+            <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary }}>
+              {node.embed.quotedAuthorDisplayName || node.embed.quotedAuthorHandle || 'Unknown'}
+            </span>
+            {node.embed.quotedAuthorHandle && (
+              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+                @{node.embed.quotedAuthorHandle}
+              </span>
+            )}
+          </div>
+          <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {node.embed.quotedText}
+          </p>
+        </div>
+      )}
+
+      {/* Link preview card from recordWithMedia external media */}
+      {node.embed?.kind === 'recordWithMedia' && node.embed.mediaExternal && (
+        <a
+          href={node.embed.mediaExternal.uri}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
+          style={{
+            display: 'block', marginBottom: contTokens.gap,
+            background: disc.surfaceCard2, borderRadius: radius[12],
+            textDecoration: 'none', overflow: 'hidden',
+            border: `0.5px solid ${disc.lineSubtle}`,
+          }}
+        >
+          {node.embed.mediaExternal.thumb && (
+            <img src={node.embed.mediaExternal.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover' }} />
+          )}
+          <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+            {node.embed.mediaExternal.title && (
+              <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>{node.embed.mediaExternal.title}</p>
+            )}
+            <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{node.embed.mediaExternal.domain}</p>
+          </div>
+        </a>
+      )}
+
       {/* Signal chips */}
       {signalType && !isRepetitive && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: contTokens.gap }}>
@@ -1181,6 +1405,16 @@ const actionBtnStyle: React.CSSProperties = {
 
 const actionCountStyle: React.CSSProperties = {
   fontSize: 13, fontWeight: 500,
+};
+
+const heroActionBtnStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 5,
+  background: 'none', border: 'none', padding: '2px 14px 2px 0',
+  cursor: 'pointer', color: 'rgba(255,255,255,0.55)',
+};
+
+const heroActionCountStyle: React.CSSProperties = {
+  fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.55)',
 };
 
 const dropdownItemStyle: React.CSSProperties = {

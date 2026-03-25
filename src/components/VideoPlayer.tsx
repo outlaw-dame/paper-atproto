@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import ReactPlayer from 'react-player/lazy';
 
 interface VideoPlayerProps {
   url: string;
@@ -9,53 +8,77 @@ interface VideoPlayerProps {
 }
 
 /**
- * A high-quality, lazy-loaded video player wrapper.
- * Uses 'light' mode to show a thumbnail preview until interaction,
- * preserving feed performance.
+ * A simple video player wrapper using native HTML5 <video>.
+ * Shows an optional thumbnail overlay and a play button to reduce auto-play overhead.
  */
 export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay = false }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoplay);
 
   return (
-    <div
-      className="video-player-wrapper"
-      style={{
-        position: 'relative',
-        paddingTop: `${(1 / aspectRatio) * 100}%`,
-        borderRadius: '12px',
-        overflow: 'hidden',
-        backgroundColor: '#000',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-      }}
-    >
-      <ReactPlayer
-        url={url}
-        light={thumb || true} // Use provided thumb or let react-player fetch it
-        playing={isPlaying}
-        controls
-        width="100%"
-        height="100%"
-        style={{ position: 'absolute', top: 0, left: 0 }}
-        onPlay={() => setIsPlaying(true)}
-        playIcon={
-          <div
-            style={{
-              width: '64px',
-              height: '64px',
-              borderRadius: '50%',
-              backgroundColor: 'rgba(0, 0, 0, 0.6)',
-              backdropFilter: 'blur(4px)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="white" style={{ marginLeft: '4px' }}>
-            <path d="M8 5v14l11-7z" />
+    <div style={{
+      position: 'relative',
+      paddingTop: `${(1 / aspectRatio) * 100}%`,
+      borderRadius: 12,
+      overflow: 'hidden',
+      backgroundColor: '#000',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    }}>
+      {!isPlaying && thumb && (
+        <img
+          src={thumb}
+          alt="video thumbnail"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            cursor: 'pointer',
+          }}
+          onClick={() => setIsPlaying(true)}
+        />
+      )}
+      {!isPlaying && (
+        <button
+          onClick={() => setIsPlaying(true)}
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 10,
+            width: 56,
+            height: 56,
+            borderRadius: '50%',
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            border: 'none',
+            color: '#fff',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          aria-label="Play video"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 5v14l11-7z" fill="currentColor" />
           </svg>
-          </div>
-        }
-      />
+        </button>
+      )}
+      {isPlaying && (
+        <video
+          src={url}
+          controls
+          autoPlay
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+          }}
+        />
+      )}
     </div>
   );
 }

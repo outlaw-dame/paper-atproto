@@ -20,6 +20,11 @@ import {
   entityMayBeNamed,
 } from './routing.js';
 
+export type WriterTranslationMap = Record<string, {
+  translatedText?: string;
+  sourceLang?: string;
+}>;
+
 // ─── Entity kind → writer type ────────────────────────────────────────────
 const ENTITY_TYPE_MAP: Record<string, WriterEntity['type']> = {
   person: 'person',
@@ -67,6 +72,7 @@ export function buildThreadStateForWriter(
   scores: Record<string, ContributionScores>,
   replies: ThreadNode[],
   confidence: ConfidenceState,
+  translationById?: WriterTranslationMap,
 ): ThreadStateForWriter {
   const summaryMode: SummaryMode = chooseSummaryMode({
     surfaceConfidence: confidence.surfaceConfidence,
@@ -76,10 +82,11 @@ export function buildThreadStateForWriter(
   // ── Selected comments ────────────────────────────────────────────────────
   const rawComments: WriterComment[] = replies.map(reply => {
     const score = scores[reply.uri];
+    const translated = translationById?.[reply.uri]?.translatedText;
     const base: WriterComment = {
       uri: reply.uri,
       handle: reply.authorHandle,
-      text: reply.text.slice(0, 280),
+      text: (translated ?? reply.text).slice(0, 280),
       impactScore: score?.finalInfluenceScore ?? score?.usefulnessScore ?? 0,
     };
     if (reply.authorName != null) base.displayName = reply.authorName;
@@ -146,7 +153,7 @@ export function buildThreadStateForWriter(
   const rootPost = {
     uri: state.rootUri,
     handle: opHandle || 'op',
-    text: rootText.slice(0, 500),
+    text: (translationById?.[state.rootUri]?.translatedText ?? rootText).slice(0, 500),
     createdAt: state.updatedAt,
   };
 

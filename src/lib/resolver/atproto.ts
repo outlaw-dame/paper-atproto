@@ -141,9 +141,12 @@ export interface ResolvedEmbed {
   // record (quote post)
   quotedUri?: string;
   quotedAuthorDid?: string;
+  quotedAuthorHandle?: string;
+  quotedAuthorDisplayName?: string;
   quotedText?: string;
-  // recordWithMedia: both images and record
+  // recordWithMedia: both images/external and record
   mediaImages?: { url: string; alt: string }[];
+  mediaExternal?: { uri: string; domain: string; title?: string; description?: string; thumb?: string };
 }
 
 export function resolveEmbed(embed: any): ResolvedEmbed | null {
@@ -184,6 +187,8 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
       kind: 'record',
       quotedUri: rec.uri,
       quotedAuthorDid: rec.author?.did,
+      quotedAuthorHandle: rec.author?.handle,
+      quotedAuthorDisplayName: rec.author?.displayName,
       quotedText: (rec.value ?? rec.record)?.text,
     };
   }
@@ -191,13 +196,26 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
   if (type === 'app.bsky.embed.recordWithMedia#view' || type === 'app.bsky.embed.recordWithMedia') {
     const rec = embed.record?.record ?? {};
     const media = embed.media ?? {};
+    const mediaType = media.$type as string ?? '';
     const imgs = (media.images ?? []) as any[];
+    const ext = media.external ?? null;
     return {
       kind: 'recordWithMedia',
       quotedUri: rec.uri,
       quotedAuthorDid: rec.author?.did,
+      quotedAuthorHandle: rec.author?.handle,
+      quotedAuthorDisplayName: rec.author?.displayName,
       quotedText: (rec.value ?? rec.record)?.text,
-      mediaImages: imgs.map(i => ({ url: i.fullsize ?? i.thumb ?? '', alt: i.alt ?? '' })),
+      ...(imgs.length > 0 ? { mediaImages: imgs.map(i => ({ url: i.fullsize ?? i.thumb ?? '', alt: i.alt ?? '' })) } : {}),
+      ...(ext && mediaType.includes('external') ? {
+        mediaExternal: {
+          uri: ext.uri ?? '',
+          domain: canonicalDomain(ext.uri ?? ''),
+          title: ext.title,
+          description: ext.description,
+          thumb: ext.thumb,
+        },
+      } : {}),
     };
   }
 
@@ -210,8 +228,8 @@ export interface ThreadNode {
   cid: string;
   authorDid: string;
   authorHandle: string;
-  authorName?: string;    // display name (may be absent)
-  authorAvatar?: string; // avatar URL (may be absent)
+  authorName?: string;      // display name (may be absent)
+  authorAvatar?: string;    // avatar URL (may be absent)
   text: string;
   createdAt: string;
   likeCount: number;
@@ -222,6 +240,8 @@ export interface ThreadNode {
   labels: ResolvedLabel[];
   depth: number;
   replies: ThreadNode[];
+  parentUri?: string;       // URI of the post this is a direct reply to
+  parentAuthorHandle?: string; // handle of the parent post's author (for "↳ reply to" display)
 }
 
 export function resolveThread(
@@ -232,13 +252,15 @@ export function resolveThread(
   const post = node.post as AppBskyFeedDefs.PostView;
   const record = post.record as AppBskyFeedPost.Record;
 
+  const parentUri = (record.reply?.parent as { uri?: string } | undefined)?.uri ?? undefined;
+
   const resolved: ThreadNode = {
     uri: post.uri,
     cid: post.cid,
     authorDid: post.author.did,
     authorHandle: post.author.handle,
-    authorName: post.author.displayName ?? undefined,
-    authorAvatar: post.author.avatar ?? undefined,
+    ...(post.author.displayName != null ? { authorName: post.author.displayName } : {}),
+    ...(post.author.avatar != null ? { authorAvatar: post.author.avatar } : {}),
     text: record.text ?? '',
     createdAt: record.createdAt ?? post.indexedAt,
     likeCount: post.likeCount ?? 0,
@@ -249,12 +271,18 @@ export function resolveThread(
     labels: resolveLabels(post.labels as any),
     depth,
     replies: [],
+    ...(parentUri !== undefined ? { parentUri } : {}),
   };
 
   if (depth < maxDepth && node.replies?.length) {
     resolved.replies = (node.replies as AppBskyFeedDefs.ThreadViewPost[])
       .filter(r => r.$type === 'app.bsky.feed.defs#threadViewPost' && r.post)
-      .map(r => resolveThread(r, depth + 1, maxDepth));
+      .map(r => {
+        const child = resolveThread(r, depth + 1, maxDepth);
+        // Stamp the parent's handle onto direct children so the UI can say "↳ @X"
+        child.parentAuthorHandle = resolved.authorHandle;
+        return child;
+      });
   }
 
   return resolved;

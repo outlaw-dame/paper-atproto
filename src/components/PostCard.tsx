@@ -4,6 +4,8 @@ import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
 import VideoPlayer from './VideoPlayer';
 import TwemojiText from './TwemojiText';
+import { useTranslationStore } from '../store/translationStore.js';
+import { translationClient } from '../lib/i18n/client.js';
 
 interface PostCardProps {
   post: MockPost;
@@ -22,6 +24,10 @@ interface PostCardProps {
 
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const { policy, byId, upsertTranslation, clearTranslation } = useTranslationStore();
+  const translation = byId[post.id];
 
   const storyRootId = post.threadRoot?.id ?? post.id;
   const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
@@ -39,6 +45,42 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     e.stopPropagation();
     setShowRepostMenu(prev => !prev);
   };
+
+  const handleTranslate = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (translation) {
+      setShowOriginal((prev) => !prev);
+      return;
+    }
+
+    if (!post.content.trim()) return;
+    setTranslating(true);
+    try {
+      const result = await translationClient.translateInline({
+        id: post.id,
+        sourceText: post.content,
+        targetLang: policy.userLanguage,
+        mode: policy.localOnlyMode ? 'local_private' : 'server_default',
+      });
+      upsertTranslation(result);
+      setShowOriginal(false);
+    } catch (err) {
+      console.warn('[PostCard] translation failed', err);
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const handleClearTranslation = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    clearTranslation(post.id);
+    setShowOriginal(false);
+  };
+
+  const displayContent = translation && !showOriginal
+    ? translation.translatedText
+    : post.content;
 
   return (
     <motion.div
@@ -102,8 +144,49 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           marginBottom: post.embed || post.media ? 12 : 4,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }}>
-          <TwemojiText text={post.content} />
+          <TwemojiText text={displayContent} />
         </p>
+      )}
+
+      {post.content.trim().length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <button
+            onClick={handleTranslate}
+            disabled={translating}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--blue)',
+              fontSize: 13,
+              fontWeight: 600,
+              padding: 0,
+              cursor: translating ? 'default' : 'pointer',
+              opacity: translating ? 0.65 : 1,
+            }}
+          >
+            {translation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
+          </button>
+          {translation && (
+            <>
+              <span style={{ fontSize: 12, color: 'var(--label-3)' }}>
+                Translated from {translation.sourceLang}
+              </span>
+              <button
+                onClick={handleClearTranslation}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--label-3)',
+                  fontSize: 12,
+                  padding: 0,
+                  cursor: 'pointer',
+                }}
+              >
+                Clear
+              </button>
+            </>
+          )}
+        </div>
       )}
 
       {/* Embeds */}

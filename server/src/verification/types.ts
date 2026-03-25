@@ -125,4 +125,14 @@ export type VerificationResult = {
   factualConfidence: number;
   factualState: FactualState;
   reasons: FactualContributionReason[];
+  entityLinking?: {
+    provider: 'heuristic' | 'rel' | 'dbpedia';
+    endpoint?: string;
+    linkedEntities: Array<{
+      mention: string;
+      canonicalId: string;
+      canonicalLabel: string;
+      confidence: number;
+    }>;
+  };
 };

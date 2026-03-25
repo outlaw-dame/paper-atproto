@@ -122,7 +122,7 @@ llmRouter.post('/write/interpolator', async (c) => {
   }
 
   try {
-    const result = await runInterpolatorWriter(parsed.data);
+    const result = await runInterpolatorWriter(parsed.data as any);
     return c.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Writer failed';
@@ -156,7 +156,7 @@ llmRouter.post('/analyze/media', async (c) => {
   }
 
   try {
-    const result = await runMediaAnalyzer(parsed.data);
+    const result = await runMediaAnalyzer(parsed.data as any);
     return c.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Media analysis failed';

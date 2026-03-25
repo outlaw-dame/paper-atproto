@@ -19,6 +19,9 @@ import { atpCall } from '../lib/atproto/client.js';
 import { mapFeedViewPost, mapPostViewToMockPost } from '../atproto/mappers.js';
 import type { MockPost } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
+import { summarizeStoryEntities } from '../intelligence/entityLinking.js';
+import { useTranslationStore } from '../store/translationStore.js';
+import { translationClient } from '../lib/i18n/client.js';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
@@ -83,9 +86,10 @@ function RichText({ text, color }: { text: string; color: string }) {
 }
 
 // ─── OverviewCard ─────────────────────────────────────────────────────────
-function OverviewCard({ posts, query }: { posts: MockPost[]; query: string }) {
+function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; query: string; getTranslatedText: (post: MockPost) => string }) {
   const top = posts[0];
   if (!top) return null;
+  const topText = getTranslatedText(top);
   const img = top.images?.[0] ?? top.embed?.thumbnail;
   const domain = top.embed?.url ? (() => { try { return new URL(top.embed!.url!).hostname.replace(/^www\./, ''); } catch { return ''; } })() : '';
 
@@ -127,7 +131,7 @@ function OverviewCard({ posts, query }: { posts: MockPost[]; query: string }) {
           fontWeight: typeScale.titleLg[2], letterSpacing: typeScale.titleLg[3],
           color: disc.textPrimary, marginBottom: 10,
         }}>
-          <RichText text={top.content.slice(0, 140)} color={disc.textPrimary} />
+          <RichText text={topText.slice(0, 140)} color={disc.textPrimary} />
         </p>
 
         {/* Stats row */}
@@ -175,9 +179,10 @@ function OverviewCard({ posts, query }: { posts: MockPost[]; query: string }) {
 }
 
 // ─── BestSourceCard ───────────────────────────────────────────────────────
-function BestSourceCard({ posts }: { posts: MockPost[] }) {
+function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTranslatedText: (post: MockPost) => string }) {
   const top = posts[0];
   if (!top) return null;
+  const topText = getTranslatedText(top);
   return (
     <div style={{
       borderRadius: ocTokens.radius,
@@ -211,7 +216,7 @@ function BestSourceCard({ posts }: { posts: MockPost[] }) {
         fontWeight: typeScale.bodyMd[2],
         color: disc.textSecondary, marginBottom: 16,
       }}>
-        <RichText text={top.content} color={disc.textSecondary} />
+        <RichText text={topText} color={disc.textSecondary} />
       </p>
 
       {/* Embed if present */}
@@ -245,9 +250,13 @@ function BestSourceCard({ posts }: { posts: MockPost[] }) {
 
 // ─── RelatedEntitiesCard ──────────────────────────────────────────────────
 function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
-  // Extract hashtags and mentioned handles
-  const hashtags = posts.flatMap(p => p.content.match(/#\w+/g) ?? []).filter((v, i, a) => a.indexOf(v) === i).slice(0, 12);
-  const handles = posts.flatMap(p => p.content.match(/@[\w.]+/g) ?? []).filter((v, i, a) => a.indexOf(v) === i).slice(0, 6);
+  const entities = summarizeStoryEntities(posts.map(p => p.content));
+  const topicEntities = entities
+    .filter(entity => entity.entityKind === 'concept' || entity.entityKind === 'claim')
+    .slice(0, 12);
+  const actorEntities = entities
+    .filter(entity => entity.entityKind === 'person' || entity.entityKind === 'org')
+    .slice(0, 8);
 
   return (
     <div style={{
@@ -261,39 +270,45 @@ function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
         textTransform: 'uppercase', color: disc.textTertiary, marginBottom: 16,
       }}>Related Entities</p>
 
-      {hashtags.length > 0 && (
+      {topicEntities.length > 0 && (
         <div style={{ marginBottom: 20 }}>
           <p style={{ fontSize: typeScale.metaSm[0], fontWeight: 600, color: disc.textTertiary, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Topics</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {hashtags.map(h => (
-              <span key={h} style={{
+            {topicEntities.map(topic => (
+              <span key={topic.canonicalId} style={{
                 padding: '5px 12px', borderRadius: radius.full,
                 background: 'rgba(91,124,255,0.14)',
                 color: accent.primary,
                 fontSize: typeScale.chip[0], fontWeight: 600,
-              }}>{h}</span>
+              }}>
+                #{topic.label.replace(/\s+/g, '')}
+                {topic.mentionCount > 1 && <span style={{ marginLeft: 6, opacity: 0.75 }}>x{topic.mentionCount}</span>}
+              </span>
             ))}
           </div>
         </div>
       )}
 
-      {handles.length > 0 && (
+      {actorEntities.length > 0 && (
         <div>
           <p style={{ fontSize: typeScale.metaSm[0], fontWeight: 600, color: disc.textTertiary, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Mentioned</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {handles.map(h => (
-              <span key={h} style={{
+            {actorEntities.map(entity => (
+              <span key={entity.canonicalId} style={{
                 padding: '5px 12px', borderRadius: radius.full,
                 background: 'rgba(191,143,255,0.12)',
                 color: '#BF8FFF',
                 fontSize: typeScale.chip[0], fontWeight: 600,
-              }}>{h}</span>
+              }}>
+                @{entity.label.replace(/^@/, '')}
+                {entity.aliasCount > 1 && <span style={{ marginLeft: 6, opacity: 0.75 }}>~{entity.aliasCount}</span>}
+              </span>
             ))}
           </div>
         </div>
       )}
 
-      {hashtags.length === 0 && handles.length === 0 && (
+      {topicEntities.length === 0 && actorEntities.length === 0 && (
         <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No entities detected in this result set.</p>
       )}
     </div>
@@ -301,7 +316,7 @@ function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
 }
 
 // ─── RelatedConversationCard ──────────────────────────────────────────────
-function RelatedConversationCard({ posts, onOpenStory }: { posts: MockPost[]; onOpenStory: (e: StoryEntry) => void }) {
+function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { posts: MockPost[]; onOpenStory: (e: StoryEntry) => void; getTranslatedText: (post: MockPost) => string }) {
   return (
     <div style={{
       borderRadius: ocTokens.radius,
@@ -343,7 +358,7 @@ function RelatedConversationCard({ posts, onOpenStory }: { posts: MockPost[]; on
               color: disc.textSecondary,
               display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
             }}>
-              {post.content}
+              {getTranslatedText(post)}
             </p>
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
               <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
@@ -411,6 +426,7 @@ function BottomQueryDock({ query, onRefine }: { query: string; onRefine: (q: str
 // ─── Main component ────────────────────────────────────────────────────────
 export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props) {
   const { agent, session } = useSessionStore();
+  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const [posts, setPosts] = useState<MockPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [cardIdx, setCardIdx] = useState(0);
@@ -433,6 +449,31 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
       .finally(() => setLoading(false));
   }, [refinedQuery, agent, session]);
 
+  const getTranslatedText = useCallback((post: MockPost): string => {
+    return translationById[post.id]?.translatedText ?? post.content;
+  }, [translationById]);
+
+  useEffect(() => {
+    if (!translationPolicy.autoTranslateExplore) return;
+    if (posts.length === 0) return;
+
+    const visible = posts.slice(0, 6).filter((post) => post.content.trim().length > 0 && !translationById[post.id]);
+    if (visible.length === 0) return;
+
+    Promise.allSettled(
+      visible.map((post) =>
+        translationClient.translateInline({
+          id: post.id,
+          sourceText: post.content,
+          targetLang: translationPolicy.userLanguage,
+          mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+        }).then((result) => upsertTranslation(result)),
+      ),
+    ).catch(() => {
+      // Keep original text when translation is unavailable.
+    });
+  }, [posts, translationById, translationPolicy.autoTranslateExplore, translationPolicy.localOnlyMode, translationPolicy.userLanguage, upsertTranslation]);
+
   const advance = useCallback(() => {
     if (cardIdx < CARD_NAMES.length - 1) { setDir(1); setCardIdx(i => i + 1); }
   }, [cardIdx]);
@@ -448,10 +489,10 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
   }, { axis: 'x', swipe: { velocity: 0.3 } });
 
   const cards = [
-    <OverviewCard key="overview" posts={posts} query={refinedQuery} />,
-    <BestSourceCard key="source" posts={posts} />,
+    <OverviewCard key="overview" posts={posts} query={refinedQuery} getTranslatedText={getTranslatedText} />,
+    <BestSourceCard key="source" posts={posts} getTranslatedText={getTranslatedText} />,
     <RelatedEntitiesCard key="entities" posts={posts} />,
-    <RelatedConversationCard key="conversation" posts={posts} onOpenStory={onOpenStory} />,
+    <RelatedConversationCard key="conversation" posts={posts} onOpenStory={onOpenStory} getTranslatedText={getTranslatedText} />,
   ];
 
   return (

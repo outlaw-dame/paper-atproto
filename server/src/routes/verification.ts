@@ -16,6 +16,32 @@ const VerifyRequestSchema = z.object({
 
 export const verificationRouter = new Hono();
 
+verificationRouter.get('/status', async (c) => {
+  const provider = env.VERIFY_ENTITY_LINKING_PROVIDER;
+  const endpoint = env.VERIFY_ENTITY_LINKING_ENDPOINT;
+  const externalLinkingEnabled = provider !== 'heuristic' && Boolean(endpoint);
+
+  return c.json({
+    ok: true,
+    status: {
+      verifyApiEnabled: env.VERIFY_API_ENABLED,
+      entityLinking: {
+        provider,
+        ...(endpoint ? { endpoint } : {}),
+        timeoutMs: env.VERIFY_ENTITY_LINKING_TIMEOUT_MS,
+        debug: env.VERIFY_ENTITY_LINKING_DEBUG,
+        externalLinkingEnabled,
+      },
+      limits: {
+        maxTextChars: env.VERIFY_MAX_TEXT_CHARS,
+        maxUrls: env.VERIFY_MAX_URLS,
+        timeoutMs: env.VERIFY_TIMEOUT_MS,
+        retryAttempts: env.VERIFY_RETRY_ATTEMPTS,
+      },
+    },
+  });
+});
+
 verificationRouter.post('/evidence', async (c) => {
   if (env.VERIFY_SHARED_SECRET) {
     const presented = c.req.header('x-verify-shared-secret');

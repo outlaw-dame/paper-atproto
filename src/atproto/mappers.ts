@@ -94,10 +94,13 @@ export function mapPostViewToMockPost(post: PostView): MockPost {
       post: mapPostViewToMockPost(embed.record as PostView),
     };
   } else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedRecord.isView(embed.record) && AppBskyFeedDefs.isPostView(embed.record.record)) {
-      embedData = {
-          type: 'quote' as const,
-          post: mapPostViewToMockPost(embed.record.record as PostView),
-      };
+    const quotedPost = mapPostViewToMockPost(embed.record.record as PostView);
+    let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+    if (AppBskyEmbedExternal.isView(embed.media)) {
+      const ext = embed.media.external;
+      externalLink = { url: ext.uri, title: ext.title, description: ext.description, thumb: ext.thumb, domain: extractDomain(ext.uri) };
+    }
+    embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
   }
 
   return {

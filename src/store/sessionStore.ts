@@ -19,12 +19,15 @@ export interface SessionData {
 interface SessionState {
   agent: BskyAgent;
   session: SessionData | null;
+  /** True once the agent has had resumeSession/login complete — safe to make authed API calls */
+  sessionReady: boolean;
   profile: AppBskyActorDefs.ProfileViewDetailed | null;
   isLoading: boolean;
   error: string | null;
 
   // Actions
   setSession: (s: SessionData | null) => void;
+  setSessionReady: (v: boolean) => void;
   setProfile: (p: AppBskyActorDefs.ProfileViewDetailed | null) => void;
   setLoading: (v: boolean) => void;
   setError: (msg: string | null) => void;
@@ -62,18 +65,20 @@ export const useSessionStore = create<SessionState>((set, get) => {
   return {
     agent,
     session: null,
+    sessionReady: false,
     profile: null,
     isLoading: true,
     error: null,
 
     setSession: (s) => set({ session: s }),
+    setSessionReady: (v) => set({ sessionReady: v }),
     setProfile: (p) => set({ profile: p }),
     setLoading: (v) => set({ isLoading: v }),
     setError: (msg) => set({ error: msg }),
 
     resetAgent: () => {
       const newAgent = buildAgent((s) => get().setSession(s));
-      set({ agent: newAgent, session: null, profile: null });
+      set({ agent: newAgent, session: null, sessionReady: false, profile: null });
     },
   };
 });

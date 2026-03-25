@@ -5,9 +5,11 @@ import type {
   SourceType,
   FactualState,
 } from './types.js';
+import { env } from '../config/env.js';
 import { GoogleFactCheckProvider } from './google-fact-check.provider.js';
 import { GeminiGroundingProvider } from './gemini-grounding.provider.js';
 import { GoogleVisionMediaProvider } from './google-vision-media.provider.js';
+import { createEntityLinkingProvider, computeEntityGrounding } from './entity-linking.provider.js';
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
@@ -120,20 +122,27 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
   const factCheck = new GoogleFactCheckProvider();
   const grounding = new GeminiGroundingProvider();
   const media = new GoogleVisionMediaProvider();
+  const entityLinking = createEntityLinkingProvider();
 
   const claimType = naiveClaimType(input.text);
   const extractedClaim = input.text.trim() || null;
   const checkability = extractedClaim ? 0.75 : 0;
   const specificity = /\b\d|\bsection\b|\brule\b|\barticle\b/i.test(input.text) ? 0.65 : 0.4;
-  const entityGrounding = (input.topicHints?.length ?? 0) > 0 ? 0.65 : 0.45;
 
-  const [factMatches, grounded, mediaResult] = await Promise.all([
+  const [factMatches, grounded, mediaResult, linkedEntities] = await Promise.all([
     extractedClaim ? factCheck.searchClaims(extractedClaim, input.languageCode ?? 'en') : Promise.resolve([]),
     extractedClaim
-      ? grounding.groundClaim({ claim: extractedClaim, languageCode: input.languageCode, ...(input.urls ? { urls: input.urls } : {}) })
+      ? grounding.groundClaim({
+          claim: extractedClaim,
+          ...(input.languageCode !== undefined ? { languageCode: input.languageCode } : {}),
+          ...(input.urls ? { urls: input.urls } : {}),
+        })
       : Promise.resolve(emptyGrounding),
     input.imageUrls?.[0] ? media.verifyImage(input.imageUrls[0]).catch(() => null) : Promise.resolve(null),
+    entityLinking.linkEntities(input.text, input.topicHints ?? []).catch(() => []),
   ]);
+
+  const entityGrounding = computeEntityGrounding(input.topicHints ?? [], linkedEntities);
 
   const sourceType = chooseSourceType(grounded.sources.map((s) => s.sourceType));
   const sourceQuality = computeSourceQuality(sourceType);
@@ -190,5 +199,21 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
     factualConfidence,
     factualState,
     reasons,
+    ...(env.VERIFY_ENTITY_LINKING_DEBUG
+      ? {
+          entityLinking: {
+            provider: env.VERIFY_ENTITY_LINKING_PROVIDER,
+            ...(env.VERIFY_ENTITY_LINKING_ENDPOINT
+              ? { endpoint: env.VERIFY_ENTITY_LINKING_ENDPOINT }
+              : {}),
+            linkedEntities: linkedEntities.map(entity => ({
+              mention: entity.mention,
+              canonicalId: entity.canonicalId,
+              canonicalLabel: entity.canonicalLabel,
+              confidence: entity.confidence,
+            })),
+          },
+        }
+      : {}),
   };
 }

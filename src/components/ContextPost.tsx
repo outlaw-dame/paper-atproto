@@ -14,8 +14,8 @@ export const ContextPost = ({
   <div
     role={onClick ? 'button' : undefined}
     tabIndex={onClick ? 0 : undefined}
-    aria-label={onClick ? (type === 'thread' ? 'Open thread root post' : 'Open replied-to post') : undefined}
-    title={onClick ? (type === 'thread' ? 'Tap to open thread root' : 'Tap to open replied-to post') : undefined}
+    aria-label={onClick ? (type === 'thread' ? 'Open original post' : 'Open replied-to post') : undefined}
+    title={onClick ? (type === 'thread' ? 'Tap to open original post' : 'Tap to open replied-to post') : undefined}
     onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
     onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
     style={{
@@ -43,11 +43,11 @@ export const ContextPost = ({
     {/* Label row: "Thread root" label on left only for thread type; open hint always on right */}
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
       <span style={{ fontSize: 'var(--type-meta-sm-size)', color: 'var(--label-3)', fontWeight: 500 }}>
-        {type === 'thread' ? 'Thread root' : ''}
+        {type === 'thread' ? 'Original post' : ''}
       </span>
       {onClick && (
         <span style={{ fontSize: 11, color: 'var(--label-4, var(--label-3))', display: 'flex', alignItems: 'center', gap: 2, opacity: 0.65 }}>
-          {type === 'thread' ? 'Open thread' : 'Open post'}
+          {type === 'thread' ? 'Open original' : 'Open post'}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
             <line x1="7" y1="17" x2="17" y2="7"/>
             <polyline points="7 7 17 7 17 17"/>
