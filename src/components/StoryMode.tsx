@@ -41,6 +41,7 @@ import { callInterpolatorWriter } from '../intelligence/modelClient.js';
 import type { SummaryMode } from '../intelligence/llmContracts.js';
 import { translateWriterInput } from '../lib/i18n/threadTranslation.js';
 import { useTranslationStore } from '../store/translationStore.js';
+import { useUiStore } from '../store/uiStore.js';
 import { translationClient } from '../lib/i18n/client.js';
 import {
   promptHero as phTokens,
@@ -177,6 +178,7 @@ function PromptHeroCard({
   const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
+  const { openProfile } = useUiStore();
   const translation = translationById[post.id];
   const rootText = translation && !showOriginal ? translation.translatedText : post.content;
 
@@ -246,11 +248,17 @@ function PromptHeroCard({
         </div>
 
         {/* Author */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); openProfile(post.author.did); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(post.author.did); } }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer' }}
+        >
           <div style={{ width: 28, height: 28, borderRadius: '50%', overflow: 'hidden', background: 'rgba(255,255,255,0.1)', flexShrink: 0 }}>
             {post.author.avatar
               ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12, fontWeight: 700 }}>{((post.author.displayName ?? post.author.handle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
             }
           </div>
           <span style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: phTokens.meta }}>
@@ -987,6 +995,7 @@ function ContributionCard({
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
+  const { openProfile } = useUiStore();
   const translation = translationById[node.uri];
 
   const handleFeedback = (fb: ContributionScores['userFeedback']) => {
@@ -1064,13 +1073,25 @@ function ContributionCard({
     <div style={cardStyle}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: contTokens.gap }}>
-        <div style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0 }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
+          style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0, cursor: 'pointer' }}
+        >
           {node.authorAvatar
             ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
           }
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
+          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+        >
           {/* Only distinction between replies: followed accounts get fontWeight 800 */}
           <p style={{
             fontSize: typeScale.chip[0],
