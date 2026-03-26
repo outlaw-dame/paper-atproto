@@ -309,32 +309,42 @@ interface SentimentBannerProps {
 }
 
 function SentimentBanner({ result, parentSnippet, onDismiss }: SentimentBannerProps) {
-  if (result.level === 'ok') return null;
+  // Only suppress when truly nothing to show
+  if (result.level === 'ok' && result.parentSignals.length === 0) return null;
 
   const isAlert = result.level === 'alert';
   const isPositive = result.level === 'positive';
+  const isOkWithContext = result.level === 'ok' && result.parentSignals.length > 0;
   const isReply = result.isReplyContext && (result.parentSignals.length > 0 || !!parentSnippet);
   const accentColor = isAlert
     ? 'var(--red)'
     : isPositive
       ? 'var(--green)'
-      : 'var(--orange)';
+      : isOkWithContext
+        ? 'var(--blue)'
+        : 'var(--orange)';
   const bgColor = isAlert
     ? 'rgba(255,59,48,0.09)'
     : isPositive
       ? 'rgba(52,199,89,0.1)'
-      : 'rgba(255,149,0,0.09)';
+      : isOkWithContext
+        ? 'rgba(10,132,255,0.07)'
+        : 'rgba(255,149,0,0.09)';
   const borderColor = isAlert
     ? 'rgba(255,59,48,0.25)'
     : isPositive
       ? 'rgba(52,199,89,0.3)'
-      : 'rgba(255,149,0,0.25)';
+      : isOkWithContext
+        ? 'rgba(10,132,255,0.22)'
+        : 'rgba(255,149,0,0.25)';
   // In reply mode the label is more specific
   const label = isAlert
     ? 'Content notice'
     : isPositive
       ? (isReply ? 'Reply context · Supportive reply + Constructive signal' : 'Supportive reply + Constructive signal')
-      : (isReply ? 'Reply context · Tone check' : 'Tone check');
+      : isOkWithContext
+        ? 'Reply context'
+        : (isReply ? 'Reply context · Tone check' : 'Tone check');
 
   return (
     <motion.div
@@ -450,7 +460,9 @@ function SentimentBanner({ result, parentSnippet, onDismiss }: SentimentBannerPr
         <p style={{ margin: 0, fontSize: 11, color: 'var(--label-4)', fontStyle: 'italic' }}>
           {isPositive
             ? 'Constructive framing like this usually helps conversations feel safer and more useful.'
-            : 'You can still post — this is just a heads-up.'}
+            : isOkWithContext
+              ? 'No tone issues detected — context above is just for awareness.'
+              : 'You can still post — this is just a heads-up.'}
         </p>
       </div>
     </motion.div>
@@ -1107,8 +1119,11 @@ export default function ComposeSheet({ onClose }: Props) {
     };
   }, [dismissedPreviewUrl, linkPreview?.url, text]);
 
-  // ── Sentiment analysis — debounced 600 ms after typing stops ─────────────
+  // ── Sentiment analysis — immediate on reply open, debounced 600 ms while typing ─
   useEffect(() => {
+    // Run immediately when opening in reply context with no draft yet so the
+    // parent-context signals surface before the user starts typing.
+    const delay = (replyTarget != null && text.trim() === '') ? 0 : 600;
     const id = window.setTimeout(() => {
       const result = analyzeSentiment(text, {
         parentText: replyParentText,
@@ -1132,7 +1147,7 @@ export default function ComposeSheet({ onClose }: Props) {
         setSentimentDismissedAt(null);
         return result;
       });
-    }, 600);
+    }, delay);
     return () => window.clearTimeout(id);
   }, [
     replyParentText,
@@ -1801,7 +1816,7 @@ export default function ComposeSheet({ onClose }: Props) {
 
               {/* Sentiment / content analysis banner */}
               <AnimatePresence>
-                {sentimentResult.level !== 'ok' && sentimentDismissedAt === null && (
+                {(sentimentResult.level !== 'ok' || sentimentResult.parentSignals.length > 0) && sentimentDismissedAt === null && (
                   <SentimentBanner
                     result={sentimentResult}
                     parentSnippet={replyParentText}

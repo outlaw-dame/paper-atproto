@@ -349,7 +349,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       signals: [],
       constructiveSignals: [],
       supportiveReplySignals: [],
-      parentSignals: [],
+      parentSignals,
       isReplyContext: !!parentText,
     };
   }
@@ -394,7 +394,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     signals: [],
     constructiveSignals: [],
     supportiveReplySignals: [],
-    parentSignals: [],
+    parentSignals,
     isReplyContext: !!parentText,
   };
 }
