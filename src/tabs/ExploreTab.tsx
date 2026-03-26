@@ -59,7 +59,6 @@ const DISCOVERY_PHRASES = [
 ];
 
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
-const QUIET_FEED_URI    = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/quiet-posters';
 
 const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Packs', 'Sources'] as const;
 type QuickFilter = typeof QUICK_FILTERS[number];
@@ -917,8 +916,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
         : Promise.resolve(null)
       ).catch(catchWithLog('getSuggestions')),
       atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 40 })).catch(catchWithLog('getFeed:whats-hot')),
-      atpCall(() => agent.app.bsky.feed.getFeed({ feed: QUIET_FEED_URI, limit: 20 })).catch(catchWithLog('getFeed:quiet-posters')),
-    ]).then(([feedsRes, actorsRes, discoverRes, quietRes]) => {
+    ]).then(([feedsRes, actorsRes, discoverRes]) => {
       if (feedsRes?.data?.feeds) setSuggestedFeeds(feedsRes.data.feeds);
       if (actorsRes?.data?.actors) setSuggestedActors(actorsRes.data.actors);
       if (discoverRes?.data?.feed?.length) {
@@ -947,12 +945,24 @@ export default function ExploreTab({ onOpenStory }: Props) {
           .sort((a, b) => (a.likeCount + a.repostCount) - (b.likeCount + b.repostCount))
           .slice(0, 3);
 
-        const quietMapped = quietRes?.data?.feed?.length
-          ? quietRes.data.feed
-              .filter((item: any) => item.post?.record?.text?.length > 40)
-              .map((item: any) => mapFeedViewPost(item))
-              .slice(0, 4)
-          : [];
+        // Quiet-poster heuristic: authors who appear exactly once across the
+        // full 40-post dataset with text > 40 chars and at least some
+        // engagement — they posted something worth surfacing without spamming.
+        const authorOccurrences = new Map<string, number>();
+        for (const p of mapped) {
+          const did = p.author?.did ?? p.author?.handle ?? '';
+          if (did) authorOccurrences.set(did, (authorOccurrences.get(did) ?? 0) + 1);
+        }
+        const quietMapped = mapped
+          .filter(p => {
+            const did = p.author?.did ?? p.author?.handle ?? '';
+            return (
+              (p.content?.length ?? 0) > 40 &&
+              (authorOccurrences.get(did) ?? 0) === 1 &&
+              (p.likeCount + p.repostCount) >= 3
+            );
+          })
+          .slice(0, 4);
 
         const seen = new Set(topIds);
         const combined: MockPost[] = [];
