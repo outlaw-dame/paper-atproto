@@ -10,6 +10,13 @@ import {
 } from '@atproto/api';
 import type { MockPost, ChipType } from '../data/mockData.js';
 import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia.js';
+import {
+  asTrimmedString,
+  contentUnionToText,
+  hasDisplayableRecordContent,
+} from '../lib/atproto/recordContent.js';
+
+export { hasDisplayableRecordContent } from '../lib/atproto/recordContent.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -45,6 +52,30 @@ function isVideoUrl(url: string): boolean {
   return pattern.test(url);
 }
 
+function readBlobRef(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const ref = (value as any).ref;
+  if (!ref || typeof ref !== 'object') return null;
+  if (typeof ref.$link === 'string' && ref.$link.length > 0) return ref.$link;
+  if (typeof ref.toString === 'function') {
+    const str = ref.toString();
+    if (typeof str === 'string' && str.length > 0 && str !== '[object Object]') return str;
+  }
+  return null;
+}
+
+function buildBlobCdnUrl(did: string, blobLike: unknown): string | undefined {
+  const cid = readBlobRef(blobLike);
+  if (!cid) return undefined;
+  return `https://cdn.bsky.app/img/feed_fullsize/plain/${did}/${cid}@jpeg`;
+}
+
+function summarizeText(text: string, maxChars = 320): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxChars) return clean;
+  return `${clean.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
 // ─── Post View Mapper ──────────────────────────────────────────────────────
 
 export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
@@ -53,6 +84,57 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
   const postLabelValues = mapRawLabelValues((post as any).labels);
   const recordLabelValues = mapRawLabelValues(record?.labels?.values);
   const contentLabels = [...new Set([...postLabelValues, ...recordLabelValues])].slice(0, 20);
+  const $type = record?.$type;
+
+  let content = record.text || '';
+  let article: MockPost['article'] | undefined;
+
+  // Detect long-form records from common ATProto article/blog lexicons.
+  if ($type === 'app.bsky.feed.article') {
+    const body = asTrimmedString(record.body) || asTrimmedString(record.textContent) || contentUnionToText(record.content);
+    const title = asTrimmedString(record.title);
+    const description = asTrimmedString(record.description);
+    const banner = buildBlobCdnUrl(post.author.did, record.thumbnail);
+    article = {
+      ...(title ? { title } : {}),
+      body,
+      ...(banner ? { banner } : {}),
+    };
+    if (!content) content = description || summarizeText(body);
+  } else if ($type === 'site.standard.document') {
+    const body = asTrimmedString(record.textContent) || contentUnionToText(record.content);
+    const title = asTrimmedString(record.title);
+    const description = asTrimmedString(record.description);
+    const banner = buildBlobCdnUrl(post.author.did, record.coverImage);
+    article = {
+      ...(title ? { title } : {}),
+      body,
+      ...(banner ? { banner } : {}),
+    };
+    if (!content) content = description || summarizeText(body);
+  } else if ($type === 'com.whtwnd.blog.entry') {
+    const body = asTrimmedString(record.content);
+    const title = asTrimmedString(record.title);
+    const subtitle = asTrimmedString(record.subtitle);
+    const ogpImage = typeof record.ogp?.image === 'string' ? record.ogp.image : undefined;
+    article = {
+      ...(title ? { title } : {}),
+      body,
+      ...(ogpImage ? { banner: ogpImage } : {}),
+    };
+    if (!content) content = subtitle || summarizeText(body);
+  } else if ($type === 'sh.standard.post' || $type === 'sh.standard.article') {
+    const body = asTrimmedString(record.content) || asTrimmedString(record.body) || asTrimmedString(record.textContent);
+    const title = asTrimmedString(record.title);
+    const description = asTrimmedString(record.description);
+    const banner = buildBlobCdnUrl(post.author.did, record.image);
+    article = {
+      ...(title ? { title } : {}),
+      body,
+      ...(banner ? { banner } : {}),
+    };
+    if (!content) content = description || summarizeText(body);
+  }
 
   let media: MockPost['media'];
   if (AppBskyEmbedImages.isView(embed)) {
@@ -132,14 +214,15 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     id: post.uri,
     cid: post.cid,
     author,
-    content: record.text,
-    createdAt: record.createdAt,
+    content,
+    createdAt: record.createdAt || record.publishedAt || (post as any).indexedAt || new Date().toISOString(),
     likeCount: post.likeCount || 0,
     replyCount: post.replyCount || 0,
     repostCount: post.repostCount || 0,
     bookmarkCount: 0,
     chips: [] as ChipType[], // Chips are determined by higher-level logic
     ...(media ? { media } : {}),
+    ...(article ? { article } : {}),
     viewer,
     ...(contentLabels.length > 0 ? { contentLabels } : {}),
     ...(embedData ? { embed: embedData } : {}),

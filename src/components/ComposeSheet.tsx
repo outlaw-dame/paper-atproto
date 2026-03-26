@@ -933,6 +933,7 @@ function HashtagBrowser({
 export default function ComposeSheet({ onClose }: Props) {
   const { agent, profile } = useAtp();
   const navigateToProfile = useProfileNavigation();
+  const openExploreSearch = useUiStore((s) => s.openExploreSearch);
   const replyTarget = useUiStore(s => s.replyTarget);
   const replyParentText = replyTarget?.content?.trim() || undefined;
   const [replyThreadContext, setReplyThreadContext] = useState<{
@@ -995,6 +996,12 @@ export default function ComposeSheet({ onClose }: Props) {
   const remaining = MAX - text.length;
   const hasDraftContent = text.trim().length > 0 || mediaItems.length > 0;
   const canPost = hasDraftContent && remaining >= 0 && !posting;
+
+  const handleHashtagClick = useCallback((tag: string) => {
+    const normalized = tag.replace(/^#/, '').trim();
+    if (!normalized) return;
+    openExploreSearch(normalized);
+  }, [openExploreSearch]);
 
   const missingAltCount = useMemo(
     () => mediaItems.reduce((count, item) => count + (item.alt.trim().length === 0 ? 1 : 0), 0),
@@ -1782,7 +1789,7 @@ export default function ComposeSheet({ onClose }: Props) {
                 overflow: 'hidden', display: '-webkit-box',
                 WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
               }}>
-                <TwemojiText text={replyTarget.content} onMention={(handle) => { void navigateToProfile(handle); }} />
+                <TwemojiText text={replyTarget.content} onMention={(handle) => { void navigateToProfile(handle); }} onHashtag={handleHashtagClick} />
               </p>
             </div>
           </div>
@@ -2043,8 +2050,9 @@ export default function ComposeSheet({ onClose }: Props) {
                     style={{
                       display: 'flex', flexDirection: 'row',
                       overflowX: 'auto', scrollSnapType: 'x mandatory',
-                      scrollBehavior: 'smooth', gap: 8, borderRadius: 14,
+                      scrollBehavior: 'smooth', gap: 12, borderRadius: 14,
                       WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none',
+                      paddingRight: mediaItems.length > 1 ? 40 : 0,
                     } as React.CSSProperties}
                   >
                     {mediaItems.map((item, idx) => {
@@ -2054,7 +2062,7 @@ export default function ComposeSheet({ onClose }: Props) {
                           key={item.id}
                           style={{
                             flexShrink: 0, scrollSnapAlign: 'start',
-                            width: mediaItems.length === 1 ? '100%' : 'calc(88%)',
+                            width: mediaItems.length === 1 ? '100%' : '85%',
                             position: 'relative', borderRadius: 14,
                             overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '4/3',
                           }}

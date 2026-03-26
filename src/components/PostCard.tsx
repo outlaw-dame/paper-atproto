@@ -14,6 +14,7 @@ import { sportsFeedService } from '../services/sportsFeed.js';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
 import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { useUiStore } from '../store/uiStore.js';
 import {
   recordSensitiveMediaImpression,
   recordSensitiveMediaReveal,
@@ -76,6 +77,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     hidePost,
   } = useSensitiveMediaStore();
   const navigateToProfile = useProfileNavigation();
+  const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const translation = byId[post.id];
   const mediaItems = post.media ?? [];
   const carouselItems = useMemo<MediaCarouselItem[]>(() => {
@@ -147,21 +149,28 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const storyRootId = post.threadRoot?.id ?? post.id;
   const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
 
-  const handleProfileClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openActorProfile = (actor: string) => {
+    if (!actor) return;
     if (onViewProfile) {
-      onViewProfile(post.author.did);
+      onViewProfile(actor);
       return;
     }
-    void navigateToProfile(post.author.did);
+    void navigateToProfile(actor);
+  };
+
+  const handleProfileClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    openActorProfile(post.author.did || post.author.handle);
   };
 
   const handleMentionClick = (handle: string) => {
-    if (onViewProfile) {
-      onViewProfile(handle);
-      return;
-    }
-    void navigateToProfile(handle);
+    openActorProfile(handle);
+  };
+
+  const handleHashtagClick = (tag: string) => {
+    const normalized = tag.replace(/^#/, '').trim();
+    if (!normalized) return;
+    openExploreSearch(normalized);
   };
 
   // Handle "open story" click
@@ -410,12 +419,13 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div
+          <button
+            type="button"
             onClick={handleProfileClick}
             style={{
               width: 40, height: 40, borderRadius: '50%',
               background: 'var(--fill-2)', overflow: 'hidden',
-              flexShrink: 0, cursor: 'pointer',
+              flexShrink: 0, cursor: 'pointer', border: 'none', padding: 0,
             }}
           >
             {post.author.avatar ? (
@@ -425,7 +435,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                 {post.author.handle[0]}
               </div>
             )}
-          </div>
+          </button>
           <div
             onClick={handleProfileClick}
             role="button"
@@ -434,7 +444,8 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                onViewProfile?.(post.author.did);
+                e.stopPropagation();
+                openActorProfile(post.author.did || post.author.handle);
               }
             }}
             style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer', minWidth: 0 }}
@@ -442,6 +453,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-ui-title-sm-track)', color: 'var(--label-1)' }}>{translatedDisplayName || post.author.displayName || post.author.handle}</span>
               {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
+              {post.article && (
+                <span style={{ background: 'var(--fill-3)', color: 'var(--label-2)', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5, border: '1px solid var(--stroke-dim)' }}>
+                  Article
+                </span>
+              )}
               <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
             </div>
             <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
@@ -456,14 +472,34 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         </p>
       )}
 
-      {/* Content */}
-      {post.content && (
+      {/* Article content preview */}
+      {post.article && (
+        <div style={{ marginBottom: 12 }}>
+          {post.article.banner && (
+            <div style={{ marginBottom: 10, borderRadius: 10, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '16/9' }}>
+              <img src={post.article.banner} alt={post.article.title || 'Article cover'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            </div>
+          )}
+          {post.article.title && (
+            <h2 style={{ fontSize: 'var(--type-ui-title-md-size)', fontWeight: 800, color: 'var(--label-1)', marginBottom: 6, lineHeight: 1.25 }}>
+              {post.article.title}
+            </h2>
+          )}
+          <p style={{ fontSize: 'var(--type-body-md-size)', color: 'var(--label-2)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            <TwemojiText text={post.article.body} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
+          </p>
+          <div style={{ marginTop: 8, fontSize: 'var(--type-meta-md-size)', color: 'var(--blue)', fontWeight: 700, letterSpacing: -0.1, textDecoration: 'underline', textUnderlineOffset: 2 }}>Read full article →</div>
+        </div>
+      )}
+
+      {/* Standard Content */}
+      {post.content && !post.article && (
         <p style={{
           fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)',
           marginBottom: post.embed || post.media ? 12 : 6,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }}>
-          <TwemojiText text={displayContent} onMention={handleMentionClick} />
+          <TwemojiText text={displayContent} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
         </p>
       )}
 
@@ -1149,7 +1185,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
           </div>
           <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
-            <TwemojiText text={quotedPost.content} onMention={handleMentionClick} />
+            <TwemojiText text={quotedPost.content} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
           </p>
         </div>
         );

@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { List, ListItem, Block, Button, Searchbar, Card, Navbar, Page, Toolbar, Link } from 'konsta/react';
 import { feedService } from '../feeds.js';
+import { Markdown } from './Markdown.js';
 import type { Feed, FeedItem } from '../schema.js';
 
 /**
- * FeedList Component for managing and consuming ATOM/RSS/JSON feeds.
+ * FeedList Component for managing and consuming multiple feed formats.
+ * Supports RSS, ATOM, JSON Feed, JSON-LD, and RDF formats with automatic detection.
+ * Content is normalized to standard FeedItem schema and rendered with markdown support.
  */
 
 export const FeedList: React.FC = () => {
@@ -66,7 +69,7 @@ export const FeedList: React.FC = () => {
             <div className="flex gap-2">
               <input
                 type="text"
-                placeholder="Enter RSS/Atom/JSON Feed URL"
+                placeholder="Enter Feed URL (RSS, Atom, JSON, RDF, JSON-LD)"
                 className="flex-1 px-3 py-2 border rounded-md dark:bg-zinc-900 dark:border-zinc-800"
                 value={newFeedUrl}
                 onChange={(e) => setNewFeedUrl(e.target.value)}
@@ -90,7 +93,7 @@ export const FeedList: React.FC = () => {
                   key={feed.id}
                   title={feed.title || 'Untitled Feed'}
                   subtitle={feed.category || 'News'}
-                  text={feed.url}
+                  text={`${feed.type.toUpperCase()} • ${feed.url}`}
                   link
                   onClick={() => handleSelectFeed(feed)}
                 />
@@ -103,8 +106,13 @@ export const FeedList: React.FC = () => {
           {feedItems.map((item) => (
             <Card key={item.id} margin="m-0" className="overflow-hidden">
               <div className="p-4">
-                <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mb-1 uppercase tracking-wider">
-                  {selectedFeed.category || 'News'}
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                    {selectedFeed.category || 'News'}
+                  </span>
+                  <span className="text-xs font-semibold px-2 py-1 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 uppercase tracking-wider">
+                    {selectedFeed.type}
+                  </span>
                 </div>
                 <h3 className="text-lg font-bold mb-2 leading-tight">
                   <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:underline">

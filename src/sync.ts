@@ -15,6 +15,7 @@ import { paperDB } from './db';
 import { inferenceClient } from './workers/InferenceClient';
 import { atpCall, atpMutate } from './lib/atproto/client';
 import { resolveEmbed, resolveFacets, extractClusterSignals } from './lib/resolver/atproto';
+import { extractRecordDisplayText } from './lib/atproto/recordContent.js';
 import { z } from 'zod';
 import { AppBskyFeedDefs } from '@atproto/api';
 
@@ -28,11 +29,18 @@ const FeedViewPostSchema = z.object({
       handle: z.string(),
     }),
     record: z.object({
-      text: z.string(),
-      createdAt: z.string(),
+      text: z.string().optional(),
+      body: z.string().optional(),
+      textContent: z.string().optional(),
+      content: z.unknown().optional(),
+      title: z.string().optional(),
+      subtitle: z.string().optional(),
+      description: z.string().optional(),
+      createdAt: z.string().optional(),
+      publishedAt: z.string().optional(),
       embed: z.any().optional(),
       facets: z.any().optional(),
-    }),
+    }).passthrough(),
   }),
   reply: z.object({
     root: z.object({ uri: z.string() }).passthrough().optional(),
@@ -69,14 +77,18 @@ export class PaperSync {
         .map(item => FeedViewPostSchema.safeParse(item))
         .filter(result => result.success)
         .map(result => (result as any).data)
-        .filter(item => item.post.record.text && item.post.record.text.trim() !== '');
+        .map((item) => ({
+          ...item,
+          extractedContent: extractRecordDisplayText(item.post.record),
+        }))
+        .filter((item) => item.extractedContent.length > 0);
 
       if (postsToProcess.length === 0) {
         console.log('[sync] No new posts to process.');
         return;
       }
 
-      const textsToEmbed = postsToProcess.map(item => sanitize(item.post.record.text));
+      const textsToEmbed = postsToProcess.map(item => sanitize(item.extractedContent));
       const embeddings = await inferenceClient.embedBatch(textsToEmbed);
 
       await pg.transaction(async (trx) => {
@@ -94,7 +106,11 @@ export class PaperSync {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT (id) DO NOTHING`,
             [
-              post.cid, post.uri, post.author.did, sanitizedContent, post.record.createdAt,
+              post.cid,
+              post.uri,
+              post.author.did,
+              sanitizedContent,
+              post.record.createdAt || post.record.publishedAt || new Date().toISOString(),
               embedding.length ? `[${embedding.join(',')}]` : null,
               JSON.stringify({ ...post.record.embed, _signals: signals }),
               reply?.parent?.uri ?? null,

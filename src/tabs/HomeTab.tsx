@@ -6,7 +6,7 @@ import ContextPost from '../components/ContextPost.js';
 import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { useUiStore } from '../store/uiStore.js';
-import { mapFeedViewPost } from '../atproto/mappers.js';
+import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
 import { atpCall, atpMutate } from '../lib/atproto/client.js';
 import { qk } from '../lib/atproto/queries.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
@@ -105,7 +105,7 @@ export default function HomeTab({ onOpenStory }: Props) {
       }
 
       const mapped = feed
-        .filter((item: any) => item.post?.record?.text !== undefined)
+        .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
         .map(mapFeedViewPost);
 
       if (isInitial) {

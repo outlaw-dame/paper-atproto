@@ -9,6 +9,7 @@
 import { withRetry } from '../lib/retry.js';
 import type { RetryOptions } from '../lib/retry.js';
 import { env } from '../config/env.js';
+import { ensureSafetyInstructions, filterWriterResponse } from '../lib/safeguards.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 // These mirror src/intelligence/llmContracts.ts — kept local to avoid
@@ -45,7 +46,7 @@ export interface WriterResponse {
 
 // ─── Prompts ───────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are the Glympse Interpolator — a thread analysis writer for a social discussion app. Your output appears inside a "Story Mode" card that helps readers understand a Bluesky thread at a glance.
+const SYSTEM_PROMPT_BASE = `You are the Glympse Interpolator — a thread analysis writer for a social discussion app.
 
 You receive a structured thread brief: a root post, high-impact replies, contributor list, and verified entities. Write ONLY from this data. Never invent names, claims, or entities not present in the input.
 
@@ -143,6 +144,9 @@ OUTPUT SCHEMA
   "abstained": false,
   "mode": "normal | descriptive_fallback | minimal_fallback"
 }`;
+
+// Prepend safety guardrails to system prompt
+const SYSTEM_PROMPT = ensureSafetyInstructions(SYSTEM_PROMPT_BASE);
 
 // ─── Ollama caller ─────────────────────────────────────────────────────────
 
@@ -393,5 +397,10 @@ export async function runInterpolatorWriter(request: WriterRequest): Promise<Wri
     throw new Error('Writer returned invalid JSON');
   }
 
-  return validateResponse(parsed, request.summaryMode);
+  const validated = validateResponse(parsed, request.summaryMode);
+  
+  // Apply safety filtering to all text fields
+  const { filtered } = filterWriterResponse(validated);
+  
+  return filtered;
 }

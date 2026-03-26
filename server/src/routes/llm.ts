@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { runInterpolatorWriter } from '../services/qwenWriter.js';
 import { runMediaAnalyzer } from '../services/qwenMultimodal.js';
 import { env } from '../config/env.js';
-
+import { filterWriterResponse, filterMediaAnalyzerResponse, logSafetyFlag } from '../services/safetyFilters.js';
 export const llmRouter = new Hono();
 
 // ─── Shared schemas ────────────────────────────────────────────────────────
@@ -123,7 +123,9 @@ llmRouter.post('/write/interpolator', async (c) => {
 
   try {
     const result = await runInterpolatorWriter(parsed.data as any);
-    return c.json(result);
+    const { filtered, safetyMetadata } = filterWriterResponse(result);
+    logSafetyFlag('[llm/write/interpolator]', safetyMetadata);
+    return c.json(filtered);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Writer failed';
     console.error('[llm/write/interpolator]', message);
@@ -157,7 +159,9 @@ llmRouter.post('/analyze/media', async (c) => {
 
   try {
     const result = await runMediaAnalyzer(parsed.data as any);
-    return c.json(result);
+    const { filtered, safetyMetadata } = filterMediaAnalyzerResponse(result);
+    logSafetyFlag('[llm/analyze/media]', safetyMetadata);
+    return c.json(filtered);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Media analysis failed';
     console.error('[llm/analyze/media]', message);
@@ -223,11 +227,14 @@ llmRouter.post('/write/search-story', async (c) => {
 
   try {
     const result = await runInterpolatorWriter(writerInput);
-    return c.json({
+    const synopsis = {
       synopsis: result.collapsedSummary,
       ...(result.expandedSummary ? { shortSynopsis: result.expandedSummary } : {}),
       abstained: result.abstained,
-    });
+    };
+    const { filtered, safetyMetadata } = filterWriterResponse(synopsis);
+    logSafetyFlag('[llm/write/search-story]', safetyMetadata);
+    return c.json(filtered);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Synopsis writer failed';
     console.error('[llm/write/search-story]', message);

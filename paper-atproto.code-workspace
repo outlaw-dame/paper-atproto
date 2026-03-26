@@ -44,7 +44,10 @@
 				"approve": true,
 				"matchCommandLine": true
 			},
-			"level": true
+			"level": true,
+			"pnpm": true,
+			"printf": true,
+			"git remote": true
 		}
 	}
 }

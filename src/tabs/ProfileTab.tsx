@@ -450,7 +450,7 @@ function WePresentWarningCard({
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const { agent, session, profile: sessionProfile } = useSessionStore();
-  const { openSearchStory, openComposeReply, setTab: setAppTab } = useUiStore();
+  const { openExploreSearch, openComposeReply, setTab: setAppTab } = useUiStore();
   const platform = usePlatform();
   const btnTokens = getButtonTokens(platform);
   const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
@@ -954,7 +954,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               </p>
 
               {/* Bio — linkified */}
-              {bio && <BioText text={bio} onHashtagClick={tag => openSearchStory(tag)} />}
+              {bio && <BioText text={bio} onHashtagClick={tag => openExploreSearch(tag)} />}
 
               {/* Stats row */}
               <div style={{

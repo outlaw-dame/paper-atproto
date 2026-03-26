@@ -31,7 +31,7 @@ export const feeds = pgTable('feeds', {
   url: text('url').unique().notNull(),
   title: text('title'),
   description: text('description'),
-  type: text('type').notNull(), // RSS, ATOM, JSON
+  type: text('type').notNull(), // RSS, ATOM, JSON, JSON-LD, RDF
   lastSyncedAt: timestamp('last_synced_at'),
   category: text('category'), // News, Podcast, Video, etc.
 });

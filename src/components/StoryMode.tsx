@@ -86,7 +86,7 @@ function Spinner() {
   );
 }
 
-function RichText({ text, facets, baseColor }: { text: string; facets?: ResolvedFacet[]; baseColor: string }) {
+function RichText({ text, facets, baseColor, onHashtag }: { text: string; facets?: ResolvedFacet[]; baseColor: string; onHashtag?: (tag: string) => void }) {
   const navigateToProfile = useProfileNavigation();
   if (!facets?.length) {
     const parts = text.split(/(@[\w.]+|#\w+|https?:\/\/\S+)/g);
@@ -94,7 +94,7 @@ function RichText({ text, facets, baseColor }: { text: string; facets?: Resolved
       <span>
         {parts.map((p, i) => {
           if (p.startsWith('@')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{p}</button>;
-          if (p.startsWith('#')) return <span key={i} style={{ color: accent.blue500, fontWeight: 500 }}>{p}</span>;
+          if (p.startsWith('#')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); onHashtag?.(p.slice(1)); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: onHashtag ? 'pointer' : 'default', padding: 0 }}>{p}</button>;
           if (p.startsWith('http')) {
             try { return <a key={i} href={p} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{new URL(p).hostname.replace(/^www\./, '')}</a>; }
             catch { return <span key={i}>{p}</span>; }
@@ -115,7 +115,7 @@ function RichText({ text, facets, baseColor }: { text: string; facets?: Resolved
     if (f.byteStart > cursor) nodes.push(<span key={`t${cursor}`} style={{ color: baseColor }}>{dec.decode(bytes.slice(cursor, f.byteStart))}</span>);
     const seg = dec.decode(bytes.slice(f.byteStart, f.byteEnd));
     if (f.kind === 'mention') nodes.push(<button key={`m${f.byteStart}`} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(seg); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{seg}</button>);
-    else if (f.kind === 'hashtag') nodes.push(<span key={`h${f.byteStart}`} style={{ color: accent.blue500, fontWeight: 500 }}>{seg}</span>);
+    else if (f.kind === 'hashtag') nodes.push(<button key={`h${f.byteStart}`} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); onHashtag?.(seg.replace(/^#/, '')); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: onHashtag ? 'pointer' : 'default', padding: 0 }}>{seg}</button>);
     else if (f.kind === 'link') nodes.push(<a key={`l${f.byteStart}`} href={f.uri} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{f.uri ? (() => { try { return new URL(f.uri!).hostname.replace(/^www\./, ''); } catch { return seg; } })() : seg}</a>);
     cursor = f.byteEnd;
   }
@@ -184,7 +184,7 @@ function PromptHeroCard({
   const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const { openProfile } = useUiStore();
+  const { openProfile, openExploreSearch } = useUiStore();
   const navigateToProfile = useProfileNavigation();
   const translation = translationById[post.id];
   const detectedRootLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
@@ -193,6 +193,12 @@ function PromptHeroCard({
     || detectedRootLanguage.language === 'und'
     || !isLikelySameLanguage(detectedRootLanguage.language, translationPolicy.userLanguage);
   const rootText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
+
+  const handleHashtagClick = (tag: string) => {
+    const normalized = tag.replace(/^#/, '').trim();
+    if (!normalized) return;
+    openExploreSearch(normalized);
+  };
 
   const handleTranslate = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -222,7 +228,9 @@ function PromptHeroCard({
     }
   };
 
-  const img = post.media?.[0]?.url ?? post.embed?.thumb;
+  const embedThumb = post.embed && post.embed.type !== 'quote' ? post.embed.thumb : undefined;
+  const img = post.media?.[0]?.url ?? embedThumb;
+  const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   return (
     <div style={{
       borderRadius: phTokens.radius,
@@ -284,13 +292,39 @@ function PromptHeroCard({
         </div>
 
         {/* Title — the "cover line" */}
-        <p style={{
-          fontSize: typeScale.titleXl[0], lineHeight: `${typeScale.titleXl[1]}px`,
-          fontWeight: typeScale.titleXl[2], letterSpacing: typeScale.titleXl[3],
-          color: phTokens.text, marginBottom: 12,
-        }}>
-          {rootText}
-        </p>
+        {post.article?.title ? (
+          <h1 style={{
+            fontSize: typeScale.titleXl[0], lineHeight: `${typeScale.titleXl[1]}px`,
+            fontWeight: 800, letterSpacing: typeScale.titleXl[3],
+            color: phTokens.text, marginBottom: 16,
+          }}>
+            {post.article.title}
+          </h1>
+        ) : (
+          <p style={{
+            fontSize: '18px', lineHeight: 1.55,
+            fontWeight: 500, letterSpacing: '-0.005em',
+            color: phTokens.text, marginBottom: 12,
+          }}>
+            <RichText text={rootText} facets={[]} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
+          </p>
+        )}
+
+        {/* Article Body */}
+        {post.article && (
+          <div style={{ 
+            fontSize: '19px', 
+            color: phTokens.text, 
+            opacity: 0.95, 
+            lineHeight: 1.7, 
+            marginBottom: 32, 
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
+            letterSpacing: '-0.01em'
+          }}>
+            <RichText text={post.article.body} facets={[]} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
+          </div>
+        )}
 
         {shouldOfferTranslation && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -334,7 +368,7 @@ function PromptHeroCard({
         )}
 
         {/* Quote post embed */}
-        {post.embed?.type === 'quote' && post.embed.post && (
+        {quoteEmbed?.post && (
           <div style={{
             padding: `${space[6]}px ${space[8]}px`,
             background: 'rgba(255,255,255,0.06)',
@@ -343,23 +377,23 @@ function PromptHeroCard({
             marginBottom: 16,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.embed.post.author.did || post.embed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                {post.embed.post.author.displayName || post.embed.post.author.handle}
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
               </button>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.embed.post.author.did || post.embed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                @{post.embed.post.author.handle}
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                @{quoteEmbed.post.author.handle}
               </button>
             </div>
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: phTokens.meta, opacity: 0.85, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-              <RichText text={post.embed.post.content} baseColor={phTokens.meta} />
+              <RichText text={quoteEmbed.post.content} baseColor={phTokens.meta} onHashtag={handleHashtagClick} />
             </p>
           </div>
         )}
 
         {/* External link preview (standalone or from recordWithMedia) */}
-        {post.embed?.type === 'quote' && post.embed.externalLink && (
+        {quoteEmbed?.externalLink && (
           <a
-            href={post.embed.externalLink.url}
+            href={quoteEmbed.externalLink.url}
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
@@ -371,14 +405,14 @@ function PromptHeroCard({
               textDecoration: 'none', overflow: 'hidden',
             }}
           >
-            {post.embed.externalLink.thumb && (
-              <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
+            {quoteEmbed.externalLink.thumb && (
+              <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
             )}
             <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-              {post.embed.externalLink.title && (
-                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.externalLink.title}</p>
+              {quoteEmbed.externalLink.title && (
+                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quoteEmbed.externalLink.title}</p>
               )}
-              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.externalLink.domain}</p>
+              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quoteEmbed.externalLink.domain}</p>
             </div>
           </a>
         )}
@@ -794,7 +828,7 @@ function InterpolatorCard({
                       <motion.div
                         initial={{ width: 0 }}
                         animate={{ width: `${heatLevel * 100}%` }}
-                        style={{ height: '100%', background: intTokens.accent.coral, borderRadius: radius.full }}
+                        style={{ height: '100%', background: intel.accentCoral, borderRadius: radius.full }}
                       />
                     </div>
                   </div>
@@ -1032,7 +1066,7 @@ function BranchSummaryPill({
         background: 'none',
         border: `0.5px solid ${disc.lineStrong}`,
         borderRadius: 20,
-        padding: `${space[2]}px ${space[6]}px ${space[2]}px ${space[3]}px`,
+        padding: `${space[2]}px ${space[6]}px ${space[2]}px ${space[4]}px`,
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
@@ -1097,7 +1131,7 @@ function ContributionCard({
   const [translating, setTranslating] = useState(false);
   const [showAllReplies, setShowAllReplies] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const { openProfile } = useUiStore();
+  const { openProfile, openExploreSearch } = useUiStore();
   const navigateToProfile = useProfileNavigation();
   const translation = translationById[node.uri];
   const detectedReplyLanguage = useMemo(() => heuristicDetectLanguage(node.text), [node.text]);
@@ -1179,6 +1213,12 @@ function ContributionCard({
     : null;
   const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : node.text;
 
+  const handleHashtagClick = (tag: string) => {
+    const normalized = tag.replace(/^#/, '').trim();
+    if (!normalized) return;
+    openExploreSearch(normalized);
+  };
+
   return (
     <div style={cardStyle}>
       {/* Header row */}
@@ -1252,7 +1292,7 @@ function ContributionCard({
           fontSize: typeScale.metaSm[0], color: disc.textTertiary,
           marginBottom: 4, fontWeight: 500,
         }}>
-          ↳ replying to <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.parentAuthorHandle); }} style={{ font: 'inherit', color: 'inherit', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.parentAuthorHandle}</button>
+          ↳ replying to <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (node.parentAuthorHandle) void navigateToProfile(node.parentAuthorHandle); }} style={{ font: 'inherit', color: 'inherit', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.parentAuthorHandle}</button>
         </p>
       )}
 
@@ -1264,7 +1304,7 @@ function ContributionCard({
         color: disc.textPrimary,
         marginBottom: contTokens.gap,
       }}>
-        <RichText text={bodyText} facets={node.facets} baseColor={disc.textPrimary} />
+        <RichText text={bodyText} facets={node.facets} baseColor={disc.textPrimary} onHashtag={handleHashtagClick} />
       </p>
 
       {shouldOfferTranslation && (
@@ -1294,9 +1334,9 @@ function ContributionCard({
       )}
 
       {/* Embed */}
-      {node.embed?.kind === 'external' && node.embed.uri && (
+      {node.embed?.kind === 'external' && node.embed.external && (
         <a
-          href={node.embed.uri}
+          href={node.embed.external.uri}
           target="_blank"
           rel="noopener noreferrer"
           onClick={e => e.stopPropagation()}
@@ -1308,44 +1348,45 @@ function ContributionCard({
             border: `0.5px solid ${disc.lineSubtle}`,
           }}
         >
-          {node.embed.thumb && <img src={node.embed.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
-          {(node.embed as any).authorName && (
-            <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, marginBottom: 4 }}>
-              <span style={{ fontWeight: 700, color: 'var(--teal)' }}>Featured author:</span> {(node.embed as any).authorName}
-              {(node.embed as any).publisher && <span style={{ marginLeft: 8, color: 'var(--label-4)' }}>· {(node.embed as any).publisher}</span>}
-            </p>
-          )}
-          <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{node.embed.title}</p>
+          {node.embed.external.thumb && <img src={node.embed.external.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
+          {node.embed.external.title && <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{node.embed.external.title}</p>}
           <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
-            {(() => { try { return new URL(node.embed.uri).hostname.replace(/^www\./, ''); } catch { return node.embed.uri; } })()}
+            {node.embed.external.domain}
           </p>
         </a>
       )}
 
       {/* Quote post embed */}
-      {(node.embed?.kind === 'record' || node.embed?.kind === 'recordWithMedia') && node.embed.quotedText && (
-        <div style={{
-          marginBottom: contTokens.gap,
-          background: disc.surfaceCard2,
-          borderRadius: radius[12],
-          padding: `${space[6]}px ${space[8]}px`,
-          border: `0.5px solid ${disc.lineSubtle}`,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.embed.quotedAuthorHandle || node.embed.quotedAuthorDisplayName || ''); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-              {node.embed.quotedAuthorDisplayName || node.embed.quotedAuthorHandle || 'Unknown'}
-            </button>
-            {node.embed.quotedAuthorHandle && (
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.embed.quotedAuthorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                @{node.embed.quotedAuthorHandle}
+      {(() => {
+        const quoteEmbed = node.embed?.kind === 'record' || node.embed?.kind === 'recordWithMedia'
+          ? node.embed
+          : null;
+        if (!quoteEmbed?.quotedText) return null;
+        const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDisplayName;
+        return (
+          <div style={{
+            marginBottom: contTokens.gap,
+            background: disc.surfaceCard2,
+            borderRadius: radius[12],
+            padding: `${space[6]}px ${space[8]}px`,
+            border: `0.5px solid ${disc.lineSubtle}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (profileTarget) void navigateToProfile(profileTarget); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: profileTarget ? 'pointer' : 'default' }}>
+                {quoteEmbed.quotedAuthorDisplayName || quoteEmbed.quotedAuthorHandle || 'Unknown'}
               </button>
-            )}
+              {quoteEmbed.quotedAuthorHandle && (
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); const handle = quoteEmbed.quotedAuthorHandle; if (handle) void navigateToProfile(handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  @{quoteEmbed.quotedAuthorHandle}
+                </button>
+              )}
+            </div>
+            <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              <RichText text={quoteEmbed.quotedText} baseColor={disc.textSecondary} onHashtag={handleHashtagClick} />
+            </p>
           </div>
-          <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-            <RichText text={node.embed.quotedText} baseColor={disc.textSecondary} />
-          </p>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Link preview card from recordWithMedia external media */}
       {node.embed?.kind === 'recordWithMedia' && node.embed.mediaExternal && (
@@ -1833,7 +1874,7 @@ export default function StoryMode({ entry, onClose }: Props) {
         if (!rootNode) return;
 
         if (isInitial) {
-          const mapped = mapFeedViewPost({ post: (threadData as any).post, reply: undefined, reason: undefined });
+          const mapped = mapFeedViewPost({ post: (threadData as any).post } as any);
           setRootPost(mapped);
           setReplies(rootNode.replies ?? []);
         } else {
@@ -1914,7 +1955,7 @@ export default function StoryMode({ entry, onClose }: Props) {
             const interpolatorForWriter = hasTranslatedThreadText
               ? {
                   ...result.interpolator,
-                  ...buildInterpolatorSummary(translatedRootText, translatedReplies, result.scores),
+                  ...buildInterpolatorSummary(translatedRootText, translatedReplies, result.scores as any),
                 }
               : result.interpolator;
 

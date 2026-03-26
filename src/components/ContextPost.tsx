@@ -2,6 +2,7 @@ import React from 'react';
 import type { MockPost } from '../data/mockData.js';
 import TwemojiText from './TwemojiText.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { useUiStore } from '../store/uiStore.js';
 
 export const ContextPost = ({
   post,
@@ -13,8 +14,15 @@ export const ContextPost = ({
   onClick?: () => void;
 }) => {
   const navigateToProfile = useProfileNavigation();
+  const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const authorActor = post.author.did || post.author.handle;
   const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
+
+  const handleHashtagClick = (tag: string) => {
+    const normalized = tag.replace(/^#/, '').trim();
+    if (!normalized) return;
+    openExploreSearch(normalized);
+  };
 
   return (
   <div
@@ -148,7 +156,7 @@ export const ContextPost = ({
           wordBreak: 'break-word',
         }}
       >
-        <TwemojiText text={post.content} onMention={(handle) => { void navigateToProfile(handle); }} />
+        <TwemojiText text={post.content} onMention={(handle) => { void navigateToProfile(handle); }} onHashtag={handleHashtagClick} />
       </p>
     </div>
   </div>

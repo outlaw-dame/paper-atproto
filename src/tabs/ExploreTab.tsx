@@ -11,7 +11,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSessionStore } from '../store/sessionStore.js';
 import { atpCall, atpMutate } from '../lib/atproto/client.js';
-import { mapFeedViewPost } from '../atproto/mappers.js';
+import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
 import type { MockPost } from '../data/mockData.js';
 import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
 import type { StoryEntry } from '../App.js';
@@ -82,6 +82,12 @@ function canAutoInlineTranslateExplore(post: MockPost): boolean {
 
 function getAuthorInitial(displayName?: string, handle?: string): string {
   return ((displayName ?? handle ?? '').trim().charAt(0) || '?').toUpperCase();
+}
+
+function getPrimaryPostText(post: MockPost): string {
+  const articleBody = post.article?.body?.trim();
+  if (articleBody) return articleBody;
+  return post.content.trim();
 }
 
 // ─── Shared sub-components ────────────────────────────────────────────────
@@ -208,14 +214,16 @@ function FeaturedSearchStoryCard({
   const navigateToProfile = useProfileNavigation();
   const targetLanguage = useTranslationStore((state) => state.policy.userLanguage);
   const embed = post.embed?.type === 'external' ? post.embed : null;
-  const img = post.media?.[0]?.url ?? embed?.thumb;
-  const domain = embed?.domain ?? '';
+  const img = post.article?.banner ?? post.media?.[0]?.url ?? embed?.thumb;
+  const domain = embed?.domain ?? (post.article ? 'Long-form' : '');
   const detectedLanguage = heuristicDetectLanguage(post.content);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
   const shouldOfferTranslation = hasRenderableTranslation
     || detectedLanguage.language === 'und'
     || !isLikelySameLanguage(detectedLanguage.language, targetLanguage);
-  const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
+  const bodyText = post.article?.body
+    ? post.article.body
+    : (hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content);
   const hashtags: string[] = Array.from(new Set((bodyText.match(/#\w+/g) ?? []) as string[])).slice(0, 5);
   // Entity chips: prefer AI-extracted, fall back to content-derived
   const entityChips = extractPostEntities(bodyText).filter(e => e.type !== 'topic' || !hashtags.includes(e.label));
@@ -333,12 +341,12 @@ function FeaturedSearchStoryCard({
         </p>
 
         {/* Article title from embed (if different from post text) */}
-        {embed?.title && embed.title.trim() !== bodyText.trim() && (
+        {(post.article?.title || embed?.title) && (post.article?.title ?? embed?.title ?? '').trim() !== bodyText.trim() && (
           <p style={{
             fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
             color: disc.textSecondary, marginBottom: 8,
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-          }}>{embed.title}</p>
+          }}>{post.article?.title ?? embed?.title}</p>
         )}
 
         {post.content.trim().length > 0 && shouldOfferTranslation && (
@@ -486,15 +494,17 @@ function LinkedPostMiniCard({
   const navigateToProfile = useProfileNavigation();
   const targetLanguage = useTranslationStore((state) => state.policy.userLanguage);
   const embed = post.embed?.type === 'external' ? post.embed : null;
-  const img = post.media?.[0]?.url ?? embed?.thumb;
-  const domain = embed?.domain ?? '';
+  const img = post.article?.banner ?? post.media?.[0]?.url ?? embed?.thumb;
+  const domain = embed?.domain ?? (post.article ? 'Long-form' : '');
   const detectedLanguage = heuristicDetectLanguage(post.content);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
   const shouldOfferTranslation = hasRenderableTranslation
     || detectedLanguage.language === 'und'
     || !isLikelySameLanguage(detectedLanguage.language, targetLanguage);
 
-  const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
+  const bodyText = post.article?.body
+    ? post.article.body
+    : (hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content);
 
   return (
     <motion.div
@@ -819,6 +829,8 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ExploreTab({ onOpenStory }: Props) {
   const { agent, session, sessionReady } = useSessionStore();
+  const exploreSearchQuery = useUiStore((state) => state.exploreSearchQuery);
+  const clearExploreSearch = useUiStore((state) => state.clearExploreSearch);
   const navigateToProfile = useProfileNavigation();
   const platform = usePlatform();
   const buttonTokens = getButtonTokens(platform);
@@ -890,6 +902,21 @@ export default function ExploreTab({ onOpenStory }: Props) {
     return () => clearTimeout(t);
   }, [query]);
 
+  // Accept external hashtag navigation and open Explore post results directly.
+  useEffect(() => {
+    if (!exploreSearchQuery) return;
+    const trimmed = exploreSearchQuery.trim();
+    if (!trimmed) {
+      clearExploreSearch();
+      return;
+    }
+    const normalized = trimmed.replace(/^#/, '');
+    const nextQuery = normalized ? `#${normalized}` : trimmed;
+    setQuery(nextQuery);
+    setDebouncedQuery(nextQuery);
+    clearExploreSearch();
+  }, [clearExploreSearch, exploreSearchQuery]);
+
   // Live search
   useEffect(() => {
     if (!debouncedQuery.trim()) { setSearchPosts([]); setSearchActors([]); return; }
@@ -902,7 +929,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
       if (postsRes?.data?.posts) {
         setSearchPosts(
           postsRes.data.posts
-            .filter((p: any) => p?.record?.text)
+            .filter((p: any) => hasDisplayableRecordContent(p?.record))
             .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }))
         );
       }
@@ -939,7 +966,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
       // Collect posts from whats-hot
       const whatsHotPosts = whatsHotRes?.data?.feed?.length
         ? whatsHotRes.data.feed
-            .filter((item: any) => item.post?.record?.text)
+            .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
             .map((item: any) => mapFeedViewPost(item))
         : [];
 
@@ -954,7 +981,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
         );
         trendingPosts = trendingSearchResults
           .filter(r => r?.data?.posts?.length)
-          .flatMap((r: any) => r.data.posts.filter((p: any) => p?.record?.text).slice(0, 2))
+          .flatMap((r: any) => r.data.posts.filter((p: any) => hasDisplayableRecordContent(p?.record)).slice(0, 2))
           .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }));
       }
 
@@ -970,13 +997,15 @@ export default function ExploreTab({ onOpenStory }: Props) {
       );
 
       // ─── Top tier: posts with external links (high engagement) ──────────
-      const withLinks = byEngagement.filter(p => p.embed?.type === 'external').slice(0, 6);
-      setLinkPosts(withLinks);
-      setFeaturedPost(withLinks[0] ?? byEngagement[0] ?? null);
+      const featuredCandidates = byEngagement
+        .filter(p => p.embed?.type === 'external' || !!p.article)
+        .slice(0, 6);
+      setLinkPosts(featuredCandidates);
+      setFeaturedPost(featuredCandidates[0] ?? byEngagement[0] ?? null);
       setTrendingPosts(byEngagement.slice(0, 10));
 
       // ─── Side-strip formula ──────────────────────────────────────────
-      const topIds = new Set(withLinks.map(p => p.id));
+      const topIds = new Set(featuredCandidates.map(p => p.id));
 
       // Mid-tier: high-engagement posts (not already in top links)
       const midTier = byEngagement
@@ -985,15 +1014,16 @@ export default function ExploreTab({ onOpenStory }: Props) {
 
       // Link posts from outside top 6: secondary batch of external-link posts
       const secondaryLinks = byEngagement
-        .filter(p => p.embed?.type === 'external' && !topIds.has(p.id))
+        .filter(p => (p.embed?.type === 'external' || !!p.article) && !topIds.has(p.id))
         .sort((a, b) => scorePostEngagement(b) - scorePostEngagement(a))
         .slice(0, 4);
 
       // Quiet posters: from dedicated feed, text length > 40 chars
       const quietMapped = quietRes?.data?.feed?.length
         ? quietRes.data.feed
-            .filter((item: any) => item.post?.record?.text?.length > 40)
+            .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
             .map((item: any) => mapFeedViewPost(item))
+            .filter((post: MockPost) => getPrimaryPostText(post).length > 40)
             .slice(0, 3)
         : [];
 
@@ -1073,7 +1103,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
 
   // ─── Trending topics derived from posts ─────────────────────────────────
   const trendingTopics = trendingPosts.flatMap(p =>
-    (p.content.match(/#\w+/g) ?? []).slice(0, 2)
+    (getPrimaryPostText(p).match(/#\w+/g) ?? []).slice(0, 2)
   ).filter((v, i, a) => a.indexOf(v) === i).slice(0, 8);
 
   // ─── Live clusters from suggestedActors (placeholder) ───────────────────
@@ -1647,7 +1677,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                             onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                             onClearTranslation={(event) => handleClearTranslation(event, p.id)}
                             onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
-                            onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                            onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
                           />
                         ))}
                       </div>
@@ -1708,7 +1738,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                   onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                                   onClearTranslation={(event) => handleClearTranslation(event, p.id)}
                                   onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
-                                  onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                                  onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
                                   onEntityTap={(e) => setActiveEntity(e)}
                                 />
                               );
@@ -1794,7 +1824,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                                 onClearTranslation={(event) => handleClearTranslation(event, p.id)}
                                 onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
-                                onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                                onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
                               />
                             );
                           })}

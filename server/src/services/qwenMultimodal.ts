@@ -11,6 +11,7 @@
 import { env } from '../config/env.js';
 import { withRetry } from '../lib/retry.js';
 import type { RetryOptions } from '../lib/retry.js';
+import { ensureSafetyInstructions, detectHarmfulContent } from '../lib/safeguards.js';
 
 export interface MediaRequest {
   threadId: string;
@@ -58,6 +59,9 @@ OUTPUT SCHEMA
   "cautionFlags": []
 }`;
 
+// Wrap with safety instructions
+const SYSTEM_PROMPT_WITH_SAFETY = ensureSafetyInstructions(SYSTEM_PROMPT);
+
 // ─── Ollama vision caller ───────────────────────────────────────────────────
 
 interface OllamaChatMessage {
@@ -99,7 +103,7 @@ async function callOllamaVision(
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: SYSTEM_PROMPT_WITH_SAFETY },
           { role: 'user', content: userContent, images: [imageBase64] },
         ],
         stream: false,
@@ -135,6 +139,16 @@ function validateResponse(raw: unknown): MediaResponse {
   const cautionFlags = Array.isArray(r.cautionFlags)
     ? (r.cautionFlags as unknown[]).filter(f => typeof f === 'string') as string[]
     : [];
+
+  // Safety check: detect harmful content in extracted text or summary
+  if (extractedText && detectHarmfulContent(extractedText).isHarmful) {
+    cautionFlags.push('harmful-content-detected');
+    console.warn('[SAFETY] Harmful content detected in image extraction');
+  }
+  if (detectHarmfulContent(mediaSummary).isHarmful) {
+    cautionFlags.push('harmful-content-detected');
+    console.warn('[SAFETY] Harmful content detected in media summary');
+  }
 
   return {
     mediaCentrality, mediaType, mediaSummary, candidateEntities, confidence, cautionFlags,

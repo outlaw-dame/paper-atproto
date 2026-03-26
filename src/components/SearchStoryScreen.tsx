@@ -15,8 +15,9 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
 import { useSessionStore } from '../store/sessionStore.js';
+import { useUiStore } from '../store/uiStore.js';
 import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost, mapPostViewToMockPost } from '../atproto/mappers.js';
+import { mapFeedViewPost, mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
 import type { MockPost } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
 import { summarizeStoryEntities } from '../intelligence/entityLinking.js';
@@ -72,12 +73,29 @@ function StoryProgressRail({ total, current }: { total: number; current: number 
 // ─── RichText inline renderer ─────────────────────────────────────────────
 function RichText({ text, color }: { text: string; color: string }) {
   const navigateToProfile = useProfileNavigation();
+  const openExploreSearch = useUiStore((s) => s.openExploreSearch);
   const parts = text.split(/(@[\w.]+|#\w+|https?:\/\/\S+)/g);
   return (
     <span>
       {parts.map((p, i) => {
         if (p.startsWith('@')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }} style={{ color: accent.cyan400, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{p}</button>;
-        if (p.startsWith('#')) return <span key={i} style={{ color: accent.cyan400, fontWeight: 500 }}>{p}</span>;
+        if (p.startsWith('#')) {
+          return (
+            <button
+              key={i}
+              className="interactive-link-button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const normalized = p.replace(/^#/, '').trim();
+                if (!normalized) return;
+                openExploreSearch(normalized);
+              }}
+              style={{ color: accent.cyan400, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              {p}
+            </button>
+          );
+        }
         if (p.startsWith('http')) {
           try {
             return <a key={i} href={p} target="_blank" rel="noopener noreferrer" style={{ color: accent.cyan400 }} onClick={e => e.stopPropagation()}>{new URL(p).hostname.replace(/^www\./, '')}</a>;
@@ -456,7 +474,7 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
         if (res?.data?.posts) {
           setPosts(
             res.data.posts
-              .filter((p: any) => p?.record?.text)
+              .filter((p: any) => hasDisplayableRecordContent(p?.record))
               .map((p: any) => mapPostViewToMockPost(p))
           );
         }

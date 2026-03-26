@@ -53,6 +53,11 @@ export interface MockPost {
     repost?: string;
     bookmark?: string;
   };
+  article?: {
+    title?: string;
+    body: string;
+    banner?: string;
+  };
 }
 
 export type ChipType = 'thread' | 'topic' | 'feed' | 'pack' | 'related' | 'story';

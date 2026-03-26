@@ -23,6 +23,7 @@ import type {
   AppBskyEmbedRecordWithMedia,
   ComAtprotoLabelDefs,
 } from '@atproto/api';
+import { extractRecordDisplayText } from '../atproto/recordContent.js';
 
 // ─── AT URI ───────────────────────────────────────────────────────────────
 export interface ParsedAtUri {
@@ -194,13 +195,14 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
 
   if (type === 'app.bsky.embed.record#view' || type === 'app.bsky.embed.record') {
     const rec = embed.record ?? embed;
+    const quotedRecord = (rec.value ?? rec.record) as unknown;
     return {
       kind: 'record',
       quotedUri: rec.uri,
       quotedAuthorDid: rec.author?.did,
       quotedAuthorHandle: rec.author?.handle,
       quotedAuthorDisplayName: rec.author?.displayName,
-      quotedText: (rec.value ?? rec.record)?.text,
+      quotedText: extractRecordDisplayText(quotedRecord),
     };
   }
 
@@ -216,7 +218,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
       quotedAuthorDid: rec.author?.did,
       quotedAuthorHandle: rec.author?.handle,
       quotedAuthorDisplayName: rec.author?.displayName,
-      quotedText: (rec.value ?? rec.record)?.text,
+      quotedText: extractRecordDisplayText((rec.value ?? rec.record) as unknown),
       ...(imgs.length > 0 ? { mediaImages: imgs.map(i => ({ url: i.fullsize ?? i.thumb ?? '', alt: i.alt ?? '' })) } : {}),
       ...(ext && mediaType.includes('external') ? {
         mediaExternal: {
@@ -262,6 +264,7 @@ export function resolveThread(
 ): ThreadNode {
   const post = node.post as AppBskyFeedDefs.PostView;
   const record = post.record as AppBskyFeedPost.Record;
+  const resolvedText = extractRecordDisplayText(record as unknown);
 
   const parentUri = (record.reply?.parent as { uri?: string } | undefined)?.uri ?? undefined;
 
@@ -272,7 +275,7 @@ export function resolveThread(
     authorHandle: post.author.handle,
     ...(post.author.displayName != null ? { authorName: post.author.displayName } : {}),
     ...(post.author.avatar != null ? { authorAvatar: post.author.avatar } : {}),
-    text: record.text ?? '',
+    text: resolvedText,
     createdAt: record.createdAt ?? post.indexedAt,
     likeCount: post.likeCount ?? 0,
     replyCount: post.replyCount ?? 0,

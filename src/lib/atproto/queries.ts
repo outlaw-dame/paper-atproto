@@ -16,7 +16,7 @@ import {
 import { useEffect } from 'react';
 import { useSessionStore } from '../../store/sessionStore.js';
 import { atpCall, atpMutate } from './client.js';
-import { mapFeedViewPost, mapNotification } from '../../atproto/mappers.js';
+import { mapFeedViewPost, mapNotification, hasDisplayableRecordContent } from '../../atproto/mappers.js';
 import type { MockPost } from '../../data/mockData.js';
 import type { LiveNotification } from '../../atproto/mappers.js';
 import { AtUri } from '@atproto/syntax';
@@ -72,7 +72,7 @@ export function useTimelineFeed(mode: 'Following' | 'Discover' | 'Feeds') {
       }
 
       return feed
-        .filter((item: any) => item.post?.record?.text !== undefined)
+        .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
         .map(mapFeedViewPost);
     },
     initialPageParam: undefined as string | undefined,

@@ -15,6 +15,7 @@ interface UiState {
   replyTarget: MockPost | null;
   story: StoryEntry | null;
   searchStoryQuery: string | null;
+  exploreSearchQuery: string | null;
   unreadCount: number;
   profileDid: string | null;
   composeDraft: string;
@@ -31,6 +32,8 @@ interface UiState {
   closeStory: () => void;
   openSearchStory: (query: string) => void;
   closeSearchStory: () => void;
+  openExploreSearch: (query: string) => void;
+  clearExploreSearch: () => void;
   setUnreadCount: (n: number) => void;
   openProfile: (did: string) => void;
 }
@@ -43,6 +46,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   replyTarget: null,
   story: null,
   searchStoryQuery: null,
+  exploreSearchQuery: null,
   unreadCount: 0,
   profileDid: null,
 
@@ -58,6 +62,14 @@ export const useUiStore = create<UiState>((set, get) => ({
   closeStory: () => set({ story: null }),
   openSearchStory: (query) => set({ searchStoryQuery: query }),
   closeSearchStory: () => set({ searchStoryQuery: null }),
+  openExploreSearch: (query) => set((s) => ({
+    exploreSearchQuery: query,
+    searchStoryQuery: null,
+    story: null,
+    prevTab: s.activeTab,
+    activeTab: 'explore' as TabId,
+  })),
+  clearExploreSearch: () => set({ exploreSearchQuery: null }),
   setUnreadCount: (n) => set({ unreadCount: n }),
   openProfile: (did) => set(s => ({ profileDid: did, prevTab: s.activeTab, activeTab: 'profile' as TabId })),
 
