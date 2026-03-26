@@ -17,7 +17,21 @@ type LanguageOption = {
   label: string;
 };
 
-type SettingsPage = 'translation' | 'moderation';
+type SettingsPage = 'translation' | 'moderation' | 'debug';
+
+interface ComposeDebugSnapshot {
+  draftText: string;
+  replyParentText: string;
+  sentimentDismissedAt: number | null;
+  sentimentResult: {
+    level: string;
+    isReplyContext?: boolean;
+    signals?: string[];
+    supportiveReplySignals?: string[];
+    constructiveSignals?: string[];
+    parentSignals?: string[];
+  };
+}
 
 const BASE_LANG_OPTIONS = [
   'en',
@@ -139,6 +153,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const iconTokens = getIconBtnTokens(platform);
   const [page, setPage] = useState<SettingsPage>('translation');
   const [altMetrics, setAltMetrics] = useState(() => getAltTextMetricsSnapshot());
+  const [composeDebug, setComposeDebug] = useState<ComposeDebugSnapshot | null>(null);
 
   const systemLang = useMemo(() => {
     try {
@@ -153,7 +168,13 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
 
-    const refresh = () => setAltMetrics(getAltTextMetricsSnapshot());
+    const refresh = () => {
+      setAltMetrics(getAltTextMetricsSnapshot());
+      if (typeof window !== 'undefined') {
+        const snapshot = (window as Window & { __PAPER_COMPOSE_DEBUG__?: unknown }).__PAPER_COMPOSE_DEBUG__;
+        setComposeDebug((snapshot ?? null) as ComposeDebugSnapshot | null);
+      }
+    };
     refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
@@ -215,7 +236,9 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 <p style={{ fontSize: 12, color: 'var(--label-3)' }}>
                   {page === 'translation'
                     ? 'Phanpy-style inline + auto translation'
-                    : 'Sensitive media, filters, and moderation controls'}
+                    : page === 'moderation'
+                      ? 'Sensitive media, filters, and moderation controls'
+                      : 'Diagnostics and QA details for internal testing'}
                 </p>
               </div>
               <button
@@ -276,6 +299,23 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                   }}
                 >
                   Moderation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPage('debug')}
+                  style={{
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 10,
+                    border: 'none',
+                    background: page === 'debug' ? 'var(--blue)' : 'var(--fill-2)',
+                    color: page === 'debug' ? '#fff' : 'var(--label-2)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Debug
                 </button>
               </div>
 
@@ -347,6 +387,78 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
 
                   <BlueskyPrefsSection />
 
+                </>
+              )}
+
+              {page === 'moderation' && <ModerationSettingsPage />}
+
+              {page === 'debug' && (
+                <>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Compose sentiment (debug)</h4>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const snapshot = (window as Window & { __PAPER_COMPOSE_DEBUG__?: unknown }).__PAPER_COMPOSE_DEBUG__;
+                          setComposeDebug((snapshot ?? null) as ComposeDebugSnapshot | null);
+                        }}
+                        style={{
+                          border: '1px solid var(--sep)',
+                          borderRadius: 8,
+                          background: 'var(--fill-1)',
+                          color: 'var(--label-2)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+
+                    <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }}>
+                      Mirrors window.__PAPER_COMPOSE_DEBUG__ and keeps debug output out of the composer UI.
+                    </p>
+
+                    {!composeDebug && (
+                      <div style={{ marginTop: 8, border: '1px solid var(--sep)', borderRadius: 10, padding: 10, background: 'var(--fill-1)' }}>
+                        <p style={{ margin: 0, fontSize: 12, color: 'var(--label-3)' }}>
+                          No compose debug snapshot found yet. Open the composer and type to generate one.
+                        </p>
+                      </div>
+                    )}
+
+                    {composeDebug && (
+                      <div style={{ marginTop: 8, border: '1px dashed var(--sep)', borderRadius: 10, padding: 10, background: 'var(--fill-1)', display: 'grid', gap: 6 }}>
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                          level={composeDebug.sentimentResult?.level ?? 'ok'} | draftLength={composeDebug.draftText?.trim().length ?? 0} | replyContext={String(!!composeDebug.sentimentResult?.isReplyContext)} | dismissed={composeDebug.sentimentDismissedAt === null ? 'false' : 'true'}
+                        </p>
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                          draft="{composeDebug.draftText?.trim() || '(empty)'}"
+                        </p>
+                        {composeDebug.replyParentText && (
+                          <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                            parent="{composeDebug.replyParentText.length > 120 ? `${composeDebug.replyParentText.slice(0, 117)}...` : composeDebug.replyParentText}"
+                          </p>
+                        )}
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                          signals={composeDebug.sentimentResult?.signals?.length ? composeDebug.sentimentResult.signals.join(' | ') : '(none)'}
+                        </p>
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                          supportiveReplySignals={composeDebug.sentimentResult?.supportiveReplySignals?.length ? composeDebug.sentimentResult.supportiveReplySignals.join(' | ') : '(none)'}
+                        </p>
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                          constructiveSignals={composeDebug.sentimentResult?.constructiveSignals?.length ? composeDebug.sentimentResult.constructiveSignals.join(' | ') : '(none)'}
+                        </p>
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                          parentSignals={composeDebug.sentimentResult?.parentSignals?.length ? composeDebug.sentimentResult.parentSignals.join(' | ') : '(none)'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
 
                   <div>
@@ -404,8 +516,6 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                   </div>
                 </>
               )}
-
-              {page === 'moderation' && <ModerationSettingsPage />}
             </div>
           </motion.div>
         </>

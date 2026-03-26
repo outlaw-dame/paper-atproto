@@ -457,62 +457,6 @@ function SentimentBanner({ result, parentSnippet, onDismiss }: SentimentBannerPr
   );
 }
 
-function SentimentDebugCard({
-  result,
-  draftText,
-  parentSnippet,
-  dismissedAt,
-}: {
-  result: SentimentResult;
-  draftText: string;
-  parentSnippet?: string;
-  dismissedAt: number | null;
-}) {
-  if (!import.meta.env.DEV) return null;
-
-  return (
-    <div
-      style={{
-        marginTop: 10,
-        borderRadius: 12,
-        border: '1px dashed var(--sep)',
-        background: 'rgba(120,120,128,0.08)',
-        padding: '10px 12px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-      }}
-    >
-      <p style={{ margin: 0, fontSize: 10, fontWeight: 800, color: 'var(--label-3)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
-        Sentiment Debug
-      </p>
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-        level={result.level} | draftLength={draftText.trim().length} | replyContext={String(result.isReplyContext)} | dismissed={dismissedAt === null ? 'false' : 'true'}
-      </p>
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-        draft="{draftText.trim() || '(empty)'}"
-      </p>
-      {parentSnippet && (
-        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-          parent="{parentSnippet.length > 120 ? `${parentSnippet.slice(0, 117)}...` : parentSnippet}"
-        </p>
-      )}
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-        signals={result.signals.length ? result.signals.join(' | ') : '(none)'}
-      </p>
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-        supportiveReplySignals={result.supportiveReplySignals.length ? result.supportiveReplySignals.join(' | ') : '(none)'}
-      </p>
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-        constructiveSignals={result.constructiveSignals.length ? result.constructiveSignals.join(' | ') : '(none)'}
-      </p>
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-        parentSignals={result.parentSignals.length ? result.parentSignals.join(' | ') : '(none)'}
-      </p>
-    </div>
-  );
-}
-
 // ─── Character ring ────────────────────────────────────────────────────────
 function CharRing({ used, max }: { used: number; max: number }) {
   const r = 11;
@@ -1865,13 +1809,6 @@ export default function ComposeSheet({ onClose }: Props) {
                   />
                 )}
               </AnimatePresence>
-
-              <SentimentDebugCard
-                result={sentimentResult}
-                draftText={text}
-                parentSnippet={replyParentText}
-                dismissedAt={sentimentDismissedAt}
-              />
 
               {/* Live preview */}
               <AnimatePresence>
