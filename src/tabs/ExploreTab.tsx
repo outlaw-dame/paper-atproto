@@ -60,8 +60,16 @@ const DISCOVERY_PHRASES = [
 
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 // "Quiet Posters" by @why.bsky.team — posts from your quieter followers
-// at://did:plc:vpkhqolt662uhesyj6nxm7ys/app.bsky.feed.generator/infreq
 const QUIET_FEED_URI    = 'at://did:plc:vpkhqolt662uhesyj6nxm7ys/app.bsky.feed.generator/infreq';
+
+/**
+ * Score a post by engagement metrics for ranking in top stories.
+ * Weights: likes (1x) + reposts (2x) + replies (1.5x) + quotes (1.5x).
+ */
+function scorePostEngagement(post: MockPost): number {
+  const quoteCount = (post.embed?.type === 'quote' ? 1 : 0);
+  return post.likeCount + post.repostCount * 2 + post.replyCount * 1.5 + quoteCount * 1.5;
+}
 
 const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Packs', 'Sources'] as const;
 type QuickFilter = typeof QUICK_FILTERS[number];
@@ -902,7 +910,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
     }).finally(() => setLoading(false));
   }, [debouncedQuery, agent, session, sessionReady]);
 
-  // Discover content
+  // Discover content: whats-hot + trending feeds + quiet posters
   useEffect(() => {
     if (!sessionReady) return;
     setDiscoverLoading(true);
@@ -918,55 +926,106 @@ export default function ExploreTab({ onOpenStory }: Props) {
         ? atpCall(() => agent.getSuggestions({ limit: 10, relativeToDid: session.did }))
         : Promise.resolve(null)
       ).catch(catchWithLog('getSuggestions')),
-      atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 40 })).catch(catchWithLog('getFeed:whats-hot')),
+      // Whats-hot feed
+      atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 50 })).catch(catchWithLog('getFeed:whats-hot')),
+      // Trending topics → posts matching trending tags
+      atpCall(() => (agent.app.bsky.unspecced as any).getTrendingTopics({ limit: 5 })).catch(catchWithLog('getTrendingTopics')),
+      // Quiet posters feed
       atpCall(() => agent.app.bsky.feed.getFeed({ feed: QUIET_FEED_URI, limit: 20 })).catch(catchWithLog('getFeed:quiet-posters')),
-    ]).then(([feedsRes, actorsRes, discoverRes, quietRes]) => {
+    ]).then(async ([feedsRes, actorsRes, whatsHotRes, trendingTopicsRes, quietRes]) => {
       if (feedsRes?.data?.feeds) setSuggestedFeeds(feedsRes.data.feeds);
       if (actorsRes?.data?.actors) setSuggestedActors(actorsRes.data.actors);
-      if (discoverRes?.data?.feed?.length) {
-        const mapped = discoverRes.data.feed
-          .filter((item: any) => item.post?.record?.text)
-          .map((item: any) => mapFeedViewPost(item));
 
-        // Sort by engagement score
-        const byEngagement = [...mapped].sort(
-          (a, b) => (b.likeCount + b.repostCount * 2 + b.replyCount) - (a.likeCount + a.repostCount * 2 + a.replyCount)
+      // Collect posts from whats-hot
+      const whatsHotPosts = whatsHotRes?.data?.feed?.length
+        ? whatsHotRes.data.feed
+            .filter((item: any) => item.post?.record?.text)
+            .map((item: any) => mapFeedViewPost(item))
+        : [];
+
+      // Collect posts from trending topics (fetch top post per trending topic)
+      let trendingPosts: MockPost[] = [];
+      if (trendingTopicsRes?.data?.topics?.length) {
+        const topicLabels = trendingTopicsRes.data.topics.slice(0, 3).map((t: any) => t.topic || t.tag);
+        const trendingSearchResults = await Promise.all(
+          topicLabels.map((topic: string) =>
+            atpCall(() => agent.app.bsky.feed.searchPosts({ q: topic, limit: 8 })).catch(() => null)
+          )
         );
-
-        // Link posts: only those with an external embed, top 6 by engagement
-        const withLinks = byEngagement.filter(p => p.embed?.type === 'external').slice(0, 6);
-        setLinkPosts(withLinks);
-        setFeaturedPost(withLinks[0] ?? byEngagement[0] ?? null);
-        setTrendingPosts(byEngagement.slice(0, 10));
-
-        // Side strip: mid-tier trending + underdogs from quiet posters feed
-        const topIds = new Set(withLinks.map(p => p.id));
-
-        const midTier = byEngagement.filter(p => !topIds.has(p.id)).slice(0, 4);
-
-        const underdogs = byEngagement
-          .filter(p => p.embed?.type === 'external' && !topIds.has(p.id))
-          .sort((a, b) => (a.likeCount + a.repostCount) - (b.likeCount + b.repostCount))
-          .slice(0, 3);
-
-        // Quiet Posters feed (by @why.bsky.team): posts from the user's
-        // quieter followers — falls back to empty if the user isn't logged in
-        // or the feed returns nothing.
-        const quietMapped = quietRes?.data?.feed?.length
-          ? quietRes.data.feed
-              .filter((item: any) => item.post?.record?.text?.length > 40)
-              .map((item: any) => mapFeedViewPost(item))
-              .slice(0, 4)
-          : [];
-
-        const seen = new Set(topIds);
-        const combined: MockPost[] = [];
-        for (const p of [...midTier, ...quietMapped, ...underdogs]) {
-          if (!seen.has(p.id)) { seen.add(p.id); combined.push(p); }
-          if (combined.length >= 10) break;
-        }
-        setSidePosts(combined);
+        trendingPosts = trendingSearchResults
+          .filter(r => r?.data?.posts?.length)
+          .flatMap((r: any) => r.data.posts.filter((p: any) => p?.record?.text).slice(0, 2))
+          .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }));
       }
+
+      // Combine whats-hot and trending, dedupe by post URI
+      const allPosts = [...whatsHotPosts, ...trendingPosts];
+      const byUri = new Map<string, MockPost>();
+      for (const post of allPosts) byUri.set(post.id, post);
+      const combined = [...byUri.values()];
+
+      // Sort combined by engagement score
+      const byEngagement = [...combined].sort(
+        (a, b) => scorePostEngagement(b) - scorePostEngagement(a)
+      );
+
+      // ─── Top tier: posts with external links (high engagement) ──────────
+      const withLinks = byEngagement.filter(p => p.embed?.type === 'external').slice(0, 6);
+      setLinkPosts(withLinks);
+      setFeaturedPost(withLinks[0] ?? byEngagement[0] ?? null);
+      setTrendingPosts(byEngagement.slice(0, 10));
+
+      // ─── Side-strip formula ──────────────────────────────────────────
+      const topIds = new Set(withLinks.map(p => p.id));
+
+      // Mid-tier: high-engagement posts (not already in top links)
+      const midTier = byEngagement
+        .filter(p => !topIds.has(p.id))
+        .slice(0, 6);
+
+      // Link posts from outside top 6: secondary batch of external-link posts
+      const secondaryLinks = byEngagement
+        .filter(p => p.embed?.type === 'external' && !topIds.has(p.id))
+        .sort((a, b) => scorePostEngagement(b) - scorePostEngagement(a))
+        .slice(0, 4);
+
+      // Quiet posters: from dedicated feed, text length > 40 chars
+      const quietMapped = quietRes?.data?.feed?.length
+        ? quietRes.data.feed
+            .filter((item: any) => item.post?.record?.text?.length > 40)
+            .map((item: any) => mapFeedViewPost(item))
+            .slice(0, 3)
+        : [];
+
+      // Underdogs: low-engagement posts with potential
+      const underdogs = byEngagement
+        .filter(p => !topIds.has(p.id) && scorePostEngagement(p) > 5)
+        .sort((a, b) => scorePostEngagement(a) - scorePostEngagement(b))
+        .slice(0, 3);
+
+      // Assemble side-strip:
+      // ~70% from secondary links + mid-tier (quality content with links)
+      // ~5% from quiet posters (underrated creators)
+      // ~25% from underdogs (good engagement, emerging stories)
+      const seen = new Set(topIds);
+      const combined2: MockPost[] = [];
+
+      // Add secondary links and mid-tier (~70%)
+      for (const p of [...secondaryLinks, ...midTier]) {
+        if (!seen.has(p.id)) { seen.add(p.id); combined2.push(p); }
+      }
+
+      // Add quiet posters (~5%)
+      for (const p of quietMapped) {
+        if (!seen.has(p.id)) { seen.add(p.id); combined2.push(p); }
+      }
+
+      // Add underdogs (~25%)
+      for (const p of underdogs) {
+        if (!seen.has(p.id)) { seen.add(p.id); combined2.push(p); }
+      }
+
+      setSidePosts(combined2.slice(0, 10));
     }).finally(() => setDiscoverLoading(false));
   }, [agent, session, sessionReady]);
 
