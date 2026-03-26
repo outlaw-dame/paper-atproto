@@ -43,7 +43,8 @@
 			"/^python3 -c \"from pathlib import Path; import json; bases=\\[Path\\.home\\(\\)/'Library/Application Support/Google/Chrome/Default/Extensions', Path\\.home\\(\\)/'Library/Application Support/Microsoft Edge/Default/Extensions'\\]; manifests=\\[\\]; \\[manifests\\.extend\\(sorted\\(base\\.glob\\('\\*/\\*/manifest\\.json'\\)\\)\\) for base in bases if base\\.exists\\(\\)\\]; print\\('\\\\n'\\.join\\(f'\\{m\\.parts\\[-3\\]\\} :: \\{json\\.loads\\(m\\.read_text\\(encoding=\\\\\"utf-8\\\\\"\\)\\)\\.get\\(\\\\\"name\\\\\"\\)\\} :: \\{json\\.loads\\(m\\.read_text\\(encoding=\\\\\"utf-8\\\\\"\\)\\)\\.get\\(\\\\\"version\\\\\"\\)\\}' for m in manifests\\[:40\\]\\)\\)\"$/": {
 				"approve": true,
 				"matchCommandLine": true
-			}
+			},
+			"level": true
 		}
 	}
 }

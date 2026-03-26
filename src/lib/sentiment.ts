@@ -36,6 +36,10 @@ export interface SentimentResult {
   parentSignals: string[];
   /** True when the result was informed by the parent post content. */
   isReplyContext: boolean;
+  /** Detected mental health crisis language. If true, show support resources. */
+  hasMentalHealthCrisis: boolean;
+  /** Specific mental health concern detected (e.g., 'self-harm', 'suicidal', 'severe-depression'). */
+  mentalHealthCategory?: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation';
 }
 
 // ─── Alert-level: harmful language ────────────────────────────────────────
@@ -63,6 +67,59 @@ const HARMFUL_PATTERNS: Array<{ re: RegExp; signal: string }> = [
   {
     re: /\bc[u*][n][t]\b/i,
     signal: 'Contains highly offensive language.',
+  },
+];
+
+// ─── Mental Health Crisis Detection ────────────────────────────────────────
+// Patterns that indicate the poster may be experiencing a mental health crisis
+// These trigger supportive resource recommendations
+
+const MENTAL_HEALTH_CRISIS_PATTERNS: Array<{
+  re: RegExp;
+  signal: string;
+  category: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation';
+}> = [
+  // Self-harm indicators
+  {
+    re: /\b(cut\s+(myself|my|arms?|wrists?)|cutting|self.?harm(ing)?|slash\s+my|hurt\s+myself)\b/i,
+    signal: 'Mentions self-harm behaviors.',
+    category: 'self-harm',
+  },
+  {
+    re: /\b(im\s+going\s+to\s+hurt|want\s+to\s+hurt|urge\s+to\s+(cut|harm))\b/i,
+    signal: 'Expresses intent to self-harm.',
+    category: 'self-harm',
+  },
+
+  // Suicidal ideation indicators
+  {
+    re: /\b(want\s+to\s+die|wanna\s+die|wish\s+i\s+(was\s+)?dead|want\s+to\s+end\s+it|suicide|suicidal|kill\s+myself)\b/i,
+    signal: 'Mentions suicidal thoughts.',
+    category: 'suicidal',
+  },
+  {
+    re: /\b(no\s+point|no\s+reason\s+to\s+live|better\s+off\s+dead|nobody\s+cares|not\s+worth\s+it)\b/i,
+    signal: 'Expresses hopelessness about life.',
+    category: 'hopelessness',
+  },
+
+  // Severe depression / despair
+  {
+    re: /\b(everything\s+is\s+hopeless|can't\s+take\s+this\s+anymore|unbearable\s+pain|empty\s+inside|numb\s+all\s+the\s+time)\b/i,
+    signal: 'Describes severe emotional distress.',
+    category: 'severe-depression',
+  },
+  {
+    re: /\b(darkest\s+(place|time)|rock\s+bottom|drowning|suffocating)\b/i,
+    signal: 'Uses language suggesting intense emotional crisis.',
+    category: 'severe-depression',
+  },
+
+  // Isolation & loneliness
+  {
+    re: /\b(completely\s+alone|no\s+one\s+(cares|understands|will\s+help)|isolation|totally\s+isolated)\b/i,
+    signal: 'Expresses severe isolation or alienation.',
+    category: 'isolation',
   },
 ];
 
@@ -206,6 +263,18 @@ function analyzeParent(parentText: string): { heatSignals: string[]; isContentio
   return { heatSignals, isContentious };
 }
 
+/** Detects mental health crisis language in text. */
+function detectMentalHealthCrisis(
+  text: string,
+): { hasCrisis: boolean; category?: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation' } {
+  for (const { re, category } of MENTAL_HEALTH_CRISIS_PATTERNS) {
+    if (re.test(text)) {
+      return { hasCrisis: true, category };
+    }
+  }
+  return { hasCrisis: false };
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export interface AnalyzeOptions {
@@ -236,6 +305,9 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     commentTexts = [],
     totalCommentCount = 0,
   } = options;
+
+  // Check for mental health crisis language immediately
+  const mentalHealthCrisis = detectMentalHealthCrisis(trimmed);
 
   const isMediumActivityThread =
     parentReplyCount >= 25 ||
@@ -306,6 +378,8 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
         supportiveReplySignals: [],
         parentSignals,
         isReplyContext: !!parentText,
+        hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
+        mentalHealthCategory: mentalHealthCrisis.category,
       };
     }
   }
@@ -351,6 +425,8 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       supportiveReplySignals: [],
       parentSignals,
       isReplyContext: !!parentText,
+      hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
+      mentalHealthCategory: mentalHealthCrisis.category,
     };
   }
 
@@ -374,6 +450,8 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       supportiveReplySignals: [],
       parentSignals,
       isReplyContext: !!parentText,
+      hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
+      mentalHealthCategory: mentalHealthCrisis.category,
     };
   }
 
@@ -386,6 +464,8 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       supportiveReplySignals: Array.from(new Set(supportiveReplySignals)).slice(0, 3),
       parentSignals,
       isReplyContext: !!parentText,
+      hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
+      mentalHealthCategory: mentalHealthCrisis.category,
     };
   }
 
@@ -396,5 +476,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     supportiveReplySignals: [],
     parentSignals,
     isReplyContext: !!parentText,
+    hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
+    mentalHealthCategory: mentalHealthCrisis.category,
   };
 }

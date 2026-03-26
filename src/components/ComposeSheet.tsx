@@ -17,6 +17,7 @@ import {
 } from '../lib/hashtags/hashtagInsights.js';
 import { analyzeSentiment, type SentimentResult } from '../lib/sentiment.js';
 import TwemojiText from './TwemojiText.js';
+import MentalHealthSupportBanner from './MentalHealthSupportBanner.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 
 interface Props {
@@ -982,8 +983,10 @@ export default function ComposeSheet({ onClose }: Props) {
     supportiveReplySignals: [],
     parentSignals: [],
     isReplyContext: false,
+    hasMentalHealthCrisis: false,
   });
   const [sentimentDismissedAt, setSentimentDismissedAt] = useState<number | null>(null);
+  const [mentalHealthDismissedAt, setMentalHealthDismissedAt] = useState<number | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const altTaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1138,6 +1141,18 @@ export default function ComposeSheet({ onClose }: Props) {
         const sameLevel = prev.level === result.level;
         const sameSignals = (prev.signals ?? []).join() === result.signals.join();
         const sameSupportiveSignals = (prev.supportiveReplySignals ?? []).join() === result.supportiveReplySignals.join();
+        const sameMentalHealth = prev.hasMentalHealthCrisis === result.hasMentalHealthCrisis;
+
+        if (sameLevel && sameSignals && sameSupportiveSignals && sameMentalHealth) {
+          return prev;
+        }
+
+        // When mental health status changes, reset dismissal state to re-show the banner
+        if (!sameMentalHealth && result.hasMentalHealthCrisis) {
+          setMentalHealthDismissedAt(null);
+        }
+
+        return result;
         const sameConstructiveSignals = (prev.constructiveSignals ?? []).join() === result.constructiveSignals.join();
         const sameParentSignals = (prev.parentSignals ?? []).join() === result.parentSignals.join();
         const sameReplyContext = (prev.isReplyContext ?? false) === result.isReplyContext;
@@ -1821,6 +1836,16 @@ export default function ComposeSheet({ onClose }: Props) {
                     result={sentimentResult}
                     parentSnippet={replyParentText}
                     onDismiss={() => setSentimentDismissedAt(Date.now())}
+                  />
+                )}
+              </AnimatePresence>
+
+              {/* Mental health support banner */}
+              <AnimatePresence>
+                {sentimentResult.hasMentalHealthCrisis && mentalHealthDismissedAt === null && (
+                  <MentalHealthSupportBanner
+                    category={sentimentResult.mentalHealthCategory}
+                    onDismiss={() => setMentalHealthDismissedAt(Date.now())}
                   />
                 )}
               </AnimatePresence>
