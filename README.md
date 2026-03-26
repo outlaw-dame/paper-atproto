@@ -31,6 +31,8 @@ pnpm install
 pnpm dev
 ```
 
+For GIF search, create a `.env` file from `.env.example` and set `VITE_TENOR_API_KEY` to a valid Tenor API key.
+
 Open `http://localhost:5173` and login with a Bluesky handle and **App Password**.
 
 ## External Entity Linking (Enabled)

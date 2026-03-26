@@ -78,6 +78,51 @@ input, textarea {
 textarea { resize: none; }
 a { text-decoration: none; color: inherit; }
 
+.interactive-link-button {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  justify-content: flex-start;
+  text-decoration: none;
+  transition: opacity 0.14s ease, transform 0.14s ease, filter 0.14s ease, text-decoration-color 0.14s ease;
+}
+
+.interactive-link-surface {
+  transition: opacity 0.14s ease, transform 0.14s ease, filter 0.14s ease;
+}
+
+@media (pointer: fine) {
+  .interactive-link-button:hover,
+  .interactive-link-surface:hover {
+    opacity: 0.84;
+    filter: saturate(1.06);
+  }
+
+  .interactive-link-button:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.14em;
+  }
+}
+
+.interactive-link-button:active,
+.interactive-link-surface:active {
+  opacity: 0.7;
+  transform: translateY(0.5px) scale(0.992);
+}
+
+.interactive-link-button:focus-visible,
+.interactive-link-surface:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 ::selection { background: rgba(10,132,255,0.25); }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
 
@@ -112,6 +157,10 @@ a { text-decoration: none; color: inherit; }
   --cyan:            #32ADE6;
 
   --chrome-bg:       rgba(242,242,247,0.88);
+
+  /* ── Semantic aliases used by feed/card components ── */
+  --surface-card:    var(--surface);
+  --stroke-dim:      var(--sep);
 
   --safe-top:        env(safe-area-inset-top, 0px);
   --safe-bottom:     env(safe-area-inset-bottom, 0px);
@@ -267,6 +316,10 @@ a { text-decoration: none; color: inherit; }
     --cyan:            #5AC8F5;
 
     --chrome-bg:       rgba(28,28,30,0.88);
+
+    /* ── Semantic aliases — dark overrides ── */
+    --surface-card:    var(--surface);
+    --stroke-dim:      var(--sep);
   }
 }
 

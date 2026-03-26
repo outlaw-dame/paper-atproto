@@ -15,8 +15,13 @@
 
 import { pipeline, env } from '@xenova/transformers';
 
-// Use WASM backend by default; WebGPU is opted in opportunistically
-env.backends.onnx.wasm.numThreads = 2;
+// Single-threaded WASM backend — sufficient for embedding + image captioning.
+// The dev server sends COOP/COEP headers so SharedArrayBuffer is available,
+// letting onnxruntime-web v1.14.0 register all backends cleanly at init time.
+env.backends.onnx.wasm.numThreads = 1;
+// We are already inside a worker; prevent ONNX from spawning a nested proxy worker.
+env.backends.onnx.wasm.proxy = false;
+env.backends.onnx.wasm.proxy = false;
 
 type WorkerMsg = {
   id: string;

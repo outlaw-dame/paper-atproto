@@ -4,6 +4,7 @@ import { Card } from 'konsta/react';
 import { Markdown } from './Markdown.js';
 import { Gif } from './Gif.js';
 import { LinkPreview } from './LinkPreview.js';
+import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 
 interface FeedItemProps {
   post: {
@@ -28,6 +29,7 @@ interface FeedItemProps {
 export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
   // Parse embed if it's a string (from DB)
   const embed = typeof post.embed === 'string' ? JSON.parse(post.embed) : post.embed;
+  const navigateToProfile = useProfileNavigation();
 
   return (
     <motion.div
@@ -55,12 +57,24 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
               </div>
             )}
             <div>
-              <div className="font-bold text-sm dark:text-white">
-                {post.author.displayName || post.author.handle}
-              </div>
-              <div className="text-xs text-zinc-500">
-                @{post.author.handle} • {new Date(post.createdAt).toLocaleDateString()}
-              </div>
+              <button
+                className="interactive-link-button"
+                onClick={(event) => { event.stopPropagation(); void navigateToProfile(post.author.handle); }}
+                style={{ justifyContent: 'flex-start' }}
+              >
+                <div className="font-bold text-sm dark:text-white">
+                  {post.author.displayName || post.author.handle}
+                </div>
+              </button>
+              <button
+                className="interactive-link-button"
+                onClick={(event) => { event.stopPropagation(); void navigateToProfile(post.author.handle); }}
+                style={{ justifyContent: 'flex-start' }}
+              >
+                <div className="text-xs text-zinc-500">
+                  @{post.author.handle} • {new Date(post.createdAt).toLocaleDateString()}
+                </div>
+              </button>
             </div>
           </div>
           <div className="text-base leading-relaxed dark:text-zinc-200">

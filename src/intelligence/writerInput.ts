@@ -73,6 +73,8 @@ export function buildThreadStateForWriter(
   replies: ThreadNode[],
   confidence: ConfidenceState,
   translationById?: WriterTranslationMap,
+  /** The actual handle of the root post author — used to correctly mark OP in contributor lists. */
+  rootAuthorHandle?: string,
 ): ThreadStateForWriter {
   const summaryMode: SummaryMode = chooseSummaryMode({
     surfaceConfidence: confidence.surfaceConfidence,
@@ -99,9 +101,9 @@ export function buildThreadStateForWriter(
   const selectedComments = selectTopCommentsForWriter(rawComments, summaryMode);
 
   // ── Top contributors ──────────────────────────────────────────────────────
-  // Determine OP: the contributor with the highest handle match against rootUri
-  // (pragmatic: first topContributor or handle from root post node if available)
-  const opHandle = state.topContributors[0]?.handle ?? '';
+  // OP is identified from the rootAuthorHandle argument when available.
+  // Fall back to the first topContributor handle only if not provided.
+  const opHandle = rootAuthorHandle ?? state.topContributors[0]?.handle ?? '';
 
   const topContributors: WriterContributor[] = state.topContributors
     .filter(c => contributorMayBeNamed(c.avgUsefulnessScore, c.handle === opHandle, summaryMode))
@@ -137,7 +139,7 @@ export function buildThreadStateForWriter(
   const factualHighlights: string[] = [];
   for (const [uri, score] of Object.entries(scores)) {
     const state_ = score.factual?.factualState;
-    if (state_ === 'supported' || state_ === 'well-supported') {
+    if (state_ === 'well-supported' || state_ === 'source-backed-clarification' || state_ === 'partially-supported') {
       const comment = rawComments.find(c => c.uri === uri);
       if (comment) factualHighlights.push(comment.text.slice(0, 120));
     }
@@ -152,7 +154,7 @@ export function buildThreadStateForWriter(
   // ── Root post ─────────────────────────────────────────────────────────────
   const rootPost = {
     uri: state.rootUri,
-    handle: opHandle || 'op',
+    handle: (rootAuthorHandle ?? opHandle) || 'op',
     text: (translationById?.[state.rootUri]?.translatedText ?? rootText).slice(0, 500),
     createdAt: state.updatedAt,
   };

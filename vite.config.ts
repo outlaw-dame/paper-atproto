@@ -8,9 +8,18 @@ export default defineConfig({
     port: 5173,
     host: true,
     allowedHosts: true,
+    headers: {
+      // Enable SharedArrayBuffer (needed for onnxruntime-web's threaded WASM backend).
+      // Without these, ort@1.14.0 fails to register backends during module init with
+      // "Cannot read properties of undefined (reading 'registerBackend')".
+      // 'credentialless' COEP (not 'require-corp') lets cross-origin images/GIFs
+      // load without requiring CORP headers on every CDN.
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+    },
   },
   optimizeDeps: {
-    exclude: ['@electric-sql/pglite', '@xenova/transformers'],
+    exclude: ['@electric-sql/pglite', '@xenova/transformers', 'onnxruntime-web'],
   },
   worker: {
     format: 'es',

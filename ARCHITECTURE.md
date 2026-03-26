@@ -207,6 +207,23 @@ src/
     └── LibraryTab.tsx      — liked posts + my feeds + my packs
 ```
 
+### Composer Tone Analysis Architecture
+
+- Analyzer module: `src/lib/sentiment.ts`
+- UI surface: `src/components/ComposeSheet.tsx`
+- Levels: `alert`, `warn`, `positive`, `ok`
+- Positive architecture contains both:
+       - `supportiveReplySignals[]` (empathy/validation/support language)
+       - `constructiveSignals[]` (practical help/context-building language)
+- Reply-context inputs include parent text plus thread activity context:
+       - `parentReplyCount`
+       - `parentThreadCount`
+- Thread-aware context inputs include full conversation snippets when available:
+       - `threadTexts[]` (root/threaded post bodies)
+       - `commentTexts[]` (reply/comment bodies)
+       - `totalCommentCount`
+- High-activity reply threads lower the threshold for showing constructive/supportive guidance to reduce pile-on tone and encourage helpful replies to the original poster.
+
 ---
 
 ## Phase Roadmap

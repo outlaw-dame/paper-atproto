@@ -18,7 +18,7 @@ import type { StoryEntry } from '../App.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { atpCall } from '../lib/atproto/client.js';
 import { mapFeedViewPost } from '../atproto/mappers.js';
-import type { MockPost } from '../data/mockData.js';
+import type { MockPost, ChipType } from '../data/mockData.js';
 import { formatTime, formatCount } from '../data/mockData.js';
 import {
   resolveThread, extractClusterSignals, isAtUri,
@@ -27,6 +27,7 @@ import {
 import { useThreadStore } from '../store/threadStore.js';
 import {
   runVerifiedThreadPipeline,
+  buildInterpolatorSummary,
   nodeToThreadPost,
   type ContributionRole,
   type ContributionScores,
@@ -38,11 +39,15 @@ import { createVerificationProviders } from '../intelligence/verification/provid
 import { InMemoryVerificationCache } from '../intelligence/verification/cache.js';
 import { buildThreadStateForWriter } from '../intelligence/writerInput.js';
 import { callInterpolatorWriter } from '../intelligence/modelClient.js';
-import type { SummaryMode } from '../intelligence/llmContracts.js';
+import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts.js';
+import { WriterEntitySheet, EntityChip } from './EntitySheet.js';
 import { translateWriterInput } from '../lib/i18n/threadTranslation.js';
 import { useTranslationStore } from '../store/translationStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { translationClient } from '../lib/i18n/client.js';
+import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
+import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import {
   promptHero as phTokens,
   interpolator as intTokens,
@@ -82,12 +87,13 @@ function Spinner() {
 }
 
 function RichText({ text, facets, baseColor }: { text: string; facets?: ResolvedFacet[]; baseColor: string }) {
+  const navigateToProfile = useProfileNavigation();
   if (!facets?.length) {
     const parts = text.split(/(@[\w.]+|#\w+|https?:\/\/\S+)/g);
     return (
       <span>
         {parts.map((p, i) => {
-          if (p.startsWith('@')) return <span key={i} style={{ color: '#BF8FFF', fontWeight: 500 }}>{p}</span>;
+          if (p.startsWith('@')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{p}</button>;
           if (p.startsWith('#')) return <span key={i} style={{ color: accent.blue500, fontWeight: 500 }}>{p}</span>;
           if (p.startsWith('http')) {
             try { return <a key={i} href={p} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{new URL(p).hostname.replace(/^www\./, '')}</a>; }
@@ -108,7 +114,7 @@ function RichText({ text, facets, baseColor }: { text: string; facets?: Resolved
   for (const f of sorted) {
     if (f.byteStart > cursor) nodes.push(<span key={`t${cursor}`} style={{ color: baseColor }}>{dec.decode(bytes.slice(cursor, f.byteStart))}</span>);
     const seg = dec.decode(bytes.slice(f.byteStart, f.byteEnd));
-    if (f.kind === 'mention') nodes.push(<span key={`m${f.byteStart}`} style={{ color: '#BF8FFF', fontWeight: 500 }}>{seg}</span>);
+    if (f.kind === 'mention') nodes.push(<button key={`m${f.byteStart}`} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(seg); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{seg}</button>);
     else if (f.kind === 'hashtag') nodes.push(<span key={`h${f.byteStart}`} style={{ color: accent.blue500, fontWeight: 500 }}>{seg}</span>);
     else if (f.kind === 'link') nodes.push(<a key={`l${f.byteStart}`} href={f.uri} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{f.uri ? (() => { try { return new URL(f.uri!).hostname.replace(/^www\./, ''); } catch { return seg; } })() : seg}</a>);
     cursor = f.byteEnd;
@@ -179,13 +185,19 @@ function PromptHeroCard({
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const { openProfile } = useUiStore();
+  const navigateToProfile = useProfileNavigation();
   const translation = translationById[post.id];
-  const rootText = translation && !showOriginal ? translation.translatedText : post.content;
+  const detectedRootLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
+  const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const shouldOfferTranslation = hasRenderableTranslation
+    || detectedRootLanguage.language === 'und'
+    || !isLikelySameLanguage(detectedRootLanguage.language, translationPolicy.userLanguage);
+  const rootText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
 
   const handleTranslate = async (e: React.MouseEvent) => {
     e.stopPropagation();
 
-    if (translation) {
+    if (hasRenderableTranslation) {
       setShowOriginal((prev) => !prev);
       return;
     }
@@ -198,7 +210,9 @@ function PromptHeroCard({
         sourceText: post.content,
         targetLang: translationPolicy.userLanguage,
         mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+        ...(detectedRootLanguage.language !== 'und' ? { sourceLang: detectedRootLanguage.language } : {}),
       });
+      if (!hasMeaningfulTranslation(post.content, result.translatedText)) return;
       upsertTranslation(result);
       setShowOriginal(false);
     } catch {
@@ -251,6 +265,7 @@ function PromptHeroCard({
         <div
           role="button"
           tabIndex={0}
+          className="interactive-link-surface"
           onClick={(e) => { e.stopPropagation(); openProfile(post.author.did); }}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(post.author.did); } }}
           style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer' }}
@@ -277,6 +292,7 @@ function PromptHeroCard({
           {rootText}
         </p>
 
+        {shouldOfferTranslation && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <button
             onClick={handleTranslate}
@@ -292,14 +308,15 @@ function PromptHeroCard({
               opacity: translating ? 0.7 : 1,
             }}
           >
-            {translation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
+            {hasRenderableTranslation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
           </button>
-          {translation && (
+          {hasRenderableTranslation && (
             <span style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta }}>
               from {translation.sourceLang}
             </span>
           )}
         </div>
+        )}
 
         {/* Embed source */}
         {post.embed && (post.embed.type === 'external' || post.embed.type === 'video') && (
@@ -326,15 +343,15 @@ function PromptHeroCard({
             marginBottom: 16,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta }}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.embed.post.author.did || post.embed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
                 {post.embed.post.author.displayName || post.embed.post.author.handle}
-              </span>
-              <span style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6 }}>
+              </button>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.embed.post.author.did || post.embed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
                 @{post.embed.post.author.handle}
-              </span>
+              </button>
             </div>
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: phTokens.meta, opacity: 0.85, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-              {post.embed.post.content}
+              <RichText text={post.embed.post.content} baseColor={phTokens.meta} />
             </p>
           </div>
         )}
@@ -553,11 +570,12 @@ type InterpolatorState = 'collapsed' | 'expanded' | 'emerging' | 'updating' | 's
 
 function InterpolatorCard({
   rootUri, summaryText, writerSummary, summaryMode,
-  writerWhatChanged, writerContributorBlurbs,
+  writerWhatChanged, writerContributorBlurbs, safeEntities,
   clarifications, newAngles,
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
   topContributors, entityLandscape, factualSignalPresent,
+  onEntityTap,
 }: {
   rootUri: string;
   summaryText: string;
@@ -569,6 +587,8 @@ function InterpolatorCard({
   writerWhatChanged?: string[] | undefined;
   /** Model-written per-contributor blurbs for the expanded Key Voices section. */
   writerContributorBlurbs?: Array<{ handle: string; blurb: string }> | undefined;
+  /** AI-extracted safe entities — shown as tappable chips in expanded view. */
+  safeEntities?: WriterEntity[] | undefined;
   clarifications: string[];
   newAngles: string[];
   heatLevel: number;
@@ -579,6 +599,7 @@ function InterpolatorCard({
   topContributors: ContributorImpact[];
   entityLandscape: EntityImpact[];
   factualSignalPresent: boolean;
+  onEntityTap?: (entity: WriterEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   // Use writer summary if available, otherwise fall back to heuristic
@@ -877,6 +898,18 @@ function InterpolatorCard({
               </div>
             )}
 
+            {/* Entity chips — AI-extracted safe entities, tappable */}
+            {safeEntities && safeEntities.length > 0 && onEntityTap && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Key entities</p>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {safeEntities.slice(0, 6).map(e => (
+                    <EntityChip key={e.id} entity={e} onTap={onEntityTap} size="sm" />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Footer actions */}
             <div style={{ display: 'flex', gap: 10 }}>
               <button style={{
@@ -972,8 +1005,74 @@ function RolePill({ role }: { role: ContributionRole }) {
   );
 }
 // ─── ContributionCard ─────────────────────────────────────────────────────
+const REPLY_PEEK = 3;
+
+// ─── BranchSummaryPill ────────────────────────────────────────────────────
+function BranchSummaryPill({
+  hiddenReplies,
+  onExpand,
+}: {
+  hiddenReplies: ThreadNode[];
+  onExpand: () => void;
+}) {
+  const seen = new Set<string>();
+  const uniqueAvatarAuthors: ThreadNode[] = [];
+  for (const r of hiddenReplies) {
+    if (!seen.has(r.authorDid)) {
+      seen.add(r.authorDid);
+      uniqueAvatarAuthors.push(r);
+      if (uniqueAvatarAuthors.length >= 3) break;
+    }
+  }
+  const hidden = hiddenReplies.length;
+  return (
+    <button
+      onClick={onExpand}
+      style={{
+        background: 'none',
+        border: `0.5px solid ${disc.lineStrong}`,
+        borderRadius: 20,
+        padding: `${space[2]}px ${space[6]}px ${space[2]}px ${space[3]}px`,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginTop: space[2],
+      }}
+    >
+      {/* Stacked avatars */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {uniqueAvatarAuthors.map((author, i) => (
+          <div
+            key={author.authorDid}
+            style={{
+              width: 20, height: 20, borderRadius: '50%',
+              overflow: 'hidden',
+              marginLeft: i > 0 ? -6 : 0,
+              border: `1.5px solid ${disc.bgBase}`,
+              background: disc.lineStrong,
+              flexShrink: 0,
+            }}
+          >
+            {author.authorAvatar
+              ? <img src={author.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', background: disc.lineStrong }} />
+            }
+          </div>
+        ))}
+      </div>
+      <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 600, color: disc.textSecondary }}>
+        {hidden} more {hidden === 1 ? 'reply' : 'replies'}
+      </span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={disc.textTertiary} strokeWidth={2.5} strokeLinecap="round">
+        <polyline points="6 9 12 15 18 9" />
+      </svg>
+    </button>
+  );
+}
+
 function ContributionCard({
-  node, score, rootUri, featured, nested,
+  node, score, rootUri, featured, nested, isOp,
   onFeedback, onQuoteComment, isFollowed,
 }: {
   node: ThreadNode;
@@ -981,6 +1080,8 @@ function ContributionCard({
   rootUri: string;
   featured?: boolean;
   nested?: boolean;
+  /** True if the reply author is also the root post author */
+  isOp?: boolean;
   isFollowed?: boolean;
   onFeedback: (uri: string, fb: ContributionScores['userFeedback']) => void;
   onQuoteComment?: (node: ThreadNode) => void;
@@ -994,9 +1095,16 @@ function ContributionCard({
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
+  const [showAllReplies, setShowAllReplies] = useState(false);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const { openProfile } = useUiStore();
+  const navigateToProfile = useProfileNavigation();
   const translation = translationById[node.uri];
+  const detectedReplyLanguage = useMemo(() => heuristicDetectLanguage(node.text), [node.text]);
+  const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(node.text, translation.translatedText);
+  const shouldOfferTranslation = hasRenderableTranslation
+    || detectedReplyLanguage.language === 'und'
+    || !isLikelySameLanguage(detectedReplyLanguage.language, translationPolicy.userLanguage);
 
   const handleFeedback = (fb: ContributionScores['userFeedback']) => {
     setFeedbackGiven(fb);
@@ -1024,7 +1132,7 @@ function ContributionCard({
   const handleTranslate = async (e: React.MouseEvent) => {
     e.stopPropagation();
 
-    if (translation) {
+    if (hasRenderableTranslation) {
       setShowOriginal((prev) => !prev);
       return;
     }
@@ -1037,7 +1145,9 @@ function ContributionCard({
         sourceText: node.text,
         targetLang: translationPolicy.userLanguage,
         mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+        ...(detectedReplyLanguage.language !== 'und' ? { sourceLang: detectedReplyLanguage.language } : {}),
       });
+      if (!hasMeaningfulTranslation(node.text, result.translatedText)) return;
       upsertTranslation(result);
       setShowOriginal(false);
     } catch {
@@ -1067,7 +1177,7 @@ function ContributionCard({
     : score?.role === 'provocative' ? 'provocative'
     : score?.role === 'useful_counterpoint' ? 'counterpoint'
     : null;
-  const bodyText = translation && !showOriginal ? translation.translatedText : node.text;
+  const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : node.text;
 
   return (
     <div style={cardStyle}>
@@ -1076,6 +1186,7 @@ function ContributionCard({
         <div
           role="button"
           tabIndex={0}
+          className="interactive-link-surface"
           onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
           style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0, cursor: 'pointer' }}
@@ -1093,15 +1204,31 @@ function ContributionCard({
           style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
         >
           {/* Only distinction between replies: followed accounts get fontWeight 800 */}
-          <p style={{
-            fontSize: typeScale.chip[0],
-            fontWeight: isFollowed ? 800 : 600,
-            color: disc.textPrimary,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {node.authorName ?? node.authorHandle}
-          </p>
-          <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>@{node.authorHandle}</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
+            <p style={{
+              fontSize: typeScale.chip[0],
+              fontWeight: isFollowed ? 800 : 600,
+              color: disc.textPrimary,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              margin: 0,
+              minWidth: 0,
+            }}>
+              {node.authorName ?? node.authorHandle}
+            </p>
+            {isOp && (
+              <span style={{
+                flexShrink: 0,
+                display: 'inline-flex', alignItems: 'center',
+                height: 17, padding: '0 5px',
+                borderRadius: 4,
+                background: 'rgba(0,106,255,0.12)',
+                color: 'var(--blue)',
+                fontSize: 10, fontWeight: 800,
+                letterSpacing: '0.04em',
+              }}>OP</span>
+            )}
+          </div>
+          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.authorDid || node.authorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, margin: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.authorHandle}</button>
         </div>
         {score && score.role !== 'unknown' && <RolePill role={score.role} />}
         {score && score.usefulnessScore > 0.7 && (
@@ -1125,7 +1252,7 @@ function ContributionCard({
           fontSize: typeScale.metaSm[0], color: disc.textTertiary,
           marginBottom: 4, fontWeight: 500,
         }}>
-          ↳ replying to @{node.parentAuthorHandle}
+          ↳ replying to <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.parentAuthorHandle); }} style={{ font: 'inherit', color: 'inherit', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.parentAuthorHandle}</button>
         </p>
       )}
 
@@ -1140,6 +1267,7 @@ function ContributionCard({
         <RichText text={bodyText} facets={node.facets} baseColor={disc.textPrimary} />
       </p>
 
+      {shouldOfferTranslation && (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: contTokens.gap }}>
         <button
           onClick={handleTranslate}
@@ -1155,14 +1283,15 @@ function ContributionCard({
             opacity: translating ? 0.7 : 1,
           }}
         >
-          {translation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
+          {hasRenderableTranslation ? (showOriginal ? 'Show translation' : 'Show original') : (translating ? 'Translating...' : 'Translate')}
         </button>
-        {translation && (
+        {hasRenderableTranslation && (
           <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
             from {translation.sourceLang}
           </span>
         )}
       </div>
+      )}
 
       {/* Embed */}
       {node.embed?.kind === 'external' && node.embed.uri && (
@@ -1203,17 +1332,17 @@ function ContributionCard({
           border: `0.5px solid ${disc.lineSubtle}`,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-            <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary }}>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.embed.quotedAuthorHandle || node.embed.quotedAuthorDisplayName || ''); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
               {node.embed.quotedAuthorDisplayName || node.embed.quotedAuthorHandle || 'Unknown'}
-            </span>
+            </button>
             {node.embed.quotedAuthorHandle && (
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.embed.quotedAuthorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
                 @{node.embed.quotedAuthorHandle}
-              </span>
+              </button>
             )}
           </div>
           <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-            {node.embed.quotedText}
+            <RichText text={node.embed.quotedText} baseColor={disc.textSecondary} />
           </p>
         </div>
       )}
@@ -1257,7 +1386,7 @@ function ContributionCard({
           marginLeft: ncTokens.inset, marginBottom: contTokens.gap,
           display: 'flex', flexDirection: 'column', gap: ncTokens.gap,
         }}>
-          {node.replies.slice(0, 2).map(child => (
+          {(showAllReplies ? node.replies : node.replies.slice(0, REPLY_PEEK)).map(child => (
             <ContributionCard
               key={child.uri}
               node={child}
@@ -1266,6 +1395,29 @@ function ContributionCard({
               onFeedback={onFeedback}
             />
           ))}
+          {!showAllReplies && node.replies.length > REPLY_PEEK && (
+            <BranchSummaryPill
+              hiddenReplies={node.replies.slice(REPLY_PEEK)}
+              onExpand={() => setShowAllReplies(true)}
+            />
+          )}
+          {showAllReplies && node.replies.length > REPLY_PEEK && (
+            <button
+              onClick={() => setShowAllReplies(false)}
+              style={{
+                background: 'none', border: 'none',
+                fontSize: typeScale.metaSm[0], color: disc.textTertiary,
+                cursor: 'pointer', textAlign: 'left',
+                padding: `${space[2]}px 0 0`,
+                display: 'flex', alignItems: 'center', gap: 4,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={disc.textTertiary} strokeWidth={2.5} strokeLinecap="round">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+              <span>collapse</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -1534,7 +1686,7 @@ function QuoteComposer({ node, onClose }: { node: ThreadNode; onClose: () => voi
 }
 
 // ─── ReplyBar ─────────────────────────────────────────────────────────────
-function ReplyBar({ userAvatar }: { userAvatar?: string }) {
+function ReplyBar({ userAvatar, onActivate, disabled = false }: { userAvatar?: string; onActivate?: () => void; disabled?: boolean }) {
   return (
     <div style={{
       flexShrink: 0,
@@ -1552,16 +1704,24 @@ function ReplyBar({ userAvatar }: { userAvatar?: string }) {
       }}>
         {userAvatar && <img src={userAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
       </div>
-      <div style={{
+      <button
+        type="button"
+        onClick={onActivate}
+        disabled={disabled}
+        aria-label="Write your reply"
+        style={{
         flex: 1, height: 36, borderRadius: 18,
         background: disc.surfaceCard2,
         border: `0.5px solid ${disc.lineStrong}`,
         display: 'flex', alignItems: 'center',
         padding: '0 14px',
-        cursor: 'text',
+        cursor: disabled ? 'default' : 'text',
+        appearance: 'none',
+        textAlign: 'left',
+        opacity: disabled ? 0.6 : 1,
       }}>
         <span style={{ fontSize: typeScale.bodyMd[0], color: disc.textTertiary }}>Write your reply…</span>
-      </div>
+      </button>
     </div>
   );
 }
@@ -1610,6 +1770,7 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 // ─── Main component ────────────────────────────────────────────────────────
 export default function StoryMode({ entry, onClose }: Props) {
   const { agent, session, profile } = useSessionStore();
+  const { openComposeReply } = useUiStore();
   const translationPolicy = useTranslationStore((state) => state.policy);
   const { ensureThread, upsertThreadResult, setWriterResult, setUserFeedback, getThread } = useThreadStore();
   const verificationCache = React.useRef(new InMemoryVerificationCache());
@@ -1621,6 +1782,8 @@ export default function StoryMode({ entry, onClose }: Props) {
   const [quoteTarget, setQuoteTarget] = useState<ThreadNode | null>(null);
   // Set of DIDs the current user follows — used only for bold username treatment
   const [followedDids, setFollowedDids] = useState<Set<string>>(new Set());
+  // Entity sheet — Narwhal v3 Phase C
+  const [activeEntity, setActiveEntity] = useState<WriterEntity | null>(null);
 
   useEffect(() => {
     if (!session?.did || !agent) return;
@@ -1707,13 +1870,15 @@ export default function StoryMode({ entry, onClose }: Props) {
           // ── Writer call (Qwen3-4B) ─────────────────────────────────────
           // Fire-and-forget after storing deterministic results.
           // Failure falls back silently to heuristic summaryText.
+          const threadReplies = rootNode.replies ?? [];
+
           try {
             const translationOutput = await translateWriterInput({
               rootPost: {
                 id: rootNode.uri,
                 text: rootNode.text,
               },
-              selectedComments: (rootNode.replies ?? []).map((reply) => ({
+              selectedComments: threadReplies.map((reply) => ({
                 id: reply.uri,
                 text: reply.text,
               })),
@@ -1739,14 +1904,40 @@ export default function StoryMode({ entry, onClose }: Props) {
               ),
             };
 
+            const translatedRootText = translationById[rootNode.uri]?.translatedText ?? rootNode.text;
+            const translatedReplies = threadReplies.map((reply) => ({
+              ...reply,
+              text: translationById[reply.uri]?.translatedText ?? reply.text,
+            }));
+            const hasTranslatedThreadText = translatedRootText !== rootNode.text
+              || translatedReplies.some((reply, index) => reply.text !== threadReplies[index]?.text);
+            const interpolatorForWriter = hasTranslatedThreadText
+              ? {
+                  ...result.interpolator,
+                  ...buildInterpolatorSummary(translatedRootText, translatedReplies, result.scores),
+                }
+              : result.interpolator;
+
+            if (hasTranslatedThreadText) {
+              upsertThreadResult(entry.id, {
+                interpolator: interpolatorForWriter,
+                scores: result.scores,
+                verificationByPost: result.verificationByPost,
+                rootVerification: result.rootVerification,
+                confidence: result.confidence,
+                summaryMode: result.summaryMode,
+              });
+            }
+
             const writerInput = buildThreadStateForWriter(
               entry.id,
               rootNode.text,
-              result.interpolator,
+              interpolatorForWriter,
               result.scores,
-              rootNode.replies ?? [],
+              threadReplies,
               result.confidence,
               translationById,
+              rootNode.authorHandle ?? undefined,
             );
             const writerResult = await callInterpolatorWriter(writerInput, controller.signal);
             if (!writerResult.abstained) {
@@ -1807,6 +1998,12 @@ export default function StoryMode({ entry, onClose }: Props) {
     return (s?.finalInfluenceScore ?? 0) > 0.75;
   });
 
+  const handleReplyToRoot = useCallback(() => {
+    if (!rootPost) return;
+    onClose();
+    openComposeReply(rootPost);
+  }, [onClose, openComposeReply, rootPost]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 32 }}
@@ -1821,6 +2018,18 @@ export default function StoryMode({ entry, onClose }: Props) {
         zIndex: 200,
       }}
     >
+      {/* Entity sheet — Narwhal v3 Phase C */}
+      <WriterEntitySheet
+        entity={activeEntity}
+        relatedPosts={replies.map(r => ({
+          id: r.uri, content: r.text,
+          author: { handle: r.authorHandle ?? '', displayName: r.authorName ?? '', did: r.authorDid ?? '', ...(r.authorAvatar != null ? { avatar: r.authorAvatar } : {}) },
+          likeCount: r.likeCount ?? 0, repostCount: r.repostCount ?? 0, replyCount: r.replyCount ?? 0,
+          bookmarkCount: 0, createdAt: '', chips: [] as ChipType[],
+        }))}
+        onClose={() => setActiveEntity(null)}
+      />
+
       {/* HostBar */}
       <HostBar onClose={onClose} />
 
@@ -1852,6 +2061,18 @@ export default function StoryMode({ entry, onClose }: Props) {
               summaryMode={thread?.summaryMode ?? undefined}
               writerWhatChanged={thread?.writerResult?.whatChanged}
               writerContributorBlurbs={thread?.writerResult?.contributorBlurbs}
+              safeEntities={
+                thread?.interpolator?.entityLandscape
+                  ?.filter(e => (e.matchConfidence ?? 0) >= 0.50 && e.mentionCount >= 2)
+                  .slice(0, 6)
+                  .map(e => ({
+                    id: e.canonicalEntityId ?? e.entityText.toLowerCase().replace(/\s+/g, '-'),
+                    label: e.canonicalLabel ?? e.entityText,
+                    type: (e.entityKind === 'person' ? 'person' : e.entityKind === 'org' ? 'organization' : 'topic') as WriterEntity['type'],
+                    confidence: e.matchConfidence ?? 0.50,
+                    impact: Math.min(1, e.mentionCount / 10),
+                  }))
+              }
               clarifications={thread?.interpolator?.clarificationsAdded ?? []}
               newAngles={thread?.interpolator?.newAnglesAdded ?? []}
               heatLevel={thread?.interpolator?.heatLevel ?? 0}
@@ -1862,6 +2083,7 @@ export default function StoryMode({ entry, onClose }: Props) {
               topContributors={thread?.interpolator?.topContributors ?? []}
               entityLandscape={thread?.interpolator?.entityLandscape ?? []}
               factualSignalPresent={thread?.interpolator?.factualSignalPresent ?? false}
+              onEntityTap={setActiveEntity}
             />
 
             {/* ThreadControls */}
@@ -1872,6 +2094,7 @@ export default function StoryMode({ entry, onClose }: Props) {
             {/* Featured contribution */}
             {featuredReply && activeFilter === 'Top' && (() => {
               const featuredScore = getThread(entry.id)?.scores[featuredReply.uri];
+              const isOp = !!(rootPost?.author.did && featuredReply.authorDid === rootPost.author.did);
               return (
                 <ContributionCard
                   key={`featured-${featuredReply.uri}`}
@@ -1879,6 +2102,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                   {...(featuredScore !== undefined ? { score: featuredScore } : {})}
                   rootUri={entry.id}
                   featured
+                  isOp={isOp}
                   {...(followedDids.has(featuredReply.authorDid ?? '') ? { isFollowed: true } : {})}
                   onFeedback={handleFeedback}
                   onQuoteComment={setQuoteTarget}
@@ -1887,23 +2111,38 @@ export default function StoryMode({ entry, onClose }: Props) {
             })()}
 
             {/* Contribution stack */}
-            {filteredReplies
-              .filter(r => r.uri !== featuredReply?.uri || activeFilter !== 'Top')
-              .map(node => {
+            {(() => {
+              const rootAuthorDid = rootPost?.author.did;
+              const shownReplies = filteredReplies.filter(r => r.uri !== featuredReply?.uri || activeFilter !== 'Top');
+              return shownReplies.map((node, idx) => {
+                const isOp = !!(rootAuthorDid && node.authorDid === rootAuthorDid);
+                const prevNode = shownReplies[idx - 1];
+                const prevIsOp = !!(prevNode && rootAuthorDid && prevNode.authorDid === rootAuthorDid);
+                // Draw a short connector line between consecutive OP self-replies
+                const showChain = isOp && prevIsOp;
                 const nodeScore = getThread(entry.id)?.scores[node.uri];
                 return (
-                  <ContributionCard
-                    key={node.uri}
-                    node={node}
-                    {...(nodeScore !== undefined ? { score: nodeScore } : {})}
-                    rootUri={entry.id}
-                    {...(followedDids.has(node.authorDid ?? '') ? { isFollowed: true } : {})}
-                    onFeedback={handleFeedback}
-                    onQuoteComment={setQuoteTarget}
-                  />
+                  <React.Fragment key={node.uri}>
+                    {showChain && (
+                      <div style={{
+                        height: 10, marginTop: -8,
+                        marginLeft: 20,
+                        borderLeft: '2px solid var(--sep-opaque)',
+                      }} />
+                    )}
+                    <ContributionCard
+                      node={node}
+                      {...(nodeScore !== undefined ? { score: nodeScore } : {})}
+                      rootUri={entry.id}
+                      isOp={isOp}
+                      {...(followedDids.has(node.authorDid ?? '') ? { isFollowed: true } : {})}
+                      onFeedback={handleFeedback}
+                      onQuoteComment={setQuoteTarget}
+                    />
+                  </React.Fragment>
                 );
-              })
-            }
+              });
+            })()}
 
             {replies.length === 0 && !loading && (
               <div style={{ padding: '24px 0', textAlign: 'center' }}>
@@ -1919,7 +2158,11 @@ export default function StoryMode({ entry, onClose }: Props) {
       </div>
 
       {/* Static reply bar — always visible, Bluesky-style */}
-      <ReplyBar {...(profile?.avatar !== undefined ? { userAvatar: profile.avatar } : {})} />
+      <ReplyBar
+        {...(profile?.avatar !== undefined ? { userAvatar: profile.avatar } : {})}
+        onActivate={handleReplyToRoot}
+        disabled={!rootPost}
+      />
 
       {/* Quote composer overlay */}
       <AnimatePresence>

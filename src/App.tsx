@@ -11,6 +11,9 @@ import { AtpProvider, useAtp } from './atproto/AtpContext.js';
 import { useUiStore } from './store/uiStore.js';
 import TabBar from './shell/TabBar.js';
 import LoginScreen from './components/LoginScreen.js';
+import { MiniPlayerProvider } from './context/MiniPlayerContext.js';
+
+const MiniPlayer = React.lazy(() => import('./components/MiniPlayer.js'));
 
 const HomeTab = React.lazy(() => import('./tabs/HomeTab.js'));
 const ExploreTab = React.lazy(() => import('./tabs/ExploreTab.js'));
@@ -27,15 +30,77 @@ export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; na
 export default function App() {
   return (
     <AtpProvider>
-      <AppShell />
+      <MiniPlayerProvider>
+        <AppShell />
+        <Suspense fallback={null}>
+          <MiniPlayer />
+        </Suspense>
+      </MiniPlayerProvider>
     </AtpProvider>
+  );
+}
+
+// ─── Floating compose button ───────────────────────────────────────────────
+// Small, unobtrusive pill button that floats above the tab bar.
+// Single tap → new post. Long press (500ms) → Discussion/PromptComposer.
+function FloatingComposeFab({ onCompose, onPromptComposer }: { onCompose: () => void; onPromptComposer: () => void }) {
+  const pressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didLongPress = React.useRef(false);
+
+  const handlePointerDown = () => {
+    didLongPress.current = false;
+    pressTimer.current = setTimeout(() => {
+      didLongPress.current = true;
+      onPromptComposer();
+    }, 500);
+  };
+  const handlePointerUp = () => {
+    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; }
+  };
+  const handleClick = () => {
+    if (didLongPress.current) return;
+    onCompose();
+  };
+
+  return (
+    <button
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerUp}
+      onClick={handleClick}
+      aria-label="Compose (hold for Discussion)"
+      style={{
+        position: 'absolute',
+        bottom: 20,
+        right: 16,
+        zIndex: 50,
+        // Pill shape with frosted surface — low visual weight
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 44, height: 44,
+        borderRadius: '50%',
+        background: 'var(--chrome-bg)',
+        backdropFilter: 'blur(20px) saturate(160%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(160%)',
+        border: '0.5px solid var(--sep)',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.14), 0 1px 3px rgba(0,0,0,0.10)',
+        cursor: 'pointer',
+        WebkitTapHighlightColor: 'transparent',
+        transition: 'opacity 0.15s',
+      }}
+    >
+      {/* Pencil / compose icon */}
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--label-1)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg>
+    </button>
   );
 }
 
 // ─── AppShell ──────────────────────────────────────────────────────────────
 function AppShell() {
   const { session, isLoading } = useAtp();
-  const { activeTab, prevTab, openStory, profileDid } = useUiStore();
+  const { activeTab, prevTab, openStory, profileDid, openCompose, openPromptComposer } = useUiStore();
 
   const tabLoadingFallback = (
     <div style={{
@@ -110,6 +175,9 @@ function AppShell() {
             </Suspense>
           </motion.div>
         </AnimatePresence>
+
+        {/* Floating compose button — unobtrusive, above tab bar */}
+        <FloatingComposeFab onCompose={openCompose} onPromptComposer={openPromptComposer} />
       </div>
 
       {/* Bottom tab bar */}

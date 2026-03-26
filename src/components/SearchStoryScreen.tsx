@@ -22,6 +22,9 @@ import type { StoryEntry } from '../App.js';
 import { summarizeStoryEntities } from '../intelligence/entityLinking.js';
 import { useTranslationStore } from '../store/translationStore.js';
 import { translationClient } from '../lib/i18n/client.js';
+import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
+import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
@@ -68,11 +71,12 @@ function StoryProgressRail({ total, current }: { total: number; current: number 
 
 // ─── RichText inline renderer ─────────────────────────────────────────────
 function RichText({ text, color }: { text: string; color: string }) {
+  const navigateToProfile = useProfileNavigation();
   const parts = text.split(/(@[\w.]+|#\w+|https?:\/\/\S+)/g);
   return (
     <span>
       {parts.map((p, i) => {
-        if (p.startsWith('@')) return <span key={i} style={{ color: '#BF8FFF', fontWeight: 500 }}>{p}</span>;
+        if (p.startsWith('@')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }} style={{ color: accent.cyan400, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{p}</button>;
         if (p.startsWith('#')) return <span key={i} style={{ color: accent.cyan400, fontWeight: 500 }}>{p}</span>;
         if (p.startsWith('http')) {
           try {
@@ -87,6 +91,7 @@ function RichText({ text, color }: { text: string; color: string }) {
 
 // ─── OverviewCard ─────────────────────────────────────────────────────────
 function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; query: string; getTranslatedText: (post: MockPost) => string }) {
+  const navigateToProfile = useProfileNavigation();
   const top = posts[0];
   if (!top) return null;
   const topText = getTranslatedText(top);
@@ -164,9 +169,15 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
                 : <span style={{ fontSize: 10, color: disc.textTertiary }}>@</span>
               }
             </div>
-            <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text }}>
-              {domain || `@${top.author.handle}`}
-            </span>
+            {domain ? (
+              <span style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text }}>
+                {domain}
+              </span>
+            ) : (
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                @{top.author.handle}
+              </button>
+            )}
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
               {top.timestamp}
@@ -180,6 +191,7 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
 
 // ─── BestSourceCard ───────────────────────────────────────────────────────
 function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTranslatedText: (post: MockPost) => string }) {
+  const navigateToProfile = useProfileNavigation();
   const top = posts[0];
   if (!top) return null;
   const topText = getTranslatedText(top);
@@ -205,8 +217,8 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
           }
         </div>
         <div>
-          <p style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary }}>{top.author.displayName}</p>
-          <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>@{top.author.handle}</p>
+          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>{top.author.displayName}</button>
+          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{top.author.handle}</button>
         </div>
       </div>
 
@@ -250,6 +262,7 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
 
 // ─── RelatedEntitiesCard ──────────────────────────────────────────────────
 function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
+  const navigateToProfile = useProfileNavigation();
   const entities = summarizeStoryEntities(posts.map(p => p.content));
   const topicEntities = entities
     .filter(entity => entity.entityKind === 'concept' || entity.entityKind === 'claim')
@@ -294,15 +307,16 @@ function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
           <p style={{ fontSize: typeScale.metaSm[0], fontWeight: 600, color: disc.textTertiary, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Mentioned</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {actorEntities.map(entity => (
-              <span key={entity.canonicalId} style={{
+              <button key={entity.canonicalId} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(entity.label); }} style={{
                 padding: '5px 12px', borderRadius: radius.full,
-                background: 'rgba(191,143,255,0.12)',
-                color: '#BF8FFF',
+                background: 'rgba(124,233,255,0.12)',
+                color: accent.cyan400,
                 fontSize: typeScale.chip[0], fontWeight: 600,
+                border: 'none', cursor: 'pointer',
               }}>
                 @{entity.label.replace(/^@/, '')}
                 {entity.aliasCount > 1 && <span style={{ marginLeft: 6, opacity: 0.75 }}>~{entity.aliasCount}</span>}
-              </span>
+              </button>
             ))}
           </div>
         </div>
@@ -317,6 +331,7 @@ function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
 
 // ─── RelatedConversationCard ──────────────────────────────────────────────
 function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { posts: MockPost[]; onOpenStory: (e: StoryEntry) => void; getTranslatedText: (post: MockPost) => string }) {
+  const navigateToProfile = useProfileNavigation();
   return (
     <div style={{
       borderRadius: ocTokens.radius,
@@ -350,7 +365,7 @@ function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { po
                   : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
                 }
               </div>
-              <span style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary }}>{post.author.displayName}</span>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
               <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{post.timestamp}</span>
             </div>
             <p style={{
@@ -358,7 +373,7 @@ function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { po
               color: disc.textSecondary,
               display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
             }}>
-              {getTranslatedText(post)}
+              <RichText text={getTranslatedText(post)} color={disc.textSecondary} />
             </p>
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
               <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
@@ -457,17 +472,29 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     if (!translationPolicy.autoTranslateExplore) return;
     if (posts.length === 0) return;
 
-    const visible = posts.slice(0, 6).filter((post) => post.content.trim().length > 0 && !translationById[post.id]);
+    const visible = posts.slice(0, 6).filter((post) => {
+      if (post.content.trim().length === 0 || translationById[post.id]) return false;
+      const detected = heuristicDetectLanguage(post.content);
+      if (detected.language !== 'und' && isLikelySameLanguage(detected.language, translationPolicy.userLanguage)) return false;
+      return true;
+    });
     if (visible.length === 0) return;
 
     Promise.allSettled(
       visible.map((post) =>
-        translationClient.translateInline({
-          id: post.id,
-          sourceText: post.content,
-          targetLang: translationPolicy.userLanguage,
-          mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
-        }).then((result) => upsertTranslation(result)),
+        {
+          const detected = heuristicDetectLanguage(post.content);
+          return translationClient.translateInline({
+            id: post.id,
+            sourceText: post.content,
+            targetLang: translationPolicy.userLanguage,
+            mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+            ...(detected.language !== 'und' ? { sourceLang: detected.language } : {}),
+          }).then((result) => {
+            if (!hasMeaningfulTranslation(post.content, result.translatedText)) return;
+            upsertTranslation(result);
+          });
+        }
       ),
     ).catch(() => {
       // Keep original text when translation is unavailable.

@@ -192,9 +192,16 @@ llmRouter.post('/write/search-story', async (c) => {
 
   // Reuse the interpolator writer with adapted input
   const { storyId, titleHint, candidatePosts, safeEntities, factualHighlights, confidence } = parsed.data;
+
+  // Derive summary mode from confidence — same logic as the client routing layer.
+  const storySummaryMode: 'normal' | 'descriptive_fallback' | 'minimal_fallback' =
+    confidence.interpretiveConfidence < 0.45
+      ? (confidence.surfaceConfidence >= 0.60 ? 'descriptive_fallback' : 'minimal_fallback')
+      : 'normal';
+
   const writerInput = {
     threadId: storyId,
-    summaryMode: 'normal' as const,
+    summaryMode: storySummaryMode,
     confidence,
     rootPost: {
       uri: candidatePosts[0]?.uri ?? storyId,

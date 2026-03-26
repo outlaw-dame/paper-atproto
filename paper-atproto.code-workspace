@@ -4,5 +4,46 @@
 			"path": "."
 		}
 	],
-	"settings": {}
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"git rev-parse": true,
+			"git add": true,
+			"git commit": true,
+			"git push": true,
+			"git --no-pager remote": true,
+			"npm --prefix server": true,
+			"/^node --input-type=module -e \"import \\{ translateWithRouter \\} from 'file:///Users/damonoutlaw/paper-atproto/server/dist/services/translation/runtime\\.js'; const result = await translateWithRouter\\(\\{ id: 'demo', sourceText: 'Bom dia #amigos, eu gosto de futebol', sourceLang: 'pt', targetLang: 'en', mode: 'server_default', localOnlyMode: false \\}\\); console\\.log\\(JSON\\.stringify\\(result\\)\\);\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cat package\\.json \\| python3 -c \"import sys,json; d=json\\.load\\(sys\\.stdin\\); deps=\\{\\*\\*d\\.get\\('dependencies',\\{\\}\\), \\*\\*d\\.get\\('devDependencies',\\{\\}\\)\\}; relevant = \\{k:v for k,v in deps\\.items\\(\\) if any\\(x in k for x in \\['transformers','onnx','vite','worker'\\]\\)\\}; print\\(json\\.dumps\\(relevant, indent=2\\)\\)\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cat /Users/damonoutlaw/paper-atproto/node_modules/onnxruntime-web/package\\.json \\| python3 -c \"import sys,json; d=json\\.load\\(sys\\.stdin\\); print\\('version:', d\\.get\\('version'\\)\\); print\\('browser:', d\\.get\\('browser'\\)\\); print\\('exports keys:', list\\(d\\.get\\('exports',\\{\\}\\)\\.keys\\(\\)\\)\\[:10\\] if d\\.get\\('exports'\\) else 'none'\\)\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cat /Users/damonoutlaw/paper-atproto/node_modules/@xenova/transformers/package\\.json \\| python3 -c \"import sys,json; d=json\\.load\\(sys\\.stdin\\); deps=d\\.get\\('dependencies',\\{\\}\\); print\\('version:', d\\.get\\('version'\\)\\); print\\('onnxruntime-web req:', deps\\.get\\('onnxruntime-web','not listed'\\)\\)\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npx tsc": true,
+			"read": true,
+			"npm --prefix ./server": true,
+			"/^python3 -c \"from pathlib import Path; import json; bases=\\[Path\\.home\\(\\)/'Library/Application Support/Google/Chrome/Default/Extensions', Path\\.home\\(\\)/'Library/Application Support/Microsoft Edge/Default/Extensions'\\];\nfor base in bases:\n    if not base\\.exists\\(\\):\n        continue\n    print\\(f'== \\{base\\} =='\\)\n    count=0\n    for manifest in sorted\\(base\\.glob\\('\\*/\\*/manifest\\.json'\\)\\):\n        try:\n            data=json\\.loads\\(manifest\\.read_text\\(encoding='utf-8'\\)\\)\n        except Exception:\n            continue\n        print\\(f'\\{manifest\\.parts\\[-3\\]\\} :: \\{data\\.get\\(\"name\"\\)\\} :: \\{data\\.get\\(\"version\"\\)\\}'\\)\n        count\\+=1\n        if count>=40:\n            break\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"./server/node_modules/.bin/tsx": true,
+			"/^python3 -c 'from pathlib import Path; import json; bases=\\[Path\\.home\\(\\)/\"Library/Application Support/Google/Chrome/Default/Extensions\", Path\\.home\\(\\)/\"Library/Application Support/Microsoft Edge/Default/Extensions\"\\]; count=0\nfor base in bases:\n    if not base\\.exists\\(\\):\n        continue\n    print\\(\"==\", base, \"==\"\\)\n    for manifest in sorted\\(base\\.glob\\(\"\\*/\\*/manifest\\.json\"\\)\\):\n        try:\n            data=json\\.loads\\(manifest\\.read_text\\(encoding=\"utf-8\"\\)\\)\n        except Exception:\n            continue\n        print\\(f\"\\{manifest\\.parts\\[-3\\]\\} :: \\{data\\.get\\('\"'\"'name'\"'\"'\\)\\} :: \\{data\\.get\\('\"'\"'version'\"'\"'\\)\\}\"\\)\n        count \\+= 1\n        if count >= 40:\n            raise SystemExit'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^python3 -c \"from pathlib import Path; import json; bases=\\[Path\\.home\\(\\)/'Library/Application Support/Google/Chrome/Default/Extensions', Path\\.home\\(\\)/'Library/Application Support/Microsoft Edge/Default/Extensions'\\]; manifests=\\[\\]; \\[manifests\\.extend\\(sorted\\(base\\.glob\\('\\*/\\*/manifest\\.json'\\)\\)\\) for base in bases if base\\.exists\\(\\)\\]; print\\('\\\\n'\\.join\\(f'\\{m\\.parts\\[-3\\]\\} :: \\{json\\.loads\\(m\\.read_text\\(encoding=\\\\\"utf-8\\\\\"\\)\\)\\.get\\(\\\\\"name\\\\\"\\)\\} :: \\{json\\.loads\\(m\\.read_text\\(encoding=\\\\\"utf-8\\\\\"\\)\\)\\.get\\(\\\\\"version\\\\\"\\)\\}' for m in manifests\\[:40\\]\\)\\)\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			}
+		}
+	}
 }

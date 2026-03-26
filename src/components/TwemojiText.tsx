@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import twemoji from 'twemoji';
+import LinkPreviewTooltip from './LinkPreviewTooltip.js';
 
 // Using the jdecked fork via jsdelivr to get the latest Unicode 15+ assets.
 const TWEMOJI_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/';
@@ -19,7 +20,7 @@ type Token = {
 
 function tokenizeRichText(text: string): Token[] {
   // Pattern: URLs, cashtags ($AAPL), @mentions, #hashtags
-  const pattern = /(https?:\/\/[^\s]+|\$[A-Za-z][A-Za-z0-9]{0,4}|@[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*|#[a-zA-Z0-9_]+)/g;
+  const pattern = /(https?:\/\/[^\s]+|\$[A-Za-z][A-Za-z0-9]{0,4}|@[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*|#[\p{L}\p{N}_]+)/gu;
   const tokens: Token[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -82,7 +83,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
             return (
               <span
                 key={index}
-                style={{ color: 'var(--purple)', fontWeight: 600 }}
+                style={{ color: 'var(--blue)', fontWeight: 600 }}
               >
                 {renderText(token.text)}
               </span>
@@ -91,8 +92,9 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
           return (
             <button
               key={index}
+              className="interactive-link-button"
               onClick={(e) => { e.stopPropagation(); onMention?.(token.text.slice(1)); }}
-              style={{ color: 'var(--purple)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              style={{ color: 'var(--blue)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               {renderText(token.text)}
             </button>
@@ -113,6 +115,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
           return (
             <button
               key={index}
+              className="interactive-link-button"
               onClick={(e) => { e.stopPropagation(); onHashtag?.(token.text.slice(1)); }}
               style={{ color: 'var(--blue)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
@@ -135,6 +138,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
           return (
             <button
               key={index}
+              className="interactive-link-button"
               onClick={(e) => { e.stopPropagation(); onCashtag?.(token.text.slice(1)); }}
               style={{ color: 'var(--teal)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
@@ -145,16 +149,13 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
 
         if (token.type === 'link') {
           return (
-            <a
+            <LinkPreviewTooltip
               key={index}
-              href={token.text}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              style={{ color: 'var(--blue)', textDecoration: 'underline' }}
+              url={token.text}
+              linkStyle={{ color: 'var(--blue)', textDecoration: 'underline' }}
             >
               {renderText(token.text)}
-            </a>
+            </LinkPreviewTooltip>
           );
         }
 

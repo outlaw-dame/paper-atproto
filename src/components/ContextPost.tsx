@@ -1,6 +1,7 @@
 import React from 'react';
 import type { MockPost } from '../data/mockData.js';
 import TwemojiText from './TwemojiText.js';
+import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 
 export const ContextPost = ({
   post,
@@ -10,62 +11,148 @@ export const ContextPost = ({
   post: MockPost;
   type: 'reply' | 'thread';
   onClick?: () => void;
-}) => (
+}) => {
+  const navigateToProfile = useProfileNavigation();
+  const authorActor = post.author.did || post.author.handle;
+  const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
+
+  return (
   <div
     role={onClick ? 'button' : undefined}
     tabIndex={onClick ? 0 : undefined}
-    aria-label={onClick ? (type === 'thread' ? 'Open original post' : 'Open replied-to post') : undefined}
-    title={onClick ? (type === 'thread' ? 'Tap to open original post' : 'Tap to open replied-to post') : undefined}
+    aria-label={
+      type === 'thread'
+        ? `Original post by ${post.author.displayName || post.author.handle}`
+        : `Replied-to post by ${post.author.displayName || post.author.handle}`
+    }
     onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
     onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
     style={{
-      padding: '8px 12px 0 54px',
-      position: 'relative',
       display: 'flex',
-      flexDirection: 'column',
-      gap: '4px',
-      background: 'var(--surface-card)',
-      borderRadius: 12,
-      border: '1px solid var(--stroke-dim)',
-      marginBottom: 8,
+      paddingLeft: 16,
+      paddingRight: 16,
       cursor: onClick ? 'pointer' : 'default',
     }}
   >
+    {/* Left column: avatar + thread connector line */}
     <div style={{
-      position: 'absolute',
-      top: 0,
-      bottom: -16,
-      left: 30,
-      width: '2px',
-      backgroundColor: 'var(--fill-3)',
-    }} />
-    
-    {/* Label row: "Thread root" label on left only for thread type; open hint always on right */}
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-      <span style={{ fontSize: 'var(--type-meta-sm-size)', color: 'var(--label-3)', fontWeight: 500 }}>
-        {type === 'thread' ? 'Original post' : ''}
-      </span>
-      {onClick && (
-        <span style={{ fontSize: 11, color: 'var(--label-4, var(--label-3))', display: 'flex', alignItems: 'center', gap: 2, opacity: 0.65 }}>
-          {type === 'thread' ? 'Open original' : 'Open post'}
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-            <line x1="7" y1="17" x2="17" y2="7"/>
-            <polyline points="7 7 17 7 17 17"/>
-          </svg>
-        </span>
-      )}
-    </div>
-    {/* Author name */}
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--type-body-sm-size)', color: 'var(--label-1)' }}>
-      <span style={{ fontWeight: 600 }}>{post.author.displayName || post.author.handle}</span>
-      <span style={{ color: 'var(--label-3)', fontSize: '0.85em' }}>@{post.author.handle}</span>
+      width: 40,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      flexShrink: 0,
+      marginRight: 10,
+    }}>
+      {/* Avatar */}
+      <div style={{
+        width: 36,
+        height: 36,
+        borderRadius: '50%',
+        background: 'var(--fill-2)',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}>
+        {post.author.avatar ? (
+          <img
+            src={post.author.avatar}
+            alt={post.author.handle}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <div style={{
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--label-2)',
+            fontWeight: 700,
+            fontSize: 'var(--type-label-md-size)',
+          }}>
+            {authorInitial}
+          </div>
+        )}
+      </div>
+      {/* Thread connector line — runs from below avatar down to PostCard */}
+      <div style={{
+        width: 2,
+        flex: 1,
+        minHeight: 12,
+        backgroundColor: 'var(--sep-opaque)',
+        borderRadius: 1,
+        marginTop: 4,
+      }} />
     </div>
 
-    {/* Content preview */}
-    <p style={{ margin: 0, fontSize: '14px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--label-2)', lineHeight: 1.3, maxHeight: '3.9em', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-      <TwemojiText text={post.content} />
-    </p>
+    {/* Right column: author + content preview */}
+    <div style={{ flex: 1, minWidth: 0, paddingBottom: 8, paddingTop: 2 }}>
+      {/* Author row */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 3,
+      }}>
+        <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(authorActor); }} style={{
+          fontSize: 'var(--type-label-md-size)',
+          lineHeight: 'var(--type-label-md-line)',
+          letterSpacing: 'var(--type-label-md-track)',
+          fontWeight: 700,
+          color: 'var(--label-1)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          background: 'none', border: 'none', padding: 0, cursor: 'pointer'
+        }}>
+          {post.author.displayName || post.author.handle}
+        </button>
+        <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(authorActor); }} style={{
+          fontSize: 'var(--type-meta-md-size)',
+          lineHeight: 'var(--type-meta-md-line)',
+          letterSpacing: 'var(--type-meta-md-track)',
+          color: 'var(--label-3)',
+          flexShrink: 0,
+          background: 'none', border: 'none', padding: 0, cursor: 'pointer'
+        }}>
+          @{post.author.handle}
+        </button>
+        {onClick && (
+          <span style={{
+            marginLeft: 'auto',
+            fontSize: 'var(--type-meta-sm-size)',
+            color: 'var(--label-3)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexShrink: 0,
+            opacity: 0.7,
+          }}>
+            Open
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+              <line x1="7" y1="17" x2="17" y2="7"/>
+              <polyline points="7 7 17 7 17 17"/>
+            </svg>
+          </span>
+        )}
+      </div>
+
+      {/* Content preview — 2-line clamp */}
+      <p
+        className="clamp-2"
+        style={{
+          margin: 0,
+          fontSize: 'var(--type-body-sm-size)',
+          lineHeight: 'var(--type-body-sm-line)',
+          letterSpacing: 'var(--type-body-sm-track)',
+          color: 'var(--label-2)',
+          wordBreak: 'break-word',
+        }}
+      >
+        <TwemojiText text={post.content} onMention={(handle) => { void navigateToProfile(handle); }} />
+      </p>
+    </div>
   </div>
-);
+  );
+};
 
 export default ContextPost;

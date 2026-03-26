@@ -62,7 +62,7 @@ function EmptyState({ label }: { label: string }) {
 
 export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
-  const { openProfile } = useUiStore();
+  const { openProfile, openComposeReply } = useUiStore();
   const platform = usePlatform();
   const buttonTokens = getButtonTokens(platform);
   const iconTokens = getIconBtnTokens(platform);
@@ -378,19 +378,19 @@ export default function HomeTab({ onOpenStory }: Props) {
                   return (
                     <div key={post.id} style={{
                       border: '1px solid var(--stroke-dim)',
-                      borderRadius: 12,
-                      padding: '10px 12px',
-                      marginBottom: 8,
+                      borderRadius: 16,
+                      padding: '12px 14px',
+                      marginBottom: 10,
                       background: 'color-mix(in srgb, var(--surface-card) 90%, var(--orange) 10%)',
                     }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
+                      <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', fontWeight: 700, color: 'var(--label-2)', marginBottom: 8 }}>
                         Matches filter:
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
                         {reasons.map((entry) => (
-                          <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--stroke-dim)', padding: '3px 8px', background: 'var(--surface-2)' }}>
-                            <span style={{ fontSize: 11, color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
-                            <span style={{ fontSize: 10, color: 'var(--label-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                          <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--stroke-dim)', padding: '4px 10px', background: 'var(--surface-2)' }}>
+                            <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
+                            <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                               {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
                             </span>
                           </span>
@@ -398,7 +398,7 @@ export default function HomeTab({ onOpenStory }: Props) {
                       </div>
                       <button
                         onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [post.id]: true }))}
-                        style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                        style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
                       >
                         Show post
                       </button>
@@ -429,17 +429,7 @@ export default function HomeTab({ onOpenStory }: Props) {
                 // a distinct unit from adjacent standalone posts
                 const isReply = !!(post.threadRoot ?? post.replyTo);
                 return (
-                <div key={post.id} style={{
-                  borderBottom: '1px solid var(--stroke-dim)',
-                  paddingBottom: 12, marginBottom: 0,
-                  ...(isReply ? {
-                    background: 'var(--surface-card)',
-                    borderRadius: 12,
-                    margin: '4px 8px',
-                    padding: '10px 10px 12px',
-                    border: '0.5px solid var(--stroke-dim)',
-                  } : { padding: '4px 0 12px' }),
-                }}>
+                <div key={post.id}>
                   {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
                   {/* Only show direct parent if it's not the same as the thread root */}
                   {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" onClick={() => openContextTarget(post.replyTo)} />}
@@ -451,9 +441,10 @@ export default function HomeTab({ onOpenStory }: Props) {
                     onToggleLike={handleToggleLike}
                     onBookmark={handleBookmark}
                     onMore={handleMore}
-                    // onReply={handleReply} // TODO: Implement reply composer
+                    onReply={openComposeReply}
                     index={i}
-                    replyingTo={post.replyTo?.author.handle ?? post.threadRoot?.author.handle}
+                    hasContextAbove={isReply}
+                    replyingTo={isReply ? undefined : (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)}
                   />
                 </div>
                 );

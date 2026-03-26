@@ -18,9 +18,12 @@ import type { StoryEntry } from '../App.js';
 import { useUiStore } from '../store/uiStore.js';
 import { useTranslationStore } from '../store/translationStore.js';
 import { translationClient } from '../lib/i18n/client.js';
+import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
 import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
 import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -41,6 +44,8 @@ import {
 import LiveSportsMoments from '../components/LiveSportsMoments.js';
 import { sportsStore } from '../sports/sportsStore.js';
 import { sportsFeedService } from '../services/sportsFeed.js';
+import { WriterEntitySheet, EntityChip } from '../components/EntitySheet.js';
+import type { WriterEntity } from '../intelligence/llmContracts.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -60,11 +65,8 @@ const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Packs', 'Sources']
 type QuickFilter = typeof QUICK_FILTERS[number];
 
 function canAutoInlineTranslateExplore(post: MockPost): boolean {
-  const hasEmbed = !!post.embed;
-  const hasMedia = !!post.media?.length;
   const textLength = post.content.trim().length;
   if (textLength === 0 || textLength > 280) return false;
-  if (hasEmbed || hasMedia) return false;
   return true;
 }
 
@@ -104,25 +106,65 @@ function SynopsisChip({ label }: { label: string }) {
 }
 
 // ─── RichPostText — inline #hashtag linkification ────────────────────────
-function RichPostText({ text, onHashtag, style }: {
+function RichPostText({ text, onHashtag, onMention, style }: {
   text: string;
   onHashtag?: (tag: string) => void;
+  onMention?: (handle: string) => void;
   style?: React.CSSProperties;
 }) {
-  const parts = text.split(/(#\w+)/g);
+  const parts = text.split(/(@[\w.]+|#\w+)/g);
   return (
     <span style={style}>
       {parts.map((part, i) =>
-        part.startsWith('#') ? (
-          <span
+        part.startsWith('@') ? (
+          <button
             key={i}
-            onClick={e => { e.stopPropagation(); onHashtag?.(part.slice(1)); }}
-            style={{ color: accent.cyan400, fontWeight: 700, cursor: onHashtag ? 'pointer' : 'default' }}
-          >{part}</span>
+              className="interactive-link-button"
+              onClick={e => { e.stopPropagation(); onMention?.(part.slice(1)); }}
+              style={{ color: accent.cyan400, font: 'inherit', fontWeight: 700, background: 'none', border: 'none', cursor: onMention ? 'pointer' : 'default', padding: 0 }}
+          >{part}</button>
+        ) : part.startsWith('#') ? (
+          <button
+            key={i}
+              className="interactive-link-button"
+              onClick={e => { e.stopPropagation(); onHashtag?.(part.slice(1)); }}
+              style={{ color: accent.cyan400, font: 'inherit', fontWeight: 700, background: 'none', border: 'none', cursor: onHashtag ? 'pointer' : 'default', padding: 0 }}
+          >{part}</button>
         ) : part
       )}
     </span>
   );
+}
+
+// ─── Entity extraction from post content ─────────────────────────────────
+// Derives lightweight WriterEntity objects from hashtags and @mentions.
+// Used until the full AI pipeline provides entities for Explore cards.
+
+function extractPostEntities(content: string): WriterEntity[] {
+  const seen = new Set<string>();
+  const entities: WriterEntity[] = [];
+
+  // Hashtags → topic entities
+  for (const match of content.matchAll(/#(\w+)/g)) {
+    const label = match[1];
+    if (!label || label.length < 2 || seen.has(label.toLowerCase())) continue;
+    seen.add(label.toLowerCase());
+    entities.push({ id: `tag-${label.toLowerCase()}`, label: `#${label}`, type: 'topic', confidence: 0.70, impact: 0.40 });
+    if (entities.length >= 4) break;
+  }
+
+  // @mentions → person entities (only if space for more)
+  if (entities.length < 4) {
+    for (const match of content.matchAll(/@([\w.]+)/g)) {
+      const handle = match[1];
+      if (!handle || handle.length < 2 || seen.has(handle.toLowerCase())) continue;
+      seen.add(handle.toLowerCase());
+      entities.push({ id: `person-${handle.toLowerCase()}`, label: `@${handle}`, type: 'person', confidence: 0.65, impact: 0.35 });
+      if (entities.length >= 4) break;
+    }
+  }
+
+  return entities;
 }
 
 // ─── FeaturedSearchStoryCard — Gist-inspired flush link story card ────────
@@ -130,30 +172,43 @@ function FeaturedSearchStoryCard({
   post,
   onTap,
   onHashtag,
+  onEntityTap,
   translation,
   showOriginal,
   translating,
   translationError,
   autoTranslated,
+  translatedDisplayName,
   onToggleTranslate,
   onClearTranslation,
 }: {
   post: MockPost;
   onTap: () => void;
   onHashtag?: (tag: string) => void;
+  onEntityTap?: (entity: WriterEntity) => void;
   translation?: { translatedText: string; sourceLang: string };
   showOriginal: boolean;
   translating: boolean;
   translationError: boolean;
   autoTranslated: boolean;
+  translatedDisplayName?: string;
   onToggleTranslate: (event: React.MouseEvent) => void;
   onClearTranslation: (event: React.MouseEvent) => void;
 }) {
+  const navigateToProfile = useProfileNavigation();
+  const targetLanguage = useTranslationStore((state) => state.policy.userLanguage);
   const embed = post.embed?.type === 'external' ? post.embed : null;
   const img = post.media?.[0]?.url ?? embed?.thumb;
   const domain = embed?.domain ?? '';
-  const bodyText = translation && !showOriginal ? translation.translatedText : post.content;
+  const detectedLanguage = heuristicDetectLanguage(post.content);
+  const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const shouldOfferTranslation = hasRenderableTranslation
+    || detectedLanguage.language === 'und'
+    || !isLikelySameLanguage(detectedLanguage.language, targetLanguage);
+  const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
   const hashtags: string[] = Array.from(new Set((bodyText.match(/#\w+/g) ?? []) as string[])).slice(0, 5);
+  // Entity chips: prefer AI-extracted, fall back to content-derived
+  const entityChips = extractPostEntities(bodyText).filter(e => e.type !== 'topic' || !hashtags.includes(e.label));
 
   return (
     <motion.div
@@ -229,7 +284,7 @@ function FeaturedSearchStoryCard({
 
         {/* Hashtag chips */}
         {hashtags.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
             {hashtags.map(tag => (
               <button
                 key={tag}
@@ -248,6 +303,15 @@ function FeaturedSearchStoryCard({
           </div>
         )}
 
+        {/* Entity chips — tappable, open EntitySheet */}
+        {onEntityTap && entityChips.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            {entityChips.map(e => (
+              <EntityChip key={e.id} entity={e} onTap={onEntityTap} size="sm" />
+            ))}
+          </div>
+        )}
+
         {/* Post text with inline hashtag linkification */}
         <p style={{
           fontSize: typeScale.titleSm[0], lineHeight: `${typeScale.titleSm[1]}px`,
@@ -255,7 +319,7 @@ function FeaturedSearchStoryCard({
           color: disc.textPrimary, marginBottom: 8,
           display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} />
+          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} onMention={(handle) => { void navigateToProfile(handle); }} />
         </p>
 
         {/* Article title from embed (if different from post text) */}
@@ -267,7 +331,7 @@ function FeaturedSearchStoryCard({
           }}>{embed.title}</p>
         )}
 
-        {post.content.trim().length > 0 && (
+        {post.content.trim().length > 0 && shouldOfferTranslation && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: translation && !showOriginal ? 10 : 6 }}>
             <button
               onClick={onToggleTranslate}
@@ -283,19 +347,19 @@ function FeaturedSearchStoryCard({
                 opacity: translating ? 0.65 : 1,
               }}
             >
-              {translation
+              {hasRenderableTranslation
                 ? (showOriginal ? 'Show translation' : 'Show original')
                 : (translating
                   ? 'Translating...'
                   : 'Translate')}
             </button>
-            {translationError && !translation && (
-              <span style={{ fontSize: 11, color: '#ff6b6b', fontWeight: 600 }}>Failed to translate</span>
+            {translationError && !hasRenderableTranslation && (
+              <span style={{ fontSize: 11, color: '#ff6b6b', fontWeight: 600 }}>No translation available</span>
             )}
           </div>
         )}
 
-        {translation && !showOriginal && (
+        {hasRenderableTranslation && !showOriginal && (
           <div style={{
             marginBottom: 8,
             border: `0.5px solid ${disc.lineSubtle}`,
@@ -366,9 +430,9 @@ function FeaturedSearchStoryCard({
               : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 9, fontWeight: 700 }}>{getAuthorInitial(post.author.displayName, post.author.handle)}</div>
             }
           </div>
-          <span style={{ fontSize: 12, fontWeight: 500, color: disc.textSecondary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {post.author.displayName}
-          </span>
+          <button onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: 12, fontWeight: 500, color: disc.textSecondary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>
+            {translatedDisplayName || post.author.displayName}
+          </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, color: disc.textTertiary }}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
@@ -409,11 +473,18 @@ function LinkedPostMiniCard({
   onToggleTranslate: (event: React.MouseEvent) => void;
   onClearTranslation: (event: React.MouseEvent) => void;
 }) {
+  const navigateToProfile = useProfileNavigation();
+  const targetLanguage = useTranslationStore((state) => state.policy.userLanguage);
   const embed = post.embed?.type === 'external' ? post.embed : null;
   const img = post.media?.[0]?.url ?? embed?.thumb;
   const domain = embed?.domain ?? '';
+  const detectedLanguage = heuristicDetectLanguage(post.content);
+  const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const shouldOfferTranslation = hasRenderableTranslation
+    || detectedLanguage.language === 'und'
+    || !isLikelySameLanguage(detectedLanguage.language, targetLanguage);
 
-  const bodyText = translation && !showOriginal ? translation.translatedText : post.content;
+  const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
 
   return (
     <motion.div
@@ -447,9 +518,9 @@ function LinkedPostMiniCard({
           fontSize: 13, fontWeight: 600, lineHeight: '18px', color: disc.textPrimary,
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} />
+          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} onMention={(handle) => { void navigateToProfile(handle); }} />
         </p>
-        {post.content.trim().length > 0 && (
+        {post.content.trim().length > 0 && shouldOfferTranslation && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
               onClick={onToggleTranslate}
@@ -465,18 +536,18 @@ function LinkedPostMiniCard({
                 opacity: translating ? 0.65 : 1,
               }}
             >
-              {translation
+              {hasRenderableTranslation
                 ? (showOriginal ? 'Show translation' : 'Show original')
                 : (translating
                   ? 'Translating...'
                   : 'Translate')}
             </button>
-            {translationError && !translation && (
-              <span style={{ fontSize: 10, color: '#ff6b6b', fontWeight: 600 }}>Failed to translate</span>
+            {translationError && !hasRenderableTranslation && (
+              <span style={{ fontSize: 10, color: '#ff6b6b', fontWeight: 600 }}>No translation available</span>
             )}
           </div>
         )}
-        {translation && !showOriginal && (
+        {hasRenderableTranslation && !showOriginal && (
           <div style={{
             border: `0.5px solid ${disc.lineSubtle}`,
             borderRadius: radius[10],
@@ -522,6 +593,9 @@ function LinkedPostMiniCard({
           </span>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          <button onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ border: 'none', background: 'none', padding: 0, fontSize: 11, color: disc.textSecondary, fontWeight: 600, cursor: 'pointer', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            @{post.author.handle}
+          </button>
           <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: disc.textTertiary }}>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
             {post.likeCount.toLocaleString()}
@@ -610,6 +684,7 @@ function LiveClusterCard({ title, summary, count, onTap }: { title: string; summ
 // ─── FeedCard ─────────────────────────────────────────────────────────────
 function FeedCard({ gen, onFollow }: { gen: AppBskyFeedDefs.GeneratorView; onFollow: (uri: string) => void }) {
   const [following, setFollowing] = useState(gen.viewer?.like !== undefined);
+  const navigateToProfile = useProfileNavigation();
   return (
     <motion.div
       whileTap={{ scale: 0.97 }}
@@ -632,9 +707,9 @@ function FeedCard({ gen, onFollow }: { gen: AppBskyFeedDefs.GeneratorView; onFol
         <p style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 2 }}>
           {gen.displayName}
         </p>
-        <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+        <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(gen.creator.did || gen.creator.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>
           by @{gen.creator.handle.replace('.bsky.social', '')}
-        </p>
+        </button>
       </div>
       <button
         onClick={e => { e.stopPropagation(); setFollowing(v => !v); onFollow(gen.uri); }}
@@ -694,6 +769,7 @@ function SectionHeader({ title }: { title: string }) {
 // ─── ActorRow (search results) ────────────────────────────────────────────
 function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; onFollow: (did: string) => void }) {
   const [following, setFollowing] = useState(actor.viewer?.following !== undefined);
+  const navigateToProfile = useProfileNavigation();
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -709,10 +785,10 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
         }
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <button className="interactive-link-button" onClick={() => { void navigateToProfile(actor.did || actor.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', maxWidth: '100%' }}>
           {actor.displayName ?? actor.handle}
-        </p>
-        <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>@{actor.handle}</p>
+        </button>
+          <button className="interactive-link-button" onClick={() => { void navigateToProfile(actor.did || actor.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{actor.handle}</button>
       </div>
       <button
         onClick={() => { setFollowing(v => !v); onFollow(actor.did); }}
@@ -733,6 +809,7 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ExploreTab({ onOpenStory }: Props) {
   const { agent, session, sessionReady } = useSessionStore();
+  const navigateToProfile = useProfileNavigation();
   const platform = usePlatform();
   const buttonTokens = getButtonTokens(platform);
   const iconBtnTokens = getIconBtnTokens(platform);
@@ -763,6 +840,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const carouselIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const phraseIdx = useRef(Math.floor(Math.random() * DISCOVERY_PHRASES.length));
+  // Entity sheet state — Narwhal v3 Phase C
+  const [activeEntity, setActiveEntity] = useState<WriterEntity | null>(null);
 
   const exploreVisiblePool = useMemo(() => {
     const merged = [
@@ -957,7 +1036,10 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const handleToggleTranslate = useCallback(async (event: React.MouseEvent, post: MockPost) => {
     event.stopPropagation();
 
-    if (translationById[post.id]) {
+    const detected = heuristicDetectLanguage(post.content);
+    const hasRenderableTranslation = !!translationById[post.id] && hasMeaningfulTranslation(post.content, translationById[post.id].translatedText);
+
+    if (hasRenderableTranslation) {
       setShowOriginalById((prev) => ({ ...prev, [post.id]: !prev[post.id] }));
       return;
     }
@@ -972,7 +1054,12 @@ export default function ExploreTab({ onOpenStory }: Props) {
         sourceText: post.content,
         targetLang: translationPolicy.userLanguage,
         mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+        ...(detected.language !== 'und' ? { sourceLang: detected.language } : {}),
       });
+      if (!hasMeaningfulTranslation(post.content, result.translatedText)) {
+        setTranslationErrorById((prev) => ({ ...prev, [post.id]: true }));
+        return;
+      }
       upsertTranslation(result);
       setShowOriginalById((prev) => ({ ...prev, [post.id]: false }));
     } catch (err) {
@@ -1011,7 +1098,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
       if (!post.content.trim()) return false;
       if (autoAttemptedIdsRef.current.has(post.id)) return false;
       if (translatingById[post.id]) return false;
-      return !translationById[post.id];
+      if (translationById[post.id]) return false;
+      // Skip posts already in the user's language
+      const detected = heuristicDetectLanguage(post.content);
+      if (detected.language !== 'und' && isLikelySameLanguage(detected.language, translationPolicy.userLanguage)) return false;
+      return true;
     });
 
     if (missing.length === 0) return;
@@ -1029,10 +1120,28 @@ export default function ExploreTab({ onOpenStory }: Props) {
           sourceText: post.content,
           targetLang: translationPolicy.userLanguage,
           mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+          ...(heuristicDetectLanguage(post.content).language !== 'und'
+            ? { sourceLang: heuristicDetectLanguage(post.content).language }
+            : {}),
         }).then((result) => {
+          if (!hasMeaningfulTranslation(post.content, result.translatedText)) return;
           autoTranslatedIdsRef.current.add(post.id);
           upsertTranslation(result);
           setShowOriginalById((prev) => ({ ...prev, [post.id]: false }));
+          // Also translate display name if it appears to be in a non-target language
+          const dn = post.author.displayName || post.author.handle;
+          const dnKey = `displayName:${post.author.did}`;
+          if (dn && !translationById[dnKey]) {
+            const dnDetected = heuristicDetectLanguage(dn);
+            if (dnDetected.language !== 'und' && !isLikelySameLanguage(dnDetected.language, translationPolicy.userLanguage)) {
+              translationClient.translateInline({
+                id: dnKey,
+                sourceText: dn,
+                targetLang: translationPolicy.userLanguage,
+                mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
+              }).then(upsertTranslation).catch(() => {});
+            }
+          }
         }).catch((err) => {
           console.warn('[ExploreTab] auto translation failed', err);
           setTranslationErrorById((prev) => ({ ...prev, [post.id]: true }));
@@ -1069,6 +1178,13 @@ export default function ExploreTab({ onOpenStory }: Props) {
         position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0,
         background: disc.bgAtmosphere,
       }} />
+
+      {/* Entity sheet — Narwhal v3 Phase C */}
+      <WriterEntitySheet
+        entity={activeEntity}
+        relatedPosts={exploreVisiblePool}
+        onClose={() => setActiveEntity(null)}
+      />
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div style={{
@@ -1317,6 +1433,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 </div>
                               );
                             }
+                            const inlineDetectedLanguage = heuristicDetectLanguage(post.content);
+                            const hasInlineTranslation = !!translationById[post.id] && hasMeaningfulTranslation(post.content, translationById[post.id].translatedText);
+                            const shouldOfferInlineTranslation = hasInlineTranslation
+                              || inlineDetectedLanguage.language === 'und'
+                              || !isLikelySameLanguage(inlineDetectedLanguage.language, translationPolicy.userLanguage);
                             return (
                           <motion.div
                             key={post.id}
@@ -1336,16 +1457,16 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                   : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700 }}>{getAuthorInitial(post.author.displayName, post.author.handle)}</div>
                                 }
                               </div>
-                              <span style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary }}>{post.author.displayName}</span>
-                              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>@{post.author.handle}</span>
+                              <button className="interactive-link-button" onClick={(event) => { event.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
+                              <button className="interactive-link-button" onClick={(event) => { event.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{post.author.handle}</button>
                             </div>
                             <p style={{ fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`, color: disc.textSecondary, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                              {translationById[post.id] && !showOriginalById[post.id]
+                              {hasInlineTranslation && !showOriginalById[post.id]
                                 ? translationById[post.id].translatedText
                                 : post.content}
                             </p>
 
-                            {post.content.trim().length > 0 && (
+                            {post.content.trim().length > 0 && shouldOfferInlineTranslation && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
                                 <button
                                   onClick={(event) => handleToggleTranslate(event, post)}
@@ -1361,19 +1482,19 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                     opacity: translatingById[post.id] ? 0.65 : 1,
                                   }}
                                 >
-                                  {translationById[post.id]
+                                  {hasInlineTranslation
                                     ? (showOriginalById[post.id] ? 'Show translation' : 'Show original')
                                     : (translatingById[post.id]
                                       ? 'Translating...'
                                       : 'Translate')}
                                 </button>
-                                {translationErrorById[post.id] && !translationById[post.id] && (
-                                  <span style={{ fontSize: 11, color: '#ff6b6b', fontWeight: 600 }}>Failed to translate</span>
+                                {translationErrorById[post.id] && !hasInlineTranslation && (
+                                  <span style={{ fontSize: 11, color: '#ff6b6b', fontWeight: 600 }}>No translation available</span>
                                 )}
                               </div>
                             )}
 
-                            {translationById[post.id] && !showOriginalById[post.id] && (
+                            {hasInlineTranslation && !showOriginalById[post.id] && (
                               <div style={{
                                 marginTop: 8,
                                 border: `0.5px solid ${disc.lineSubtle}`,
@@ -1519,10 +1640,12 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                   translating={!!translatingById[p.id]}
                                   translationError={!!translationErrorById[p.id]}
                                   autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
+                                  translatedDisplayName={translationById[`displayName:${p.author.did}`]?.translatedText}
                                   onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                                   onClearTranslation={(event) => handleClearTranslation(event, p.id)}
                                   onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
                                   onHashtag={tag => useUiStore.getState().openSearchStory(tag)}
+                                  onEntityTap={(e) => setActiveEntity(e)}
                                 />
                               );
                             })()}

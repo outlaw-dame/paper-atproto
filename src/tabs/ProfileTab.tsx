@@ -450,7 +450,7 @@ function WePresentWarningCard({
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const { agent, session, profile: sessionProfile } = useSessionStore();
-  const { openSearchStory, setTab: setAppTab } = useUiStore();
+  const { openSearchStory, openComposeReply, setTab: setAppTab } = useUiStore();
   const platform = usePlatform();
   const btnTokens = getButtonTokens(platform);
   const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
@@ -625,7 +625,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                   </div>
                 );
               }
-              return <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} index={i} />;
+              return <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} onReply={openComposeReply} index={i} />;
             });
 
       case 'Library':

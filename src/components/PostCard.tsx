@@ -1,15 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
+import { fetchOGData } from '../og.js';
 import VideoPlayer from './VideoPlayer';
 import TwemojiText from './TwemojiText';
 import { useTranslationStore } from '../store/translationStore.js';
 import { translationClient } from '../lib/i18n/client.js';
+import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
 import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge.js';
 import { sportsFeedService } from '../services/sportsFeed.js';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
 import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia.js';
+import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import {
   recordSensitiveMediaImpression,
   recordSensitiveMediaReveal,
@@ -27,16 +31,43 @@ interface PostCardProps {
   onBookmark?: (post: MockPost) => void;
   onMore?: (post: MockPost) => void;
   index: number;
-  /** Handle of the post being replied to — shown as "↳ Replying to @handle" */
+  /** Handle of the post being replied to — shown as "↳ Replying to @handle" when no ContextPost is visible */
   replyingTo?: string | undefined;
+  /** When true, draws a connector line entering from the top of the card to the avatar, bridging a ContextPost above */
+  hasContextAbove?: boolean;
 }
 
-export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo }: PostCardProps) {
+type MediaCarouselItem =
+  | {
+      kind: 'image';
+      key: string;
+      url: string;
+      alt: string;
+      aspectRatio?: number;
+    }
+  | {
+      kind: 'video';
+      key: string;
+      url: string;
+      thumb?: string;
+      title?: string;
+      domain: string;
+    };
+
+export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translationError, setTranslationError] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+  const [mediaViewportWidth, setMediaViewportWidth] = useState(0);
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxViewportWidth, setLightboxViewportWidth] = useState(0);
+  const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
+  const mediaScrollRef = useRef<HTMLDivElement | null>(null);
+  const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation, clearTranslation } = useTranslationStore();
   const {
     policy: sensitivePolicy,
@@ -44,16 +75,93 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     revealPost,
     hidePost,
   } = useSensitiveMediaStore();
+  const navigateToProfile = useProfileNavigation();
   const translation = byId[post.id];
+  const mediaItems = post.media ?? [];
+  const carouselItems = useMemo<MediaCarouselItem[]>(() => {
+    const items: MediaCarouselItem[] = mediaItems.map((img, idx) => ({
+      kind: 'image',
+      key: `img-${idx}`,
+      url: img.url,
+      alt: img.alt ?? '',
+      ...(typeof img.aspectRatio === 'number' ? { aspectRatio: img.aspectRatio } : {}),
+    }));
+
+    if (post.embed?.type === 'video') {
+      items.push({
+        kind: 'video',
+        key: 'embed-video',
+        url: post.embed.url,
+        ...(post.embed.thumb ? { thumb: post.embed.thumb } : {}),
+        ...(post.embed.title ? { title: post.embed.title } : {}),
+        domain: post.embed.domain,
+      });
+    }
+
+    return items;
+  }, [mediaItems, post.embed]);
+  const lightboxItems = useMemo(() => carouselItems.filter((item): item is Extract<MediaCarouselItem, { kind: 'image' }> => item.kind === 'image'), [carouselItems]);
+  const carouselToLightboxIndex = useMemo(() => {
+    const map: number[] = [];
+    let imageIndex = 0;
+    for (let i = 0; i < carouselItems.length; i += 1) {
+      const item = carouselItems[i];
+      if (!item) continue;
+      if (item.kind === 'image') {
+        map[i] = imageIndex;
+        imageIndex += 1;
+      } else {
+        map[i] = -1;
+      }
+    }
+    return map;
+  }, [carouselItems]);
+  const detectedPostLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
+  const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
   const autoAttemptedRef = useRef(false);
   const sensitiveImpressionLoggedRef = useRef(false);
+
+  // Lazy-fetch author metadata for external link cards.
+  // ATProto's external embed spec doesn't carry author/fediverse fields, so we
+  // fetch them from the article page's meta tags (cached in og.ts).
+  const [fetchedAuthor, setFetchedAuthor] = useState<{ name?: string; handle?: string; profileUrl?: string } | null>(null);
+  const externalEmbedUrl = post.embed?.type === 'external' ? post.embed.url : null;
+  useEffect(() => {
+    if (!externalEmbedUrl) return;
+    // Skip if the API already gave us author info
+    if (post.embed?.type === 'external' && post.embed.authorName) return;
+    let cancelled = false;
+    fetchOGData(externalEmbedUrl).then((meta) => {
+      if (cancelled || !meta) return;
+      if (meta.author || meta.authorHandle) {
+        setFetchedAuthor({
+          ...(meta.author ? { name: meta.author } : {}),
+          ...(meta.authorHandle ? { handle: meta.authorHandle } : {}),
+          ...(meta.authorProfileUrl ? { profileUrl: meta.authorProfileUrl } : {}),
+        });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [externalEmbedUrl]);
 
   const storyRootId = post.threadRoot?.id ?? post.id;
   const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
 
   const handleProfileClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onViewProfile?.(post.author.did);
+    if (onViewProfile) {
+      onViewProfile(post.author.did);
+      return;
+    }
+    void navigateToProfile(post.author.did);
+  };
+
+  const handleMentionClick = (handle: string) => {
+    if (onViewProfile) {
+      onViewProfile(handle);
+      return;
+    }
+    void navigateToProfile(handle);
   };
 
   // Handle "open story" click
@@ -73,7 +181,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const handleTranslate = async (e: React.MouseEvent) => {
     e.stopPropagation();
 
-    if (translation) {
+    if (hasRenderableTranslation) {
       setShowOriginal((prev) => !prev);
       return;
     }
@@ -87,7 +195,12 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         sourceText: post.content,
         targetLang: policy.userLanguage,
         mode: policy.localOnlyMode ? 'local_private' : 'server_default',
+        ...(detectedPostLanguage.language !== 'und' ? { sourceLang: detectedPostLanguage.language } : {}),
       });
+      if (!hasMeaningfulTranslation(post.content, result.translatedText)) {
+        setTranslationError(true);
+        return;
+      }
       upsertTranslation(result);
       setShowOriginal(false);
     } catch (err) {
@@ -105,6 +218,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   };
 
   const displayContent = translation && !showOriginal
+    && hasRenderableTranslation
     ? translation.translatedText
     : post.content;
 
@@ -115,14 +229,15 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const shouldBlurSensitiveMedia = sensitivePolicy.blurSensitiveMedia && isSensitiveMedia && !isSensitiveMediaRevealed;
   const sensitiveReasonLabel = sensitiveMedia.reasons.slice(0, 2).join(', ');
 
+  const displayNameKey = `displayName:${post.author.did}`;
+  const translatedDisplayName = byId[displayNameKey]?.translatedText;
+
   const canAutoInlineTranslate = useMemo(() => {
-    const hasEmbed = !!post.embed;
-    const hasMedia = !!post.media?.length;
     const textLength = post.content.trim().length;
     if (textLength === 0 || textLength > 280) return false;
-    if (hasEmbed || hasMedia) return false;
+    if (detectedPostLanguage.language !== 'und' && isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)) return false;
     return true;
-  }, [post.content, post.embed, post.media]);
+  }, [detectedPostLanguage.language, policy.userLanguage, post.content]);
 
   useEffect(() => {
     if (translation || translating) return;
@@ -130,6 +245,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     if (!canAutoInlineTranslate) return;
     if (autoAttemptedRef.current) return;
 
+    // Skip posts already in the user's language
     autoAttemptedRef.current = true;
     setTranslating(true);
     setTranslationError(false);
@@ -139,22 +255,109 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       sourceText: post.content,
       targetLang: policy.userLanguage,
       mode: policy.localOnlyMode ? 'local_private' : 'server_default',
+      ...(detectedPostLanguage.language !== 'und' ? { sourceLang: detectedPostLanguage.language } : {}),
     }).then((result) => {
+      if (!hasMeaningfulTranslation(post.content, result.translatedText)) return;
       upsertTranslation(result);
       setShowOriginal(false);
+      // Translate display name if it appears to be in a non-target language
+      const dn = post.author.displayName || post.author.handle;
+      if (dn && !useTranslationStore.getState().byId[displayNameKey]) {
+        const dnDetected = heuristicDetectLanguage(dn);
+        if (dnDetected.language !== 'und' && !isLikelySameLanguage(dnDetected.language, policy.userLanguage)) {
+          translationClient.translateInline({
+            id: displayNameKey,
+            sourceText: dn,
+            targetLang: policy.userLanguage,
+            mode: policy.localOnlyMode ? 'local_private' : 'server_default',
+          }).then(upsertTranslation).catch(() => {});
+        }
+      }
     }).catch((err) => {
       console.warn('[PostCard] auto translation failed', err);
       setTranslationError(true);
     }).finally(() => {
       setTranslating(false);
     });
-  }, [canAutoInlineTranslate, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.content, post.id, translation, translating, upsertTranslation]);
+  }, [canAutoInlineTranslate, detectedPostLanguage.language, displayNameKey, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.author.displayName, post.author.handle, post.content, post.id, translation, translating, upsertTranslation]);
 
   useEffect(() => {
     if (!shouldBlurSensitiveMedia || sensitiveImpressionLoggedRef.current) return;
     sensitiveImpressionLoggedRef.current = true;
     recordSensitiveMediaImpression(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
   }, [shouldBlurSensitiveMedia, sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn]);
+
+  useEffect(() => {
+    setExpandedAltIndex(null);
+    setActiveMediaIndex(0);
+    if (mediaScrollRef.current) {
+      mediaScrollRef.current.scrollTo({ left: 0, behavior: 'auto' });
+    }
+  }, [post.id, carouselItems.length]);
+
+  useEffect(() => {
+    const node = mediaScrollRef.current;
+    if (!node) return;
+
+    const updateViewportWidth = () => setMediaViewportWidth(node.clientWidth);
+    updateViewportWidth();
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updateViewportWidth);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [post.id, carouselItems.length]);
+
+  useEffect(() => {
+    if (!isLightboxOpen || typeof document === 'undefined') return;
+    const priorOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = priorOverflow;
+    };
+  }, [isLightboxOpen]);
+
+  useEffect(() => {
+    if (!isLightboxOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!lightboxItems.length) return;
+      if (event.key === 'Escape') {
+        setIsLightboxOpen(false);
+      } else if (event.key === 'ArrowRight') {
+        setIsLightboxZoomed(false);
+        setLightboxIndex((prev) => Math.min(lightboxItems.length - 1, prev + 1));
+      } else if (event.key === 'ArrowLeft') {
+        setIsLightboxZoomed(false);
+        setLightboxIndex((prev) => Math.max(0, prev - 1));
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isLightboxOpen, lightboxItems.length]);
+
+  useEffect(() => {
+    if (!isLightboxOpen) return;
+    const node = lightboxScrollRef.current;
+    if (!node) return;
+    const width = lightboxViewportWidth || node.clientWidth;
+    if (!width) return;
+    node.scrollTo({ left: lightboxIndex * width, behavior: 'smooth' });
+  }, [isLightboxOpen, lightboxIndex, lightboxViewportWidth]);
+
+  useEffect(() => {
+    if (!isLightboxOpen) return;
+    const node = lightboxScrollRef.current;
+    if (!node) return;
+
+    const updateViewportWidth = () => setLightboxViewportWidth(node.clientWidth);
+    updateViewportWidth();
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updateViewportWidth);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isLightboxOpen]);
 
   useEffect(() => {
     if (shouldBlurSensitiveMedia) return;
@@ -184,9 +387,9 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       style={{
         background: 'var(--surface-card)',
         borderRadius: 16,
-        padding: '16px',
-        marginBottom: 12,
-        boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+        padding: '14px 16px 12px',
+        marginBottom: 10,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
         border: '1px solid var(--stroke-dim)',
         cursor: 'pointer',
         position: 'relative',
@@ -194,14 +397,25 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       }}
     >
       {/* Author Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+      {hasContextAbove && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 35,
+          width: 2,
+          // Runs from top of card to the avatar vertical center (padding-top 14px + half avatar 20px = 34px)
+          height: 34,
+          backgroundColor: 'var(--sep-opaque)',
+        }} />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div
             onClick={handleProfileClick}
             style={{
               width: 40, height: 40, borderRadius: '50%',
               background: 'var(--fill-2)', overflow: 'hidden',
-              cursor: 'pointer'
+              flexShrink: 0, cursor: 'pointer',
             }}
           >
             {post.author.avatar ? (
@@ -216,39 +430,40 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             onClick={handleProfileClick}
             role="button"
             tabIndex={0}
+            className="interactive-link-surface"
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 onViewProfile?.(post.author.did);
               }
             }}
-            style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer' }}
+            style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer', minWidth: 0 }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>{post.author.displayName || post.author.handle}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-ui-title-sm-track)', color: 'var(--label-1)' }}>{translatedDisplayName || post.author.displayName || post.author.handle}</span>
               {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
-              <span style={{ fontSize: 14, color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
+              <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
             </div>
-            <span style={{ fontSize: 14, color: 'var(--label-3)' }}>@{post.author.handle}</span>
+            <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
           </div>
         </div>
       </div>
 
       {/* Reply-to attribution */}
       {replyingTo && (
-        <p style={{ fontSize: 13, color: 'var(--label-3)', margin: '0 0 6px', fontWeight: 500 }}>
-          ↳ Replying to <span style={{ color: 'var(--blue)' }}>@{replyingTo}</span>
+        <p style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', margin: '0 0 8px', fontWeight: 500 }}>
+          ↳ Replying to <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); handleMentionClick(replyingTo); }} style={{ color: 'var(--blue)', font: 'inherit', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>@{replyingTo}</button>
         </p>
       )}
 
       {/* Content */}
       {post.content && (
         <p style={{
-          fontSize: 16, lineHeight: '1.45', color: 'var(--label-1)',
-          marginBottom: post.embed || post.media ? 12 : 4,
+          fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)',
+          marginBottom: post.embed || post.media ? 12 : 6,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }}>
-          <TwemojiText text={displayContent} />
+          <TwemojiText text={displayContent} onMention={handleMentionClick} />
         </p>
       )}
 
@@ -262,7 +477,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         </div>
       ) : null}
 
-      {post.content.trim().length > 0 && (
+      {post.content.trim().length > 0 && (hasRenderableTranslation || detectedPostLanguage.language === 'und' || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, marginTop: -2 }}>
           <button
             onClick={handleTranslate}
@@ -271,30 +486,32 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               border: 'none',
               background: 'transparent',
               color: 'var(--blue)',
-              fontSize: 13,
+              fontSize: 'var(--type-meta-md-size)',
+              lineHeight: 'var(--type-meta-md-line)',
+              letterSpacing: 'var(--type-meta-md-track)',
               fontWeight: 600,
               padding: 0,
               cursor: translating ? 'default' : 'pointer',
               opacity: translating ? 0.65 : 1,
             }}
           >
-            {translation
+            {hasRenderableTranslation
               ? (showOriginal ? 'Show translation' : 'Show original')
               : (translating
                 ? 'Translating...'
                 : 'Translate')}
           </button>
-          {translationError && !translation && (
-            <span style={{ fontSize: 12, color: 'var(--red)' }}>Failed to translate</span>
+          {translationError && !hasRenderableTranslation && (
+            <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--red)' }}>No translation available</span>
           )}
         </div>
       )}
 
-      {translation && !showOriginal && (
+      {hasRenderableTranslation && !showOriginal && (
         <div style={{
           marginBottom: 10,
           border: '1px solid var(--stroke-dim)',
-          borderRadius: 10,
+          borderRadius: 12,
           background: 'color-mix(in srgb, var(--surface-card) 80%, var(--blue) 6%)',
           overflow: 'hidden',
         }}>
@@ -303,7 +520,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 10,
-            padding: '7px 9px',
+            padding: '8px 12px',
             borderBottom: '1px solid var(--stroke-dim)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -315,7 +532,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                 <path d="M22 22l-5-10-5 10" />
                 <path d="M14 18h6" />
               </svg>
-              <span style={{ fontSize: 11, color: 'var(--label-2)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-2)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {policy.autoTranslateFeed && canAutoInlineTranslate
                   ? `Auto-translated from ${translation.sourceLang}`
                   : `Translated from ${translation.sourceLang}`}
@@ -325,13 +542,13 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <button
                 onClick={handleTranslate}
-                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 11, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
               >
                 Show original
               </button>
               <button
                 onClick={handleClearTranslation}
-                style={{ border: 'none', background: 'transparent', color: 'var(--label-3)', fontSize: 11, fontWeight: 600, padding: 0, cursor: 'pointer' }}
+                style={{ border: 'none', background: 'transparent', color: 'var(--label-3)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 600, padding: 0, cursor: 'pointer' }}
               >
                 Clear
               </button>
@@ -346,16 +563,16 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <div style={{
           marginBottom: 10,
           border: '1px solid color-mix(in srgb, var(--orange) 35%, var(--sep))',
-          borderRadius: 10,
+          borderRadius: 12,
           background: 'color-mix(in srgb, var(--surface-card) 82%, var(--orange) 10%)',
-          padding: '9px 10px',
+          padding: '10px 12px',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <div>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
+              <p style={{ margin: 0, fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, color: 'var(--label-1)' }}>
                 Sensitive content warning
               </p>
-              <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)' }}>
+              <p style={{ margin: '4px 0 0', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)' }}>
                 {sensitiveReasonLabel ? `Label: ${sensitiveReasonLabel}` : 'This media is flagged for sexual content, nudity, or graphic violence.'}
               </p>
             </div>
@@ -363,7 +580,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             {sensitivePolicy.allowReveal && (
               <button
                 onClick={handleRevealSensitiveMedia}
-                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
               >
                 Show media
               </button>
@@ -376,81 +593,121 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <div style={{ marginBottom: 10 }}>
           <button
             onClick={handleHideSensitiveMedia}
-            style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+            style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
           >
             Hide sensitive media
           </button>
         </div>
       )}
 
-      {/* 1. Video Embed */}
-      {post.embed?.type === 'video' && (
-        <div style={{ position: 'relative', marginTop: 8 }}>
-          <div
-            className="video-player-wrapper"
-            onClick={e => e.stopPropagation()}
-            style={{
-              filter: shouldBlurSensitiveMedia ? 'blur(28px)' : 'none',
-              transition: 'filter 0.18s ease',
-              pointerEvents: shouldBlurSensitiveMedia ? 'none' : 'auto',
-            }}
-            aria-hidden={shouldBlurSensitiveMedia}
-          >
-            <VideoPlayer
-              url={post.embed.url}
-              {...(post.embed.thumb ? { thumb: post.embed.thumb } : {})}
-              autoplay={false}
-            />
-            {post.embed.title && (
-              <div style={{ marginTop: 8 }}>
-                <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--label-1)' }}>{post.embed.title}</p>
-                <p style={{ fontSize: 13, color: 'var(--label-3)' }}>{post.embed.domain}</p>
-              </div>
-            )}
-          </div>
-
-          {shouldBlurSensitiveMedia && (
-            <div style={{
-              position: 'absolute',
-              inset: 0,
-              borderRadius: 12,
-              background: 'linear-gradient(180deg, rgba(0,0,0,0.42), rgba(0,0,0,0.6))',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              fontSize: 12,
-              fontWeight: 700,
-              textAlign: 'center',
-              padding: 12,
-            }}>
-              Sensitive video hidden
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 2. Image Grid */}
-      {post.media && post.media.length > 0 && (
+      {/* 1. Media Carousel (Images + Video) */}
+      {carouselItems.length > 0 && (
         <div style={{ position: 'relative' }}>
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: post.media.length > 1 ? '1fr 1fr' : '1fr',
-            gap: 4, borderRadius: 12, overflow: 'hidden',
             marginTop: 8,
+            borderRadius: 12,
+            overflow: 'hidden',
             filter: shouldBlurSensitiveMedia ? 'blur(22px)' : 'none',
             transition: 'filter 0.18s ease',
             pointerEvents: shouldBlurSensitiveMedia ? 'none' : 'auto',
+            position: 'relative',
           }}>
-            {post.media.map((img, i) => {
-              const alt = (img.alt ?? '').trim();
+            <div
+              ref={mediaScrollRef}
+              onScroll={(e) => {
+                const node = e.currentTarget;
+                const width = mediaViewportWidth || node.clientWidth;
+                if (!width) return;
+                const stride = carouselItems.length > 1 ? Math.max(1, width - 20) : width;
+                const nextIndex = Math.max(0, Math.min(carouselItems.length - 1, Math.round(node.scrollLeft / stride)));
+                setActiveMediaIndex(nextIndex);
+              }}
+              style={{
+                display: 'flex',
+                overflowX: carouselItems.length > 1 ? 'auto' : 'hidden',
+                overscrollBehaviorX: 'contain',
+                scrollSnapType: carouselItems.length > 1 ? 'x mandatory' : 'none',
+                scrollPaddingInline: carouselItems.length > 1 ? 10 : 0,
+                paddingInline: carouselItems.length > 1 ? 10 : 0,
+                scrollBehavior: 'smooth',
+                scrollSnapStop: 'always',
+                WebkitOverflowScrolling: 'touch',
+                scrollbarWidth: 'none',
+                touchAction: 'pan-y pinch-zoom',
+                gap: carouselItems.length > 1 ? 8 : 0,
+              }}
+            >
+            {carouselItems.map((item, i) => {
+              const alt = item.kind === 'image' ? item.alt.trim() : '';
               const hasAlt = alt.length > 0;
               return (
-                <div key={i} style={{
-                  aspectRatio: img.aspectRatio ? String(img.aspectRatio) : '16/9',
-                  position: 'relative', background: 'var(--fill-2)'
-                }}>
-                  <img src={img.url} alt={img.alt ?? ''} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                <motion.div
+                  key={i}
+                  animate={{
+                    scale: carouselItems.length > 1 ? (i === activeMediaIndex ? 1 : 0.985) : 1,
+                    y: carouselItems.length > 1 ? (i === activeMediaIndex ? 0 : 2) : 0,
+                    opacity: i === activeMediaIndex ? 1 : 0.96,
+                  }}
+                  transition={{
+                    type: 'spring',
+                    stiffness: 420,
+                    damping: 34,
+                    mass: 0.7,
+                  }}
+                  style={{
+                    aspectRatio: item.kind === 'image' && item.aspectRatio ? String(item.aspectRatio) : '16/9',
+                    position: 'relative',
+                    background: 'var(--fill-2)',
+                    flex: carouselItems.length > 1 ? '0 0 calc(100% - 28px)' : '0 0 100%',
+                    minWidth: carouselItems.length > 1 ? 'calc(100% - 28px)' : '100%',
+                    scrollSnapAlign: 'start',
+                    borderRadius: 10,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {item.kind === 'image' ? (
+                    <img
+                      src={item.url}
+                      alt={item.alt}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const imageIndex = carouselToLightboxIndex[i];
+                        if (typeof imageIndex !== 'number' || imageIndex < 0) return;
+                        setLightboxIndex(imageIndex);
+                        setIsLightboxZoomed(false);
+                        setIsLightboxOpen(true);
+                      }}
+                      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }}
+                    />
+                  ) : (
+                    <div
+                      className="video-player-wrapper"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ position: 'absolute', inset: 0 }}
+                    >
+                      <VideoPlayer
+                        url={item.url}
+                        postId={post.id}
+                        {...(item.thumb ? { thumb: item.thumb } : {})}
+                        autoplay={false}
+                      />
+                      {item.title && (
+                        <div style={{
+                          position: 'absolute',
+                          left: 10,
+                          right: 10,
+                          bottom: 10,
+                          background: 'rgba(0,0,0,0.42)',
+                          borderRadius: 8,
+                          padding: '8px 10px',
+                          backdropFilter: 'blur(2px)',
+                        }}>
+                          <p style={{ margin: 0, fontWeight: 700, fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: '#fff' }}>{item.title}</p>
+                          <p style={{ margin: '3px 0 0', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'rgba(255,255,255,0.82)' }}>{item.domain}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {hasAlt && (
                     <button
@@ -475,9 +732,122 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       ALT
                     </button>
                   )}
-                </div>
+                </motion.div>
               );
             })}
+
+            </div>
+
+            {carouselItems.length > 1 && (
+              <>
+                <div style={{
+                  position: 'absolute',
+                  top: 10,
+                  right: 10,
+                  borderRadius: 999,
+                  background: 'rgba(0,0,0,0.52)',
+                  color: '#fff',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: '4px 9px',
+                }}>
+                  {activeMediaIndex + 1}/{carouselItems.length}
+                </div>
+
+                <div style={{
+                  position: 'absolute',
+                  left: 8,
+                  right: 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  pointerEvents: 'none',
+                }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const nextIndex = Math.max(0, activeMediaIndex - 1);
+                      setExpandedAltIndex(prev => (prev !== null && prev !== nextIndex ? null : prev));
+                      setActiveMediaIndex(nextIndex);
+                      const width = mediaViewportWidth || mediaScrollRef.current?.clientWidth || 0;
+                      const stride = carouselItems.length > 1 ? Math.max(1, width - 20) : width;
+                      mediaScrollRef.current?.scrollTo({ left: nextIndex * stride, behavior: 'smooth' });
+                    }}
+                    disabled={activeMediaIndex === 0}
+                    style={{
+                      pointerEvents: 'auto',
+                      width: 28,
+                      height: 28,
+                      borderRadius: '50%',
+                      border: 'none',
+                      background: 'rgba(0,0,0,0.48)',
+                      color: '#fff',
+                      fontSize: 16,
+                      fontWeight: 700,
+                      cursor: activeMediaIndex === 0 ? 'default' : 'pointer',
+                      opacity: activeMediaIndex === 0 ? 0.4 : 1,
+                    }}
+                  >
+                    ‹
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const nextIndex = Math.min(carouselItems.length - 1, activeMediaIndex + 1);
+                      setExpandedAltIndex(prev => (prev !== null && prev !== nextIndex ? null : prev));
+                      setActiveMediaIndex(nextIndex);
+                      const width = mediaViewportWidth || mediaScrollRef.current?.clientWidth || 0;
+                      const stride = carouselItems.length > 1 ? Math.max(1, width - 20) : width;
+                      mediaScrollRef.current?.scrollTo({ left: nextIndex * stride, behavior: 'smooth' });
+                    }}
+                    disabled={activeMediaIndex === carouselItems.length - 1}
+                    style={{
+                      pointerEvents: 'auto',
+                      width: 28,
+                      height: 28,
+                      borderRadius: '50%',
+                      border: 'none',
+                      background: 'rgba(0,0,0,0.48)',
+                      color: '#fff',
+                      fontSize: 16,
+                      fontWeight: 700,
+                      cursor: activeMediaIndex === carouselItems.length - 1 ? 'default' : 'pointer',
+                      opacity: activeMediaIndex === carouselItems.length - 1 ? 0.4 : 1,
+                    }}
+                  >
+                    ›
+                  </button>
+                </div>
+
+                <div style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  pointerEvents: 'none',
+                }}>
+                  {carouselItems.map((_, dotIndex) => (
+                    <span
+                      key={dotIndex}
+                      style={{
+                        width: dotIndex === activeMediaIndex ? 16 : 6,
+                        height: 6,
+                        borderRadius: 999,
+                        background: dotIndex === activeMediaIndex ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           {shouldBlurSensitiveMedia && (
@@ -495,113 +865,298 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               textAlign: 'center',
               padding: 12,
             }}>
-              Sensitive images hidden
+              Sensitive media hidden
             </div>
           )}
 
-          {expandedAltIndex !== null && post.media[expandedAltIndex] && !shouldBlurSensitiveMedia && (
+          {expandedAltIndex !== null && carouselItems[expandedAltIndex]?.kind === 'image' && !shouldBlurSensitiveMedia && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 marginTop: 8,
                 border: '1px solid var(--stroke-dim)',
-                borderRadius: 10,
+                borderRadius: 12,
                 background: 'var(--fill-1)',
-                padding: '9px 10px',
+                padding: '10px 12px',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--label-3)' }}>
-                  Media description {expandedAltIndex + 1}/{post.media.length}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', fontWeight: 700, color: 'var(--label-3)' }}>
+                  Media description {expandedAltIndex + 1}/{carouselItems.length}
                 </span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     setExpandedAltIndex(null);
                   }}
-                  style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 11, fontWeight: 700, padding: 0, cursor: 'pointer' }}
+                  style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
                 >
                   Hide
                 </button>
               </div>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: 'var(--label-2)', whiteSpace: 'pre-wrap' }}>
-                {(post.media[expandedAltIndex].alt ?? '').trim()}
+              <p style={{ margin: 0, fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', whiteSpace: 'pre-wrap' }}>
+                {(carouselItems[expandedAltIndex]?.kind === 'image' ? carouselItems[expandedAltIndex].alt : '').trim()}
               </p>
             </div>
           )}
         </div>
       )}
 
+      <AnimatePresence>
+      {isLightboxOpen && lightboxItems.length > 0 && (
+        <motion.div
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsLightboxOpen(false);
+          }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.94)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ type: 'spring', stiffness: 280, damping: 30 }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '16px 16px 8px',
+              color: '#fff',
+              flexShrink: 0,
+            }}
+          >
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsLightboxOpen(false);
+              }}
+              style={{
+                border: 'none',
+                background: 'rgba(255,255,255,0.14)',
+                color: '#fff',
+                borderRadius: 999,
+                width: 32,
+                height: 32,
+                fontSize: 16,
+                lineHeight: 1,
+                cursor: 'pointer',
+              }}
+            >
+              ✕
+            </button>
+
+            <span style={{ fontSize: 'var(--type-label-sm-size)', lineHeight: 'var(--type-label-sm-line)', fontWeight: 700 }}>{lightboxIndex + 1}/{lightboxItems.length}</span>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsLightboxZoomed((prev) => !prev);
+              }}
+              style={{
+                border: 'none',
+                background: 'rgba(255,255,255,0.14)',
+                color: '#fff',
+                borderRadius: 999,
+                padding: '7px 12px',
+                fontSize: 'var(--type-meta-md-size)',
+                lineHeight: 'var(--type-meta-md-line)',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {isLightboxZoomed ? 'Zoom out' : 'Zoom in'}
+            </button>
+          </motion.div>
+
+          <motion.div
+            ref={lightboxScrollRef}
+            onClick={(e) => e.stopPropagation()}
+            onScroll={(e) => {
+              const node = e.currentTarget;
+              const width = lightboxViewportWidth || node.clientWidth;
+              if (!width) return;
+              const nextIndex = Math.max(0, Math.min(lightboxItems.length - 1, Math.round(node.scrollLeft / width)));
+              if (nextIndex !== lightboxIndex) {
+                setLightboxIndex(nextIndex);
+                setIsLightboxZoomed(false);
+              }
+            }}
+            initial={{ opacity: 0, scale: 0.985 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.985 }}
+            transition={{ type: 'spring', stiffness: 240, damping: 28, mass: 0.8 }}
+            style={{
+              flex: 1,
+              display: 'flex',
+              overflowX: 'auto',
+              scrollSnapType: 'x mandatory',
+              scrollBehavior: 'smooth',
+              WebkitOverflowScrolling: 'touch',
+              touchAction: 'pan-y pinch-zoom',
+            }}
+          >
+            {lightboxItems.map((img, i) => {
+              const zoomedCurrent = isLightboxZoomed && i === lightboxIndex;
+              return (
+                <div
+                  key={`lightbox-${i}`}
+                  style={{
+                    flex: '0 0 100%',
+                    minWidth: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 12,
+                    scrollSnapAlign: 'start',
+                  }}
+                >
+                  <img
+                    src={img.url}
+                    alt={img.alt ?? ''}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (i !== lightboxIndex) return;
+                      setIsLightboxZoomed((prev) => !prev);
+                    }}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '100%',
+                      objectFit: 'contain',
+                      transform: zoomedCurrent ? 'scale(2)' : 'scale(1)',
+                      transformOrigin: 'center center',
+                      transition: 'transform 0.24s cubic-bezier(0.18, 0.8, 0.2, 1)',
+                      cursor: zoomedCurrent ? 'zoom-out' : 'zoom-in',
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </motion.div>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
       {/* 3. External Link */}
-      {post.embed?.type === 'external' && (
-        <a
-          href={post.embed.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
+      {post.embed?.type === 'external' && (() => {
+        const externalUrl = post.embed.url;
+        return (
+        <div
+          role="link"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(externalUrl, '_blank', 'noopener,noreferrer');
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            window.open(externalUrl, '_blank', 'noopener,noreferrer');
+          }}
           style={{
             display: 'block', textDecoration: 'none',
             border: '1px solid var(--stroke-dim)', borderRadius: 12,
-            overflow: 'hidden', marginTop: 8
+            overflow: 'hidden', marginTop: 8, cursor: 'pointer'
           }}
         >
           {post.embed.thumb && (
-            <div style={{ height: 160, width: '100%', background: 'var(--fill-2)' }}>
-              <img src={post.embed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+              <img src={post.embed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }} />
             </div>
           )}
           <div style={{ padding: '10px 12px', background: 'var(--fill-1)' }}>
-            <div style={{ fontSize: 12, color: 'var(--label-3)', marginBottom: 2 }}>{post.embed.domain}</div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--label-1)', lineHeight: 1.3, marginBottom: 4 }}>{post.embed.title}</div>
-            {post.embed.description && (
-              <div style={{ fontSize: 13, color: 'var(--label-2)', lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: (post.embed.authorName || post.embed.publisher) ? 6 : 0 }}>
-                {post.embed.description}
-              </div>
-            )}
-            {(post.embed.authorName || post.embed.publisher) && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, paddingTop: 6, borderTop: '0.5px solid var(--stroke-dim)' }}>
-                <span style={{
-                  fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
-                  color: 'var(--blue)', background: 'color-mix(in srgb, var(--blue) 12%, transparent)',
-                  padding: '2px 7px', borderRadius: 100,
-                }}>Featured</span>
-                {post.embed.authorName && (
-                  <span style={{ fontSize: 12, color: 'var(--label-2)' }}>
-                    By <span style={{ fontWeight: 600, color: 'var(--label-1)' }}>{post.embed.authorName}</span>
-                  </span>
-                )}
-                {post.embed.publisher && (
-                  <span style={{ fontSize: 12, color: 'var(--label-3)' }}>
-                    {post.embed.authorName ? `· ${post.embed.publisher}` : post.embed.publisher}
-                  </span>
-                )}
-              </div>
-            )}
+            <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)', marginBottom: 3 }}>{post.embed.domain}</div>
+            <div style={{ fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', letterSpacing: 'var(--type-label-lg-track)', fontWeight: 600, color: 'var(--label-1)', marginBottom: 4 }}>{post.embed.title}</div>
+            {(() => {
+              // Merge API-provided author (rare) with lazily fetched meta-tag author
+              const authorName = post.embed.authorName ?? fetchedAuthor?.name;
+              // authorHandle is a fediverse handle e.g. "@user@mastodon.social"
+              const authorHandle = fetchedAuthor?.handle;
+              const authorProfileUrl = fetchedAuthor?.profileUrl;
+              const publisher = post.embed.publisher;
+              const hasAuthor = !!(authorName || authorHandle || publisher);
+              return (
+                <>
+                  {post.embed.description && (
+                    <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
+                      {post.embed.description}
+                    </div>
+                  )}
+                  {hasAuthor && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, paddingTop: 6, borderTop: '0.5px solid var(--stroke-dim)' }}>
+                      {authorName && (
+                        <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-2)' }}>
+                          By <span style={{ fontWeight: 600, color: 'var(--label-1)' }}>{authorName}</span>
+                        </span>
+                      )}
+                      {authorHandle && (
+                        authorProfileUrl ? (
+                          <a
+                            href={authorProfileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--blue)', textDecoration: 'none' }}
+                          >
+                            {authorHandle}
+                          </a>
+                        ) : (
+                          <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--blue)' }}>
+                            {authorHandle}
+                          </span>
+                        )
+                      )}
+                      {publisher && (
+                        <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)' }}>
+                          {(authorName || authorHandle) ? `· ${publisher}` : publisher}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
-        </a>
-      )}
+        </div>
+        );
+      })()}
 
       {/* 4. Quote Post */}
-      {post.embed?.type === 'quote' && (
+      {post.embed?.type === 'quote' && (() => {
+        const quotedPost = post.embed.post;
+        const quotedActor = quotedPost.author.did || quotedPost.author.handle;
+        return (
         <div style={{
           border: '1px solid var(--stroke-dim)', borderRadius: 12,
-          padding: 12, marginTop: 8, background: 'var(--fill-1)'
+          padding: '10px 12px', marginTop: 8, background: 'var(--fill-1)'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-            <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden' }}>
-              {post.embed.post.author.avatar && <img src={post.embed.post.author.avatar} style={{ width: '100%', height: '100%' }} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
+              {quotedPost.author.avatar && <img src={quotedPost.author.avatar} style={{ width: '100%', height: '100%' }} />}
             </div>
-            <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--label-1)' }}>{post.embed.post.author.displayName}</span>
-            <span style={{ fontSize: 13, color: 'var(--label-3)' }}>@{post.embed.post.author.handle}</span>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName}</button>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
           </div>
-          <p style={{ fontSize: 15, color: 'var(--label-1)', lineHeight: 1.4 }}>
-            <TwemojiText text={post.embed.post.content} />
+          <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
+            <TwemojiText text={quotedPost.content} onMention={handleMentionClick} />
           </p>
         </div>
-      )}
+        );
+      })()}
 
       {/* Action Bar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingRight: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingRight: 4 }}>
         <ActionButton 
           icon="reply" 
           count={post.replyCount} 
@@ -645,9 +1200,11 @@ function ActionButton({ icon, count, active, onClick }: { icon: 'reply' | 'repos
     <button
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
-        background: 'none', border: 'none', padding: '4px 8px',
+        background: 'none', border: 'none', 
+        padding: '12px 8px', // Increased vertical padding for 44pt target
         cursor: 'pointer', color,
-        marginLeft: -8
+        marginLeft: -8,
+        minWidth: 44, minHeight: 44, // HIG standard tap target
       }}
       onClick={(e) => { e.stopPropagation(); onClick?.(); }}
     >
@@ -681,7 +1238,7 @@ function ActionButton({ icon, count, active, onClick }: { icon: 'reply' | 'repos
           <circle cx="12" cy="19" r="1"></circle>
         </svg>
       )}
-      {icon !== 'more' && <span style={{ fontSize: 13, fontWeight: 500, color: active ? color : 'var(--label-3)' }}>{formatCount(count)}</span>}
+      {icon !== 'more' && <span style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', fontWeight: 500, color: active ? color : 'var(--label-3)' }}>{formatCount(count)}</span>}
     </button>
   );
 }

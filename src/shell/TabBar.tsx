@@ -26,7 +26,6 @@ const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNo
       </svg>
     ),
   },
-  { id: 'compose', label: '', icon: () => null },
   {
     id: 'inbox', label: 'Inbox',
     icon: (a) => (
@@ -58,7 +57,7 @@ const tabBarStyle: React.CSSProperties = {
 };
 
 export default function TabBar() {
-  const { activeTab, unreadCount, setTab, openCompose, openPromptComposer } = useUiStore();
+  const { activeTab, unreadCount, setTab } = useUiStore();
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
   const tabBtnStyle: React.CSSProperties = {
@@ -72,55 +71,11 @@ export default function TabBar() {
     border: 'none', background: 'none',
     WebkitTapHighlightColor: 'transparent',
   };
-  const fabSize = platform.prefersCoarsePointer ? 56 : 52;
-  const fabStyle: React.CSSProperties = {
-    width: fabSize,
-    height: fabSize,
-    borderRadius: '50%',
-    background: 'var(--blue)', display: 'flex',
-    alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 4px 16px rgba(0,122,255,0.4)',
-    marginTop: platform.prefersCoarsePointer ? -10 : -8,
-  };
-  const pressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleFabPointerDown = () => {
-    pressTimer.current = setTimeout(() => { openPromptComposer(); }, 500);
-  };
-  const handleFabPointerUp = () => {
-    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; }
-  };
-  const handleFabClick = () => {
-    // Only fires if not a long-press (timer already cleared)
-    if (!pressTimer.current) return;
-    clearTimeout(pressTimer.current);
-    pressTimer.current = null;
-    openCompose();
-  };
 
   return (
     <nav style={tabBarStyle} role="tablist" aria-label="Main navigation">
       {TABS.map(({ id, label, icon }) => {
         const active = id === activeTab;
-        if (id === 'compose') {
-          return (
-            <button
-              key="compose"
-              style={tabBtnStyle}
-              onPointerDown={handleFabPointerDown}
-              onPointerUp={handleFabPointerUp}
-              onPointerLeave={handleFabPointerUp}
-              onClick={handleFabClick}
-              aria-label="Compose (hold for Discussion)"
-            >
-              <div style={fabStyle}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-              </div>
-            </button>
-          );
-        }
         return (
           <button
             key={id}

@@ -5,6 +5,7 @@ import {
   type TranslationProvider,
   type TranslationResult,
 } from './types.js';
+import { prepareHashtagsForTranslation, restoreTranslatedHashtags } from './hashtags.js';
 import { chooseTranslationProvider } from './router.js';
 import { M2M100Provider } from './providerM2M100.js';
 import { MarianProvider } from './providerMarian.js';
@@ -26,6 +27,7 @@ export async function translateWithRouter(input: {
   mode: TranslationMode;
   localOnlyMode: boolean;
 }): Promise<TranslationResult> {
+  const preparedInput = prepareHashtagsForTranslation(input.sourceText);
   const key = pairKey(input.sourceLang, input.targetLang);
   const providerName: TranslationProvider = chooseTranslationProvider({
     sourceLang: input.sourceLang,
@@ -36,13 +38,13 @@ export async function translateWithRouter(input: {
     hotPair: HOT_PAIRS.has(key),
   });
 
-  let translatedText = input.sourceText;
+  let translatedText = preparedInput.text;
   let modelVersion = 'unknown';
   let qualityTier: TranslationResult['qualityTier'] = 'default';
 
   if (providerName === 'bergamot') {
     translatedText = await bergamot.translate({
-      text: input.sourceText,
+      text: preparedInput.text,
       sourceLang: input.sourceLang,
       targetLang: input.targetLang,
     });
@@ -51,7 +53,7 @@ export async function translateWithRouter(input: {
   } else if (providerName === 'marian') {
     try {
       const output = await marian.translate({
-        text: input.sourceText,
+        text: preparedInput.text,
         sourceLang: input.sourceLang,
         targetLang: input.targetLang,
       });
@@ -60,7 +62,7 @@ export async function translateWithRouter(input: {
       qualityTier = 'optimized';
     } catch {
       const output = await m2m100.translate({
-        text: input.sourceText,
+        text: preparedInput.text,
         sourceLang: input.sourceLang,
         targetLang: input.targetLang,
       });
@@ -70,7 +72,7 @@ export async function translateWithRouter(input: {
     }
   } else {
     const output = await m2m100.translate({
-      text: input.sourceText,
+      text: preparedInput.text,
       sourceLang: input.sourceLang,
       targetLang: input.targetLang,
     });
@@ -78,6 +80,8 @@ export async function translateWithRouter(input: {
     modelVersion = output.modelVersion;
     qualityTier = 'default';
   }
+
+  translatedText = restoreTranslatedHashtags(translatedText, preparedInput.tokens);
 
   return {
     id: input.id,
