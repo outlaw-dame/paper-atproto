@@ -1,34 +1,28 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { networkInterfaces } from 'node:os';
 
-function detectLanHost(): string | undefined {
-  const interfaces = networkInterfaces();
-  for (const entries of Object.values(interfaces)) {
-    for (const net of entries ?? []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address;
-      }
-    }
-  }
-  return undefined;
-}
-
-const lanHost = detectLanHost();
-const devPort = Number(process.env.VITE_DEV_PORT ?? 5173);
+const devPort = Number(process.env.VITE_DEV_PORT ?? 5180);
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? process.env.VITE_GLYMPSE_API_BASE_URL ?? 'http://localhost:3011';
-const hmrHost = process.env.VITE_HMR_HOST ?? lanHost ?? 'localhost';
+const devHost = process.env.VITE_DEV_HOST ?? '0.0.0.0';
+const hmrHost = process.env.VITE_HMR_HOST;
 const hmrProtocol = process.env.VITE_HMR_PROTOCOL === 'wss' ? 'wss' : 'ws';
-const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? devPort);
+const hmrClientPort = process.env.VITE_HMR_CLIENT_PORT
+  ? Number(process.env.VITE_HMR_CLIENT_PORT)
+  : undefined;
+const hmrPort = process.env.VITE_HMR_PORT
+  ? Number(process.env.VITE_HMR_PORT)
+  : undefined;
 const enableIsolationHeaders = process.env.VITE_ENABLE_ISOLATION_HEADERS === '1';
 
-export default defineConfig({
-  base: '/paper-atproto/',
+export default defineConfig(({ command }) => ({
+  // Keep the GitHub Pages base in production builds, but do not force local
+  // development under a subpath.
+  base: command === 'serve' ? '/' : '/paper-atproto/',
   plugins: [react()],
   server: {
     port: devPort,
-    strictPort: true,
-    host: true,
+    strictPort: false,
+    host: devHost,
     allowedHosts: true,
     proxy: {
       '/api': {
@@ -40,13 +34,16 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-    hmr: {
-      host: hmrHost,
-      protocol: hmrProtocol,
-      clientPort: hmrClientPort,
-      port: devPort,
-      path: '/paper-atproto/',
-    },
+    ...(hmrHost || typeof hmrClientPort === 'number' || typeof hmrPort === 'number'
+      ? {
+          hmr: {
+            ...(hmrHost ? { host: hmrHost } : {}),
+            protocol: hmrProtocol,
+            ...(typeof hmrClientPort === 'number' ? { clientPort: hmrClientPort } : {}),
+            ...(typeof hmrPort === 'number' ? { port: hmrPort } : {}),
+          },
+        }
+      : {}),
     headers: enableIsolationHeaders ? {
       // Enable SharedArrayBuffer (needed for onnxruntime-web's threaded WASM backend).
       // Without these, ort@1.14.0 fails to register backends during module init with
@@ -122,4 +119,4 @@ export default defineConfig({
       'node:worker_threads': '/src/shims/empty.ts',
     },
   },
-});
+}));
