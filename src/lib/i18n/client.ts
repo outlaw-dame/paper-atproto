@@ -8,6 +8,7 @@ import type {
   LanguageDetectionResult,
   TranslationResult,
 } from './types.js';
+import { getConfiguredApiBaseUrl, resolveApiUrl } from '../apiBase.js';
 
 export type TranslationHttpClientConfig = {
   baseUrl: string;
@@ -44,7 +45,7 @@ export class TranslationHttpClient {
       const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
       try {
-        const response = await fetch(`${this.config.baseUrl}${path}`, {
+        const response = await fetch(resolveApiUrl(path, this.config.baseUrl), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -98,6 +99,9 @@ export class TranslationHttpClient {
 }
 
 export const translationClient = new TranslationHttpClient({
-  baseUrl: (import.meta as any).env?.VITE_GLYMPSE_TRANSLATE_BASE_URL ?? 'http://localhost:3001',
+  baseUrl: getConfiguredApiBaseUrl(
+    (import.meta as any).env?.VITE_GLYMPSE_TRANSLATE_BASE_URL,
+    (import.meta as any).env?.VITE_GLYMPSE_API_BASE_URL,
+  ),
   timeoutMs: Number((import.meta as any).env?.VITE_GLYMPSE_TRANSLATE_TIMEOUT_MS ?? 12_000),
 });

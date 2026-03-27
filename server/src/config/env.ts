@@ -50,7 +50,7 @@ const EnvSchema = z.object({
   PODCASTINDEX_API_SECRET: z.string().min(1).optional(),
   PODCASTINDEX_BASE_URL: z.string().url().default('https://api.podcastindex.org'),
   PODCASTINDEX_USER_AGENT: z.string().default('paper-atproto/1.0 (+https://github.com/damonoutlaw/paper-atproto)'),
-  PORT: z.coerce.number().int().positive().default(3001),
+  PORT: z.coerce.number().int().positive().default(3011),
 });
 
 export type AppEnv = z.infer<typeof EnvSchema>;

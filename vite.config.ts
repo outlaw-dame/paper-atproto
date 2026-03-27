@@ -16,6 +16,7 @@ function detectLanHost(): string | undefined {
 
 const lanHost = detectLanHost();
 const devPort = Number(process.env.VITE_DEV_PORT ?? 5173);
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? process.env.VITE_GLYMPSE_API_BASE_URL ?? 'http://localhost:3011';
 const hmrHost = process.env.VITE_HMR_HOST ?? lanHost ?? 'localhost';
 const hmrProtocol = process.env.VITE_HMR_PROTOCOL === 'wss' ? 'wss' : 'ws';
 const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? devPort);
@@ -29,6 +30,16 @@ export default defineConfig({
     strictPort: true,
     host: true,
     allowedHosts: true,
+    proxy: {
+      '/api': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+      },
+      '/health': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+      },
+    },
     hmr: {
       host: hmrHost,
       protocol: hmrProtocol,

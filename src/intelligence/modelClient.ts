@@ -15,10 +15,13 @@ import type {
   ComposerGuidanceWriteRequest,
   ComposerGuidanceWriteResult,
 } from './composer/llmWriterContracts.js';
+import { getConfiguredApiBaseUrl, resolveApiUrl } from '../lib/apiBase.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────
-const BASE_URL = (import.meta as any).env?.VITE_GLYMPSE_LLM_BASE_URL
-  ?? 'http://localhost:3001';
+const BASE_URL = getConfiguredApiBaseUrl(
+  (import.meta as any).env?.VITE_GLYMPSE_LLM_BASE_URL,
+  (import.meta as any).env?.VITE_GLYMPSE_API_BASE_URL,
+);
 
 const RETRY_BASE_MS = 300;
 const RETRY_MAX_MS = 4000;
@@ -55,7 +58,8 @@ async function fetchWithRetry<T>(
     const combinedSignal = signal ?? controller.signal;
 
     try {
-      const res = await fetch(`${BASE_URL}${path}`, {
+      const endpoint = resolveApiUrl(path, BASE_URL);
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

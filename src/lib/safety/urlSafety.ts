@@ -1,3 +1,5 @@
+import { getConfiguredApiBaseUrl, resolveApiUrl } from '../apiBase.js';
+
 export interface UrlThreatMatch {
   threatType: string;
   platformType: string;
@@ -16,9 +18,11 @@ export interface UrlSafetyVerdict {
   threats: UrlThreatMatch[];
 }
 
-const BASE_URL = (import.meta as any).env?.VITE_GLYMPSE_VERIFY_BASE_URL
-  ?? (import.meta as any).env?.VITE_GLYMPSE_LLM_BASE_URL
-  ?? 'http://localhost:3001';
+const BASE_URL = getConfiguredApiBaseUrl(
+  (import.meta as any).env?.VITE_GLYMPSE_VERIFY_BASE_URL,
+  (import.meta as any).env?.VITE_GLYMPSE_LLM_BASE_URL,
+  (import.meta as any).env?.VITE_GLYMPSE_API_BASE_URL,
+);
 
 const TIMEOUT_MS = 6000;
 const cache = new Map<string, Promise<UrlSafetyVerdict>>();
@@ -52,7 +56,7 @@ async function fetchUrlSafety(url: string): Promise<UrlSafetyVerdict> {
   const timeout = window.setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${BASE_URL}/api/safety/url-check`, {
+    const response = await fetch(resolveApiUrl('/api/safety/url-check', BASE_URL), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url }),
