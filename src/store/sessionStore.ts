@@ -40,19 +40,24 @@ function buildAgent(onSession: (s: SessionData | null) => void): BskyAgent {
   return new BskyAgent({
     service: 'https://bsky.social',
     persistSession: (evt, sess) => {
-      if ((evt === 'create' || evt === 'update') && sess) {
-        const s: SessionData = {
-          did: sess.did,
-          handle: sess.handle,
-          accessJwt: sess.accessJwt,
-          refreshJwt: sess.refreshJwt,
-          email: sess.email ?? undefined,
-        };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-        onSession(s);
-      } else if (evt === 'expired' || evt === 'create-failed') {
-        localStorage.removeItem(SESSION_KEY);
-        onSession(null);
+      try {
+        if ((evt === 'create' || evt === 'update') && sess) {
+          const s: SessionData = {
+            did: sess.did,
+            handle: sess.handle,
+            accessJwt: sess.accessJwt,
+            refreshJwt: sess.refreshJwt,
+            email: sess.email ?? undefined,
+          };
+          localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+          onSession(s);
+        } else if (evt === 'expired' || evt === 'create-failed') {
+          localStorage.removeItem(SESSION_KEY);
+          onSession(null);
+        }
+      } catch (err) {
+        console.error('[Session] Failed to persist session:', err);
+        // Session persistence failed but session is still valid in memory
       }
     },
   });

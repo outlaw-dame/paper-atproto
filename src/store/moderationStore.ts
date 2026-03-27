@@ -69,8 +69,26 @@ function saveStorage(
 ) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ timedMutes, blockRkeys }));
-  } catch {
-    // quota exceeded or private-browsing restriction — ignore
+  } catch (err) {
+    if ((err as DOMException).code === 'QuotaExceededError') {
+      // Storage quota exceeded — clear old expired mutes and try again
+      const now = Date.now();
+      const recentMutes: Record<string, number> = {};
+      for (const [did, expiry] of Object.entries(timedMutes)) {
+        if (expiry === 0 || expiry > now) {
+          // Keep indefinite (0) and non-expired mutes
+          recentMutes[did] = expiry;
+        }
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ timedMutes: recentMutes, blockRkeys }));
+      } catch {
+        // Still failed — give up
+        console.warn('[Moderation] Storage quota exceeded and cleanup failed');
+      }
+    } else {
+      // Private browsing or other error — ignore
+    }
   }
 }
 

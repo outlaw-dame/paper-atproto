@@ -28,12 +28,9 @@ export function usePostFilterResults(posts: MockPost[], context: FilterContext) 
 
       for (const post of posts) {
         const text = searchableTextForPost(post);
+        // Keyword and semantic matches are independent — evaluate both
         const keywordMatches = getKeywordMatches(text, activeRules);
-
-        let semanticMatches: PostFilterMatch[] = [];
-        if (keywordMatches.length === 0) {
-          semanticMatches = await getSemanticMatches(text, activeRules);
-        }
+        const semanticMatches = await getSemanticMatches(text, activeRules);
 
         const merged = [...keywordMatches, ...semanticMatches];
         if (merged.length > 0) next[post.id] = merged;

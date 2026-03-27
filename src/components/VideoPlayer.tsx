@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useMiniPlayer } from '../context/MiniPlayerContext.js';
+import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
 
 interface VideoPlayerProps {
   url: string;
@@ -17,9 +18,15 @@ interface VideoPlayerProps {
  */
 export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay = false, postId }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoplay);
+  const [isMuted, setIsMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastPersistAtRef = useRef(0);
   const { entry: miniEntry, activate } = useMiniPlayer();
+  const mediaKey = `video:${postId ?? url}`;
 
   // Is the floating mini-player currently showing this video?
   const isInMiniPlayer = miniEntry?.url === url && miniEntry?.postId === (postId ?? url);
@@ -48,6 +55,80 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, [isPlaying, isInMiniPlayer, url, thumb, aspectRatio, postId, activate]);
+
+  useEffect(() => {
+    if (!autoplay || isInMiniPlayer) return;
+    const v = videoRef.current;
+    if (!v) return;
+    v.play().catch(() => setIsPlaying(false));
+  }, [autoplay, isInMiniPlayer]);
+
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (!v) return;
+      saveMediaPlaybackPrefs(mediaKey, {
+        positionSeconds: v.currentTime,
+        playbackRate: v.playbackRate,
+      });
+    };
+  }, [mediaKey]);
+
+  const formatTime = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const safeSeconds = Math.floor(seconds);
+    const mins = Math.floor(safeSeconds / 60);
+    const secs = safeSeconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const seekBy = (delta: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const nextTime = Math.max(0, Math.min((duration || v.duration || 0), v.currentTime + delta));
+    v.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play().catch(() => setIsPlaying(false));
+      return;
+    }
+    v.pause();
+  };
+
+  const toggleMute = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+    setIsMuted(v.muted);
+  };
+
+  const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const nextTime = Number(event.target.value);
+    v.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const enterFullscreen = () => {
+    const node = containerRef.current;
+    if (!node || !document.fullscreenEnabled) return;
+    node.requestFullscreen().catch(() => {});
+  };
+
+  const handleRateChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextRate = Number(event.target.value);
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(nextRate) || nextRate <= 0) return;
+    v.playbackRate = nextRate;
+    setPlaybackRate(nextRate);
+    saveMediaPlaybackPrefs(mediaKey, { playbackRate: nextRate });
+  };
 
   return (
     <div
@@ -108,50 +189,164 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
       )}
 
       {/* Play button (not playing, not in mini-player) */}
-      {!isPlaying && !isInMiniPlayer && (
-        <button
-          onClick={() => setIsPlaying(true)}
-          style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            zIndex: 10,
-            width: 56,
-            height: 56,
-            borderRadius: '50%',
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            border: 'none',
-            color: '#fff',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-          aria-label="Play video"
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <path d="M8 5v14l11-7z" fill="currentColor"/>
-          </svg>
-        </button>
-      )}
+      {!isInMiniPlayer && (
+        <>
+          <video
+            ref={videoRef}
+            src={url}
+            autoPlay={autoplay}
+            playsInline
+            preload="metadata"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+            }}
+            onClick={togglePlay}
+            onLoadedMetadata={(event) => {
+              const nextDuration = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0;
+              const prefs = getMediaPlaybackPrefs(mediaKey);
+              setDuration(nextDuration);
+              if (prefs?.playbackRate && prefs.playbackRate > 0) {
+                event.currentTarget.playbackRate = prefs.playbackRate;
+              }
+              if (prefs?.positionSeconds && prefs.positionSeconds > 0) {
+                event.currentTarget.currentTime = Math.min(prefs.positionSeconds, nextDuration || prefs.positionSeconds);
+              }
+              setCurrentTime(event.currentTarget.currentTime || 0);
+              setIsMuted(event.currentTarget.muted);
+              setPlaybackRate(event.currentTarget.playbackRate || 1);
+            }}
+            onTimeUpdate={(event) => {
+              const nextTime = event.currentTarget.currentTime;
+              setCurrentTime(nextTime);
+              const now = Date.now();
+              if (now - lastPersistAtRef.current >= 2000) {
+                saveMediaPlaybackPrefs(mediaKey, {
+                  positionSeconds: nextTime,
+                  playbackRate: event.currentTarget.playbackRate,
+                });
+                lastPersistAtRef.current = now;
+              }
+            }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={(event) => {
+              setIsPlaying(false);
+              saveMediaPlaybackPrefs(mediaKey, {
+                positionSeconds: event.currentTarget.currentTime,
+                playbackRate: event.currentTarget.playbackRate,
+              });
+            }}
+            onEnded={(event) => {
+              setIsPlaying(false);
+              saveMediaPlaybackPrefs(mediaKey, {
+                positionSeconds: 0,
+                playbackRate: event.currentTarget.playbackRate,
+              });
+            }}
+          />
 
-      {/* Actual video — only mounted while playing inline */}
-      {isPlaying && !isInMiniPlayer && (
-        <video
-          ref={videoRef}
-          src={url}
-          controls
-          autoPlay
-          playsInline
-          style={{
-            position: 'absolute',
-            inset: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-          }}
-        />
+          {!isPlaying && (
+            <button
+              onClick={togglePlay}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                zIndex: 10,
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                backgroundColor: 'rgba(0,0,0,0.6)',
+                border: 'none',
+                color: '#fff',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              aria-label="Play video"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                <path d="M8 5v14l11-7z" fill="currentColor"/>
+              </svg>
+            </button>
+          )}
+
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              padding: '8px 10px 10px',
+              background: 'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.65) 100%)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <input
+              type="range"
+              min={0}
+              max={duration > 0 ? duration : 0}
+              step={0.1}
+              value={Math.min(currentTime, duration || currentTime)}
+              onChange={handleSeek}
+              aria-label="Seek video"
+              style={{ width: '100%' }}
+            />
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 6,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={togglePlay} type="button" aria-label={isPlaying ? 'Pause video' : 'Play video'} style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
+                  {isPlaying ? 'Pause' : 'Play'}
+                </button>
+                <button onClick={() => seekBy(-10)} type="button" aria-label="Rewind 10 seconds" style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
+                  -10s
+                </button>
+                <button onClick={() => seekBy(10)} type="button" aria-label="Forward 10 seconds" style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
+                  +10s
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: 'rgba(255,255,255,0.92)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </span>
+                <button onClick={toggleMute} type="button" aria-label={isMuted ? 'Unmute video' : 'Mute video'} style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
+                  {isMuted ? 'Unmute' : 'Mute'}
+                </button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'rgba(255,255,255,0.92)', fontSize: 11 }}>
+                  Speed
+                  <select
+                    value={playbackRate}
+                    onChange={handleRateChange}
+                    aria-label="Video playback speed"
+                    style={{ borderRadius: 6, border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', padding: '3px 6px', cursor: 'pointer' }}
+                  >
+                    <option value={0.75}>0.75x</option>
+                    <option value={1}>1x</option>
+                    <option value={1.25}>1.25x</option>
+                    <option value={1.5}>1.5x</option>
+                    <option value={2}>2x</option>
+                  </select>
+                </label>
+                <button onClick={enterFullscreen} type="button" aria-label="Open fullscreen" style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
+                  Full
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

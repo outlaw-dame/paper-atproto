@@ -129,7 +129,7 @@ export function filterResponseForSafety(
   }
 
   const category = detection.category || 'unknown';
-  const fallback = FALLBACK_RESPONSES[category] || FALLBACK_RESPONSES['self-harm'];
+  const fallback = FALLBACK_RESPONSES[category] ?? FALLBACK_RESPONSES['self-harm'] ?? 'Please reach out to a trusted support resource.';
 
   // Log the incident for safety audit
   console.warn(`[SAFETY] Harmful content detected in model output [${category}]`, {
@@ -174,7 +174,7 @@ export function filterWriterResponse(response: {
     const check = detectHarmfulContent(response.collapsedSummary);
     if (check.isHarmful) {
       console.warn(`[SAFETY] Harmful content in collapsedSummary [${check.category}]`);
-      response.collapsedSummary = FALLBACK_RESPONSES[check.category || 'self-harm'];
+      response.collapsedSummary = FALLBACK_RESPONSES[check.category || 'self-harm'] ?? FALLBACK_RESPONSES['self-harm'] ?? 'Please reach out for support.';
     }
   }
 
@@ -184,7 +184,7 @@ export function filterWriterResponse(response: {
     const check = detectHarmfulContent(response.expandedSummary);
     if (check.isHarmful) {
       console.warn(`[SAFETY] Harmful content in expandedSummary [${check.category}]`);
-      response.expandedSummary = undefined; // Omit rather than show fallback
+      delete response.expandedSummary; // Omit rather than show fallback
     }
   }
 

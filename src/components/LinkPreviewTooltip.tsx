@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchOGData, type OGMetadata } from '../og.js';
+import { checkUrlSafety, type UrlSafetyVerdict } from '../lib/safety/urlSafety.js';
 
 /**
  * Wraps an inline link and shows a rich OG preview card on hover.
@@ -37,14 +38,26 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetched = useRef(false);
   const [meta, setMeta] = useState<OGMetadata | null>(null);
+  const [safety, setSafety] = useState<UrlSafetyVerdict | null>(null);
   const [cardPos, setCardPos] = useState<{ top: number; left: number; flip: boolean } | null>(null);
 
+  const isUnsafe = safety?.status === 'unsafe';
   const hasPreview = !!(meta?.title || meta?.description);
+  const hasCard = hasPreview || isUnsafe;
 
   const prefetch = useCallback(() => {
     if (prefetched.current) return;
     prefetched.current = true;
-    fetchOGData(url).then((m) => { if (m) setMeta(m); }).catch(() => {});
+    void checkUrlSafety(url)
+      .then((verdict) => {
+        setSafety(verdict);
+        if (verdict.status === 'unsafe') return null;
+        return fetchOGData(url);
+      })
+      .then((m) => {
+        if (m) setMeta(m);
+      })
+      .catch(() => {});
   }, [url]);
 
   const showCard = useCallback(() => {
@@ -89,6 +102,21 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
     catch { return url; }
   })();
 
+  const handleLinkClick = useCallback(async (event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const verdict = safety ?? await checkUrlSafety(url);
+    setSafety(verdict);
+
+    if (verdict.status === 'unsafe') {
+      showCard();
+      return;
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }, [safety, showCard, url]);
+
   return (
     <>
       <a
@@ -96,7 +124,7 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
+        onClick={handleLinkClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         style={linkStyle}
@@ -104,7 +132,7 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
         {children}
       </a>
 
-      {cardPos && hasPreview && createPortal(
+      {cardPos && hasCard && createPortal(
         <div
           onMouseEnter={() => { if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } }}
           onMouseLeave={handleCardMouseLeave}
@@ -128,7 +156,7 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
           }}
         >
           {/* OG image */}
-          {meta?.image && (
+          {meta?.image && !isUnsafe && (
             <div style={{ width: '100%', aspectRatio: '1.91 / 1', overflow: 'hidden', background: 'var(--fill-2)' }}>
               <img
                 src={meta.image}
@@ -139,49 +167,84 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
           )}
 
           <div style={{ padding: '9px 12px 11px' }}>
-            {/* Site name / hostname */}
-            <div style={{
-              fontSize: 11,
-              color: 'var(--label-3)',
-              marginBottom: 3,
-              overflow: 'hidden',
-              whiteSpace: 'nowrap',
-              textOverflow: 'ellipsis',
-              letterSpacing: 0.1,
-            }}>
-              {meta?.siteName ?? hostname}
-            </div>
+            {isUnsafe ? (
+              <>
+                <div style={{
+                  fontSize: 11,
+                  color: 'var(--red)',
+                  marginBottom: 3,
+                  letterSpacing: 0.1,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                }}>
+                  Unsafe Link Warning
+                </div>
+                <div style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'var(--label-1)',
+                  lineHeight: 1.35,
+                  marginBottom: 4,
+                }}>
+                  This URL was flagged by Google Safe Browsing.
+                </div>
+                <div style={{
+                  fontSize: 12,
+                  color: 'var(--label-2)',
+                  lineHeight: 1.4,
+                }}>
+                  {safety?.threats.length
+                    ? `Threats: ${Array.from(new Set(safety.threats.map((t) => t.threatType))).join(', ')}`
+                    : (safety?.reason ?? 'Open only if you trust the source.')}
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Site name / hostname */}
+                <div style={{
+                  fontSize: 11,
+                  color: 'var(--label-3)',
+                  marginBottom: 3,
+                  overflow: 'hidden',
+                  whiteSpace: 'nowrap',
+                  textOverflow: 'ellipsis',
+                  letterSpacing: 0.1,
+                }}>
+                  {meta?.siteName ?? hostname}
+                </div>
 
-            {/* Title */}
-            {meta?.title && (
-              <div style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: 'var(--label-1)',
-                lineHeight: 1.35,
-                marginBottom: meta.description ? 4 : 0,
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-              }}>
-                {meta.title}
-              </div>
-            )}
+                {/* Title */}
+                {meta?.title && (
+                  <div style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: 'var(--label-1)',
+                    lineHeight: 1.35,
+                    marginBottom: meta.description ? 4 : 0,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }}>
+                    {meta.title}
+                  </div>
+                )}
 
-            {/* Description */}
-            {meta?.description && (
-              <div style={{
-                fontSize: 12,
-                color: 'var(--label-2)',
-                lineHeight: 1.4,
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-              }}>
-                {meta.description}
-              </div>
+                {/* Description */}
+                {meta?.description && (
+                  <div style={{
+                    fontSize: 12,
+                    color: 'var(--label-2)',
+                    lineHeight: 1.4,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }}>
+                    {meta.description}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>,

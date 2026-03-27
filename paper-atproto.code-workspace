@@ -47,7 +47,9 @@
 			"level": true,
 			"pnpm": true,
 			"printf": true,
-			"git remote": true
+			"git remote": true,
+			"npm --prefix /Users/damonoutlaw/paper-atproto/server": true,
+			"mv": true
 		}
 	}
 }

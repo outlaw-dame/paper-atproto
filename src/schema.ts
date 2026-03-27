@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, vector, customType } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, vector, customType, jsonb } from 'drizzle-orm/pg-core';
 
 // Custom type for tsvector (Full-Text Search)
 const tsvector = customType<{ data: string }>({
@@ -46,6 +46,9 @@ export const feedItems = pgTable('feed_items', {
   author: text('author'),
   enclosureUrl: text('enclosure_url'), // For podcasts/videos
   enclosureType: text('enclosure_type'),
+  transcriptUrl: text('transcript_url'),
+  chaptersUrl: text('chapters_url'),
+  valueConfig: jsonb('value_config'),
   embedding: vector('embedding', { dimensions: 384 }), // For semantic search
   searchVector: tsvector('search_vector'), // For full-text search
 });

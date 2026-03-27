@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useMiniPlayer } from '../context/MiniPlayerContext.js';
+import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
 
 /**
  * Floating mini-player — stays fixed at bottom-right above the tab bar.
@@ -10,15 +11,40 @@ export default function MiniPlayer() {
   const { entry, dismiss } = useMiniPlayer();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const lastPersistAtRef = useRef(0);
+
+  const mediaKey = entry ? `video:${entry.postId ?? entry.url}` : null;
 
   // Seek to the saved position and begin playback when a new entry arrives
   useEffect(() => {
-    if (!entry || !videoRef.current) return;
+    if (!entry || !videoRef.current || !mediaKey) return;
     const v = videoRef.current;
-    v.currentTime = entry.startTime;
+    const prefs = getMediaPlaybackPrefs(mediaKey);
+    const resumeTime = entry.startTime > 0
+      ? entry.startTime
+      : (prefs?.positionSeconds ?? 0);
+    v.currentTime = resumeTime;
+    if (prefs?.playbackRate && prefs.playbackRate > 0) {
+      v.playbackRate = prefs.playbackRate;
+      setPlaybackRate(prefs.playbackRate);
+    }
     v.play().catch(() => setIsPlaying(false));
     setIsPlaying(true);
-  }, [entry?.url, entry?.startTime]);
+  }, [entry?.url, entry?.startTime, mediaKey]);
+
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (!v || !mediaKey) return;
+      saveMediaPlaybackPrefs(mediaKey, {
+        positionSeconds: v.currentTime,
+        playbackRate: v.playbackRate,
+      });
+    };
+  }, [mediaKey]);
 
   if (!entry) return null;
 
@@ -35,6 +61,44 @@ export default function MiniPlayer() {
     } else {
       v.play().catch(() => {});
       setIsPlaying(true);
+    }
+  };
+
+  const seekBy = (delta: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const upperBound = duration || v.duration || 0;
+    const nextTime = Math.max(0, Math.min(upperBound, v.currentTime + delta));
+    v.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    const v = videoRef.current;
+    if (!v) return;
+    const nextTime = Number(event.target.value);
+    v.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const formatTime = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const safeSeconds = Math.floor(seconds);
+    const mins = Math.floor(safeSeconds / 60);
+    const secs = safeSeconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleRateChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    event.stopPropagation();
+    const nextRate = Number(event.target.value);
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(nextRate) || nextRate <= 0) return;
+    v.playbackRate = nextRate;
+    setPlaybackRate(nextRate);
+    if (mediaKey) {
+      saveMediaPlaybackPrefs(mediaKey, { playbackRate: nextRate });
     }
   };
 
@@ -67,24 +131,122 @@ export default function MiniPlayer() {
           src={entry.url}
           playsInline
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-          onEnded={() => setIsPlaying(false)}
+          onClick={togglePlay}
+          onLoadedMetadata={(event) => {
+            const nextDuration = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0;
+            setDuration(nextDuration);
+            setCurrentTime(event.currentTarget.currentTime || 0);
+            setPlaybackRate(event.currentTarget.playbackRate || 1);
+          }}
+          onTimeUpdate={(event) => {
+            const nextTime = event.currentTarget.currentTime;
+            setCurrentTime(nextTime);
+            const now = Date.now();
+            if (mediaKey && now - lastPersistAtRef.current >= 2000) {
+              saveMediaPlaybackPrefs(mediaKey, {
+                positionSeconds: nextTime,
+                playbackRate: event.currentTarget.playbackRate,
+              });
+              lastPersistAtRef.current = now;
+            }
+          }}
+          onEnded={(event) => {
+            setIsPlaying(false);
+            if (mediaKey) {
+              saveMediaPlaybackPrefs(mediaKey, {
+                positionSeconds: 0,
+                playbackRate: event.currentTarget.playbackRate,
+              });
+            }
+          }}
           onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPause={(event) => {
+            setIsPlaying(false);
+            if (mediaKey) {
+              saveMediaPlaybackPrefs(mediaKey, {
+                positionSeconds: event.currentTarget.currentTime,
+                playbackRate: event.currentTarget.playbackRate,
+              });
+            }
+          }}
         />
 
-        {/* Tap-to-toggle-play overlay (full area) */}
-        <button
-          onClick={togglePlay}
+        <div
           style={{
             position: 'absolute',
-            inset: 0,
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            WebkitTapHighlightColor: 'transparent',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            padding: '6px 6px 7px',
+            background: 'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.66) 100%)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            zIndex: 1,
           }}
-          aria-label={isPlaying ? 'Pause' : 'Play'}
-        />
+        >
+          <input
+            type="range"
+            min={0}
+            max={duration > 0 ? duration : 0}
+            step={0.1}
+            value={Math.min(currentTime, duration || currentTime)}
+            onChange={handleSeek}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Seek mini-player video"
+            style={{ width: '100%' }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  seekBy(-10);
+                }}
+                type="button"
+                aria-label="Rewind 10 seconds"
+                style={{ border: 'none', borderRadius: 6, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 6px', cursor: 'pointer' }}
+              >
+                -10
+              </button>
+              <button
+                onClick={togglePlay}
+                type="button"
+                aria-label={isPlaying ? 'Pause mini-player video' : 'Play mini-player video'}
+                style={{ border: 'none', borderRadius: 6, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 6px', cursor: 'pointer' }}
+              >
+                {isPlaying ? 'Pause' : 'Play'}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  seekBy(10);
+                }}
+                type="button"
+                aria-label="Forward 10 seconds"
+                style={{ border: 'none', borderRadius: 6, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 6px', cursor: 'pointer' }}
+              >
+                +10
+              </button>
+              <select
+                value={playbackRate}
+                onChange={handleRateChange}
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Mini-player playback speed"
+                style={{ border: 'none', borderRadius: 6, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 4px', cursor: 'pointer' }}
+              >
+                <option value={0.75}>0.75x</option>
+                <option value={1}>1x</option>
+                <option value={1.25}>1.25x</option>
+                <option value={1.5}>1.5x</option>
+                <option value={2}>2x</option>
+              </select>
+            </div>
+            <span style={{ color: 'rgba(255,255,255,0.9)', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>
+              {formatTime(currentTime)}
+            </span>
+          </div>
+        </div>
 
         {/* Paused state: center play icon */}
         {!isPlaying && (
@@ -136,7 +298,7 @@ export default function MiniPlayer() {
             backdropFilter: 'blur(4px)',
             WebkitBackdropFilter: 'blur(4px)',
             WebkitTapHighlightColor: 'transparent',
-            zIndex: 1,
+            zIndex: 2,
           }}
           aria-label="Close mini player"
         >

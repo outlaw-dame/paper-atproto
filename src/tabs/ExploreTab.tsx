@@ -17,11 +17,15 @@ import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
 import type { StoryEntry } from '../App.js';
 import { useUiStore } from '../store/uiStore.js';
 import { useTranslationStore } from '../store/translationStore.js';
+import { useActivityStore } from '../store/activityStore.js';
 import { translationClient } from '../lib/i18n/client.js';
 import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
 import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
+import { feedService } from '../feeds.js';
+import { hybridSearch } from '../search.js';
+import { searchPodcastIndex } from '../lib/podcastIndexClient.js';
 import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import {
@@ -49,6 +53,53 @@ import type { WriterEntity } from '../intelligence/llmContracts.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
+}
+
+interface ExploreFeedResult {
+  id: string;
+  title: string;
+  content?: string;
+  link: string;
+  pubDate?: string;
+  author?: string;
+  enclosureType?: string;
+  feedTitle?: string;
+  feedCategory?: string;
+  score?: number;
+  source?: 'local' | 'podcast-index';
+}
+
+function mapFeedRowToExploreFeedResult(row: any): ExploreFeedResult {
+  return {
+    id: String(row.id),
+    title: String(row.title || 'Untitled feed item'),
+    ...(row.content ? { content: String(row.content) } : {}),
+    link: String(row.link || ''),
+    ...(row.pub_date ? { pubDate: String(row.pub_date) } : {}),
+    ...(row.author ? { author: String(row.author) } : {}),
+    ...(row.enclosure_type ? { enclosureType: String(row.enclosure_type) } : {}),
+    ...(row.feed_title ? { feedTitle: String(row.feed_title) } : {}),
+    ...(row.feed_category ? { feedCategory: String(row.feed_category) } : {}),
+    ...(typeof row.rrf_score === 'number' ? { score: row.rrf_score } : {}),
+    source: 'local',
+  };
+}
+
+function mapPodcastFeedToExploreFeedResult(feed: any): ExploreFeedResult {
+  const categories = feed?.categories && typeof feed.categories === 'object'
+    ? Object.values(feed.categories).filter((value) => typeof value === 'string')
+    : [];
+  return {
+    id: `podcast-index:${String(feed?.id ?? feed?.url ?? Math.random())}`,
+    title: String(feed?.title || 'Untitled podcast'),
+    ...(feed?.description ? { content: String(feed.description) } : {}),
+    link: String(feed?.url || ''),
+    ...(feed?.author ? { author: String(feed.author) } : {}),
+    enclosureType: 'audio/mpeg',
+    feedTitle: String(feed?.title || 'Podcast'),
+    ...(categories.length > 0 ? { feedCategory: String(categories[0]) } : { feedCategory: 'Podcast' }),
+    source: 'podcast-index',
+  };
 }
 
 // ─── Discovery phrases ────────────────────────────────────────────────────
@@ -838,11 +889,16 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const clearTranslation = useTranslationStore((state) => state.clearTranslation);
+  const addAppNotification = useActivityStore((state) => state.addAppNotification);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<QuickFilter | null>(null);
   const [searchPosts, setSearchPosts] = useState<MockPost[]>([]);
+  const [searchFeedItems, setSearchFeedItems] = useState<ExploreFeedResult[]>([]);
+  const [recentFeedItems, setRecentFeedItems] = useState<ExploreFeedResult[]>([]);
   const [searchActors, setSearchActors] = useState<AppBskyActorDefs.ProfileView[]>([]);
+  const [addingPodcastFeedByUrl, setAddingPodcastFeedByUrl] = useState<Record<string, boolean>>({});
+  const [podcastFeedAddStatus, setPodcastFeedAddStatus] = useState<string | null>(null);
   const [suggestedFeeds, setSuggestedFeeds] = useState<AppBskyFeedDefs.GeneratorView[]>([]);
   const [suggestedActors, setSuggestedActors] = useState<AppBskyActorDefs.ProfileView[]>([]);
   const [featuredPost, setFeaturedPost] = useState<MockPost | null>(null);
@@ -919,13 +975,15 @@ export default function ExploreTab({ onOpenStory }: Props) {
 
   // Live search
   useEffect(() => {
-    if (!debouncedQuery.trim()) { setSearchPosts([]); setSearchActors([]); return; }
+    if (!debouncedQuery.trim()) { setSearchPosts([]); setSearchFeedItems([]); setSearchActors([]); return; }
     if (!sessionReady) return;
     setLoading(true);
     Promise.all([
       atpCall(() => agent.app.bsky.feed.searchPosts({ q: debouncedQuery, limit: 20 })).catch(() => null),
       atpCall(() => agent.searchActors({ term: debouncedQuery, limit: 8 })).catch(() => null),
-    ]).then(([postsRes, actorsRes]) => {
+      hybridSearch.searchFeedItems(debouncedQuery, 12).catch(() => null),
+      searchPodcastIndex(debouncedQuery, 8).catch(() => []),
+    ]).then(([postsRes, actorsRes, feedRes, podcastIndexFeeds]) => {
       if (postsRes?.data?.posts) {
         setSearchPosts(
           postsRes.data.posts
@@ -934,6 +992,21 @@ export default function ExploreTab({ onOpenStory }: Props) {
         );
       }
       if (actorsRes?.data?.actors) setSearchActors(actorsRes.data.actors);
+      const localResults = feedRes?.rows
+        ? feedRes.rows.map(mapFeedRowToExploreFeedResult)
+        : [];
+      const podcastResults = Array.isArray(podcastIndexFeeds)
+        ? podcastIndexFeeds.map(mapPodcastFeedToExploreFeedResult)
+        : [];
+      const seenLinks = new Set<string>();
+      const merged = [...localResults, ...podcastResults].filter((item) => {
+        const key = item.link.trim().toLowerCase();
+        if (!key) return false;
+        if (seenLinks.has(key)) return false;
+        seenLinks.add(key);
+        return true;
+      });
+      setSearchFeedItems(merged);
     }).finally(() => setLoading(false));
   }, [debouncedQuery, agent, session, sessionReady]);
 
@@ -1083,12 +1156,61 @@ export default function ExploreTab({ onOpenStory }: Props) {
       for (const game of sportsStore.getGames()) {
         sportsStore.startPolling(game.id, 'mock');
       }
+    } else {
+      const leagues = ['nba', 'nfl', 'mlb', 'nhl'] as const;
+      sportsStore.loadFromEspn([...leagues]).catch(() => {
+        // Keep discovery usable even if sports API is temporarily unreachable.
+      });
+      sportsStore.startEspnAutoRefresh([...leagues], 45_000);
     }
     return () => {
       sportsStore.stopAllPolling();
+      sportsStore.stopEspnAutoRefresh();
       if (enableMockSports) sportsStore.clear();
     };
   }, []);
+
+  const handleAddPodcastFeed = useCallback(async (feedUrl: string) => {
+    const normalized = feedUrl.trim();
+    if (!normalized) return;
+    setPodcastFeedAddStatus(null);
+    setAddingPodcastFeedByUrl((prev) => ({ ...prev, [normalized]: true }));
+    try {
+      await feedService.addFeed(normalized, 'Podcasts');
+      setPodcastFeedAddStatus('Podcast feed added.');
+      addAppNotification({
+        title: 'Podcast Added',
+        message: `Subscribed to ${normalized}`,
+        level: 'success',
+      });
+    } catch {
+      setPodcastFeedAddStatus('Unable to add this podcast feed right now.');
+      addAppNotification({
+        title: 'Podcast Add Failed',
+        message: `Could not subscribe to ${normalized}`,
+        level: 'warning',
+      });
+    } finally {
+      setAddingPodcastFeedByUrl((prev) => ({ ...prev, [normalized]: false }));
+    }
+  }, [addAppNotification]);
+
+  useEffect(() => {
+    let canceled = false;
+    feedService.getRecentFeedItems(12)
+      .then((rows: any[]) => {
+        if (canceled) return;
+        setRecentFeedItems(rows.map(mapFeedRowToExploreFeedResult));
+      })
+      .catch(() => {
+        if (canceled) return;
+        setRecentFeedItems([]);
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [sessionReady]);
 
   const handleFollow = useCallback(async (did: string) => {
     if (!session) return;
@@ -1101,7 +1223,6 @@ export default function ExploreTab({ onOpenStory }: Props) {
 
   const isSearching = debouncedQuery.trim().length > 0;
 
-  // ─── Trending topics derived from posts ─────────────────────────────────
   const trendingTopics = trendingPosts.flatMap(p =>
     (getPrimaryPostText(p).match(/#\w+/g) ?? []).slice(0, 2)
   ).filter((v, i, a) => a.indexOf(v) === i).slice(0, 8);
@@ -1632,7 +1753,85 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       </div>
                     </div>
                   )}
-                  {searchActors.length === 0 && searchPosts.length === 0 && (
+                  {searchFeedItems.length > 0 && (
+                    <div style={{ marginBottom: 24 }}>
+                      <SectionHeader title="Feeds & Podcasts" />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {searchFeedItems.slice(0, 10).map((item) => {
+                          const isPodcast = item.source === 'podcast-index' || (item.enclosureType || '').startsWith('audio/');
+                          const isAdding = Boolean(addingPodcastFeedByUrl[item.link]);
+                          return (
+                            <div
+                              key={item.id}
+                              style={{
+                                background: disc.surfaceCard,
+                                borderRadius: radius[16],
+                                padding: `${space[8]}px ${space[10]}px`,
+                                border: `0.5px solid ${disc.lineSubtle}`,
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                <p style={{ margin: 0, fontSize: typeScale.bodySm[0], fontWeight: 700, color: disc.textPrimary }}>{item.title}</p>
+                                {isPodcast && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '3px 8px', background: 'rgba(91,124,255,0.2)', color: accent.cyan400 }}>
+                                    Podcast
+                                  </span>
+                                )}
+                              </div>
+                              <p style={{ margin: '4px 0 0', fontSize: typeScale.metaSm[0], color: disc.textSecondary }}>
+                                {(item.feedTitle || 'Feed')} • {(item.feedCategory || 'General')}
+                              </p>
+                              {item.content && (
+                                <p style={{ margin: '6px 0 0', fontSize: typeScale.bodySm[0], color: disc.textTertiary, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                  {item.content}
+                                </p>
+                              )}
+                              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <a
+                                  href={item.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{
+                                    color: accent.primary,
+                                    fontSize: typeScale.metaSm[0],
+                                    fontWeight: 700,
+                                    textDecoration: 'none',
+                                  }}
+                                >
+                                  Open feed
+                                </a>
+                                {item.source === 'podcast-index' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddPodcastFeed(item.link)}
+                                    disabled={isAdding}
+                                    style={{
+                                      border: 'none',
+                                      borderRadius: 999,
+                                      padding: '5px 10px',
+                                      cursor: isAdding ? 'default' : 'pointer',
+                                      background: isAdding ? disc.surfaceCard : accent.primary,
+                                      color: '#fff',
+                                      fontSize: 11,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    {isAdding ? 'Adding...' : 'Add Podcast'}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {podcastFeedAddStatus && (
+                          <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textSecondary }}>
+                            {podcastFeedAddStatus}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {searchActors.length === 0 && searchPosts.length === 0 && searchFeedItems.length === 0 && (
                     <div style={{ padding: '40px 0', textAlign: 'center' }}>
                       <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No results for "{debouncedQuery}"</p>
                     </div>
@@ -1680,6 +1879,45 @@ export default function ExploreTab({ onOpenStory }: Props) {
                             onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
                           />
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {recentFeedItems.length > 0 && (
+                    <div>
+                      <SectionHeader title="From Your Feeds" />
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        {recentFeedItems.slice(0, 6).map((item) => {
+                          const isPodcast = (item.enclosureType || '').startsWith('audio/');
+                          return (
+                            <a
+                              key={item.id}
+                              href={item.link}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: 'block',
+                                background: disc.surfaceCard,
+                                borderRadius: radius[16],
+                                padding: `${space[8]}px ${space[10]}px`,
+                                border: `0.5px solid ${disc.lineSubtle}`,
+                                textDecoration: 'none',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                <p style={{ margin: 0, fontSize: typeScale.bodySm[0], fontWeight: 700, color: disc.textPrimary }}>{item.title}</p>
+                                {isPodcast && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 7px', background: 'rgba(91,124,255,0.2)', color: accent.cyan400 }}>
+                                    Podcast
+                                  </span>
+                                )}
+                              </div>
+                              <p style={{ margin: '4px 0 0', fontSize: typeScale.metaSm[0], color: disc.textSecondary }}>
+                                {(item.feedTitle || 'Feed')} • {(item.feedCategory || 'General')}
+                              </p>
+                            </a>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

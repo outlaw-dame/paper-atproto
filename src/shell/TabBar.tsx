@@ -27,7 +27,7 @@ const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNo
     ),
   },
   {
-    id: 'inbox', label: 'Inbox',
+    id: 'activity', label: 'Activity',
     icon: (a) => (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={a ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={a ? 2.5 : 1.75} strokeLinecap="round" strokeLinejoin="round">
         <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -52,7 +52,7 @@ const tabBarStyle: React.CSSProperties = {
   background: 'var(--chrome-bg)',
   backdropFilter: 'blur(20px) saturate(180%)',
   WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-  borderTop: '0.5px solid var(--sep)',
+  borderTop: '0.5px solid color-mix(in srgb, var(--sep) 35%, transparent)',
   paddingBottom: 'var(--safe-bottom)',
 };
 
@@ -98,8 +98,8 @@ export default function TabBar() {
               >
                 {icon(active)}
               </div>
-              {/* Unread badge on Inbox */}
-              {id === 'inbox' && unreadCount > 0 && (
+              {/* Unread badge on Activity */}
+              {id === 'activity' && unreadCount > 0 && (
                 <span style={{
                   position: 'absolute', top: -3, right: -6,
                   minWidth: 16, height: 16, borderRadius: 8,

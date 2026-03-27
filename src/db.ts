@@ -71,9 +71,17 @@ export class PaperDB {
         author TEXT,
         enclosure_url TEXT,
         enclosure_type TEXT,
+        transcript_url TEXT,
+        chapters_url TEXT,
+        value_config JSONB,
         embedding vector(384),
         search_vector tsvector
       );
+
+      -- Backfill Podcasting 2.0 columns for existing installations
+      ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS transcript_url TEXT;
+      ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS chapters_url TEXT;
+      ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS value_config JSONB;
 
       -- Create index for full-text search (GIN)
       CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN(search_vector);

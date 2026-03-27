@@ -6,6 +6,7 @@ import ContextPost from '../components/ContextPost.js';
 import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { useUiStore } from '../store/uiStore.js';
+import { useFeedCacheStore } from '../store/feedCacheStore.js';
 import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
 import { atpCall, atpMutate } from '../lib/atproto/client.js';
 import { qk } from '../lib/atproto/queries.js';
@@ -76,7 +77,115 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollCleanupRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const filterResults = usePostFilterResults(posts, 'home');
+  
+  // Feed cache integration
+  const feedCache = useFeedCacheStore();
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+
+  /**
+   * Calculate top visible post index based on scroll position
+   */
+  const getTopVisibleIndex = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    
+    const cards = el.querySelectorAll('[data-post-index]');
+    let topIndex = 0;
+    
+    for (const card of cards) {
+      const index = parseInt((card as HTMLElement).dataset.postIndex ?? '0', 10);
+      const rect = card.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      
+      // Check if card is at least partially visible
+      if (rect.top < elRect.bottom && rect.bottom > elRect.top) {
+        topIndex = index;
+        break;
+      }
+    }
+    
+    return topIndex;
+  }, []);
+
+  /**
+   * Persist scroll position and visible index periodically
+   */
+  useEffect(() => {
+    const persistScrollPosition = () => {
+      if (!session || !scrollRef.current) return;
+      
+      const topIndex = getTopVisibleIndex();
+      feedCache.updateScrollPosition(session.did, mode, scrollRef.current.scrollTop, topIndex);
+    };
+
+    // Clean up previous interval
+    if (scrollCleanupRef.current) {
+      clearInterval(scrollCleanupRef.current);
+    }
+
+    // Update scroll position every 2 seconds while scrolling
+    scrollCleanupRef.current = setInterval(persistScrollPosition, 2000);
+
+    return () => {
+      if (scrollCleanupRef.current) {
+        clearInterval(scrollCleanupRef.current);
+      }
+    };
+  }, [session, mode, feedCache, getTopVisibleIndex]);
+
+  /**
+   * Restore feed from cache when mode changes
+   */
+  useEffect(() => {
+    if (!session) return;
+    
+    const cached = feedCache.getCache(session.did, mode);
+    if (cached && cached.posts.length > 0) {
+      // Restore from cache
+      setPosts(cached.posts);
+      setCursor(cached.cursor);
+      
+      // Schedule scroll restoration (needs DOM to be ready)
+      setTimeout(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = cached.scrollPosition;
+        }
+      }, 50);
+
+      // Load the unread count for this mode
+      setUnreadCounts((prev) => ({
+        ...prev,
+        [mode]: cached.unreadCount,
+      }));
+
+      return; // Don't fetch, use cache
+    }
+
+    // No cache, fetch fresh
+    setPosts([]);
+    setCursor(undefined);
+    setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
+    fetchFeed(mode);
+  }, [mode, session]);
+
+  /**
+   * Save cache after posts change
+   */
+  useEffect(() => {
+    if (!session) return;
+    
+    feedCache.saveCache(session.did, mode, {
+      posts,
+      cursor,
+      scrollPosition: scrollRef.current?.scrollTop ?? 0,
+      topVisibleIndex: getTopVisibleIndex(),
+      unreadCount: unreadCounts[mode] ?? 0,
+      savedAt: Date.now(),
+      isInvalidated: false,
+    });
+  }, [posts, cursor, session, mode, feedCache, unreadCounts, getTopVisibleIndex]);
 
   const fetchFeed = useCallback(async (m: Mode, cur?: string) => {
     if (!session) return;
@@ -109,8 +218,17 @@ export default function HomeTab({ onOpenStory }: Props) {
         .map(mapFeedViewPost);
 
       if (isInitial) {
+        const cached = feedCache.getCache(session.did, m);
+        const newCount = cached ? mapped.length : 0;
+        
         setPosts(dedupePostsById(mapped));
         scrollRef.current?.scrollTo({ top: 0 });
+        
+        // If there was cached data and new posts arrived, track as unread
+        if (newCount > 0) {
+          setUnreadCounts((prev) => ({ ...prev, [m]: newCount }));
+          feedCache.incrementUnreadCount(session.did, m, newCount);
+        }
       } else {
         setPosts(prev => dedupePostsById([...prev, ...mapped]));
       }
@@ -121,7 +239,7 @@ export default function HomeTab({ onOpenStory }: Props) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [agent, session]);
+  }, [agent, session, feedCache]);
 
   useEffect(() => {
     setPosts([]);
@@ -132,10 +250,20 @@ export default function HomeTab({ onOpenStory }: Props) {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || loadingMore || !cursor) return;
+    
+    // Load more when near bottom
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
       fetchFeed(mode, cursor);
     }
-  }, [fetchFeed, mode, cursor, loadingMore]);
+
+    // Clear unread count when user scrolls to top
+    if (el.scrollTop < 100 && unreadCounts[mode]) {
+      setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
+      if (session) {
+        feedCache.resetUnreadCount(session.did, mode);
+      }
+    }
+  }, [fetchFeed, mode, cursor, loadingMore, unreadCounts, session, feedCache]);
 
   const avatarInitial = profile?.displayName?.[0] ?? profile?.handle?.[0] ?? 'Y';
 
@@ -259,7 +387,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         background: 'var(--chrome-bg)',
         backdropFilter: 'blur(20px) saturate(180%)',
         WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        borderBottom: '0.5px solid var(--sep)',
+        borderBottom: '0.5px solid color-mix(in srgb, var(--sep) 35%, transparent)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
           <div style={{
@@ -319,22 +447,40 @@ export default function HomeTab({ onOpenStory }: Props) {
 
         {/* Mode pills */}
         <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 12px', gap: 8 }}>
-          {MODES.map(m => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              style={{
-                minHeight: platform.prefersCoarsePointer ? 40 : 34,
-                padding: `0 ${buttonTokens.paddingH - 2}px`,
-                borderRadius: 100,
-                fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: mode === m ? 600 : 400, letterSpacing: 'var(--type-label-md-track)',
-                color: mode === m ? '#fff' : 'var(--label-2)',
-                background: mode === m ? 'var(--blue)' : 'var(--fill-2)',
-                border: 'none', cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-            >{m}</button>
-          ))}
+          {MODES.map(m => {
+            const unreadCount = unreadCounts[m] ?? 0;
+            return (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                style={{
+                  minHeight: platform.prefersCoarsePointer ? 40 : 34,
+                  padding: `0 ${buttonTokens.paddingH - 2}px`,
+                  borderRadius: 100,
+                  fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: mode === m ? 600 : 400, letterSpacing: 'var(--type-label-md-track)',
+                  color: mode === m ? '#fff' : 'var(--label-2)',
+                  background: mode === m ? 'var(--blue)' : 'var(--fill-2)',
+                  border: 'none', cursor: 'pointer',
+                  transition: 'all 0.15s',
+                  position: 'relative',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}
+              >
+                {m}
+                {unreadCount > 0 && (
+                  <span style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 20, height: 20, borderRadius: '50%',
+                    background: mode === m ? 'rgba(255,255,255,0.3)' : 'var(--red)',
+                    color: mode === m ? '#fff' : '#fff',
+                    fontFamily: 'var(--font-ui)', fontSize: '11px', fontWeight: 700,
+                  }}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -429,7 +575,7 @@ export default function HomeTab({ onOpenStory }: Props) {
                 // a distinct unit from adjacent standalone posts
                 const isReply = !!(post.threadRoot ?? post.replyTo);
                 return (
-                <div key={post.id}>
+                <div key={post.id} data-post-index={i}>
                   {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
                   {/* Only show direct parent if it's not the same as the thread root */}
                   {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" onClick={() => openContextTarget(post.replyTo)} />}

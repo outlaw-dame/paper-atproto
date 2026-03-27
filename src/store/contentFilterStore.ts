@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { FilterContext, KeywordFilterRule, FilterAction } from '../lib/contentFilters/types.js';
 
 type NewFilterRule = {
@@ -66,6 +66,17 @@ export const useContentFilterStore = create<ContentFilterState>()(
     }),
     {
       name: 'glympse.content-filters.v1',
+      storage: createJSONStorage(() => localStorage),
+      version: 1,
+      migrate: (_state: unknown, version: number) => {
+        // v0 → v1: no migration needed yet
+        return _state as ContentFilterState || { rules: [] };
+      },
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          console.warn('[ContentFilter] Rehydration error, starting fresh:', error);
+        }
+      },
     },
   ),
 );

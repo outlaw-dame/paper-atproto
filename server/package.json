@@ -12,6 +12,7 @@
     "translation:setup-python": "python3 -m pip install --upgrade huggingface_hub ctranslate2 sacremoses sentencepiece transformers torch"
   },
   "dependencies": {
+    "dotenv": "^16.6.1",
     "@google-cloud/vision": "^5.2.0",
     "@google/genai": "^1.0.0",
     "@hono/node-server": "^1.13.0",

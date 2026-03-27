@@ -400,7 +400,21 @@ export async function runInterpolatorWriter(request: WriterRequest): Promise<Wri
   const validated = validateResponse(parsed, request.summaryMode);
   
   // Apply safety filtering to all text fields
-  const { filtered } = filterWriterResponse(validated);
-  
-  return filtered;
+  const { filtered } = filterWriterResponse({ ...validated });
+  const normalizedMode: SummaryMode = (
+    filtered.mode === 'normal' ||
+    filtered.mode === 'descriptive_fallback' ||
+    filtered.mode === 'minimal_fallback'
+  )
+    ? filtered.mode
+    : validated.mode;
+
+  return {
+    collapsedSummary: filtered.collapsedSummary ?? validated.collapsedSummary,
+    ...(filtered.expandedSummary ? { expandedSummary: filtered.expandedSummary } : {}),
+    whatChanged: filtered.whatChanged ?? validated.whatChanged,
+    contributorBlurbs: filtered.contributorBlurbs ?? validated.contributorBlurbs,
+    abstained: filtered.abstained ?? validated.abstained,
+    mode: normalizedMode,
+  };
 }

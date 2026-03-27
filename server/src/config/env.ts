@@ -13,6 +13,7 @@ const EnvSchema = z.object({
     z.string().optional().transform((v) => v !== 'false').default('true'),
   ),
   GOOGLE_FACT_CHECK_API_KEY: z.string().min(1).optional(),
+  GOOGLE_SAFE_BROWSING_API_KEY: z.string().min(1).optional(),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_GROUNDING_MODEL: z.string().default('gemini-2.5-flash'),
   GOOGLE_CLOUD_PROJECT: z.string().optional(),
@@ -45,6 +46,10 @@ const EnvSchema = z.object({
   TRANSLATION_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
   TRANSLATION_MODELS_DIR: z.string().optional(),
   TRANSLATION_WORKER_PATH: z.string().optional(),
+  PODCASTINDEX_API_KEY: z.string().min(1).optional(),
+  PODCASTINDEX_API_SECRET: z.string().min(1).optional(),
+  PODCASTINDEX_BASE_URL: z.string().url().default('https://api.podcastindex.org'),
+  PODCASTINDEX_USER_AGENT: z.string().default('paper-atproto/1.0 (+https://github.com/damonoutlaw/paper-atproto)'),
   PORT: z.coerce.number().int().positive().default(3001),
 });
 

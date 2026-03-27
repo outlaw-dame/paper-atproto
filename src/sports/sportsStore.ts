@@ -1,11 +1,15 @@
 import type { LiveGame, LiveEventUpdate } from './types.js';
 
+type SportsApiProvider = 'espn' | 'nfl' | 'nba' | 'mock';
+type EspnLeague = 'nba' | 'nfl' | 'mlb' | 'nhl';
+
 /**
  * Real-time sports data store
  * Manages live game state and external API updates
  */
 class SportsStore {
   private liveGames = new Map<string, LiveGame>();
+  private espnRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   private getNow(): number {
     return Date.now();
@@ -147,14 +151,17 @@ class SportsStore {
    */
   async updateFromExternalAPI(
     gameId: string,
-    apiProvider: 'espn' | 'nfl' | 'nba' | 'mock' = 'mock'
+    apiProvider: SportsApiProvider = 'mock'
   ): Promise<void> {
     try {
-      // Mock API call - in production, fetch from actual provider
-      const game = this.mockFetchGameState(gameId, apiProvider);
-      if (game) {
-        this.setGame(game);
+      if (apiProvider === 'mock') {
+        const game = this.mockFetchGameState(gameId, apiProvider);
+        if (game) this.setGame(game);
+        return;
       }
+
+      const league: EspnLeague = apiProvider === 'espn' ? 'nba' : apiProvider;
+      await this.syncEspnLeague(league);
     } catch (error) {
       console.error(`Failed to update game ${gameId} from ${apiProvider}:`, error);
     }
@@ -163,7 +170,7 @@ class SportsStore {
   /**
    * Start polling for game updates
    */
-  startPolling(gameId: string, apiProvider: 'espn' | 'nfl' | 'nba' | 'mock' = 'mock'): void {
+  startPolling(gameId: string, apiProvider: SportsApiProvider = 'mock'): void {
     if (this.pollingTimers.has(gameId)) {
       return; // Already polling
     }
@@ -197,6 +204,28 @@ class SportsStore {
   stopAllPolling(): void {
     this.pollingTimers.forEach((timer) => clearInterval(timer));
     this.pollingTimers.clear();
+  }
+
+  async loadFromEspn(leagues: EspnLeague[] = ['nba', 'nfl']): Promise<void> {
+    await Promise.all(leagues.map((league) => this.syncEspnLeague(league)));
+  }
+
+  startEspnAutoRefresh(leagues: EspnLeague[] = ['nba', 'nfl'], intervalMs = 45_000): void {
+    this.stopEspnAutoRefresh();
+    this.loadFromEspn(leagues).catch(() => {
+      // Swallow refresh bootstrap errors and keep app responsive.
+    });
+    this.espnRefreshTimer = setInterval(() => {
+      this.loadFromEspn(leagues).catch(() => {
+        // Ignore transient API failures and retry on next tick.
+      });
+    }, intervalMs);
+  }
+
+  stopEspnAutoRefresh(): void {
+    if (!this.espnRefreshTimer) return;
+    clearInterval(this.espnRefreshTimer);
+    this.espnRefreshTimer = null;
   }
 
   /**
@@ -252,8 +281,130 @@ class SportsStore {
    */
   clear(): void {
     this.stopAllPolling();
+    this.stopEspnAutoRefresh();
     this.liveGames.clear();
     this.updateHistory = [];
+  }
+
+  private getEspnSportPath(league: EspnLeague): string {
+    switch (league) {
+      case 'nba':
+        return 'basketball/nba';
+      case 'nfl':
+        return 'football/nfl';
+      case 'mlb':
+        return 'baseball/mlb';
+      case 'nhl':
+        return 'hockey/nhl';
+      default:
+        return 'basketball/nba';
+    }
+  }
+
+  private detectSportByLeague(league: EspnLeague): LiveGame['sport'] {
+    switch (league) {
+      case 'nba':
+        return 'basketball';
+      case 'nfl':
+        return 'football';
+      case 'mlb':
+        return 'baseball';
+      case 'nhl':
+        return 'hockey';
+      default:
+        return 'other';
+    }
+  }
+
+  private toPositiveInt(raw: unknown): number {
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  }
+
+  private toTag(value: string): string {
+    return value.replace(/[^a-zA-Z0-9]/g, '');
+  }
+
+  private mapEspnStatus(statusRaw: string, detailRaw: string): LiveGame['status'] {
+    const status = statusRaw.toLowerCase();
+    const detail = detailRaw.toLowerCase();
+    if (status === 'in') {
+      if (detail.includes('halftime')) return 'halftime';
+      return 'live';
+    }
+    if (status === 'post' || status === 'final') return 'final';
+    if (status === 'pre') return 'scheduled';
+    if (status === 'postponed') return 'postponed';
+    if (status === 'cancelled') return 'cancelled';
+    return 'scheduled';
+  }
+
+  private mapEspnEventToLiveGame(event: any, league: EspnLeague): LiveGame | null {
+    const competition = Array.isArray(event?.competitions) ? event.competitions[0] : null;
+    const competitors = Array.isArray(competition?.competitors) ? competition.competitors : [];
+    const home = competitors.find((entry: any) => entry?.homeAway === 'home');
+    const away = competitors.find((entry: any) => entry?.homeAway === 'away');
+    if (!home || !away) return null;
+
+    const statusType = competition?.status?.type;
+    const state = String(statusType?.state || 'pre');
+    const detail = String(competition?.status?.type?.shortDetail || competition?.status?.type?.detail || '');
+    const leagueTag = league.toUpperCase();
+    const homeAbbrev = String(home?.team?.abbreviation || home?.team?.name || '').trim();
+    const awayAbbrev = String(away?.team?.abbreviation || away?.team?.name || '').trim();
+
+    return {
+      id: `${league}-${String(event?.id || `${awayAbbrev}-${homeAbbrev}`)}`,
+      league,
+      sport: this.detectSportByLeague(league),
+      homeTeam: {
+        id: String(home?.team?.id || homeAbbrev || 'home'),
+        name: String(home?.team?.displayName || home?.team?.name || 'Home'),
+        score: this.toPositiveInt(home?.score),
+        ...(typeof home?.team?.logo === 'string' && home.team.logo ? { logo: String(home.team.logo) } : {}),
+      },
+      awayTeam: {
+        id: String(away?.team?.id || awayAbbrev || 'away'),
+        name: String(away?.team?.displayName || away?.team?.name || 'Away'),
+        score: this.toPositiveInt(away?.score),
+        ...(typeof away?.team?.logo === 'string' && away.team.logo ? { logo: String(away.team.logo) } : {}),
+      },
+      status: this.mapEspnStatus(state, detail),
+      ...(Number.isFinite(Number(competition?.status?.period)) ? { period: Number(competition.status.period) } : {}),
+      ...(typeof competition?.status?.displayClock === 'string' && competition.status.displayClock
+        ? { clock: String(competition.status.displayClock) }
+        : {}),
+      startTime: String(event?.date || new Date().toISOString()),
+      ...(state === 'post' ? { endTime: new Date().toISOString() } : {}),
+      ...(typeof competition?.venue?.fullName === 'string' && competition.venue.fullName
+        ? { venue: String(competition.venue.fullName) }
+        : {}),
+      ...(typeof event?.links?.[0]?.href === 'string' && event.links[0].href
+        ? { externalUrl: String(event.links[0].href) }
+        : {}),
+      hashtags: [
+        this.toTag(leagueTag),
+        this.toTag(`${awayAbbrev}${homeAbbrev}`),
+      ].filter(Boolean),
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  private async syncEspnLeague(league: EspnLeague): Promise<void> {
+    const sportPath = this.getEspnSportPath(league);
+    const endpoint = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard`;
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      throw new Error(`ESPN scoreboard request failed for ${league}: ${response.status}`);
+    }
+
+    const payload = await response.json() as { events?: any[] };
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    events.forEach((event) => {
+      const mapped = this.mapEspnEventToLiveGame(event, league);
+      if (!mapped) return;
+      this.setGame(mapped);
+    });
   }
 
   /**
@@ -379,6 +530,9 @@ export function useSportsStore() {
     setGame: sportsStore.setGame.bind(sportsStore),
     startPolling: sportsStore.startPolling.bind(sportsStore),
     stopPolling: sportsStore.stopPolling.bind(sportsStore),
+    loadFromEspn: sportsStore.loadFromEspn.bind(sportsStore),
+    startEspnAutoRefresh: sportsStore.startEspnAutoRefresh.bind(sportsStore),
+    stopEspnAutoRefresh: sportsStore.stopEspnAutoRefresh.bind(sportsStore),
     subscribe: sportsStore.subscribe.bind(sportsStore),
     loadSampleGames: sportsStore.loadSampleGames.bind(sportsStore),
     clear: sportsStore.clear.bind(sportsStore),

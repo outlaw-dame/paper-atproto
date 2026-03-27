@@ -687,7 +687,11 @@ function HashtagBrowser({
   const toggleFavorite = (tag: string) => {
     const next = favorites.includes(tag) ? favorites.filter((f) => f !== tag) : [tag, ...favorites];
     setFavorites(next);
-    localStorage.setItem(FAVORITE_HASHTAGS_KEY, JSON.stringify(next));
+    try {
+      localStorage.setItem(FAVORITE_HASHTAGS_KEY, JSON.stringify(next));
+    } catch (err) {
+      console.warn('[Hashtags] Failed to save favorite:', err);
+    }
   };
 
   const filtered = (list: string[]) =>

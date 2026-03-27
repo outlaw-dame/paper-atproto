@@ -39,6 +39,11 @@ export const useTranslationStore = create<TranslationStoreState>()(
       name: 'glympse.translation.policy.v1',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ policy: state.policy }),
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          console.warn('[Translation] Rehydration error:', error);
+        }
+      },
     },
   ),
 );

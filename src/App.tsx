@@ -17,12 +17,12 @@ const MiniPlayer = React.lazy(() => import('./components/MiniPlayer.js'));
 
 const HomeTab = React.lazy(() => import('./tabs/HomeTab.js'));
 const ExploreTab = React.lazy(() => import('./tabs/ExploreTab.js'));
-const InboxTab = React.lazy(() => import('./tabs/InboxTab.js'));
+const ActivityTab = React.lazy(() => import('./tabs/ActivityTab.js'));
 const ProfileTab = React.lazy(() => import('./tabs/ProfileTab.js'));
 const OverlayHost = React.lazy(() => import('./shell/OverlayHost.js'));
 const TimedMuteWatcherBridge = React.lazy(() => import('./components/TimedMuteWatcherBridge.js'));
 
-export type TabId = 'home' | 'explore' | 'compose' | 'inbox' | 'profile';
+export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
 export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; name: string; reason: string }
 
@@ -170,7 +170,7 @@ function AppShell() {
             <Suspense fallback={tabLoadingFallback}>
               {activeTab === 'home'    && <HomeTab onOpenStory={openStory} />}
               {activeTab === 'explore' && <ExploreTab onOpenStory={openStory} />}
-              {activeTab === 'inbox'   && <InboxTab />}
+              {activeTab === 'activity' && <ActivityTab />}
               {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} actorDid={profileDid ?? undefined} />}
             </Suspense>
           </motion.div>

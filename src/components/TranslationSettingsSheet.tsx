@@ -4,6 +4,7 @@ import { useTranslationStore } from '../store/translationStore.js';
 import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
 import BlueskyPrefsSection from './BlueskyPrefsSection.js';
 import ModerationSettingsPage from './ModerationSettingsPage.js';
+import FeedsSettingsPage from './FeedsSettingsPage.js';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
 import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry.js';
 
@@ -17,7 +18,7 @@ type LanguageOption = {
   label: string;
 };
 
-type SettingsPage = 'translation' | 'moderation' | 'debug';
+type SettingsPage = 'translation' | 'moderation' | 'feeds' | 'debug';
 
 interface ComposeDebugSnapshot {
   draftText: string;
@@ -238,6 +239,8 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     ? 'Phanpy-style inline + auto translation'
                     : page === 'moderation'
                       ? 'Sensitive media, filters, and moderation controls'
+                      : page === 'feeds'
+                        ? 'Manage News, Podcasts, Videos, and other feed subscriptions'
                       : 'Diagnostics and QA details for internal testing'}
                 </p>
               </div>
@@ -317,6 +320,23 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 >
                   Debug
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setPage('feeds')}
+                  style={{
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 10,
+                    border: 'none',
+                    background: page === 'feeds' ? 'var(--blue)' : 'var(--fill-2)',
+                    color: page === 'feeds' ? '#fff' : 'var(--label-2)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Feeds
+                </button>
               </div>
 
               {page === 'translation' && (
@@ -391,6 +411,8 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
               )}
 
               {page === 'moderation' && <ModerationSettingsPage />}
+
+              {page === 'feeds' && <FeedsSettingsPage />}
 
               {page === 'debug' && (
                 <>

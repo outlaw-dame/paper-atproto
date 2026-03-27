@@ -9,6 +9,94 @@ import { hybridSearch } from './search.js';
  */
 
 export class FeedService {
+  private getFirstChildByLocalName(parent: Element, localName: string): Element | null {
+    const all = parent.getElementsByTagName('*');
+    for (let i = 0; i < all.length; i += 1) {
+      const node = all[i];
+      if (node.localName?.toLowerCase() === localName.toLowerCase()) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  private parsePodcast20Metadata(xmlContent: string): Map<string, { transcriptUrl?: string; chaptersUrl?: string; valueConfig?: unknown }> {
+    const metadataByKey = new Map<string, { transcriptUrl?: string; chaptersUrl?: string; valueConfig?: unknown }>();
+
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlContent, 'application/xml');
+      if (doc.getElementsByTagName('parsererror').length > 0) {
+        return metadataByKey;
+      }
+
+      const items = doc.getElementsByTagName('item');
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        const guid = item.getElementsByTagName('guid')[0]?.textContent?.trim();
+        const link = item.getElementsByTagName('link')[0]?.textContent?.trim();
+        const enclosureUrl = item.getElementsByTagName('enclosure')[0]?.getAttribute('url')?.trim();
+
+        const transcriptEl = this.getFirstChildByLocalName(item, 'transcript');
+        const chaptersEl = this.getFirstChildByLocalName(item, 'chapters');
+        const valueEl = this.getFirstChildByLocalName(item, 'value');
+
+        const transcriptUrl = transcriptEl?.getAttribute('url')?.trim() || undefined;
+        const chaptersUrl = chaptersEl?.getAttribute('url')?.trim() || undefined;
+
+        let valueConfig: unknown;
+        if (valueEl) {
+          const recipients = valueEl.getElementsByTagName('*');
+          const valueRecipients: Array<Record<string, string>> = [];
+          for (let r = 0; r < recipients.length; r += 1) {
+            const recipientNode = recipients[r];
+            if (recipientNode.localName?.toLowerCase() !== 'valuerecipient') continue;
+            const record: Record<string, string> = {};
+            for (let a = 0; a < recipientNode.attributes.length; a += 1) {
+              const attr = recipientNode.attributes.item(a);
+              if (!attr) continue;
+              record[attr.name] = attr.value;
+            }
+            valueRecipients.push(record);
+          }
+
+          valueConfig = {
+            method: valueEl.getAttribute('method') || undefined,
+            type: valueEl.getAttribute('type') || undefined,
+            suggested: valueEl.getAttribute('suggested') || undefined,
+            recipients: valueRecipients,
+          };
+        }
+
+        const meta = { transcriptUrl, chaptersUrl, valueConfig };
+        const keys = [guid, link, enclosureUrl].filter((key): key is string => Boolean(key));
+        keys.forEach((key) => metadataByKey.set(key, meta));
+      }
+    } catch {
+      return metadataByKey;
+    }
+
+    return metadataByKey;
+  }
+
+  private getPodcast20ForItem(
+    item: any,
+    metadataByKey: Map<string, { transcriptUrl?: string; chaptersUrl?: string; valueConfig?: unknown }>,
+  ) {
+    const keyCandidates = [
+      item?.enclosure?.url,
+      item?.id,
+      item?.guid,
+      item?.link,
+    ].filter((key): key is string => Boolean(key));
+
+    for (const key of keyCandidates) {
+      const hit = metadataByKey.get(key);
+      if (hit) return hit;
+    }
+    return { transcriptUrl: undefined, chaptersUrl: undefined, valueConfig: undefined };
+  }
+
   /**
    * Parse JSON-LD feed data into standard feed items.
    */
@@ -87,8 +175,11 @@ export class FeedService {
 
       // Try to parse with feedsmith first (handles RSS, ATOM, JSON Feed)
       let parsed: any;
+      let podcast20ByKey = new Map<string, { transcriptUrl?: string; chaptersUrl?: string; valueConfig?: unknown }>();
       try {
         parsed = await parseFeed(feedContent);
+        // Podcast namespace extensions are XML-specific, parse raw XML to enrich items.
+        podcast20ByKey = this.parsePodcast20Metadata(feedContent);
       } catch {
         // If feedsmith fails, try JSON-LD
         try {
@@ -120,14 +211,30 @@ export class FeedService {
       for (const item of parsed.items) {
         const itemId = item.id || item.link;
         const content = item.content || item.description || '';
+        const podcast20 = this.getPodcast20ForItem(item, podcast20ByKey);
 
-        // Generate embedding for hybrid search
-        const embedding = await hybridSearch.generateEmbedding(item.title + ' ' + content);
+        // Generate embedding for hybrid search — format as pgvector string [x,y,...]
+        const embeddingArr = await hybridSearch.generateEmbedding(item.title + ' ' + content);
+        const embedding = embeddingArr.length ? `[${embeddingArr.join(',')}]` : null;
 
         await pg.query(
-          `INSERT INTO feed_items (id, feed_id, title, content, link, pub_date, author, enclosure_url, enclosure_type, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (id) DO NOTHING`,
+          `INSERT INTO feed_items (
+             id, feed_id, title, content, link, pub_date, author, enclosure_url, enclosure_type,
+             transcript_url, chapters_url, value_config, embedding
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+           ON CONFLICT (id) DO UPDATE SET
+             title = EXCLUDED.title,
+             content = EXCLUDED.content,
+             link = EXCLUDED.link,
+             pub_date = EXCLUDED.pub_date,
+             author = EXCLUDED.author,
+             enclosure_url = EXCLUDED.enclosure_url,
+             enclosure_type = EXCLUDED.enclosure_type,
+             transcript_url = COALESCE(EXCLUDED.transcript_url, feed_items.transcript_url),
+             chapters_url = COALESCE(EXCLUDED.chapters_url, feed_items.chapters_url),
+             value_config = COALESCE(EXCLUDED.value_config, feed_items.value_config),
+             embedding = EXCLUDED.embedding`,
           [
             itemId,
             feedId,
@@ -138,6 +245,9 @@ export class FeedService {
             item.author,
             item.enclosure?.url,
             item.enclosure?.type,
+            podcast20.transcriptUrl,
+            podcast20.chaptersUrl,
+            podcast20.valueConfig ? JSON.stringify(podcast20.valueConfig) : null,
             embedding,
           ]
         );
@@ -286,6 +396,22 @@ ${items}
     const result = await pg.query(
       'SELECT * FROM feed_items WHERE feed_id = $1 ORDER BY pub_date DESC LIMIT 50',
       [feedId]
+    );
+    return result.rows;
+  }
+
+  /**
+   * Get recent feed items across all subscribed feeds.
+   */
+  async getRecentFeedItems(limit = 20) {
+    const pg = paperDB.getPG();
+    const result = await pg.query(
+      `SELECT fi.*, f.title AS feed_title, f.category AS feed_category, f.type AS feed_type
+       FROM feed_items fi
+       LEFT JOIN feeds f ON fi.feed_id = f.id
+       ORDER BY fi.pub_date DESC NULLS LAST
+       LIMIT $1`,
+      [Math.max(1, Math.min(limit, 100))],
     );
     return result.rows;
   }

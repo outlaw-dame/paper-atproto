@@ -60,6 +60,17 @@ export const useSensitiveMediaStore = create<SensitiveMediaState>()(
         policy: state.policy,
         revealedPostIds: state.revealedPostIds,
       }),
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          console.warn('[SensitiveMedia] Rehydration error:', error);
+        }
+        // Limit revealedPostIds to 500 entries to prevent unbounded storage growth
+        if (state && Object.keys(state.revealedPostIds).length > 500) {
+          const ids = Object.keys(state.revealedPostIds);
+          const keysToKeep = ids.slice(-500);
+          state.revealedPostIds = keysToKeep.reduce((acc, k) => ({ ...acc, [k]: true as const }), {});
+        }
+      },
     },
   ),
 );
