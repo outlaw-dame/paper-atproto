@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import InlineTranslation, { TranslateIcon } from './InlineTranslation';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
@@ -57,9 +58,6 @@ type MediaCarouselItem =
 
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
-  const [showOriginal, setShowOriginal] = useState(false);
-  const [translating, setTranslating] = useState(false);
-  const [translationError, setTranslationError] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
   const [mediaViewportWidth, setMediaViewportWidth] = useState(0);
@@ -69,7 +67,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
   const mediaScrollRef = useRef<HTMLDivElement | null>(null);
   const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
-  const { policy, byId, upsertTranslation, clearTranslation } = useTranslationStore();
+  const { policy, byId, upsertTranslation } = useTranslationStore();
   const {
     policy: sensitivePolicy,
     revealedPostIds,
@@ -78,7 +76,6 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   } = useSensitiveMediaStore();
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((state) => state.openExploreSearch);
-  const translation = byId[post.id];
   const mediaItems = post.media ?? [];
   const carouselItems = useMemo<MediaCarouselItem[]>(() => {
     const items: MediaCarouselItem[] = mediaItems.map((img, idx) => ({
@@ -119,8 +116,6 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     return map;
   }, [carouselItems]);
   const detectedPostLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
-  const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
-  const autoAttemptedRef = useRef(false);
   const sensitiveImpressionLoggedRef = useRef(false);
 
   // Lazy-fetch author metadata for external link cards.
@@ -187,50 +182,6 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     setShowRepostMenu(prev => !prev);
   };
 
-  const handleTranslate = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    if (hasRenderableTranslation) {
-      setShowOriginal((prev) => !prev);
-      return;
-    }
-
-    if (!post.content.trim()) return;
-    setTranslating(true);
-    setTranslationError(false);
-    try {
-      const result = await translationClient.translateInline({
-        id: post.id,
-        sourceText: post.content,
-        targetLang: policy.userLanguage,
-        mode: policy.localOnlyMode ? 'local_private' : 'server_default',
-        ...(detectedPostLanguage.language !== 'und' ? { sourceLang: detectedPostLanguage.language } : {}),
-      });
-      if (!hasMeaningfulTranslation(post.content, result.translatedText)) {
-        setTranslationError(true);
-        return;
-      }
-      upsertTranslation(result);
-      setShowOriginal(false);
-    } catch (err) {
-      console.warn('[PostCard] translation failed', err);
-      setTranslationError(true);
-    } finally {
-      setTranslating(false);
-    }
-  };
-
-  const handleClearTranslation = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    clearTranslation(post.id);
-    setShowOriginal(false);
-  };
-
-  const displayContent = translation && !showOriginal
-    && hasRenderableTranslation
-    ? translation.translatedText
-    : post.content;
-
   const sportsMetadata = useMemo(() => sportsFeedService.extractSportsMetadata(post), [post]);
   const sensitiveMedia = useMemo(() => detectSensitiveMedia(post), [post]);
   const isSensitiveMedia = sensitiveMedia.isSensitive;
@@ -247,48 +198,33 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     if (detectedPostLanguage.language !== 'und' && isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)) return false;
     return true;
   }, [detectedPostLanguage.language, policy.userLanguage, post.content]);
+  const cardDescription = post.embed?.type === 'external' ? (post.embed.description ?? '') : '';
+  const cardTranslationId = post.embed?.type === 'external' ? `card:${post.id}:description` : null;
+  const detectedCardLanguage = useMemo(() => {
+    if (!cardDescription.trim()) return { language: 'und' as const, confidence: 0 };
+    return heuristicDetectLanguage(cardDescription);
+  }, [cardDescription]);
 
   useEffect(() => {
-    if (translation || translating) return;
-    if (!policy.autoTranslateFeed) return;
-    if (!canAutoInlineTranslate) return;
-    if (autoAttemptedRef.current) return;
+    if (!policy.autoTranslateFeed || !canAutoInlineTranslate) return;
+    if (useTranslationStore.getState().byId[displayNameKey]) return;
 
-    // Skip posts already in the user's language
-    autoAttemptedRef.current = true;
-    setTranslating(true);
-    setTranslationError(false);
+    // Keep display-name translation in sync with feed auto-translate policy.
+    const dn = post.author.displayName || post.author.handle;
+    if (!dn) return;
+    const dnDetected = heuristicDetectLanguage(dn);
+    if (dnDetected.language === 'und' || isLikelySameLanguage(dnDetected.language, policy.userLanguage)) return;
 
     translationClient.translateInline({
-      id: post.id,
-      sourceText: post.content,
+      id: displayNameKey,
+      sourceText: dn,
       targetLang: policy.userLanguage,
       mode: policy.localOnlyMode ? 'local_private' : 'server_default',
-      ...(detectedPostLanguage.language !== 'und' ? { sourceLang: detectedPostLanguage.language } : {}),
     }).then((result) => {
-      if (!hasMeaningfulTranslation(post.content, result.translatedText)) return;
+      if (!hasMeaningfulTranslation(dn, result.translatedText)) return;
       upsertTranslation(result);
-      setShowOriginal(false);
-      // Translate display name if it appears to be in a non-target language
-      const dn = post.author.displayName || post.author.handle;
-      if (dn && !useTranslationStore.getState().byId[displayNameKey]) {
-        const dnDetected = heuristicDetectLanguage(dn);
-        if (dnDetected.language !== 'und' && !isLikelySameLanguage(dnDetected.language, policy.userLanguage)) {
-          translationClient.translateInline({
-            id: displayNameKey,
-            sourceText: dn,
-            targetLang: policy.userLanguage,
-            mode: policy.localOnlyMode ? 'local_private' : 'server_default',
-          }).then(upsertTranslation).catch(() => {});
-        }
-      }
-    }).catch((err) => {
-      console.warn('[PostCard] auto translation failed', err);
-      setTranslationError(true);
-    }).finally(() => {
-      setTranslating(false);
-    });
-  }, [canAutoInlineTranslate, detectedPostLanguage.language, displayNameKey, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.author.displayName, post.author.handle, post.content, post.id, translation, translating, upsertTranslation]);
+    }).catch(() => {});
+  }, [canAutoInlineTranslate, displayNameKey, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.author.displayName, post.author.handle, upsertTranslation]);
 
   useEffect(() => {
     if (!shouldBlurSensitiveMedia || sensitiveImpressionLoggedRef.current) return;
@@ -494,13 +430,24 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
       {/* Standard Content */}
       {post.content && !post.article && (
-        <p style={{
-          fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)',
-          marginBottom: post.embed || post.media ? 12 : 6,
-          whiteSpace: 'pre-wrap', wordBreak: 'break-word'
-        }}>
-          <TwemojiText text={displayContent} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
-        </p>
+        <InlineTranslation
+          postId={post.id}
+          sourceText={post.content}
+          sourceLang={detectedPostLanguage.language}
+          targetLang={policy.userLanguage}
+          autoTranslate={policy.autoTranslateFeed && canAutoInlineTranslate}
+          localOnlyMode={policy.localOnlyMode}
+          showTrigger={detectedPostLanguage.language === 'und' || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)}
+          renderText={(displayText) => (
+            <p style={{
+              fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)',
+              marginBottom: post.embed || post.media ? 12 : 6,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+            }}>
+              <TwemojiText text={displayText} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
+            </p>
+          )}
+        />
       )}
 
       {sportsMetadata.isSports ? (
@@ -512,87 +459,6 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           />
         </div>
       ) : null}
-
-      {post.content.trim().length > 0 && (hasRenderableTranslation || detectedPostLanguage.language === 'und' || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, marginTop: -2 }}>
-          <button
-            onClick={handleTranslate}
-            disabled={translating}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              color: 'var(--blue)',
-              fontSize: 'var(--type-meta-md-size)',
-              lineHeight: 'var(--type-meta-md-line)',
-              letterSpacing: 'var(--type-meta-md-track)',
-              fontWeight: 600,
-              padding: 0,
-              cursor: translating ? 'default' : 'pointer',
-              opacity: translating ? 0.65 : 1,
-            }}
-          >
-            {hasRenderableTranslation
-              ? (showOriginal ? 'Show translation' : 'Show original')
-              : (translating
-                ? 'Translating...'
-                : 'Translate')}
-          </button>
-          {translationError && !hasRenderableTranslation && (
-            <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--red)' }}>No translation available</span>
-          )}
-        </div>
-      )}
-
-      {hasRenderableTranslation && !showOriginal && (
-        <div style={{
-          marginBottom: 10,
-          border: '1px solid var(--stroke-dim)',
-          borderRadius: 12,
-          background: 'color-mix(in srgb, var(--surface-card) 80%, var(--blue) 6%)',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 10,
-            padding: '8px 12px',
-            borderBottom: '1px solid var(--stroke-dim)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 8l6 6" />
-                <path d="M4 14l6-6 2-3" />
-                <path d="M2 5h12" />
-                <path d="M7 2h1" />
-                <path d="M22 22l-5-10-5 10" />
-                <path d="M14 18h6" />
-              </svg>
-              <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-2)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {policy.autoTranslateFeed && canAutoInlineTranslate
-                  ? `Auto-translated from ${translation.sourceLang}`
-                  : `Translated from ${translation.sourceLang}`}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-              <button
-                onClick={handleTranslate}
-                style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
-              >
-                Show original
-              </button>
-              <button
-                onClick={handleClearTranslation}
-                style={{ border: 'none', background: 'transparent', color: 'var(--label-3)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 600, padding: 0, cursor: 'pointer' }}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-        </div>
-      )}
 
       {/* Embeds */}
       {shouldBlurSensitiveMedia && (
@@ -1124,10 +990,20 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               const hasAuthor = !!(authorName || authorHandle || publisher);
               return (
                 <>
-                  {post.embed.description && (
-                    <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
-                      {post.embed.description}
-                    </div>
+                  {post.embed.description && cardTranslationId && (
+                    <InlineTranslation
+                      postId={cardTranslationId}
+                      sourceText={post.embed.description}
+                      sourceLang={detectedCardLanguage.language}
+                      targetLang={policy.userLanguage}
+                      localOnlyMode={policy.localOnlyMode}
+                      showTrigger={detectedCardLanguage.language === 'und' || !isLikelySameLanguage(detectedCardLanguage.language, policy.userLanguage)}
+                      renderText={(displayText) => (
+                        <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
+                          {displayText}
+                        </div>
+                      )}
+                    />
                   )}
                   {hasAuthor && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, paddingTop: 6, borderTop: '0.5px solid var(--stroke-dim)' }}>
