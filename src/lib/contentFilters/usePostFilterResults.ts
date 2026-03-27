@@ -6,6 +6,32 @@ import { activeRulesForContext, getKeywordMatches, getSemanticMatches, searchabl
 
 type ResultByPostId = Record<string, PostFilterMatch[]>;
 
+function resultMapEquals(a: ResultByPostId, b: ResultByPostId): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    const aMatches = a[key] ?? [];
+    const bMatches = b[key] ?? [];
+    if (aMatches.length !== bMatches.length) return false;
+    for (let i = 0; i < aMatches.length; i += 1) {
+      const am = aMatches[i];
+      const bm = bMatches[i];
+      if (!am || !bm) return false;
+      if (
+        am.ruleId !== bm.ruleId ||
+        am.phrase !== bm.phrase ||
+        am.action !== bm.action ||
+        am.matchType !== bm.matchType ||
+        am.score !== bm.score
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function usePostFilterResults(posts: MockPost[], context: FilterContext) {
   const rules = useContentFilterStore((state) => state.rules);
   const [resultByPostId, setResultByPostId] = useState<ResultByPostId>({});
@@ -19,7 +45,7 @@ export function usePostFilterResults(posts: MockPost[], context: FilterContext) 
     const token = evalTokenRef.current;
 
     if (activeRules.length === 0 || posts.length === 0) {
-      setResultByPostId({});
+      setResultByPostId((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       return;
     }
 
@@ -37,13 +63,13 @@ export function usePostFilterResults(posts: MockPost[], context: FilterContext) 
       }
 
       if (!isCancelled && token === evalTokenRef.current) {
-        setResultByPostId(next);
+        setResultByPostId((prev) => (resultMapEquals(prev, next) ? prev : next));
       }
     };
 
     run().catch(() => {
       if (!isCancelled && token === evalTokenRef.current) {
-        setResultByPostId({});
+        setResultByPostId((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       }
     });
 

@@ -81,7 +81,11 @@ export default function HomeTab({ onOpenStory }: Props) {
   const filterResults = usePostFilterResults(posts, 'home');
   
   // Feed cache integration
-  const feedCache = useFeedCacheStore();
+  const getFeedCache = useFeedCacheStore((state) => state.getCache);
+  const saveFeedCache = useFeedCacheStore((state) => state.saveCache);
+  const incrementFeedUnreadCount = useFeedCacheStore((state) => state.incrementUnreadCount);
+  const resetFeedUnreadCount = useFeedCacheStore((state) => state.resetUnreadCount);
+  const updateFeedScrollPosition = useFeedCacheStore((state) => state.updateScrollPosition);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
 
   /**
@@ -117,7 +121,7 @@ export default function HomeTab({ onOpenStory }: Props) {
       if (!session || !scrollRef.current) return;
       
       const topIndex = getTopVisibleIndex();
-      feedCache.updateScrollPosition(session.did, mode, scrollRef.current.scrollTop, topIndex);
+      updateFeedScrollPosition(session.did, mode, scrollRef.current.scrollTop, topIndex);
     };
 
     // Clean up previous interval
@@ -133,7 +137,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         clearInterval(scrollCleanupRef.current);
       }
     };
-  }, [session, mode, feedCache, getTopVisibleIndex]);
+  }, [session, mode, updateFeedScrollPosition, getTopVisibleIndex]);
 
   /**
    * Restore feed from cache when mode changes
@@ -141,7 +145,7 @@ export default function HomeTab({ onOpenStory }: Props) {
   useEffect(() => {
     if (!session) return;
     
-    const cached = feedCache.getCache(session.did, mode);
+    const cached = getFeedCache(session.did, mode);
     if (cached && cached.posts.length > 0) {
       // Restore from cache
       setPosts(cached.posts);
@@ -168,7 +172,7 @@ export default function HomeTab({ onOpenStory }: Props) {
     setCursor(undefined);
     setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
     fetchFeed(mode);
-  }, [mode, session]);
+  }, [mode, session, getFeedCache]);
 
   /**
    * Save cache after posts change
@@ -176,16 +180,16 @@ export default function HomeTab({ onOpenStory }: Props) {
   useEffect(() => {
     if (!session) return;
     
-    feedCache.saveCache(session.did, mode, {
+    saveFeedCache(session.did, mode, {
       posts,
-      cursor,
+      ...(cursor !== undefined ? { cursor } : {}),
       scrollPosition: scrollRef.current?.scrollTop ?? 0,
       topVisibleIndex: getTopVisibleIndex(),
       unreadCount: unreadCounts[mode] ?? 0,
       savedAt: Date.now(),
       isInvalidated: false,
     });
-  }, [posts, cursor, session, mode, feedCache, unreadCounts, getTopVisibleIndex]);
+  }, [posts, cursor, session, mode, saveFeedCache, unreadCounts, getTopVisibleIndex]);
 
   const fetchFeed = useCallback(async (m: Mode, cur?: string) => {
     if (!session) return;
@@ -218,7 +222,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         .map(mapFeedViewPost);
 
       if (isInitial) {
-        const cached = feedCache.getCache(session.did, m);
+        const cached = getFeedCache(session.did, m);
         const newCount = cached ? mapped.length : 0;
         
         setPosts(dedupePostsById(mapped));
@@ -227,7 +231,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         // If there was cached data and new posts arrived, track as unread
         if (newCount > 0) {
           setUnreadCounts((prev) => ({ ...prev, [m]: newCount }));
-          feedCache.incrementUnreadCount(session.did, m, newCount);
+          incrementFeedUnreadCount(session.did, m, newCount);
         }
       } else {
         setPosts(prev => dedupePostsById([...prev, ...mapped]));
@@ -239,7 +243,7 @@ export default function HomeTab({ onOpenStory }: Props) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [agent, session, feedCache]);
+  }, [agent, session, getFeedCache, incrementFeedUnreadCount]);
 
   useEffect(() => {
     setPosts([]);
@@ -260,10 +264,10 @@ export default function HomeTab({ onOpenStory }: Props) {
     if (el.scrollTop < 100 && unreadCounts[mode]) {
       setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
       if (session) {
-        feedCache.resetUnreadCount(session.did, mode);
+        resetFeedUnreadCount(session.did, mode);
       }
     }
-  }, [fetchFeed, mode, cursor, loadingMore, unreadCounts, session, feedCache]);
+  }, [fetchFeed, mode, cursor, loadingMore, unreadCounts, session, resetFeedUnreadCount]);
 
   const avatarInitial = profile?.displayName?.[0] ?? profile?.handle?.[0] ?? 'Y';
 

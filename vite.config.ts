@@ -1,14 +1,42 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { networkInterfaces } from 'node:os';
+
+function detectLanHost(): string | undefined {
+  const interfaces = networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    for (const net of entries ?? []) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return undefined;
+}
+
+const lanHost = detectLanHost();
+const devPort = Number(process.env.VITE_DEV_PORT ?? 5173);
+const hmrHost = process.env.VITE_HMR_HOST ?? lanHost ?? 'localhost';
+const hmrProtocol = process.env.VITE_HMR_PROTOCOL === 'wss' ? 'wss' : 'ws';
+const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? devPort);
+const enableIsolationHeaders = process.env.VITE_ENABLE_ISOLATION_HEADERS === '1';
 
 export default defineConfig({
   base: '/paper-atproto/',
   plugins: [react()],
   server: {
-    port: 5173,
+    port: devPort,
+    strictPort: true,
     host: true,
     allowedHosts: true,
-    headers: {
+    hmr: {
+      host: hmrHost,
+      protocol: hmrProtocol,
+      clientPort: hmrClientPort,
+      port: devPort,
+      path: '/paper-atproto/',
+    },
+    headers: enableIsolationHeaders ? {
       // Enable SharedArrayBuffer (needed for onnxruntime-web's threaded WASM backend).
       // Without these, ort@1.14.0 fails to register backends during module init with
       // "Cannot read properties of undefined (reading 'registerBackend')".
@@ -16,7 +44,7 @@ export default defineConfig({
       // load without requiring CORP headers on every CDN.
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'credentialless',
-    },
+    } : undefined,
   },
   optimizeDeps: {
     exclude: ['@electric-sql/pglite', '@xenova/transformers', 'onnxruntime-web'],
