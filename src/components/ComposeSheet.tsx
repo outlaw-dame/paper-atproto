@@ -8,6 +8,7 @@ import { useUiStore } from '../store/uiStore.js';
 import { atpCall } from '../lib/atproto/client.js';
 import { resolveThread, type ThreadNode } from '../lib/resolver/atproto.js';
 import { fetchOGData, type OGMetadata } from '../og.js';
+import { checkUrlSafety } from '../lib/safety/urlSafety.js';
 import { GifPicker, type TenorGif } from './GifPicker.js';
 import {
   getHashtagInsights,
@@ -15,9 +16,14 @@ import {
   type HashtagInsight,
   type TrendingTopic,
 } from '../lib/hashtags/hashtagInsights.js';
-import { analyzeSentiment, type SentimentResult } from '../lib/sentiment.js';
 import TwemojiText from './TwemojiText.js';
+import ComposerGuidanceBanner from './ComposerGuidanceBanner.js';
 import MentalHealthSupportBanner from './MentalHealthSupportBanner.js';
+import {
+  buildPostComposerContext,
+  buildReplyComposerContext,
+} from '../intelligence/composer/contextBuilder.js';
+import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 
 interface Props {
@@ -123,7 +129,7 @@ function lintAltText(value: string): AltLintIssue[] {
 function describeAltQuality(value: string): string | null {
   const issues = lintAltText(value);
   if (issues.length === 0) return null;
-  return issues[0].message;
+  return issues[0]?.message ?? null;
 }
 
 async function loadImageDimensions(file: File): Promise<{ width: number; height: number }> {
@@ -204,18 +210,24 @@ interface ComposeLinkPreview {
   title: string;
   description: string;
   siteName: string;
+  safetyStatus: 'safe' | 'unsafe' | 'unknown';
+  safetyReason?: string;
+  safetyThreats?: string[];
   image?: string;
   author?: string;
   authorHandle?: string;
 }
 
-function buildPreviewFromMetadata(url: string, metadata: OGMetadata | null): ComposeLinkPreview {
-  let hostname = url;
+function getUrlHostname(url: string): string {
   try {
-    hostname = new URL(url).hostname;
+    return new URL(url).hostname;
   } catch {
-    // Keep the original URL as a final fallback.
+    return url;
   }
+}
+
+function buildPreviewFromMetadata(url: string, metadata: OGMetadata | null): ComposeLinkPreview {
+  const hostname = getUrlHostname(url);
 
   const title = metadata?.title?.trim() || hostname;
   const description = metadata?.description?.trim() || '';
@@ -226,9 +238,23 @@ function buildPreviewFromMetadata(url: string, metadata: OGMetadata | null): Com
     title,
     description,
     siteName,
+    safetyStatus: 'safe',
     ...(metadata?.image ? { image: metadata.image } : {}),
     ...(metadata?.author ? { author: metadata.author } : {}),
     ...(metadata?.authorHandle ? { authorHandle: metadata.authorHandle } : {}),
+  };
+}
+
+function buildUnsafePreview(url: string, reason?: string, threats?: string[]): ComposeLinkPreview {
+  const hostname = getUrlHostname(url);
+  return {
+    url,
+    title: 'Potentially unsafe link',
+    description: reason ?? 'This URL was flagged by Google Safe Browsing.',
+    siteName: hostname,
+    safetyStatus: 'unsafe',
+    ...(reason ? { safetyReason: reason } : {}),
+    ...(threats && threats.length ? { safetyThreats: threats } : {}),
   };
 }
 
@@ -300,174 +326,6 @@ function collectThreadContextTexts(root: ThreadNode): {
     commentTexts,
     totalCommentCount: commentTexts.length,
   };
-}
-
-// ─── Sentiment banner ──────────────────────────────────────────────────────
-interface SentimentBannerProps {
-  result: SentimentResult;
-  parentSnippet?: string;   // first ~120 chars of the post being replied to
-  onDismiss: () => void;
-}
-
-function SentimentBanner({ result, parentSnippet, onDismiss }: SentimentBannerProps) {
-  // Only suppress when truly nothing to show
-  if (result.level === 'ok' && result.parentSignals.length === 0) return null;
-
-  const isAlert = result.level === 'alert';
-  const isPositive = result.level === 'positive';
-  const isOkWithContext = result.level === 'ok' && result.parentSignals.length > 0;
-  const isReply = result.isReplyContext && (result.parentSignals.length > 0 || !!parentSnippet);
-  const accentColor = isAlert
-    ? 'var(--red)'
-    : isPositive
-      ? 'var(--green)'
-      : isOkWithContext
-        ? 'var(--blue)'
-        : 'var(--orange)';
-  const bgColor = isAlert
-    ? 'rgba(255,59,48,0.09)'
-    : isPositive
-      ? 'rgba(52,199,89,0.1)'
-      : isOkWithContext
-        ? 'rgba(10,132,255,0.07)'
-        : 'rgba(255,149,0,0.09)';
-  const borderColor = isAlert
-    ? 'rgba(255,59,48,0.25)'
-    : isPositive
-      ? 'rgba(52,199,89,0.3)'
-      : isOkWithContext
-        ? 'rgba(10,132,255,0.22)'
-        : 'rgba(255,149,0,0.25)';
-  // In reply mode the label is more specific
-  const label = isAlert
-    ? 'Content notice'
-    : isPositive
-      ? (isReply ? 'Reply context · Supportive reply + Constructive signal' : 'Supportive reply + Constructive signal')
-      : isOkWithContext
-        ? 'Reply context'
-        : (isReply ? 'Reply context · Tone check' : 'Tone check');
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -6, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -4, scale: 0.98 }}
-      transition={{ duration: 0.2 }}
-      style={{
-        marginTop: 10,
-        borderRadius: 14,
-        background: bgColor,
-        border: `1px solid ${borderColor}`,
-        overflow: 'hidden',
-        // Reply-mode gets a left accent stripe for visual emphasis
-        boxShadow: isReply ? `inset 3px 0 0 ${accentColor}` : 'none',
-      }}
-    >
-      {/* Header row */}
-      <div style={{
-        display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6,
-        padding: '9px 12px 8px',
-        borderBottom: `0.5px solid ${borderColor}`,
-      }}>
-        {isAlert ? (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-        ) : isPositive ? (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 6L9 17l-5-5"/>
-          </svg>
-        ) : (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-        )}
-        <span style={{ fontSize: 11, fontWeight: 800, color: accentColor, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>
-          {label}
-        </span>
-        <button
-          onClick={onDismiss}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: accentColor, opacity: 0.55, fontSize: 18, lineHeight: 1 }}
-          aria-label="Dismiss"
-        >
-          ×
-        </button>
-      </div>
-
-      <div style={{ padding: '9px 12px 11px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {/* Parent post snippet — shown only in reply context */}
-        {isReply && parentSnippet && (
-          <div style={{
-            padding: '7px 10px',
-            borderRadius: 9,
-            background: 'rgba(0,0,0,0.04)',
-            borderLeft: `2px solid ${accentColor}`,
-          }}>
-            <p style={{ margin: '0 0 3px', fontSize: 10, fontWeight: 700, color: accentColor, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-              Replying to
-            </p>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--label-2)', lineHeight: 1.4, fontStyle: 'italic' }}>
-              "{parentSnippet.length > 120 ? parentSnippet.slice(0, 117) + '…' : parentSnippet}"
-            </p>
-          </div>
-        )}
-
-        {/* Parent-derived context signals */}
-        {result.parentSignals.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {result.parentSignals.map((s, i) => (
-              <div key={i} style={{ display: 'flex', flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 10, color: accentColor, marginTop: 2, flexShrink: 0 }}>›</span>
-                <p style={{ margin: 0, fontSize: 12, color: 'var(--label-3)', lineHeight: 1.4 }}>{s}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Divider between parent signals and reply signals */}
-        {result.parentSignals.length > 0 && result.signals.length > 0 && (
-          <div style={{ height: 1, background: borderColor }} />
-        )}
-
-        {/* Reply / draft signals */}
-        {result.signals.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {result.signals.map((s, i) => (
-              <p key={i} style={{ margin: 0, fontSize: 12, color: 'var(--label-2)', lineHeight: 1.4 }}>
-                {s}
-              </p>
-            ))}
-          </div>
-        )}
-
-        {isPositive && (result.supportiveReplySignals.length > 0 || result.constructiveSignals.length > 0) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {result.supportiveReplySignals.length > 0 && (
-              <span style={{ fontSize: 10, fontWeight: 700, color: accentColor, background: 'rgba(52,199,89,0.14)', border: '1px solid rgba(52,199,89,0.26)', borderRadius: 999, padding: '2px 8px' }}>
-                Supportive reply
-              </span>
-            )}
-            {result.constructiveSignals.length > 0 && (
-              <span style={{ fontSize: 10, fontWeight: 700, color: accentColor, background: 'rgba(52,199,89,0.14)', border: '1px solid rgba(52,199,89,0.26)', borderRadius: 999, padding: '2px 8px' }}>
-                Constructive signal
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Footnote */}
-        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-4)', fontStyle: 'italic' }}>
-          {isPositive
-            ? 'Constructive framing like this usually helps conversations feel safer and more useful.'
-            : isOkWithContext
-              ? 'No tone issues detected — context above is just for awareness.'
-              : 'You can still post — this is just a heads-up.'}
-        </p>
-      </div>
-    </motion.div>
-  );
 }
 
 // ─── Character ring ────────────────────────────────────────────────────────
@@ -977,22 +835,13 @@ export default function ComposeSheet({ onClose }: Props) {
   const [activeCarouselIdx, setActiveCarouselIdx] = useState(0);
   const [hashtagInsights, setHashtagInsights] = useState<HashtagInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
-  const [sentimentResult, setSentimentResult] = useState<SentimentResult>({
-    level: 'ok',
-    signals: [],
-    constructiveSignals: [],
-    supportiveReplySignals: [],
-    parentSignals: [],
-    isReplyContext: false,
-    hasMentalHealthCrisis: false,
-  });
-  const [sentimentDismissedAt, setSentimentDismissedAt] = useState<number | null>(null);
   const [mentalHealthDismissedAt, setMentalHealthDismissedAt] = useState<number | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const altTaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaCarouselRef = useRef<HTMLDivElement>(null);
   const linkPreviewRequestIdRef = useRef(0);
+  const mentalHealthGuidanceDraftRef = useRef<string | null>(null);
   const remaining = MAX - text.length;
   const hasDraftContent = text.trim().length > 0 || mediaItems.length > 0;
   const canPost = hasDraftContent && remaining >= 0 && !posting;
@@ -1061,7 +910,7 @@ export default function ComposeSheet({ onClose }: Props) {
         if (!rootUri) return;
 
         const response = await atpCall(() => agent.getPostThread({ uri: rootUri, depth: 6 }), { maxAttempts: 1 });
-        const threadData = response?.data?.thread;
+        const threadData = (response as any)?.data?.thread;
         if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') return;
 
         const resolved = resolveThread(threadData as any);
@@ -1082,6 +931,54 @@ export default function ComposeSheet({ onClose }: Props) {
       cancelled = true;
     };
   }, [agent, replyTarget?.id, replyTarget?.replyCount, replyTarget?.threadRoot?.id, replyTarget?.threadRoot?.content, replyTarget?.content, replyTarget?.replyTo?.content]);
+
+  const composerContext = useMemo(() => {
+    if (replyTarget) {
+      return buildReplyComposerContext({
+        draftText: text,
+        parentText: replyParentText ?? '',
+        parentUri: replyTarget.id,
+        parentAuthorHandle: replyTarget.author.handle,
+        threadTexts: replyThreadContext.threadTexts,
+        commentTexts: replyThreadContext.commentTexts,
+        totalCommentCount: replyThreadContext.totalCommentCount,
+        parentReplyCount: replyTarget.replyCount,
+        parentThreadCount: replyTarget.threadCount,
+      });
+    }
+
+    return buildPostComposerContext(text);
+  }, [
+    replyParentText,
+    replyTarget,
+    replyThreadContext.commentTexts,
+    replyThreadContext.threadTexts,
+    replyThreadContext.totalCommentCount,
+    text,
+  ]);
+
+  const {
+    draftId: composerGuidanceDraftId,
+    guidance: composerGuidance,
+    dismissedAt: composerGuidanceDismissedAt,
+    dismissGuidance,
+  } = useComposerGuidance({
+    surfaceId: 'compose-sheet',
+    context: composerContext,
+    debounceMs: 600,
+  });
+
+  useEffect(() => {
+    if (!composerGuidance.heuristics.hasMentalHealthCrisis) {
+      mentalHealthGuidanceDraftRef.current = null;
+      return;
+    }
+
+    if (mentalHealthGuidanceDraftRef.current !== composerGuidanceDraftId) {
+      mentalHealthGuidanceDraftRef.current = composerGuidanceDraftId;
+      setMentalHealthDismissedAt(null);
+    }
+  }, [composerGuidance.heuristics.hasMentalHealthCrisis, composerGuidanceDraftId]);
 
   useEffect(() => {
     const previewUrl = getFirstPreviewUrl(text);
@@ -1112,13 +1009,34 @@ export default function ComposeSheet({ onClose }: Props) {
 
     const timer = window.setTimeout(() => {
       void (async () => {
+        const safety = await checkUrlSafety(previewUrl);
+        if (linkPreviewRequestIdRef.current !== requestId) return;
+
+        if (safety.status === 'unsafe') {
+          const threatTypes = Array.from(new Set(safety.threats.map((t) => t.threatType)));
+          const threatLabel = threatTypes.length
+            ? `Threats: ${threatTypes.join(', ')}`
+            : (safety.reason ?? 'This URL matched Safe Browsing threat lists.');
+
+          setLinkPreview(buildUnsafePreview(previewUrl, threatLabel, threatTypes));
+          setLinkPreviewError('Google Safe Browsing flagged this URL. Link preview attachment is disabled.');
+          setLinkPreviewLoading(false);
+          return;
+        }
+
         const metadata = await fetchOGData(previewUrl);
         if (linkPreviewRequestIdRef.current !== requestId) return;
 
         const previewData = buildPreviewFromMetadata(previewUrl, metadata);
+        if (safety.status === 'unknown' && safety.reason) {
+          previewData.safetyStatus = 'unknown';
+          previewData.safetyReason = safety.reason;
+        }
         setLinkPreview(previewData);
         if (!metadata) {
           setLinkPreviewError('Could not fetch full preview metadata. The link will still be attached.');
+        } else if (safety.status === 'unknown' && safety.reason) {
+          setLinkPreviewError(`Safety check unavailable: ${safety.reason}`);
         }
         setLinkPreviewLoading(false);
       })();
@@ -1129,68 +1047,16 @@ export default function ComposeSheet({ onClose }: Props) {
     };
   }, [dismissedPreviewUrl, linkPreview?.url, text]);
 
-  // ── Sentiment analysis — immediate on reply open, debounced 600 ms while typing ─
-  useEffect(() => {
-    // Run immediately when opening in reply context with no draft yet so the
-    // parent-context signals surface before the user starts typing.
-    const delay = (replyTarget != null && text.trim() === '') ? 0 : 600;
-    const id = window.setTimeout(() => {
-      const result = analyzeSentiment(text, {
-        parentText: replyParentText,
-        parentReplyCount: replyTarget?.replyCount,
-        parentThreadCount: replyTarget?.threadCount,
-        threadTexts: replyThreadContext.threadTexts,
-        commentTexts: replyThreadContext.commentTexts,
-        totalCommentCount: replyThreadContext.totalCommentCount,
-      });
-      // Only update (and un-dismiss) if the level changed or new signals appeared.
-      setSentimentResult(prev => {
-        const sameLevel = prev.level === result.level;
-        const sameSignals = (prev.signals ?? []).join() === result.signals.join();
-        const sameSupportiveSignals = (prev.supportiveReplySignals ?? []).join() === result.supportiveReplySignals.join();
-        const sameMentalHealth = prev.hasMentalHealthCrisis === result.hasMentalHealthCrisis;
-
-        if (sameLevel && sameSignals && sameSupportiveSignals && sameMentalHealth) {
-          return prev;
-        }
-
-        // When mental health status changes, reset dismissal state to re-show the banner
-        if (!sameMentalHealth && result.hasMentalHealthCrisis) {
-          setMentalHealthDismissedAt(null);
-        }
-
-        return result;
-        const sameConstructiveSignals = (prev.constructiveSignals ?? []).join() === result.constructiveSignals.join();
-        const sameParentSignals = (prev.parentSignals ?? []).join() === result.parentSignals.join();
-        const sameReplyContext = (prev.isReplyContext ?? false) === result.isReplyContext;
-        if (sameLevel && sameSignals && sameSupportiveSignals && sameConstructiveSignals && sameParentSignals && sameReplyContext) return prev;
-
-        // If the visible notice content changes, re-show it.
-        setSentimentDismissedAt(null);
-        return result;
-      });
-    }, delay);
-    return () => window.clearTimeout(id);
-  }, [
-    replyParentText,
-    replyTarget?.replyCount,
-    replyTarget?.threadCount,
-    replyThreadContext.threadTexts,
-    replyThreadContext.commentTexts,
-    replyThreadContext.totalCommentCount,
-    text,
-  ]);
-
   useEffect(() => {
     if (!import.meta.env.DEV || typeof window === 'undefined') return;
 
     (window as Window & { __PAPER_COMPOSE_DEBUG__?: unknown }).__PAPER_COMPOSE_DEBUG__ = {
       draftText: text,
       replyParentText,
-      sentimentResult,
-      sentimentDismissedAt,
+      composerGuidance,
+      composerGuidanceDismissedAt,
     };
-  }, [replyParentText, sentimentDismissedAt, sentimentResult, text]);
+  }, [composerGuidance, composerGuidanceDismissedAt, replyParentText, text]);
 
   // ── Hashtag insights — debounced 600 ms, runs all three signals in parallel
   useEffect(() => {
@@ -1323,7 +1189,7 @@ export default function ComposeSheet({ onClose }: Props) {
           $type: 'app.bsky.embed.images',
           images: uploadedImages,
         };
-      } else if (linkPreview) {
+      } else if (linkPreview && linkPreview.safetyStatus !== 'unsafe') {
         embed = await buildExternalEmbed(linkPreview);
       }
 
@@ -1545,6 +1411,7 @@ export default function ComposeSheet({ onClose }: Props) {
   const openNextAltEditor = useCallback(() => {
     if (mediaItems.length === 0) return;
     const next = mediaItems.find((item) => item.alt.trim().length === 0) ?? mediaItems[0];
+    if (!next) return;
     openAltEditor(next.id);
   }, [mediaItems, openAltEditor]);
 
@@ -1594,6 +1461,7 @@ export default function ComposeSheet({ onClose }: Props) {
     try {
       for (let i = 0; i < missing.length; i += 1) {
         const item = missing[i];
+        if (!item) continue;
         try {
           const caption = await inferenceClient.captionImage(item.previewUrl);
           const normalized = caption.trim();
@@ -1838,20 +1706,20 @@ export default function ComposeSheet({ onClose }: Props) {
 
               {/* Sentiment / content analysis banner */}
               <AnimatePresence>
-                {(sentimentResult.level !== 'ok' || sentimentResult.parentSignals.length > 0) && sentimentDismissedAt === null && (
-                  <SentimentBanner
-                    result={sentimentResult}
-                    parentSnippet={replyParentText}
-                    onDismiss={() => setSentimentDismissedAt(Date.now())}
+                {(composerGuidance.level !== 'ok' || composerGuidance.heuristics.parentSignals.length > 0) && composerGuidanceDismissedAt === null && (
+                  <ComposerGuidanceBanner
+                    guidance={composerGuidance}
+                    {...(replyParentText !== undefined ? { parentSnippet: replyParentText } : {})}
+                    onDismiss={dismissGuidance}
                   />
                 )}
               </AnimatePresence>
 
               {/* Mental health support banner */}
               <AnimatePresence>
-                {sentimentResult.hasMentalHealthCrisis && mentalHealthDismissedAt === null && (
+                {composerGuidance.heuristics.hasMentalHealthCrisis && mentalHealthDismissedAt === null && (
                   <MentalHealthSupportBanner
-                    category={sentimentResult.mentalHealthCategory}
+                    category={composerGuidance.heuristics.mentalHealthCategory!}
                     onDismiss={() => setMentalHealthDismissedAt(Date.now())}
                   />
                 )}
@@ -1878,11 +1746,16 @@ export default function ComposeSheet({ onClose }: Props) {
                     justifyContent: 'space-between',
                     padding: '8px 10px',
                     borderBottom: '0.5px solid var(--sep)',
-                    background: 'rgba(10,132,255,0.07)',
+                    background: linkPreview?.safetyStatus === 'unsafe' ? 'rgba(255,59,48,0.08)' : 'rgba(10,132,255,0.07)',
                     gap: 8,
                   }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.3, color: 'var(--blue)' }}>
-                      LINK PREVIEW
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: 0.3,
+                      color: linkPreview?.safetyStatus === 'unsafe' ? 'var(--red)' : 'var(--blue)',
+                    }}>
+                      {linkPreview?.safetyStatus === 'unsafe' ? 'UNSAFE LINK' : 'LINK PREVIEW'}
                     </span>
                     {linkPreview?.url && (
                       <button

@@ -10,6 +10,7 @@ A local-first ATProto social reader inspired by Facebook Paper, Neeva Gist, and 
 *   **Inference:** Transformers.js (in Web Worker)
 *   **Network:** ATProto via `@atproto/api`
 *   **UI:** Tailwind CSS, Konsta UI, Framer Motion
+*   **Composer Guidance Layer:** Shared authoring guidance for `ComposeSheet` and `PromptComposer`, built from staged local heuristics + worker-hosted sentiment/emotion/targeted-tone models + local abuse scoring + selective server-side guidance writing
 
 ## Core Architecture
 
@@ -53,6 +54,7 @@ The server reads `server/.env.example` keys:
 * `VERIFY_ENTITY_LINKING_ENDPOINT`
 * `VERIFY_ENTITY_LINKING_TIMEOUT_MS`
 * `VERIFY_ENTITY_LINKING_API_KEY`
+* `GOOGLE_SAFE_BROWSING_API_KEY` (optional, enables URL reputation checks)
 
 Default mode is `dbpedia` using `https://api.dbpedia-spotlight.org/en/annotate`.
 
@@ -109,6 +111,22 @@ The status endpoint reports active entity-linking provider, endpoint, timeout,
 and whether external linking is currently enabled.
 
 If external calls fail or time out, the pipeline safely falls back to deterministic heuristics.
+
+## Safe Browsing Integration
+
+Paper now integrates Google Safe Browsing Lookup API v4 through the local verify-server.
+
+What it does:
+
+* Checks external URLs via `POST /api/safety/url-check` before rich link previews are shown.
+* Blocks opening links from hover previews when the URL is flagged unsafe.
+* Composer preview warns when a link is flagged and skips creating an external embed card for that URL.
+
+Configure:
+
+1. Set `GOOGLE_SAFE_BROWSING_API_KEY` in `server/.env`.
+2. Start the server (`npm --prefix ./server run dev`) and app (`pnpm dev`).
+3. Ensure `VITE_GLYMPSE_VERIFY_BASE_URL` points to the verify-server base (default local fallback is `http://localhost:3001`).
 
 ## Current Status
 

@@ -6,11 +6,13 @@
 //   POST /api/llm/write/interpolator  — Qwen3-4B thread summary writer
 //   POST /api/llm/analyze/media       — Qwen3-VL multimodal analyzer (Phase B)
 //   POST /api/llm/write/search-story  — Qwen3-4B Explore synopsis writer
+//   POST /api/llm/write/composer-guidance — selective composer guidance writer
 
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { runInterpolatorWriter } from '../services/qwenWriter.js';
 import { runMediaAnalyzer } from '../services/qwenMultimodal.js';
+import { runComposerGuidanceWriter } from '../services/qwenComposerGuidanceWriter.js';
 import { env } from '../config/env.js';
 import { filterWriterResponse, filterMediaAnalyzerResponse, logSafetyFlag } from '../services/safetyFilters.js';
 export const llmRouter = new Hono();
@@ -96,6 +98,33 @@ const ExploreSynopsisSchema = z.object({
   safeEntities: z.array(WriterEntitySchema).max(8),
   factualHighlights: z.array(z.string().max(200)).max(5),
   confidence: ConfidenceSchema,
+});
+
+const ComposerGuidanceSchema = z.object({
+  mode: z.enum(['post', 'reply', 'hosted_thread']),
+  draftText: z.string().min(1).max(1200),
+  parentText: z.string().max(500).optional(),
+  uiState: z.enum(['positive', 'caution', 'warning']),
+  scores: z.object({
+    positiveSignal: z.number().min(0).max(1),
+    negativeSignal: z.number().min(0).max(1),
+    supportiveness: z.number().min(0).max(1),
+    constructiveness: z.number().min(0).max(1),
+    clarifying: z.number().min(0).max(1),
+    hostility: z.number().min(0).max(1),
+    dismissiveness: z.number().min(0).max(1),
+    escalation: z.number().min(0).max(1),
+    sentimentPositive: z.number().min(0).max(1),
+    sentimentNegative: z.number().min(0).max(1),
+    anger: z.number().min(0).max(1),
+    trust: z.number().min(0).max(1),
+    optimism: z.number().min(0).max(1),
+    targetedNegativity: z.number().min(0).max(1),
+    toxicity: z.number().min(0).max(1),
+  }),
+  constructiveSignals: z.array(z.string().max(200)).max(4),
+  supportiveSignals: z.array(z.string().max(200)).max(4),
+  parentSignals: z.array(z.string().max(200)).max(4),
 });
 
 // ─── Helper ────────────────────────────────────────────────────────────────
@@ -239,5 +268,32 @@ llmRouter.post('/write/search-story', async (c) => {
     const message = err instanceof Error ? err.message : 'Synopsis writer failed';
     console.error('[llm/write/search-story]', message);
     return c.json({ synopsis: '', abstained: true });
+  }
+});
+
+// ─── POST /write/composer-guidance ────────────────────────────────────────
+
+llmRouter.post('/write/composer-guidance', async (c) => {
+  if (!env.LLM_ENABLED) return llmDisabled(c);
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const parsed = ComposerGuidanceSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  }
+
+  try {
+    const result = await runComposerGuidanceWriter(parsed.data);
+    return c.json(result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Composer guidance writer failed';
+    console.error('[llm/write/composer-guidance]', message);
+    return c.json({ error: 'Composer guidance writer failed' }, 503);
   }
 });

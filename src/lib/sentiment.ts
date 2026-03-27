@@ -16,8 +16,11 @@
  *   - signals from the parent that explain the author's emotional state are
  *     surfaced so the author can see why the nudge appeared
  *
- * Entirely local; no network calls, no telemetry.
+ * The deterministic core is entirely local; an optional model-backed wrapper
+ * can enrich the result when a tone classifier is provided.
  */
+
+import type { ToneModelResult } from './toneModel.js';
 
 export type SentimentLevel = 'ok' | 'positive' | 'warn' | 'alert';
 
@@ -138,11 +141,15 @@ const HEATED_PATTERNS: Array<{ re: RegExp; signal: string }> = [
     signal: 'Dismissive or vulgar language directed at others.',
   },
   {
+    re: /\b((you\s+are|you're|ur)\s+(dumb|stupid|idiotic|moronic|brainless|pathetic|garbage|trash|delusional|lying|a\s+liar)|(you\s+are|you're|ur)\s+(?:an?\s+)?(idiot|moron|jerk|loser|clown|fool))\b/i,
+    signal: 'Direct insults usually land as personal attacks — consider criticizing the point instead.',
+  },
+  {
     re: /\b(stupid|idiotic|moronic|brainless)\s+(people|person|everyone|anyone|liberals|conservatives|women|men)\b/i,
     signal: 'Broad negative characterisation of a group — consider being more specific.',
   },
   {
-    re: /\b(this|that|it|you|they|he|she|these|those)\s+(is|are|was|were)\s+(stupid|idiotic|moronic|pathetic|garbage|trash)\b/i,
+    re: /\b(this|that|it|you|they|he|she|these|those)\s+(is|are|was|were)\s+(dumb|stupid|idiotic|moronic|pathetic|garbage|trash)\b/i,
     signal: 'Blunt negative framing can escalate a reply quickly — consider adding a little more context.',
   },
 ];
@@ -188,7 +195,7 @@ const CONSTRUCTIVE_SIGNAL_PATTERNS: Array<{ re: RegExp; signal: string }> = [
 
 const PARENT_HEAT_PATTERNS: Array<{ re: RegExp; signal: string }> = [
   {
-    re: /\b(you\s+are|you're|ur)\s+(wrong|lying|a\s+liar|delusional|an\s+idiot|stupid)\b/i,
+    re: /\b((you\s+are|you're|ur)\s+(wrong|lying|a\s+liar|delusional|dumb|stupid|idiotic|moronic|brainless)|(you\s+are|you're|ur)\s+(?:an?\s+)?(idiot|moron|jerk|loser|clown|fool))\b/i,
     signal: "The original post directly challenges someone's position aggressively.",
   },
   {
@@ -214,6 +221,15 @@ const PARENT_HEAT_PATTERNS: Array<{ re: RegExp; signal: string }> = [
 const CONTENTIOUS_TOPIC_RE =
   /\b(abortion|gun\s+control|immigration|trans\s+rights|critical\s+race|election\s+(fraud|integrity)|vaccine|antivaxx?|climate\s+(change|denial)|roe\s+v\s+wade|blm|antifa|proud\s+boys|qanon)\b/i;
 
+const MODEL_TONE_MIN_LENGTH = 6;
+const MODEL_SIGNAL_LIMIT = 3;
+const HOSTILE_MODEL_THRESHOLD = 0.82;
+const HOSTILE_REPLY_CONTEXT_THRESHOLD = 0.74;
+const POSITIVE_MODEL_THRESHOLD = 0.84;
+const SUPPORTIVE_MODEL_THRESHOLD = 0.78;
+const CONSTRUCTIVE_MODEL_THRESHOLD = 0.74;
+const MODEL_SCORE_MARGIN = 0.08;
+
 // ─── Structural / context signals ─────────────────────────────────────────
 
 function detectStructuralSignals(text: string): string[] {
@@ -237,7 +253,7 @@ function detectStructuralSignals(text: string): string[] {
   const words = text.trim().split(/\s+/);
   const CONTEXT_TRIGGERS = [
     'wrong', 'liar', 'lies', 'lying', 'fake', 'fraud', 'corrupt',
-    'evil', 'garbage', 'trash', 'stupid', 'idiot', 'pathetic', 'disgusting',
+    'evil', 'garbage', 'trash', 'dumb', 'stupid', 'idiot', 'moron', 'jerk', 'loser', 'clown', 'fool', 'pathetic', 'disgusting',
     'always', 'never', 'everyone', 'nobody',
   ];
   if (words.length <= 14) {
@@ -283,6 +299,8 @@ export interface AnalyzeOptions {
    * context-aware: parent heat lowers the reply's warning threshold.
    */
   parentText?: string;
+  /** Short reply target string used by targeted sentiment models when available. */
+  targetText?: string;
   /** Approximate number of replies on the parent post. */
   parentReplyCount?: number;
   /** Approximate size/depth signal of the related thread. */
@@ -293,6 +311,136 @@ export interface AnalyzeOptions {
   commentTexts?: string[];
   /** Aggregate comments/replies count if available. */
   totalCommentCount?: number;
+}
+
+export type ToneClassifier = (text: string) => Promise<ToneModelResult>;
+
+function uniqSignals(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function strongestPositiveModelSignal(
+  tone: ToneModelResult,
+): 'supportive' | 'constructive' | 'positive' | null {
+  const {
+    hostile,
+    supportive,
+    constructive,
+    positive,
+  } = tone.scores;
+
+  if (
+    supportive >= SUPPORTIVE_MODEL_THRESHOLD
+    && supportive >= hostile + MODEL_SCORE_MARGIN
+  ) {
+    return 'supportive';
+  }
+
+  if (
+    constructive >= CONSTRUCTIVE_MODEL_THRESHOLD
+    && constructive >= hostile + MODEL_SCORE_MARGIN
+  ) {
+    return 'constructive';
+  }
+
+  if (
+    positive >= POSITIVE_MODEL_THRESHOLD
+    && positive >= hostile + MODEL_SCORE_MARGIN
+  ) {
+    return 'positive';
+  }
+
+  return null;
+}
+
+function toneLooksHostile(tone: ToneModelResult, isReplyContext: boolean): boolean {
+  const threshold = isReplyContext ? HOSTILE_REPLY_CONTEXT_THRESHOLD : HOSTILE_MODEL_THRESHOLD;
+  const { hostile, supportive, constructive, positive, neutral } = tone.scores;
+
+  return (
+    hostile >= threshold
+    && hostile >= Math.max(supportive, constructive, positive) + MODEL_SCORE_MARGIN
+    && hostile >= neutral + MODEL_SCORE_MARGIN
+  );
+}
+
+function mergeToneModelIntoSentiment(
+  base: SentimentResult,
+  text: string,
+  tone: ToneModelResult,
+): SentimentResult {
+  const trimmed = text.trim();
+  if (trimmed.length < MODEL_TONE_MIN_LENGTH || base.level === 'alert') {
+    return base;
+  }
+
+  if (toneLooksHostile(tone, base.isReplyContext)) {
+    return {
+      ...base,
+      level: 'warn',
+      signals: uniqSignals([
+        ...base.signals,
+        'This reads as more hostile than you may intend — consider softening the phrasing.',
+      ]),
+      constructiveSignals: [],
+      supportiveReplySignals: [],
+    };
+  }
+
+  if (base.level === 'warn') {
+    return base;
+  }
+
+  const positiveSignal = strongestPositiveModelSignal(tone);
+  if (!positiveSignal) {
+    return base;
+  }
+
+  const supportiveReplySignals = [...base.supportiveReplySignals];
+  const constructiveSignals = [...base.constructiveSignals];
+  const positiveSignals = [...base.signals];
+
+  if (positiveSignal === 'supportive' && supportiveReplySignals.length === 0) {
+    supportiveReplySignals.push('This reads as empathetic and supportive.');
+    positiveSignals.push('This reads as empathetic and supportive.');
+  }
+
+  if (positiveSignal === 'constructive' && constructiveSignals.length === 0) {
+    constructiveSignals.push('This reads as constructive and solution-oriented.');
+    positiveSignals.push('This reads as constructive and solution-oriented.');
+  }
+
+  if (
+    positiveSignal === 'positive'
+    && supportiveReplySignals.length === 0
+    && constructiveSignals.length === 0
+  ) {
+    positiveSignals.push('This reads as positive and encouraging.');
+  }
+
+  const uniqueSupportiveSignals = uniqSignals(supportiveReplySignals).slice(0, MODEL_SIGNAL_LIMIT);
+  const uniqueConstructiveSignals = uniqSignals(constructiveSignals).slice(0, MODEL_SIGNAL_LIMIT);
+  const uniquePositiveSignals = uniqSignals([
+    ...positiveSignals,
+    ...uniqueSupportiveSignals,
+    ...uniqueConstructiveSignals,
+  ]).slice(0, MODEL_SIGNAL_LIMIT);
+
+  if (
+    uniquePositiveSignals.join() === base.signals.join()
+    && uniqueSupportiveSignals.join() === base.supportiveReplySignals.join()
+    && uniqueConstructiveSignals.join() === base.constructiveSignals.join()
+  ) {
+    return base;
+  }
+
+  return {
+    ...base,
+    level: 'positive',
+    signals: uniquePositiveSignals,
+    supportiveReplySignals: uniqueSupportiveSignals,
+    constructiveSignals: uniqueConstructiveSignals,
+  };
 }
 
 export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): SentimentResult {
@@ -479,4 +627,24 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
     mentalHealthCategory: mentalHealthCrisis.category,
   };
+}
+
+export async function analyzeSentimentWithModel(
+  text: string,
+  options: AnalyzeOptions = {},
+  classifyTone?: ToneClassifier,
+): Promise<SentimentResult> {
+  const base = analyzeSentiment(text, options);
+  const trimmed = text.trim();
+
+  if (!classifyTone || trimmed.length < MODEL_TONE_MIN_LENGTH || base.level === 'alert') {
+    return base;
+  }
+
+  try {
+    const tone = await classifyTone(trimmed);
+    return mergeToneModelIntoSentiment(base, trimmed, tone);
+  } catch {
+    return base;
+  }
 }

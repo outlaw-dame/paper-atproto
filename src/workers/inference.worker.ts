@@ -1,31 +1,46 @@
 // ─── Inference Worker ─────────────────────────────────────────────────────
 // All Transformers.js model calls run here, completely off the main UI thread.
-// The worker uses a simple message-passing protocol:
-//
-//   Main → Worker:  { id, type, payload }
-//   Worker → Main:  { id, type, result?, error? }
-//
-// Supported message types:
-//   'embed'        — generate a 384-d MiniLM embedding for a text string
-//   'embed_batch'  — generate embeddings for an array of strings
-//   'status'       — returns current model load status
-//
-// The worker lazy-loads the model on the first 'embed' request and caches it.
-// It posts a 'ready' message when the model is loaded.
+// Composer guidance models are kept local-first and lazy-loaded on demand.
 
 import { pipeline, env } from '@xenova/transformers';
+import type {
+  AbuseModelLabel,
+  AbuseModelResult,
+  AbuseModelScores,
+} from '../lib/abuseModel.js';
+import type {
+  ComposerEmotionLabel,
+  ComposerEmotionResult,
+  ComposerEmotionScores,
+  ComposerQualityLabel,
+  ComposerQualityResult,
+  ComposerQualityScores,
+  ComposerSentimentLabel,
+  ComposerSentimentResult,
+  ComposerSentimentScores,
+  ComposerTargetedToneLabel,
+  ComposerTargetedToneResult,
+  ComposerTargetedToneScores,
+} from '../lib/composerMl.js';
+import type { ToneModelLabel, ToneModelResult, ToneModelScores } from '../lib/toneModel.js';
 
-// Single-threaded WASM backend — sufficient for embedding + image captioning.
-// The dev server sends COOP/COEP headers so SharedArrayBuffer is available,
-// letting onnxruntime-web v1.14.0 register all backends cleanly at init time.
 env.backends.onnx.wasm.numThreads = 1;
-// We are already inside a worker; prevent ONNX from spawning a nested proxy worker.
 env.backends.onnx.wasm.proxy = false;
-env.backends.onnx.wasm.proxy = false;
+env.localModelPath = '/models/';
 
 type WorkerMsg = {
   id: string;
-  type: 'embed' | 'embed_batch' | 'caption_image' | 'status';
+  type:
+    | 'embed'
+    | 'embed_batch'
+    | 'caption_image'
+    | 'classify_tone'
+    | 'score_abuse'
+    | 'classify_sentiment'
+    | 'classify_emotion'
+    | 'classify_targeted_tone'
+    | 'classify_quality'
+    | 'status';
   payload?: any;
 };
 
@@ -36,30 +51,150 @@ type WorkerReply = {
   error?: string;
 };
 
+type WorkerStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+interface ComposerQualityHead {
+  model: string;
+  provider: string;
+  base_model: string;
+  normalize_embeddings: boolean;
+  labels: ComposerQualityLabel[];
+  coefficients: number[][];
+  intercepts: number[];
+}
+
 let extractor: any = null;
 let captioner: any = null;
-let modelStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+let toneClassifier: any = null;
+let abuseClassifier: any = null;
+let sentimentClassifier: any = null;
+let emotionClassifier: any = null;
+let targetedToneClassifier: any = null;
+let qualityHead: ComposerQualityHead | null = null;
+
+let modelStatus: WorkerStatus = 'idle';
 let modelError: string | null = null;
-let captionStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+let captionStatus: WorkerStatus = 'idle';
 let captionError: string | null = null;
+let toneStatus: WorkerStatus = 'idle';
+let toneError: string | null = null;
+let abuseStatus: WorkerStatus = 'idle';
+let abuseError: string | null = null;
+let sentimentStatus: WorkerStatus = 'idle';
+let sentimentError: string | null = null;
+let emotionStatus: WorkerStatus = 'idle';
+let emotionError: string | null = null;
+let targetedToneStatus: WorkerStatus = 'idle';
+let targetedToneError: string | null = null;
+let qualityStatus: WorkerStatus = 'idle';
+let qualityError: string | null = null;
+
+const TONE_MODEL_NAME = 'Xenova/nli-deberta-v3-xsmall';
+const ABUSE_MODEL_NAME = 'Xenova/toxic-bert';
+const ABUSE_MODEL_PROVIDER = 'xenova-toxic-bert';
+const SENTIMENT_MODEL_NAME = 'Xenova/twitter-roberta-base-sentiment-latest';
+const EMOTION_MODEL_NAME = 'cardiffnlp/twitter-roberta-base-emotion-latest-onnx';
+const TARGETED_TONE_MODEL_NAME = 'cardiffnlp/twitter-roberta-base-topic-sentiment-latest-onnx';
+const QUALITY_MODEL_NAME = 'local/composer-quality-setfit-head';
+const QUALITY_MODEL_PROVIDER = 'setfit-linear-head';
+const LOCAL_MODEL_ROOT = (env.localModelPath ?? '/models/').replace(/\/+$/, '/');
+
+const TONE_LABELS: Record<ToneModelLabel, string> = {
+  hostile: 'hostile or insulting personal attack',
+  supportive: 'supportive or empathetic response',
+  constructive: 'constructive or solution-oriented feedback',
+  positive: 'positive appreciation or encouragement',
+  neutral: 'neutral or informational statement',
+};
+const TONE_LABEL_BY_TEXT = Object.fromEntries(
+  Object.entries(TONE_LABELS).map(([key, label]) => [label, key as ToneModelLabel]),
+);
+const ABUSE_LABELS: AbuseModelLabel[] = [
+  'toxic',
+  'insult',
+  'obscene',
+  'identity_hate',
+  'threat',
+  'severe_toxic',
+];
+const SENTIMENT_LABEL_ALIASES: Record<string, ComposerSentimentLabel> = {
+  negative: 'negative',
+  neutral: 'neutral',
+  positive: 'positive',
+  LABEL_0: 'negative',
+  LABEL_1: 'neutral',
+  LABEL_2: 'positive',
+};
+const EMOTION_LABELS: ComposerEmotionLabel[] = [
+  'anger',
+  'anticipation',
+  'disgust',
+  'fear',
+  'joy',
+  'love',
+  'optimism',
+  'pessimism',
+  'sadness',
+  'surprise',
+  'trust',
+];
+const TARGETED_TONE_LABEL_ALIASES: Record<string, ComposerTargetedToneLabel> = {
+  'strongly negative': 'strongly_negative',
+  negative: 'negative',
+  'negative or neutral': 'negative_or_neutral',
+  positive: 'positive',
+  'strongly positive': 'strongly_positive',
+  LABEL_0: 'strongly_negative',
+  LABEL_1: 'negative',
+  LABEL_2: 'negative_or_neutral',
+  LABEL_3: 'positive',
+  LABEL_4: 'strongly_positive',
+};
+const QUALITY_LABELS: ComposerQualityLabel[] = [
+  'constructive',
+  'supportive',
+  'clarifying',
+  'dismissive',
+  'hostile',
+  'escalating',
+];
+
+function localModelUrl(relativePath: string): string {
+  return `${LOCAL_MODEL_ROOT}${relativePath.replace(/^\/+/, '')}`;
+}
+
+async function waitForReady(
+  getStatus: () => WorkerStatus,
+  getError: () => string | null,
+  message: string,
+): Promise<void> {
+  if (getStatus() !== 'loading') return;
+
+  await new Promise<void>((resolve, reject) => {
+    const check = setInterval(() => {
+      if (getStatus() === 'ready') {
+        clearInterval(check);
+        resolve();
+      }
+      if (getStatus() === 'error') {
+        clearInterval(check);
+        reject(new Error(getError() ?? message));
+      }
+    }, 100);
+  });
+}
 
 async function ensureModel(): Promise<void> {
   if (extractor) return;
   if (modelStatus === 'loading') {
-    // Wait for the in-flight load
-    await new Promise<void>((resolve, reject) => {
-      const check = setInterval(() => {
-        if (modelStatus === 'ready') { clearInterval(check); resolve(); }
-        if (modelStatus === 'error') { clearInterval(check); reject(new Error(modelError ?? 'Model load failed')); }
-      }, 100);
-    });
+    await waitForReady(() => modelStatus, () => modelError, 'Embedding model load failed');
     return;
   }
 
   modelStatus = 'loading';
   try {
     extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-      quantized: true,  // use quantized ONNX model for smaller download + faster inference
+      quantized: true,
     });
     modelStatus = 'ready';
     self.postMessage({ id: '__system__', type: 'ready', result: { model: 'all-MiniLM-L6-v2' } });
@@ -74,18 +209,7 @@ async function ensureModel(): Promise<void> {
 async function ensureCaptionModel(): Promise<void> {
   if (captioner) return;
   if (captionStatus === 'loading') {
-    await new Promise<void>((resolve, reject) => {
-      const check = setInterval(() => {
-        if (captionStatus === 'ready') {
-          clearInterval(check);
-          resolve();
-        }
-        if (captionStatus === 'error') {
-          clearInterval(check);
-          reject(new Error(captionError ?? 'Caption model load failed'));
-        }
-      }, 100);
-    });
+    await waitForReady(() => captionStatus, () => captionError, 'Caption model load failed');
     return;
   }
 
@@ -98,6 +222,147 @@ async function ensureCaptionModel(): Promise<void> {
   } catch (err: any) {
     captionStatus = 'error';
     captionError = err?.message ?? 'Unknown caption model error';
+    throw err;
+  }
+}
+
+async function ensureToneModel(): Promise<void> {
+  if (toneClassifier) return;
+  if (toneStatus === 'loading') {
+    await waitForReady(() => toneStatus, () => toneError, 'Tone model load failed');
+    return;
+  }
+
+  toneStatus = 'loading';
+  try {
+    toneClassifier = await pipeline('zero-shot-classification', TONE_MODEL_NAME, {
+      quantized: true,
+    });
+    toneStatus = 'ready';
+  } catch (err: any) {
+    toneStatus = 'error';
+    toneError = err?.message ?? 'Unknown tone model error';
+    throw err;
+  }
+}
+
+async function ensureAbuseModel(): Promise<void> {
+  if (abuseClassifier) return;
+  if (abuseStatus === 'loading') {
+    await waitForReady(() => abuseStatus, () => abuseError, 'Abuse model load failed');
+    return;
+  }
+
+  abuseStatus = 'loading';
+  try {
+    abuseClassifier = await pipeline('text-classification', ABUSE_MODEL_NAME, {
+      quantized: true,
+    });
+    abuseStatus = 'ready';
+  } catch (err: any) {
+    abuseStatus = 'error';
+    abuseError = err?.message ?? 'Unknown abuse model error';
+    throw err;
+  }
+}
+
+async function ensureSentimentModel(): Promise<void> {
+  if (sentimentClassifier) return;
+  if (sentimentStatus === 'loading') {
+    await waitForReady(() => sentimentStatus, () => sentimentError, 'Sentiment model load failed');
+    return;
+  }
+
+  sentimentStatus = 'loading';
+  try {
+    sentimentClassifier = await pipeline('text-classification', SENTIMENT_MODEL_NAME, {
+      quantized: true,
+    });
+    sentimentStatus = 'ready';
+  } catch (err: any) {
+    sentimentStatus = 'error';
+    sentimentError = err?.message ?? 'Unknown sentiment model error';
+    throw err;
+  }
+}
+
+async function ensureEmotionModel(): Promise<void> {
+  if (emotionClassifier) return;
+  if (emotionStatus === 'loading') {
+    await waitForReady(() => emotionStatus, () => emotionError, 'Emotion model load failed');
+    return;
+  }
+
+  emotionStatus = 'loading';
+  try {
+    emotionClassifier = await pipeline('text-classification', EMOTION_MODEL_NAME, {
+      quantized: true,
+    });
+    emotionStatus = 'ready';
+  } catch (err: any) {
+    emotionStatus = 'error';
+    emotionError = err?.message ?? 'Unknown emotion model error';
+    throw err;
+  }
+}
+
+async function ensureTargetedToneModel(): Promise<void> {
+  if (targetedToneClassifier) return;
+  if (targetedToneStatus === 'loading') {
+    await waitForReady(() => targetedToneStatus, () => targetedToneError, 'Targeted sentiment model load failed');
+    return;
+  }
+
+  targetedToneStatus = 'loading';
+  try {
+    targetedToneClassifier = await pipeline('text-classification', TARGETED_TONE_MODEL_NAME, {
+      quantized: true,
+    });
+    targetedToneStatus = 'ready';
+  } catch (err: any) {
+    targetedToneStatus = 'error';
+    targetedToneError = err?.message ?? 'Unknown targeted sentiment model error';
+    throw err;
+  }
+}
+
+async function ensureQualityHead(): Promise<void> {
+  if (qualityHead) return;
+  if (qualityStatus === 'loading') {
+    await waitForReady(() => qualityStatus, () => qualityError, 'Quality classifier head load failed');
+    return;
+  }
+
+  qualityStatus = 'loading';
+  try {
+    const response = await fetch(localModelUrl(`${QUALITY_MODEL_NAME}/model.json`));
+    if (!response.ok) {
+      throw new Error(`Failed to fetch quality classifier head: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json() as Partial<ComposerQualityHead>;
+    if (
+      !Array.isArray(data.labels)
+      || !Array.isArray(data.coefficients)
+      || !Array.isArray(data.intercepts)
+      || typeof data.base_model !== 'string'
+    ) {
+      throw new Error('Quality classifier head is missing required fields');
+    }
+
+    qualityHead = {
+      model: data.model ?? QUALITY_MODEL_NAME,
+      provider: data.provider ?? QUALITY_MODEL_PROVIDER,
+      base_model: data.base_model,
+      normalize_embeddings: Boolean(data.normalize_embeddings),
+      labels: data.labels as ComposerQualityLabel[],
+      coefficients: data.coefficients,
+      intercepts: data.intercepts,
+    };
+    qualityStatus = 'ready';
+  } catch (err: any) {
+    qualityStatus = 'error';
+    qualityError = err?.message ?? 'Unknown quality model error';
     throw err;
   }
 }
@@ -127,6 +392,346 @@ async function generateEmbedding(text: string): Promise<number[]> {
   return Array.from(output.data as Float32Array);
 }
 
+function createEmptyToneScores(): ToneModelScores {
+  return {
+    hostile: 0,
+    supportive: 0,
+    constructive: 0,
+    positive: 0,
+    neutral: 0,
+  };
+}
+
+function createEmptyAbuseScores(): AbuseModelScores {
+  return {
+    toxic: 0,
+    insult: 0,
+    obscene: 0,
+    identity_hate: 0,
+    threat: 0,
+    severe_toxic: 0,
+  };
+}
+
+function createEmptySentimentScores(): ComposerSentimentScores {
+  return {
+    negative: 0,
+    neutral: 0,
+    positive: 0,
+  };
+}
+
+function createEmptyEmotionScores(): ComposerEmotionScores {
+  return {
+    anger: 0,
+    anticipation: 0,
+    disgust: 0,
+    fear: 0,
+    joy: 0,
+    love: 0,
+    optimism: 0,
+    pessimism: 0,
+    sadness: 0,
+    surprise: 0,
+    trust: 0,
+  };
+}
+
+function createEmptyTargetedToneScores(): ComposerTargetedToneScores {
+  return {
+    strongly_negative: 0,
+    negative: 0,
+    negative_or_neutral: 0,
+    positive: 0,
+    strongly_positive: 0,
+  };
+}
+
+function createEmptyQualityScores(): ComposerQualityScores {
+  return {
+    constructive: 0,
+    supportive: 0,
+    clarifying: 0,
+    dismissive: 0,
+    hostile: 0,
+    escalating: 0,
+  };
+}
+
+function getStrongestToneLabel(scores: ToneModelScores): ToneModelLabel {
+  let bestLabel: ToneModelLabel = 'neutral';
+  let bestScore = scores.neutral;
+
+  (Object.keys(scores) as ToneModelLabel[]).forEach((label) => {
+    const score = scores[label];
+    if (score > bestScore) {
+      bestLabel = label;
+      bestScore = score;
+    }
+  });
+
+  return bestLabel;
+}
+
+function getStrongestAbuseLabel(scores: AbuseModelScores): AbuseModelLabel {
+  let bestLabel: AbuseModelLabel = 'toxic';
+  let bestScore = scores.toxic;
+
+  ABUSE_LABELS.forEach((label) => {
+    const score = scores[label];
+    if (score > bestScore) {
+      bestLabel = label;
+      bestScore = score;
+    }
+  });
+
+  return bestLabel;
+}
+
+function getStrongestSentimentLabel(scores: ComposerSentimentScores): ComposerSentimentLabel {
+  let bestLabel: ComposerSentimentLabel = 'neutral';
+  let bestScore = scores.neutral;
+
+  (Object.keys(scores) as ComposerSentimentLabel[]).forEach((label) => {
+    const score = scores[label];
+    if (score > bestScore) {
+      bestLabel = label;
+      bestScore = score;
+    }
+  });
+
+  return bestLabel;
+}
+
+function getStrongestTargetedToneLabel(scores: ComposerTargetedToneScores): ComposerTargetedToneLabel {
+  let bestLabel: ComposerTargetedToneLabel = 'negative_or_neutral';
+  let bestScore = scores.negative_or_neutral;
+
+  (Object.keys(scores) as ComposerTargetedToneLabel[]).forEach((label) => {
+    const score = scores[label];
+    if (score > bestScore) {
+      bestLabel = label;
+      bestScore = score;
+    }
+  });
+
+  return bestLabel;
+}
+
+function getStrongestQualityLabel(scores: ComposerQualityScores): ComposerQualityLabel {
+  let bestLabel: ComposerQualityLabel = 'clarifying';
+  let bestScore = scores.clarifying;
+
+  QUALITY_LABELS.forEach((label) => {
+    const score = scores[label];
+    if (score > bestScore) {
+      bestLabel = label;
+      bestScore = score;
+    }
+  });
+
+  return bestLabel;
+}
+
+function computeAbuseScore(scores: AbuseModelScores): number {
+  const weightedMax = Math.max(
+    scores.toxic,
+    scores.insult * 0.98,
+    scores.obscene * 0.88,
+    scores.identity_hate * 1.12,
+    scores.threat * 1.2,
+    scores.severe_toxic * 1.25,
+  );
+
+  return Math.max(0, Math.min(1, weightedMax));
+}
+
+function softmax(logits: number[]): number[] {
+  const maxLogit = Math.max(...logits);
+  const exps = logits.map((value) => Math.exp(value - maxLogit));
+  const sum = exps.reduce((total, value) => total + value, 0) || 1;
+  return exps.map((value) => value / sum);
+}
+
+function dotProduct(left: number[], right: number[]): number {
+  const length = Math.min(left.length, right.length);
+  let total = 0;
+  for (let index = 0; index < length; index += 1) {
+    total += left[index] * right[index];
+  }
+  return total;
+}
+
+function normalizeOutputRows(output: any): Array<{ label?: string; score?: number }> {
+  if (Array.isArray(output)) {
+    if (Array.isArray(output[0])) {
+      return output[0] as Array<{ label?: string; score?: number }>;
+    }
+    return output as Array<{ label?: string; score?: number }>;
+  }
+
+  return [output as { label?: string; score?: number }];
+}
+
+async function classifyTone(text: string): Promise<ToneModelResult> {
+  await ensureToneModel();
+
+  const output = await toneClassifier(text, Object.values(TONE_LABELS), {
+    multi_label: true,
+    hypothesis_template: 'This reply is {}.',
+  });
+
+  const scores = createEmptyToneScores();
+  const labels: string[] = Array.isArray(output?.labels) ? output.labels : [];
+  const values: number[] = Array.isArray(output?.scores) ? output.scores : [];
+
+  labels.forEach((label, index) => {
+    const key = TONE_LABEL_BY_TEXT[label];
+    if (!key) return;
+    scores[key] = Number(values[index] ?? 0);
+  });
+
+  return {
+    model: TONE_MODEL_NAME,
+    label: getStrongestToneLabel(scores),
+    scores,
+  };
+}
+
+async function scoreAbuse(text: string): Promise<AbuseModelResult> {
+  await ensureAbuseModel();
+
+  const output = await abuseClassifier(text, {
+    topk: null,
+  });
+
+  const scores = createEmptyAbuseScores();
+  const rows = normalizeOutputRows(output);
+
+  rows.forEach((row) => {
+    const label = row?.label;
+    if (!label || !ABUSE_LABELS.includes(label as AbuseModelLabel)) return;
+    scores[label as AbuseModelLabel] = Number(row.score ?? 0);
+  });
+
+  return {
+    model: ABUSE_MODEL_NAME,
+    provider: ABUSE_MODEL_PROVIDER,
+    label: getStrongestAbuseLabel(scores),
+    score: computeAbuseScore(scores),
+    scores,
+  };
+}
+
+async function classifySentiment(text: string): Promise<ComposerSentimentResult> {
+  await ensureSentimentModel();
+
+  const output = await sentimentClassifier(text, {
+    topk: null,
+  });
+  const rows = normalizeOutputRows(output);
+  const scores = createEmptySentimentScores();
+
+  rows.forEach((row) => {
+    const label = typeof row?.label === 'string' ? SENTIMENT_LABEL_ALIASES[row.label] : undefined;
+    if (!label) return;
+    scores[label] = Number(row.score ?? 0);
+  });
+
+  const label = getStrongestSentimentLabel(scores);
+  return {
+    model: SENTIMENT_MODEL_NAME,
+    label,
+    confidence: scores[label],
+    scores,
+  };
+}
+
+async function classifyEmotion(text: string): Promise<ComposerEmotionResult> {
+  await ensureEmotionModel();
+
+  const output = await emotionClassifier(text, {
+    topk: null,
+  });
+  const rows = normalizeOutputRows(output);
+  const scores = createEmptyEmotionScores();
+
+  rows.forEach((row) => {
+    const label = typeof row?.label === 'string' ? row.label.toLowerCase() : '';
+    if (!EMOTION_LABELS.includes(label as ComposerEmotionLabel)) return;
+    scores[label as ComposerEmotionLabel] = Number(row.score ?? 0);
+  });
+
+  const emotions = EMOTION_LABELS
+    .map((label) => ({ label, score: scores[label] }))
+    .sort((left, right) => right.score - left.score);
+
+  return {
+    model: EMOTION_MODEL_NAME,
+    emotions,
+    scores,
+  };
+}
+
+async function classifyTargetedTone(
+  text: string,
+  target: string,
+): Promise<ComposerTargetedToneResult> {
+  await ensureTargetedToneModel();
+
+  const textInput = `${text.trim()} </s> ${target.trim()}`;
+  const output = await targetedToneClassifier(textInput, {
+    topk: null,
+  });
+  const rows = normalizeOutputRows(output);
+  const scores = createEmptyTargetedToneScores();
+
+  rows.forEach((row) => {
+    const label = typeof row?.label === 'string'
+      ? TARGETED_TONE_LABEL_ALIASES[row.label]
+      : undefined;
+    if (!label) return;
+    scores[label] = Number(row.score ?? 0);
+  });
+
+  const label = getStrongestTargetedToneLabel(scores);
+  return {
+    model: TARGETED_TONE_MODEL_NAME,
+    target,
+    label,
+    confidence: scores[label],
+    scores,
+  };
+}
+
+async function classifyQuality(text: string): Promise<ComposerQualityResult> {
+  await ensureQualityHead();
+  if (!qualityHead) {
+    throw new Error('Quality classifier head is unavailable');
+  }
+
+  const embedding = await generateEmbedding(text);
+  const logits = qualityHead.coefficients.map((coefficients, index) => (
+    dotProduct(coefficients, embedding) + Number(qualityHead?.intercepts[index] ?? 0)
+  ));
+  const probabilities = softmax(logits);
+  const scores = createEmptyQualityScores();
+
+  qualityHead.labels.forEach((label, index) => {
+    if (!QUALITY_LABELS.includes(label)) return;
+    scores[label] = Number(probabilities[index] ?? 0);
+  });
+
+  const label = getStrongestQualityLabel(scores);
+  return {
+    model: qualityHead.model,
+    provider: qualityHead.provider,
+    label,
+    confidence: scores[label],
+    scores,
+  };
+}
+
 self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
   const { id, type, payload } = event.data;
   const reply: WorkerReply = { id, type };
@@ -138,6 +743,18 @@ self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
         error: modelError,
         captionStatus,
         captionError,
+        toneStatus,
+        toneError,
+        abuseStatus,
+        abuseError,
+        sentimentStatus,
+        sentimentError,
+        emotionStatus,
+        emotionError,
+        targetedToneStatus,
+        targetedToneError,
+        qualityStatus,
+        qualityError,
       };
       self.postMessage(reply);
       return;
@@ -158,7 +775,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
     if (type === 'embed_batch') {
       const texts: string[] = payload?.texts ?? [];
       const embeddings = await Promise.all(
-        texts.map(t => t.trim() ? generateEmbedding(t) : Promise.resolve([]))
+        texts.map((text) => (text.trim() ? generateEmbedding(text) : Promise.resolve([]))),
       );
       reply.result = { embeddings };
       self.postMessage(reply);
@@ -172,6 +789,116 @@ self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
       } else {
         const caption = await generateCaption(imageUrl);
         reply.result = { caption };
+      }
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'classify_tone') {
+      const text: string = payload?.text ?? '';
+      if (!text.trim()) {
+        reply.result = {
+          tone: {
+            model: TONE_MODEL_NAME,
+            label: 'neutral',
+            scores: createEmptyToneScores(),
+          },
+        };
+      } else {
+        reply.result = { tone: await classifyTone(text) };
+      }
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'score_abuse') {
+      const text: string = payload?.text ?? '';
+      if (!text.trim()) {
+        reply.result = {
+          abuse: {
+            model: ABUSE_MODEL_NAME,
+            provider: ABUSE_MODEL_PROVIDER,
+            label: 'toxic',
+            score: 0,
+            scores: createEmptyAbuseScores(),
+          },
+        };
+      } else {
+        reply.result = { abuse: await scoreAbuse(text) };
+      }
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'classify_sentiment') {
+      const text: string = payload?.text ?? '';
+      if (!text.trim()) {
+        reply.result = {
+          sentiment: {
+            model: SENTIMENT_MODEL_NAME,
+            label: 'neutral',
+            confidence: 0,
+            scores: createEmptySentimentScores(),
+          },
+        };
+      } else {
+        reply.result = { sentiment: await classifySentiment(text) };
+      }
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'classify_emotion') {
+      const text: string = payload?.text ?? '';
+      if (!text.trim()) {
+        reply.result = {
+          emotion: {
+            model: EMOTION_MODEL_NAME,
+            emotions: [],
+            scores: createEmptyEmotionScores(),
+          },
+        };
+      } else {
+        reply.result = { emotion: await classifyEmotion(text) };
+      }
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'classify_targeted_tone') {
+      const text: string = payload?.text ?? '';
+      const target: string = payload?.target ?? '';
+      if (!text.trim() || !target.trim()) {
+        reply.result = {
+          targetedTone: {
+            model: TARGETED_TONE_MODEL_NAME,
+            target,
+            label: 'negative_or_neutral',
+            confidence: 0,
+            scores: createEmptyTargetedToneScores(),
+          },
+        };
+      } else {
+        reply.result = { targetedTone: await classifyTargetedTone(text, target) };
+      }
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'classify_quality') {
+      const text: string = payload?.text ?? '';
+      if (!text.trim()) {
+        reply.result = {
+          quality: {
+            model: QUALITY_MODEL_NAME,
+            provider: QUALITY_MODEL_PROVIDER,
+            label: 'clarifying',
+            confidence: 0,
+            scores: createEmptyQualityScores(),
+          },
+        };
+      } else {
+        reply.result = { quality: await classifyQuality(text) };
       }
       self.postMessage(reply);
       return;

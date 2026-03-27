@@ -24,6 +24,8 @@ out/
 .idea/
 *.swp
 *.swo
+.venv/
+.tmp/
 
 # OS
 .DS_Store
@@ -31,6 +33,7 @@ Thumbs.db
 
 # ML model weights (large binary files — download via scripts/download-translation-models.sh)
 server/models/
+public/models/
 
 # Local research/benchmark config variants
 vite.config.research*.ts

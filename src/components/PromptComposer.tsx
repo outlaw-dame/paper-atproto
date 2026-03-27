@@ -14,10 +14,14 @@
 //     PromptHeroCard stub (dark hero preview)
 //     Post / Back actions
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSessionStore } from '../store/sessionStore.js';
 import { atpMutate } from '../lib/atproto/client.js';
+import ComposerGuidanceBanner from './ComposerGuidanceBanner.js';
+import MentalHealthSupportBanner from './MentalHealthSupportBanner.js';
+import { buildHostedThreadComposerContext } from '../intelligence/composer/contextBuilder.js';
+import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
 import {
   promptHero as phTokens,
   discussion as disc,
@@ -174,7 +178,9 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
   const [audienceOpen, setAudienceOpen] = useState(false);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mentalHealthDismissedAt, setMentalHealthDismissedAt] = useState<number | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const mentalHealthGuidanceDraftRef = useRef<string | null>(null);
 
   const toggleTopic = (t: string) => {
     setTopics(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
@@ -190,6 +196,37 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
 
   const canPreview = prompt.trim().length >= 10;
   const canPost = canPreview && !posting;
+
+  const composerContext = useMemo(() => buildHostedThreadComposerContext({
+    prompt,
+    description,
+    source,
+    topics,
+    audience,
+  }), [audience, description, prompt, source, topics]);
+
+  const {
+    draftId: composerGuidanceDraftId,
+    guidance: composerGuidance,
+    dismissedAt: composerGuidanceDismissedAt,
+    dismissGuidance,
+  } = useComposerGuidance({
+    surfaceId: 'prompt-composer',
+    context: composerContext,
+    debounceMs: 450,
+  });
+
+  useEffect(() => {
+    if (!composerGuidance.heuristics.hasMentalHealthCrisis) {
+      mentalHealthGuidanceDraftRef.current = null;
+      return;
+    }
+
+    if (mentalHealthGuidanceDraftRef.current !== composerGuidanceDraftId) {
+      mentalHealthGuidanceDraftRef.current = composerGuidanceDraftId;
+      setMentalHealthDismissedAt(null);
+    }
+  }, [composerGuidance.heuristics.hasMentalHealthCrisis, composerGuidanceDraftId]);
 
   const handlePost = useCallback(async () => {
     if (!canPost || !session) return;
@@ -385,6 +422,24 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
                   }}
                 />
               </div>
+
+              <AnimatePresence>
+                {(composerGuidance.level !== 'ok' || composerGuidance.heuristics.parentSignals.length > 0) && composerGuidanceDismissedAt === null && (
+                  <ComposerGuidanceBanner
+                    guidance={composerGuidance}
+                    onDismiss={dismissGuidance}
+                  />
+                )}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {composerGuidance.heuristics.hasMentalHealthCrisis && mentalHealthDismissedAt === null && (
+                  <MentalHealthSupportBanner
+                    category={composerGuidance.heuristics.mentalHealthCategory}
+                    onDismiss={() => setMentalHealthDismissedAt(Date.now())}
+                  />
+                )}
+              </AnimatePresence>
 
               {/* Topic chips */}
               <div>

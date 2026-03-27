@@ -11,6 +11,10 @@ import type {
   ExploreSynopsisRequest,
   ExploreSynopsisResult,
 } from './llmContracts.js';
+import type {
+  ComposerGuidanceWriteRequest,
+  ComposerGuidanceWriteResult,
+} from './composer/llmWriterContracts.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────
 const BASE_URL = (import.meta as any).env?.VITE_GLYMPSE_LLM_BASE_URL
@@ -122,6 +126,21 @@ export async function callExploreWriter(
 ): Promise<ExploreSynopsisResult> {
   return fetchWithRetry<ExploreSynopsisResult>(
     '/api/llm/write/search-story',
+    input,
+    signal,
+  );
+}
+
+/**
+ * Calls the selective composer-guidance writer. This is advisory polish only;
+ * callers should always have local fallback copy ready.
+ */
+export async function callComposerGuidanceWriter(
+  input: ComposerGuidanceWriteRequest,
+  signal?: AbortSignal,
+): Promise<ComposerGuidanceWriteResult> {
+  return fetchWithRetry<ComposerGuidanceWriteResult>(
+    '/api/llm/write/composer-guidance',
     input,
     signal,
   );

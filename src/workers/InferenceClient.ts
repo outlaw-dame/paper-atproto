@@ -1,11 +1,14 @@
 // ─── Inference Client ─────────────────────────────────────────────────────
 // Manages the inference web worker and exposes a clean Promise-based API.
-// All callers use this instead of importing from search.ts or linking.ts.
-//
-// Usage:
-//   import { inferenceClient } from '../workers/InferenceClient.js';
-//   const embedding = await inferenceClient.embed('hello world');
-//   const batch     = await inferenceClient.embedBatch(['a', 'b', 'c']);
+
+import type { AbuseModelResult } from '../lib/abuseModel.js';
+import type {
+  ComposerEmotionResult,
+  ComposerQualityResult,
+  ComposerSentimentResult,
+  ComposerTargetedToneResult,
+} from '../lib/composerMl.js';
+import type { ToneModelResult } from '../lib/toneModel.js';
 
 type PendingRequest = {
   resolve: (value: any) => void;
@@ -24,20 +27,18 @@ class InferenceClient {
   private getWorker(): Worker {
     if (this.worker) return this.worker;
 
-    // Vite's ?worker suffix tells it to bundle this as a worker module
     this.worker = new Worker(
       new URL('./inference.worker.ts', import.meta.url),
-      { type: 'module' }
+      { type: 'module' },
     );
 
     this.worker.addEventListener('message', (event) => {
       const { id, type, result, error } = event.data;
 
-      // System messages from the worker
       if (id === '__system__') {
         if (type === 'ready') {
           this._status = 'ready';
-          this.readyCallbacks.forEach(cb => cb());
+          this.readyCallbacks.forEach((callback) => callback());
           this.readyCallbacks = [];
         } else if (type === 'error') {
           this._status = 'error';
@@ -58,9 +59,8 @@ class InferenceClient {
 
     this.worker.addEventListener('error', (err) => {
       this._status = 'error';
-      // Reject all pending requests
       for (const [, req] of this.pending) {
-        req.reject(new Error('Worker crashed: ' + err.message));
+        req.reject(new Error(`Worker crashed: ${err.message}`));
       }
       this.pending.clear();
       this.worker = null;
@@ -79,46 +79,88 @@ class InferenceClient {
     });
   }
 
-  /** Generate a single 384-d MiniLM embedding. Returns [] for empty text. */
   async embed(text: string): Promise<number[]> {
     const res = await this.send<{ embedding: number[] }>('embed', { text });
     return res.embedding;
   }
 
-  /** Generate embeddings for multiple texts in one worker round-trip. */
   async embedBatch(texts: string[]): Promise<number[][]> {
     if (!texts.length) return [];
     const res = await this.send<{ embeddings: number[][] }>('embed_batch', { texts });
     return res.embeddings;
   }
 
-  /** Returns the worker's current model status. */
-  async getStatus(): Promise<{ status: string; error: string | null; captionStatus?: string; captionError?: string | null }> {
+  async classifyTone(text: string): Promise<ToneModelResult> {
+    const res = await this.send<{ tone: ToneModelResult }>('classify_tone', { text });
+    return res.tone;
+  }
+
+  async scoreAbuse(text: string): Promise<AbuseModelResult> {
+    const res = await this.send<{ abuse: AbuseModelResult }>('score_abuse', { text });
+    return res.abuse;
+  }
+
+  async classifySentiment(text: string): Promise<ComposerSentimentResult> {
+    const res = await this.send<{ sentiment: ComposerSentimentResult }>('classify_sentiment', { text });
+    return res.sentiment;
+  }
+
+  async classifyEmotion(text: string): Promise<ComposerEmotionResult> {
+    const res = await this.send<{ emotion: ComposerEmotionResult }>('classify_emotion', { text });
+    return res.emotion;
+  }
+
+  async classifyTargetedTone(text: string, target: string): Promise<ComposerTargetedToneResult> {
+    const res = await this.send<{ targetedTone: ComposerTargetedToneResult }>('classify_targeted_tone', {
+      text,
+      target,
+    });
+    return res.targetedTone;
+  }
+
+  async classifyComposerQuality(text: string): Promise<ComposerQualityResult> {
+    const res = await this.send<{ quality: ComposerQualityResult }>('classify_quality', { text });
+    return res.quality;
+  }
+
+  async getStatus(): Promise<{
+    status: string;
+    error: string | null;
+    captionStatus?: string;
+    captionError?: string | null;
+    toneStatus?: string;
+    toneError?: string | null;
+    abuseStatus?: string;
+    abuseError?: string | null;
+    sentimentStatus?: string;
+    sentimentError?: string | null;
+    emotionStatus?: string;
+    emotionError?: string | null;
+    targetedToneStatus?: string;
+    targetedToneError?: string | null;
+    qualityStatus?: string;
+    qualityError?: string | null;
+  }> {
     return this.send('status');
   }
 
-  /** Generate an ALT-style caption for an image URL using an open-source model in the worker. */
   async captionImage(imageUrl: string): Promise<string> {
     const res = await this.send<{ caption: string }>('caption_image', { imageUrl });
     return res.caption;
   }
 
-  /** Warm up the worker (pre-loads the model). Call once at app start. */
   warmup(): void {
     if (this._status !== 'idle') return;
     this._status = 'loading';
-    this.getWorker(); // triggers worker construction and model load
-    // Fire a dummy embed to trigger model download
+    this.getWorker();
     this.embed('warmup').catch(() => {});
   }
 
-  /** Returns a promise that resolves when the model is ready. */
   onReady(): Promise<void> {
     if (this._status === 'ready') return Promise.resolve();
-    return new Promise(resolve => this.readyCallbacks.push(resolve));
+    return new Promise((resolve) => this.readyCallbacks.push(resolve));
   }
 
-  /** Terminate the worker (e.g. on app unmount). */
   terminate(): void {
     this.worker?.terminate();
     this.worker = null;
@@ -127,5 +169,4 @@ class InferenceClient {
   }
 }
 
-// Singleton — one worker for the whole app
 export const inferenceClient = new InferenceClient();

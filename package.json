@@ -12,6 +12,9 @@
     "start": "PORT=${PORT:-3011} npm --prefix ./server run start",
     "server:start": "npm --prefix ./server run start",
     "translation:download-models": "npm --prefix ./server run translation:download-models",
+    "models:download-browser": "node scripts/download_browser_models.mjs",
+    "models:export-cardiff-composer": "./.venv/bin/python scripts/export_cardiff_composer_models.py",
+    "models:train-setfit-quality": "./.venv/bin/python scripts/train_export_setfit_quality.py",
     "preview": "vite preview",
     "test": "echo \"Error: no test specified\" && exit 1",
     "deploy": "gh-pages -d dist"

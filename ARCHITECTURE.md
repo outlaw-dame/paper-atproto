@@ -207,11 +207,27 @@ src/
     └── LibraryTab.tsx      — liked posts + my feeds + my packs
 ```
 
-### Composer Tone Analysis Architecture
+### Composer Guidance Layer
 
-- Analyzer module: `src/lib/sentiment.ts`
-- UI surface: `src/components/ComposeSheet.tsx`
-- Levels: `alert`, `warn`, `positive`, `ok`
+- Legacy tone pipeline core: `src/intelligence/composeTonePipeline.ts`
+- Shared composer orchestration: `src/intelligence/composer/guidancePipeline.ts`
+- Context shaping: `src/intelligence/composer/contextBuilder.ts`
+- Policy routing + staged execution: `src/intelligence/composer/routing.ts`, `src/hooks/useComposerGuidance.ts`
+- Selective writer-copy pass: `src/intelligence/composer/guidanceWriter.ts`, `server/src/services/qwenComposerGuidanceWriter.ts`
+- Shared hook + store: `src/hooks/useComposerGuidance.ts`, `src/store/composerGuidanceStore.ts`
+- Shared banner UI: `src/components/ComposerGuidanceBanner.tsx`
+- Deterministic substrate: `src/lib/sentiment.ts`
+- Current authoring surfaces: `src/components/ComposeSheet.tsx`, `src/components/PromptComposer.tsx`
+- Levels: `alert`, `warning`, `caution`, `positive`, `ok`
+- Current pipeline stages:
+       - `heuristic` (deterministic safety/context + supportive/constructive rules)
+       - `zero-shot-tone` (worker-hosted model-backed tone classification)
+       - `abuse-score` (worker-hosted `Xenova/toxic-bert` abuse scoring)
+       - `sentiment-polarity` (local Twitter-RoBERTa sentiment classifier)
+       - `emotion` (local Cardiff emotion classifier)
+       - `targeted-sentiment` (local Cardiff reply-targeted classifier)
+       - `quality-score` (local SetFit-compatible linear head over MiniLM embeddings)
+       - `guidance-writer` (optional Qwen advisory copy pass after local scoring settles)
 - Positive architecture contains both:
        - `supportiveReplySignals[]` (empathy/validation/support language)
        - `constructiveSignals[]` (practical help/context-building language)
@@ -242,7 +258,7 @@ src/
 
 ### Phase 2 (planned)
 - SetFit few-shot classifier in inference worker (replaces heuristic scorer)
-- Detoxify abuse scoring in inference worker
+- Optional Detoxify/server moderation provider as an alternate `abuse-score` backend
 - Pipeline A Tier 3: clustering by shared signals + cosine similarity
 - EntitySheet wired to live ATProto actor/feed/hashtag data
 - OAuth + PKCE login flow (app-password as fallback)
