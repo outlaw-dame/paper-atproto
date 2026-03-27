@@ -334,8 +334,8 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         borderRadius: 16,
         padding: '14px 16px 12px',
         marginBottom: 10,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-        border: '1px solid var(--stroke-dim)',
+        boxShadow: 'none',
+        border: '0.5px solid var(--stroke-dim)',
         cursor: 'pointer',
         position: 'relative',
         overflow: 'hidden',
@@ -1053,16 +1053,56 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           border: '1px solid var(--stroke-dim)', borderRadius: 12,
           padding: '10px 12px', marginTop: 8, background: 'var(--fill-1)'
         }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 'var(--type-meta-sm-size)',
+              lineHeight: 'var(--type-meta-sm-line)',
+              fontWeight: 800,
+              color: 'var(--label-3)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7h10a4 4 0 010 8H9"/>
+                <path d="M13 7l-4 4 4 4"/>
+              </svg>
+              Quote post
+            </span>
+            <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', fontWeight: 600 }}>
+              {formatTime(quotedPost.createdAt)}
+            </span>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
             <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
-              {quotedPost.author.avatar && <img src={quotedPost.author.avatar} style={{ width: '100%', height: '100%' }} />}
+              {quotedPost.author.avatar
+                ? <img src={quotedPost.author.avatar} alt={quotedPost.author.handle} style={{ width: '100%', height: '100%' }} />
+                : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontSize: 10, fontWeight: 700 }}>{((quotedPost.author.displayName || quotedPost.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
             </div>
-            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName}</button>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
             <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
           </div>
           <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
             <TwemojiText text={quotedPost.content} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
           </p>
+          {post.embed.externalLink && (
+            <div style={{
+              marginTop: 8,
+              paddingTop: 8,
+              borderTop: '0.5px solid var(--stroke-dim)',
+            }}>
+              <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
+                {post.embed.externalLink.domain}
+              </div>
+              {post.embed.externalLink.title && (
+                <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
+                  {post.embed.externalLink.title}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         );
       })()}

@@ -391,7 +391,6 @@ export default function HomeTab({ onOpenStory }: Props) {
         background: 'var(--chrome-bg)',
         backdropFilter: 'blur(20px) saturate(180%)',
         WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        borderBottom: '0.5px solid color-mix(in srgb, var(--sep) 35%, transparent)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
           <div style={{

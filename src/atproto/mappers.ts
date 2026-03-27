@@ -76,6 +76,103 @@ function summarizeText(text: string, maxChars = 320): string {
   return `${clean.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
+function mapImageViewToMedia(embed: AppBskyEmbedImages.View): NonNullable<MockPost['media']> {
+  return embed.images.map((img: any) => ({
+    type: 'image' as const,
+    url: img.fullsize,
+    alt: img.alt,
+    aspectRatio: img.aspectRatio ? img.aspectRatio.width / img.aspectRatio.height : undefined,
+  }));
+}
+
+function buildExternalEmbedData(embed: AppBskyEmbedExternal.View): Extract<NonNullable<MockPost['embed']>, { type: 'external' }> {
+  return {
+    type: 'external',
+    url: embed.external.uri,
+    title: embed.external.title,
+    description: embed.external.description,
+    thumb: embed.external.thumb,
+    domain: extractDomain(embed.external.uri),
+    authorName: (embed.external as any).author || (embed.external as any).authorName,
+    authorUrl: (embed.external as any).authorUrl,
+    publisher: (embed.external as any).siteName || (embed.external as any).publisher,
+  };
+}
+
+function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<MockPost, 'replyTo' | 'threadRoot'> {
+  let media: MockPost['media'];
+  let embed: MockPost['embed'];
+
+  for (const quotedEmbed of record.embeds ?? []) {
+    if (!media && AppBskyEmbedImages.isView(quotedEmbed)) {
+      media = mapImageViewToMedia(quotedEmbed);
+      continue;
+    }
+
+    if (!media && AppBskyEmbedRecordWithMedia.isView(quotedEmbed) && AppBskyEmbedImages.isView((quotedEmbed as any).media)) {
+      media = mapImageViewToMedia((quotedEmbed as any).media);
+    }
+
+    if (!embed && AppBskyEmbedExternal.isView(quotedEmbed)) {
+      embed = buildExternalEmbedData(quotedEmbed);
+      continue;
+    }
+
+    if (!embed && AppBskyEmbedRecord.isView(quotedEmbed) && AppBskyEmbedRecord.isViewRecord((quotedEmbed as any).record)) {
+      embed = {
+        type: 'quote',
+        post: mapQuotedRecordToMockPost((quotedEmbed as any).record as AppBskyEmbedRecord.ViewRecord),
+      };
+      continue;
+    }
+
+    if (
+      !embed &&
+      AppBskyEmbedRecordWithMedia.isView(quotedEmbed) &&
+      AppBskyEmbedRecord.isViewRecord((quotedEmbed as any).record.record)
+    ) {
+      const quotedPost = mapQuotedRecordToMockPost((quotedEmbed as any).record.record as AppBskyEmbedRecord.ViewRecord);
+      let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+      if (AppBskyEmbedExternal.isView((quotedEmbed as any).media)) {
+        const ext = (quotedEmbed as any).media.external;
+        externalLink = {
+          url: ext.uri,
+          title: ext.title,
+          description: ext.description,
+          thumb: ext.thumb,
+          domain: extractDomain(ext.uri),
+        };
+      }
+      embed = {
+        type: 'quote',
+        post: quotedPost,
+        ...(externalLink ? { externalLink } : {}),
+      };
+    }
+  }
+
+  return {
+    id: record.uri,
+    cid: record.cid,
+    author: {
+      did: record.author.did,
+      handle: record.author.handle,
+      displayName: record.author.displayName || record.author.handle,
+      ...(record.author.avatar ? { avatar: record.author.avatar } : {}),
+      verified: !!(record.author as any).viewer?.followedBy,
+    },
+    content: extractRecordDisplayText(record.value),
+    createdAt: record.indexedAt,
+    likeCount: record.likeCount || 0,
+    replyCount: record.replyCount || 0,
+    repostCount: record.repostCount || 0,
+    bookmarkCount: 0,
+    chips: [],
+    ...(media ? { media } : {}),
+    ...(embed ? { embed } : {}),
+  };
+}
+
 // ─── Post View Mapper ──────────────────────────────────────────────────────
 
 export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
@@ -138,19 +235,9 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
 
   let media: MockPost['media'];
   if (AppBskyEmbedImages.isView(embed)) {
-    media = embed.images.map((img: any) => ({
-      type: 'image' as const,
-      url: img.fullsize,
-      alt: img.alt,
-      aspectRatio: img.aspectRatio ? img.aspectRatio.width / img.aspectRatio.height : undefined,
-    }));
+    media = mapImageViewToMedia(embed);
   } else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedImages.isView((embed as any).media)) {
-    media = (embed as any).media.images.map((img: any) => ({
-      type: 'image' as const,
-      url: img.fullsize,
-      alt: img.alt,
-      aspectRatio: img.aspectRatio ? img.aspectRatio.width / img.aspectRatio.height : undefined,
-    }));
+    media = mapImageViewToMedia((embed as any).media);
   }
 
   let embedData: MockPost['embed'];
@@ -165,23 +252,18 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
         domain: extractDomain(embed.external.uri),
       };
     } else {
-      embedData = {
-        type: 'external',
-        url: embed.external.uri,
-        title: embed.external.title,
-        description: embed.external.description,
-        thumb: embed.external.thumb,
-        domain: extractDomain(embed.external.uri),
-        authorName: (embed.external as any).author || (embed.external as any).authorName,
-        authorUrl: (embed.external as any).authorUrl,
-        publisher: (embed.external as any).siteName || (embed.external as any).publisher,
-      };
+      embedData = buildExternalEmbedData(embed);
     }
 
   } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView((embed as any).record)) {
     embedData = {
       type: 'quote' as const,
       post: mapPostViewToMockPost((embed as any).record as AppBskyFeedDefs.PostView),
+    };
+  } else if (AppBskyEmbedRecord.isView(embed) && AppBskyEmbedRecord.isViewRecord((embed as any).record)) {
+    embedData = {
+      type: 'quote' as const,
+      post: mapQuotedRecordToMockPost((embed as any).record as AppBskyEmbedRecord.ViewRecord),
     };
   } else if (
     AppBskyEmbedRecordWithMedia.isView(embed) &&
@@ -193,6 +275,24 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     if (AppBskyEmbedExternal.isView((embed as any).media)) {
       const ext = (embed as any).media.external;
       externalLink = { url: ext.uri, title: ext.title, description: ext.description, thumb: ext.thumb, domain: extractDomain(ext.uri) };
+    }
+    embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
+  } else if (
+    AppBskyEmbedRecordWithMedia.isView(embed) &&
+    AppBskyEmbedRecord.isView((embed as any).record) &&
+    AppBskyEmbedRecord.isViewRecord((embed as any).record.record)
+  ) {
+    const quotedPost = mapQuotedRecordToMockPost((embed as any).record.record as AppBskyEmbedRecord.ViewRecord);
+    let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+    if (AppBskyEmbedExternal.isView((embed as any).media)) {
+      const ext = (embed as any).media.external;
+      externalLink = {
+        url: ext.uri,
+        title: ext.title,
+        description: ext.description,
+        thumb: ext.thumb,
+        domain: extractDomain(ext.uri),
+      };
     }
     embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
   }

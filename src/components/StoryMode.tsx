@@ -376,7 +376,33 @@ function PromptHeroCard({
             border: `0.5px solid ${phTokens.line}`,
             marginBottom: 16,
           }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: typeScale.metaSm[0],
+                color: phTokens.meta,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+              }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 7h10a4 4 0 010 8H9"/>
+                  <path d="M13 7l-4 4 4 4"/>
+                </svg>
+                Quoted post
+              </span>
+              <span style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.7 }}>
+                {formatTime(quoteEmbed.post.createdAt)}
+              </span>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <div style={{ width: 22, height: 22, borderRadius: '50%', overflow: 'hidden', background: 'rgba(255,255,255,0.08)', flexShrink: 0 }}>
+                {quoteEmbed.post.author.avatar
+                  ? <img src={quoteEmbed.post.author.avatar} alt={quoteEmbed.post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: phTokens.text, fontSize: 10, fontWeight: 700 }}>{((quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
+              </div>
               <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
                 {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
               </button>
@@ -1362,7 +1388,7 @@ function ContributionCard({
           ? node.embed
           : null;
         if (!quoteEmbed?.quotedText) return null;
-        const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDisplayName;
+        const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDid;
         return (
           <div style={{
             marginBottom: contTokens.gap,
@@ -1371,6 +1397,24 @@ function ContributionCard({
             padding: `${space[6]}px ${space[8]}px`,
             border: `0.5px solid ${disc.lineSubtle}`,
           }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: typeScale.metaSm[0],
+                color: disc.textTertiary,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+              }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 7h10a4 4 0 010 8H9"/>
+                  <path d="M13 7l-4 4 4 4"/>
+                </svg>
+                Quoted post
+              </span>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
               <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (profileTarget) void navigateToProfile(profileTarget); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: profileTarget ? 'pointer' : 'default' }}>
                 {quoteEmbed.quotedAuthorDisplayName || quoteEmbed.quotedAuthorHandle || 'Unknown'}

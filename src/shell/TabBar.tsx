@@ -52,7 +52,6 @@ const tabBarStyle: React.CSSProperties = {
   background: 'var(--chrome-bg)',
   backdropFilter: 'blur(20px) saturate(180%)',
   WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-  borderTop: '0.5px solid color-mix(in srgb, var(--sep) 35%, transparent)',
   paddingBottom: 'var(--safe-bottom)',
 };
 
