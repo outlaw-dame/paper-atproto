@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo } from 'react';
 import twemoji from 'twemoji';
 import LinkPreviewTooltip from './LinkPreviewTooltip.js';
+import type { ResolvedFacet } from '../lib/resolver/atproto.js';
 
 // Using the jdecked fork via jsdelivr to get the latest Unicode 15+ assets.
 const TWEMOJI_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/';
@@ -16,6 +17,8 @@ type OnCashtag = (cashtag: string) => void;
 type Token = {
   type: 'text' | 'mention' | 'hashtag' | 'cashtag' | 'link';
   text: string;
+  /** Full URI for link tokens (from facets — may differ from display text). */
+  uri?: string;
 };
 
 function tokenizeRichText(text: string): Token[] {
@@ -33,12 +36,11 @@ function tokenizeRichText(text: string): Token[] {
     if (tokenText.startsWith('@')) {
       tokens.push({ type: 'mention', text: tokenText });
     } else if (tokenText.startsWith('$')) {
-      // Normalize cashtag to uppercase for consistency with AT Protocol
       tokens.push({ type: 'cashtag', text: tokenText.toUpperCase() });
     } else if (tokenText.startsWith('#')) {
       tokens.push({ type: 'hashtag', text: tokenText });
     } else {
-      tokens.push({ type: 'link', text: tokenText });
+      tokens.push({ type: 'link', text: tokenText, uri: tokenText });
     }
     lastIndex = match.index + tokenText.length;
   }
@@ -49,8 +51,50 @@ function tokenizeRichText(text: string): Token[] {
   return tokens;
 }
 
+// Converts ATProto facets (byte-range annotations) to the same Token list shape.
+// This is byte-accurate — ATProto uses UTF-8 byte offsets, not character offsets.
+function tokenizeWithFacets(text: string, facets: ResolvedFacet[]): Token[] {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const bytes = enc.encode(text);
+  const sorted = [...facets].sort((a, b) => a.byteStart - b.byteStart);
+  const tokens: Token[] = [];
+  let cursor = 0;
+
+  for (const facet of sorted) {
+    const start = Math.max(facet.byteStart, cursor);
+    const end = Math.min(facet.byteEnd, bytes.length);
+    if (start >= end) continue;
+
+    if (start > cursor) {
+      tokens.push({ type: 'text', text: dec.decode(bytes.slice(cursor, start)) });
+    }
+
+    const seg = dec.decode(bytes.slice(start, end));
+    if (facet.kind === 'link') {
+      tokens.push({ type: 'link', text: seg, uri: facet.uri ?? seg });
+    } else if (facet.kind === 'mention') {
+      tokens.push({ type: 'mention', text: seg });
+    } else if (facet.kind === 'hashtag') {
+      tokens.push({ type: 'hashtag', text: seg });
+    } else if (facet.kind === 'cashtag') {
+      tokens.push({ type: 'cashtag', text: seg });
+    } else {
+      tokens.push({ type: 'text', text: seg });
+    }
+    cursor = end;
+  }
+
+  if (cursor < bytes.length) {
+    tokens.push({ type: 'text', text: dec.decode(bytes.slice(cursor)) });
+  }
+  return tokens;
+}
+
 interface Props {
   text: string;
+  /** ATProto resolved facets. When provided, used instead of regex for byte-accurate rendering. */
+  facets?: ResolvedFacet[];
   className?: string;
   style?: React.CSSProperties;
   onMention?: OnMention;
@@ -58,7 +102,7 @@ interface Props {
   onCashtag?: OnCashtag;
 }
 
-export default function TwemojiText({ text, className, style, onMention, onHashtag, onCashtag }: Props) {
+export default function TwemojiText({ text, facets, className, style, onMention, onHashtag, onCashtag }: Props) {
   const renderText = useCallback((raw: string) => {
     const encoded = escapeHtml(raw);
     const parsed = twemoji.parse(encoded, {
@@ -73,7 +117,10 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
     return <span dangerouslySetInnerHTML={{ __html: parsed }} />;
   }, []);
 
-  const tokens = useMemo(() => tokenizeRichText(text), [text]);
+  const tokens = useMemo(
+    () => facets?.length ? tokenizeWithFacets(text, facets) : tokenizeRichText(text),
+    [text, facets],
+  );
 
   return (
     <span className={className} style={style}>
@@ -81,10 +128,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
         if (token.type === 'mention') {
           if (!onMention) {
             return (
-              <span
-                key={index}
-                style={{ color: 'var(--blue)', fontWeight: 600 }}
-              >
+              <span key={index} style={{ color: 'var(--blue)', fontWeight: 600 }}>
                 {renderText(token.text)}
               </span>
             );
@@ -93,7 +137,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
             <button
               key={index}
               className="interactive-link-button"
-              onClick={(e) => { e.stopPropagation(); onMention?.(token.text.slice(1)); }}
+              onClick={(e) => { e.stopPropagation(); onMention?.(token.text.replace(/^@/, '')); }}
               style={{ color: 'var(--blue)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               {renderText(token.text)}
@@ -104,10 +148,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
         if (token.type === 'hashtag') {
           if (!onHashtag) {
             return (
-              <span
-                key={index}
-                style={{ color: 'var(--blue)', fontWeight: 600 }}
-              >
+              <span key={index} style={{ color: 'var(--blue)', fontWeight: 600 }}>
                 {renderText(token.text)}
               </span>
             );
@@ -116,7 +157,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
             <button
               key={index}
               className="interactive-link-button"
-              onClick={(e) => { e.stopPropagation(); onHashtag?.(token.text.slice(1)); }}
+              onClick={(e) => { e.stopPropagation(); onHashtag?.(token.text.replace(/^#/, '')); }}
               style={{ color: 'var(--blue)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               {renderText(token.text)}
@@ -127,10 +168,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
         if (token.type === 'cashtag') {
           if (!onCashtag) {
             return (
-              <span
-                key={index}
-                style={{ color: 'var(--teal)', fontWeight: 600 }}
-              >
+              <span key={index} style={{ color: 'var(--teal)', fontWeight: 600 }}>
                 {renderText(token.text)}
               </span>
             );
@@ -139,7 +177,7 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
             <button
               key={index}
               className="interactive-link-button"
-              onClick={(e) => { e.stopPropagation(); onCashtag?.(token.text.slice(1)); }}
+              onClick={(e) => { e.stopPropagation(); onCashtag?.(token.text.replace(/^\$/, '')); }}
               style={{ color: 'var(--teal)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               {renderText(token.text)}
@@ -148,10 +186,11 @@ export default function TwemojiText({ text, className, style, onMention, onHasht
         }
 
         if (token.type === 'link') {
+          const href = token.uri ?? token.text;
           return (
             <LinkPreviewTooltip
               key={index}
-              url={token.text}
+              url={href}
               linkStyle={{ color: 'var(--blue)', textDecoration: 'underline' }}
             >
               {renderText(token.text)}

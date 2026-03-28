@@ -1,3 +1,5 @@
+import type { ResolvedFacet } from '../lib/resolver/atproto.js';
+
 export interface MockPost {
   id: string;
   cid?: string;
@@ -9,6 +11,8 @@ export interface MockPost {
     verified?: boolean;
   };
   content: string;
+  /** ATProto facets resolved from the post record — drives byte-accurate link/mention/hashtag rendering. */
+  facets?: ResolvedFacet[];
   createdAt: string;
   timestamp?: string;
   likeCount: number;

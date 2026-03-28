@@ -320,7 +320,7 @@ function PromptHeroCard({
             fontWeight: 500, letterSpacing: '-0.005em',
             color: phTokens.text, marginBottom: 12,
           }}>
-            <RichText text={rootText} facets={[]} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
+            <RichText text={rootText} facets={rootText === post.content ? post.facets : []} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
           </p>
         )}
 
@@ -382,8 +382,46 @@ function PromptHeroCard({
           </div>
         )}
 
-        {/* Embed source */}
-        {post.embed && (post.embed.type === 'external' || post.embed.type === 'video') && (
+        {/* External link card */}
+        {post.embed?.type === 'external' && (() => {
+          const ext = post.embed;
+          return (
+            <div
+              role="link"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); window.open(ext.url, '_blank', 'noopener,noreferrer'); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.open(ext.url, '_blank', 'noopener,noreferrer'); } }}
+              style={{
+                borderRadius: radius[12],
+                border: `0.5px solid ${phTokens.line}`,
+                overflow: 'hidden',
+                marginBottom: 16,
+                cursor: 'pointer',
+              }}
+            >
+              {ext.thumb && (
+                <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                  <img src={ext.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }} />
+                </div>
+              )}
+              <div style={{ padding: `${space[4]}px ${space[6]}px`, background: 'rgba(255,255,255,0.06)' }}>
+                <div style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, marginBottom: 2 }}>{ext.domain}</div>
+                {ext.title && (
+                  <div style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text, marginBottom: ext.description ? 3 : 0 }}>{ext.title}</div>
+                )}
+                {ext.description && (
+                  <div style={{ fontSize: typeScale.bodySm[0], color: phTokens.meta, lineHeight: 1.4,
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {ext.description}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Video embed source pill (non-external) */}
+        {post.embed?.type === 'video' && (
           <div style={{
             padding: `${space[4]}px ${space[6]}px`,
             background: 'rgba(255,255,255,0.06)',

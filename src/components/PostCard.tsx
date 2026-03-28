@@ -447,7 +447,12 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               marginBottom: post.embed || post.media ? 12 : 6,
               whiteSpace: 'pre-wrap', wordBreak: 'break-word'
             }}>
-              <TwemojiText text={displayText} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
+              <TwemojiText
+                text={displayText}
+                facets={displayText === post.content ? post.facets : undefined}
+                onMention={handleMentionClick}
+                onHashtag={handleHashtagClick}
+              />
             </p>
           )}
         />

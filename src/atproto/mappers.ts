@@ -10,6 +10,7 @@ import {
   AppBskyNotificationListNotifications,
 } from '@atproto/api';
 import type { MockPost, ChipType } from '../data/mockData.js';
+import { resolveFacets } from '../lib/resolver/atproto.js';
 import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia.js';
 import {
   asTrimmedString,
@@ -345,6 +346,8 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     ...(post.viewer?.repost ? { repost: post.viewer.repost } : {}),
   };
 
+  const facets = resolveFacets(record.facets);
+
   const mapped: MockPost = {
     id: post.uri,
     cid: post.cid,
@@ -355,7 +358,8 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     replyCount: post.replyCount || 0,
     repostCount: post.repostCount || 0,
     bookmarkCount: 0,
-    chips: [] as ChipType[], // Chips are determined by higher-level logic
+    chips: [] as ChipType[],
+    ...(facets.length > 0 ? { facets } : {}), // Chips are determined by higher-level logic
     ...(media ? { media } : {}),
     ...(article ? { article } : {}),
     viewer,
