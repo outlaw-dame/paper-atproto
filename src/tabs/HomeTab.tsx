@@ -527,6 +527,12 @@ export default function HomeTab({ onOpenStory }: Props) {
                       marginBottom: 10,
                       background: 'color-mix(in srgb, var(--surface-card) 90%, var(--orange) 10%)',
                     }}>
+                      <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }}>
+                        Content warning
+                      </div>
+                      <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)', marginBottom: 10 }}>
+                        This post may include words or topics you asked to warn about.
+                      </div>
                       <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', fontWeight: 700, color: 'var(--label-2)', marginBottom: 8 }}>
                         Matches filter:
                       </div>

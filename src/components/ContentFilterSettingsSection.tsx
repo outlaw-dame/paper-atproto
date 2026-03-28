@@ -1,14 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { useContentFilterStore } from '../store/contentFilterStore.js';
+import { useContentFilterMetricsStore } from '../store/contentFilterMetricsStore.js';
 import type { FilterContext, FilterAction } from '../lib/contentFilters/types.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { useSyncMutedWords, useImportMutedWords } from '../lib/atproto/queries.js';
 
 const CONTEXT_OPTIONS: Array<{ value: FilterContext; label: string }> = [
   { value: 'home', label: 'Home feed' },
-  { value: 'explore', label: 'Explore' },
+  { value: 'explore', label: 'Explore + Search' },
   { value: 'profile', label: 'Profiles' },
-  { value: 'thread', label: 'Threads' },
+  { value: 'thread', label: 'Conversations' },
 ];
 
 const EXPIRY_OPTIONS = [
@@ -78,6 +79,8 @@ function sortableCreatedAt(value: string | undefined): number {
 
 export default function ContentFilterSettingsSection() {
   const { rules, addRule, removeRule, toggleRule, updateRule } = useContentFilterStore();
+  const filteredCountByRuleId = useContentFilterMetricsStore((state) => state.filteredCountByRuleId);
+  const resetFilterCounts = useContentFilterMetricsStore((state) => state.resetCounts);
   const { session } = useSessionStore();
   const syncMutation = useSyncMutedWords();
   const importMutation = useImportMutedWords();
@@ -262,15 +265,15 @@ export default function ContentFilterSettingsSection() {
     });
   };
 
-  const handleSyncToBsky = () => {
+  const handleSyncToAccount = () => {
     setSyncStatus(null);
     syncMutation.mutate(rules, {
-      onSuccess: (count) => setSyncStatus(count === 0 ? 'Already up to date.' : `Synced ${count} word${count !== 1 ? 's' : ''} to Bluesky.`),
+      onSuccess: (count) => setSyncStatus(count === 0 ? 'Already up to date.' : `Synced ${count} word${count !== 1 ? 's' : ''} to your account.`),
       onError: () => setSyncStatus('Sync failed — check connection.'),
     });
   };
 
-  const handleImportFromBsky = () => {
+  const handleImportFromAccount = () => {
     setSyncStatus(null);
     const existing = new Set(rules.map((r) => r.phrase.toLowerCase()));
     importMutation.mutate(existing, {
@@ -286,15 +289,15 @@ export default function ContentFilterSettingsSection() {
     <div style={{ marginTop: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
         <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>
-          Keyword filters
+          Muted words and semantic filters
         </h4>
         {session && (
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
-              onClick={handleSyncToBsky}
+              onClick={handleSyncToAccount}
               disabled={syncMutation.isPending || importMutation.isPending}
-              title="Push your local filter rules to Bluesky's muted words (cross-client sync)"
+              title="Push local filter rules to account muted words (cross-device sync)"
               style={{
                 height: 26, padding: '0 9px', borderRadius: 7,
                 border: '1px solid var(--sep)', background: 'var(--fill-1)',
@@ -302,13 +305,13 @@ export default function ContentFilterSettingsSection() {
                 opacity: (syncMutation.isPending || importMutation.isPending) ? 0.5 : 1,
               }}
             >
-              {syncMutation.isPending ? '…' : '↑ Bsky'}
+              {syncMutation.isPending ? '…' : '↑ Sync'}
             </button>
             <button
               type="button"
-              onClick={handleImportFromBsky}
+              onClick={handleImportFromAccount}
               disabled={syncMutation.isPending || importMutation.isPending}
-              title="Import your Bluesky muted words into local filter rules"
+              title="Import account muted words into local filter rules"
               style={{
                 height: 26, padding: '0 9px', borderRadius: 7,
                 border: '1px solid var(--sep)', background: 'var(--fill-1)',
@@ -322,7 +325,10 @@ export default function ContentFilterSettingsSection() {
         )}
       </div>
       <p style={{ fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35, marginBottom: syncStatus ? 4 : 10 }}>
-        Mastodon-style filters with semantic matching. Warn shows a banner; hide removes matching posts.
+        Keyword muted-word filters with optional semantic matching. Warn shows a banner; hide removes matching posts.
+      </p>
+      <p style={{ fontSize: 11, color: 'var(--label-4)', lineHeight: 1.35, marginBottom: 10 }}>
+        Explore + Search context includes Discovery and Search Story surfaces.
       </p>
       {syncStatus && (
         <p style={{ fontSize: 11, color: 'var(--green)', fontWeight: 600, marginBottom: 8 }}>{syncStatus}</p>
@@ -458,22 +464,42 @@ export default function ContentFilterSettingsSection() {
       </div>
 
       {sortedRules.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          <button
-            type="button"
-            onClick={confirmDisableAllRules}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              color: 'var(--label-3)',
-              fontSize: 11,
-              fontWeight: 700,
-              cursor: 'pointer',
-              padding: 0,
-            }}
-          >
-            Disable all
-          </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--label-4)' }}>
+            Counters are session-based and show unique posts matched by each rule.
+          </p>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={resetFilterCounts}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--label-3)',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              Reset counters
+            </button>
+            <button
+              type="button"
+              onClick={confirmDisableAllRules}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--label-3)',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              Disable all
+            </button>
+          </div>
         </div>
       )}
 
@@ -598,6 +624,15 @@ export default function ContentFilterSettingsSection() {
               </>
             ) : (
               <>
+                {(() => {
+                  const filteredCount = filteredCountByRuleId[rule.id] ?? 0;
+                  if (filteredCount === 0) return null;
+                  return (
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>
+                      {filteredCount} content{filteredCount === 1 ? '' : 's'} filtered
+                    </div>
+                  );
+                })()}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <ActionChip action={rule.action} />
                   <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--label-1)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MockPost } from '../../data/mockData.js';
 import { useContentFilterStore } from '../../store/contentFilterStore.js';
+import { useContentFilterMetricsStore } from '../../store/contentFilterMetricsStore.js';
 import type { FilterContext, PostFilterMatch } from './types.js';
 import { activeRulesForContext, getKeywordMatches, getSemanticMatches, searchableTextForPost } from './match.js';
 
@@ -63,6 +64,7 @@ export function usePostFilterResults(posts: MockPost[], context: FilterContext) 
       }
 
       if (!isCancelled && token === evalTokenRef.current) {
+        useContentFilterMetricsStore.getState().recordMatches(context, next);
         setResultByPostId((prev) => (resultMapEquals(prev, next) ? prev : next));
       }
     };

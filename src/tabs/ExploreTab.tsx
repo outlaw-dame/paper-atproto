@@ -122,7 +122,7 @@ function scorePostEngagement(post: MockPost): number {
   return post.likeCount + post.repostCount * 2 + post.replyCount * 1.5 + quoteCount * 1.5;
 }
 
-const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Sources'] as const;
+const QUICK_FILTERS = ['Live', 'Topics', 'Conversations', 'Feeds', 'Sources'] as const;
 type QuickFilter = typeof QUICK_FILTERS[number];
 type DiscoverSectionKey =
   | 'live-sports'
@@ -137,7 +137,7 @@ type DiscoverSectionKey =
 const QUICK_FILTER_SECTION_MAP: Record<QuickFilter, readonly DiscoverSectionKey[]> = {
   Live: ['live-sports', 'sports-pulse', 'live-clusters'],
   Topics: ['top-stories', 'trending-topics'],
-  Threads: ['top-stories', 'live-clusters'],
+  Conversations: ['top-stories', 'live-clusters'],
   Feeds: ['feed-items', 'feeds-to-follow'],
   Sources: ['sources', 'top-stories'],
 } as const;
@@ -1678,6 +1678,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                               const reasons = warnMatchReasons(matches);
                               return (
                                 <div key={post.id} style={{ border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[16], padding: '10px 12px', background: 'rgba(255,149,0,0.08)' }}>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: disc.textPrimary, marginBottom: 4 }}>Content warning</div>
+                                  <div style={{ fontSize: 11, color: disc.textSecondary, marginBottom: 8 }}>This post may include words or topics you asked to warn about.</div>
                                   <div style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                                     {reasons.map((entry) => (
@@ -2009,6 +2011,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 const reasons = warnMatchReasons(matches);
                                 return (
                                   <div style={{ border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[20], padding: '12px 14px', background: 'rgba(255,149,0,0.08)' }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: disc.textPrimary, marginBottom: 4 }}>Content warning</div>
+                                    <div style={{ fontSize: 11, color: disc.textSecondary, marginBottom: 8 }}>This post may include words or topics you asked to warn about.</div>
                                     <div style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                                       {reasons.map((entry) => (
@@ -2095,6 +2099,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                               const reasons = warnMatchReasons(matches);
                               return (
                                 <div key={p.id} style={{ flexShrink: 0, width: 182, border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[20], padding: '10px 12px', background: 'rgba(255,149,0,0.08)' }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: disc.textPrimary, marginBottom: 4 }}>Content warning</div>
+                                  <div style={{ fontSize: 10, color: disc.textSecondary, marginBottom: 8 }}>This post may include words or topics you asked to warn about.</div>
                                   <div style={{ fontSize: 11, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
                                     {reasons.map((entry) => (

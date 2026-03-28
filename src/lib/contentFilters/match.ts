@@ -26,6 +26,19 @@ function containsKeyword(text: string, phrase: string, wholeWord: boolean): bool
   return text.toLowerCase().includes(phrase.toLowerCase());
 }
 
+function phraseVariants(phrase: string): string[] {
+  const cleaned = phrase.trim();
+  if (!cleaned) return [];
+  const normalized = cleaned.replace(/^#+/, '');
+  const variants = new Set<string>();
+  variants.add(cleaned);
+  if (normalized) {
+    variants.add(normalized);
+    variants.add(`#${normalized}`);
+  }
+  return [...variants];
+}
+
 async function embedText(text: string): Promise<number[]> {
   const key = text.trim().toLowerCase();
   if (!key) return [];
@@ -79,7 +92,9 @@ export function getKeywordMatches(
 ): PostFilterMatch[] {
   const matches: PostFilterMatch[] = [];
   for (const rule of rules) {
-    if (containsKeyword(text, rule.phrase, rule.wholeWord)) {
+    const variants = phraseVariants(rule.phrase);
+    const didMatch = variants.some((variant) => containsKeyword(text, variant, rule.wholeWord));
+    if (didMatch) {
       matches.push({
         ruleId: rule.id,
         phrase: rule.phrase,
@@ -101,13 +116,22 @@ export async function getSemanticMatches(
   const postEmbedding = await embedText(text);
   if (postEmbedding.length === 0) return matches;
 
-  const phraseEmbeddings = await Promise.all(semanticRules.map((rule) => embedText(rule.phrase)));
+  const phraseEmbeddings = await Promise.all(
+    semanticRules.map(async (rule) => {
+      const variants = phraseVariants(rule.phrase);
+      const embeddings = await Promise.all(variants.map((variant) => embedText(variant)));
+      return embeddings.filter((embedding) => embedding.length > 0);
+    }),
+  );
 
   for (let i = 0; i < semanticRules.length; i += 1) {
     const rule = semanticRules[i];
-    const phraseEmbedding = phraseEmbeddings[i];
-    if (!rule || !phraseEmbedding) continue;
-    const score = cosine(postEmbedding, phraseEmbedding);
+    const embeddingsForRule = phraseEmbeddings[i] ?? [];
+    if (!rule || embeddingsForRule.length === 0) continue;
+    const score = embeddingsForRule.reduce((best, embedding) => {
+      const next = cosine(postEmbedding, embedding);
+      return next > best ? next : best;
+    }, 0);
     if (score >= rule.semanticThreshold) {
       matches.push({
         ruleId: rule.id,

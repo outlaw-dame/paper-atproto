@@ -2,7 +2,7 @@
 // Renders inside the settings sheet. Shows lists of blocked and muted
 // accounts with inline unblock/unmute actions.
 //
-// Timed mutes (Mastodon-inspired): the mute form lets users pick a duration;
+// Timed mutes: the mute form lets users pick a duration;
 // the store manages expiry and useTimedMuteWatcher auto-unmutes when expired.
 
 import { useState } from 'react';

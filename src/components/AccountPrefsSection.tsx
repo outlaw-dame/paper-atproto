@@ -71,7 +71,7 @@ function ToggleRow({
   );
 }
 
-export default function BlueskyPrefsSection() {
+export default function AccountPrefsSection() {
   const { session } = useSessionStore();
   const { data: prefs, isLoading } = usePreferences();
   const setThreadPrefs = useSetThreadViewPrefs();
@@ -89,7 +89,7 @@ export default function BlueskyPrefsSection() {
   const isSaving = setThreadPrefs.isPending || setFeedPrefs.isPending;
 
   const threadSort = prefs?.threadViewPrefs.sort ?? 'oldest';
-  // Bluesky uses 'home' as the key for the Following feed's view preferences
+  // Upstream preferences use 'home' as the key for Following feed view settings
   const homePrefs: {
     hideReplies?: boolean;
     hideRepliesByUnfollowed?: boolean;
@@ -115,7 +115,7 @@ export default function BlueskyPrefsSection() {
     <div style={{ marginTop: 14 }}>
       {/* ── Header ── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Feed &amp; thread</h4>
+        <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Feed &amp; conversation</h4>
         {savedLabel && (
           <span style={{ fontSize: 11, fontWeight: 600, color: savedLabel === 'Save failed' ? 'var(--red)' : 'var(--green)' }}>
             {savedLabel}
@@ -126,7 +126,7 @@ export default function BlueskyPrefsSection() {
         )}
       </div>
       <p style={{ fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35, marginBottom: 10 }}>
-        Synced to your Bluesky account — takes effect in any Bluesky client.
+        Synced to your account — takes effect across your connected clients.
       </p>
 
       {isLoading ? (
@@ -136,7 +136,7 @@ export default function BlueskyPrefsSection() {
           {/* ── Thread sort ── */}
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }}>
-              Thread sort order
+              Conversation sort order
             </label>
             <select
               value={threadSort}

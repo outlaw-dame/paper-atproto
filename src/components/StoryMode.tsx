@@ -49,6 +49,9 @@ import { translationClient } from '../lib/i18n/client.js';
 import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
+import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
+import type { PostFilterMatch } from '../lib/contentFilters/types.js';
 import {
   promptHero as phTokens,
   interpolator as intTokens,
@@ -90,6 +93,94 @@ function Spinner() {
           <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>
         </path>
       </svg>
+    </div>
+  );
+}
+
+function toFilterableThreadPost(node: ThreadNode): MockPost {
+  return {
+    id: node.uri,
+    author: {
+      did: node.authorDid,
+      handle: node.authorHandle,
+      displayName: node.authorName ?? node.authorHandle,
+      ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
+    },
+    content: node.text,
+    facets: node.facets,
+    createdAt: node.createdAt,
+    likeCount: node.likeCount,
+    replyCount: node.replyCount,
+    repostCount: node.repostCount,
+    bookmarkCount: 0,
+    chips: [],
+  };
+}
+
+function ThreadModerationNotice({
+  onReveal,
+  matches,
+  isHidden,
+}: {
+  onReveal: () => void;
+  matches?: PostFilterMatch[];
+  isHidden?: boolean;
+}) {
+  const reasons = warnMatchReasons(matches ?? []);
+  return (
+    <div style={{
+      border: '1px solid var(--stroke-dim)',
+      borderRadius: 16,
+      padding: '12px 14px',
+      background: 'color-mix(in srgb, var(--surface-card) 90%, var(--orange) 10%)',
+    }}>
+      {isHidden ? (
+        <>
+          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)', fontWeight: 700, marginBottom: 4 }}>
+            Hidden by your moderation settings.
+          </div>
+          <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 10 }}>
+            This post includes muted words or topics and is hidden in this view.
+          </div>
+        </>
+      ) : reasons.length > 0 ? (
+        <>
+          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: 4 }}>
+            Content warning
+          </div>
+          <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 10 }}>
+            This post may include words or topics you asked to warn about.
+          </div>
+          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)', fontWeight: 700, marginBottom: 8 }}>
+            Matches filter:
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            {reasons.map((entry) => (
+              <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--stroke-dim)', padding: '4px 10px', background: 'var(--surface-2)' }}>
+                <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
+                <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                </span>
+              </span>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)', fontWeight: 700, marginBottom: 4 }}>
+            Hidden by your moderation settings.
+          </div>
+          <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 10 }}>
+            This post includes muted words or topics and is hidden in this view.
+          </div>
+        </>
+      )}
+      <button
+        onClick={onReveal}
+        style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
+      >
+        Show post
+      </button>
     </div>
   );
 }
@@ -320,7 +411,12 @@ function PromptHeroCard({
             fontWeight: 500, letterSpacing: '-0.005em',
             color: phTokens.text, marginBottom: 12,
           }}>
-            <RichText text={rootText} facets={rootText === post.content ? post.facets : []} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
+            <RichText
+              text={rootText}
+              {...(rootText === post.content && post.facets ? { facets: post.facets } : {})}
+              baseColor={phTokens.text}
+              onHashtag={handleHashtagClick}
+            />
           </p>
         )}
 
@@ -2051,6 +2147,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<ThreadFilter>('Top');
   const [quoteTarget, setQuoteTarget] = useState<ThreadNode | null>(null);
+  const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
   // Set of DIDs the current user follows — used only for bold username treatment
   const [followedDids, setFollowedDids] = useState<Set<string>>(new Set());
   // Entity sheet — Narwhal v3 Phase C
@@ -2068,6 +2165,19 @@ export default function StoryMode({ entry, onClose }: Props) {
   }, [session?.did]);
 
   const thread = getThread(entry.id);
+  const threadFilterPool = useMemo(() => {
+    const posts: MockPost[] = [];
+    if (rootPost) posts.push(rootPost);
+    for (const reply of replies) {
+      posts.push(toFilterableThreadPost(reply));
+    }
+    return posts;
+  }, [rootPost, replies]);
+  const threadFilterResults = usePostFilterResults(threadFilterPool, 'thread');
+
+  useEffect(() => {
+    setRevealedFilteredPosts({});
+  }, [entry.id]);
 
   // ── Fetch thread + polling ────────────────────────────────────────────────
   // Initial load shows the loading spinner; background re-polls at 60s are
@@ -2088,7 +2198,7 @@ export default function StoryMode({ entry, onClose }: Props) {
 
       try {
         if (!isAtUri(entry.id)) {
-          if (isInitial) setError('This discussion is not linked to a Bluesky thread yet.');
+          if (isInitial) setError('This discussion is not linked to a conversation yet.');
           return;
         }
         const res = await atpCall(
@@ -2264,7 +2374,18 @@ export default function StoryMode({ entry, onClose }: Props) {
     return sorted;
   }, [replies, activeFilter, entry.id, thread?.lastComputedAt]);
 
+  const getModerationMatches = useCallback((postId: string) => threadFilterResults[postId] ?? [], [threadFilterResults]);
+  const isHiddenByModeration = useCallback((postId: string) => {
+    const matches = getModerationMatches(postId);
+    return matches.some((m) => m.action === 'hide') && !revealedFilteredPosts[postId];
+  }, [getModerationMatches, revealedFilteredPosts]);
+  const isWarnedByModeration = useCallback((postId: string) => {
+    const matches = getModerationMatches(postId);
+    return matches.some((m) => m.action === 'warn') && !revealedFilteredPosts[postId];
+  }, [getModerationMatches, revealedFilteredPosts]);
+
   const featuredReply = filteredReplies.find(r => {
+    if (isHiddenByModeration(r.uri) || isWarnedByModeration(r.uri)) return false;
     const s = getThread(entry.id)?.scores[r.uri];
     return (s?.finalInfluenceScore ?? 0) > 0.75;
   });
@@ -2316,13 +2437,29 @@ export default function StoryMode({ entry, onClose }: Props) {
           <div style={{ padding: '20px 16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* PromptHeroCard */}
-            {rootPost && (
-              <PromptHeroCard
-                post={rootPost}
-                participantCount={replies.length}
-                {...(thread?.rootVerification !== undefined ? { rootVerification: thread.rootVerification } : {})}
-              />
-            )}
+            {rootPost && (() => {
+              const rootMatches = getModerationMatches(rootPost.id);
+              const rootHidden = rootMatches.some((m) => m.action === 'hide') && !revealedFilteredPosts[rootPost.id];
+              const rootWarned = rootMatches.some((m) => m.action === 'warn') && !revealedFilteredPosts[rootPost.id];
+
+              if (rootHidden || rootWarned) {
+                return (
+                  <ThreadModerationNotice
+                    matches={rootMatches}
+                    isHidden={rootHidden}
+                    onReveal={() => setRevealedFilteredPosts((prev) => ({ ...prev, [rootPost.id]: true }))}
+                  />
+                );
+              }
+
+              return (
+                <PromptHeroCard
+                  post={rootPost}
+                  participantCount={replies.length}
+                  {...(thread?.rootVerification !== undefined ? { rootVerification: thread.rootVerification } : {})}
+                />
+              );
+            })()}
 
             {/* InterpolatorCard */}
             <InterpolatorCard
@@ -2386,6 +2523,21 @@ export default function StoryMode({ entry, onClose }: Props) {
               const rootAuthorDid = rootPost?.author.did;
               const shownReplies = filteredReplies.filter(r => r.uri !== featuredReply?.uri || activeFilter !== 'Top');
               return shownReplies.map((node, idx) => {
+                const moderationMatches = getModerationMatches(node.uri);
+                const isHidden = moderationMatches.some((m) => m.action === 'hide') && !revealedFilteredPosts[node.uri];
+                const isWarned = moderationMatches.some((m) => m.action === 'warn') && !revealedFilteredPosts[node.uri];
+
+                if (isHidden || isWarned) {
+                  return (
+                    <ThreadModerationNotice
+                      key={`moderation-${node.uri}`}
+                      matches={moderationMatches}
+                      isHidden={isHidden}
+                      onReveal={() => setRevealedFilteredPosts((prev) => ({ ...prev, [node.uri]: true }))}
+                    />
+                  );
+                }
+
                 const isOp = !!(rootAuthorDid && node.authorDid === rootAuthorDid);
                 const prevNode = shownReplies[idx - 1];
                 const prevIsOp = !!(prevNode && rootAuthorDid && prevNode.authorDid === rootAuthorDid);
@@ -2428,7 +2580,7 @@ export default function StoryMode({ entry, onClose }: Props) {
         )}
       </div>
 
-      {/* Static reply bar — always visible, Bluesky-style */}
+      {/* Static reply bar — always visible, platform-consistent */}
       <ReplyBar
         {...(profile?.avatar !== undefined ? { userAvatar: profile.avatar } : {})}
         onActivate={handleReplyToRoot}

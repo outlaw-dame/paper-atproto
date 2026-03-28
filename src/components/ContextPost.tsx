@@ -18,11 +18,11 @@ export const ContextPost = ({
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const sensitivePolicy = useSensitiveMediaStore((s) => s.policy);
+  const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quoteEmbed?.post.sensitiveMedia?.isSensitive);
   const authorActor = post.author.did || post.author.handle;
   const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
   const contextLabel = type === 'thread' ? 'Thread start' : 'Earlier reply';
-  const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const externalEmbed = post.embed?.type === 'external' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;

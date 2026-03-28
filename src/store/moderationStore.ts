@@ -70,7 +70,7 @@ function saveStorage(
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ timedMutes, blockRkeys }));
   } catch (err) {
-    if ((err as DOMException).code === 'QuotaExceededError') {
+    if ((err as DOMException).name === 'QuotaExceededError') {
       // Storage quota exceeded — clear old expired mutes and try again
       const now = Date.now();
       const recentMutes: Record<string, number> = {};

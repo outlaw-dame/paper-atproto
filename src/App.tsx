@@ -8,19 +8,133 @@
 import React, { Suspense } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AtpProvider, useAtp } from './atproto/AtpContext.js';
+import { scheduleRuntimePrefetches } from './prefetch/runtimePrefetch.js';
 import { useUiStore } from './store/uiStore.js';
 import TabBar from './shell/TabBar.js';
 import LoginScreen from './components/LoginScreen.js';
 import { MiniPlayerProvider } from './context/MiniPlayerContext.js';
+import MiniPlayer from './components/MiniPlayer.js';
+import HomeTab from './tabs/HomeTab.js';
+import OverlayHost from './shell/OverlayHost.js';
+import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge.js';
 
-const MiniPlayer = React.lazy(() => import('./components/MiniPlayer.js'));
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  loader: () => Promise<{ default: T }>,
+  label: string,
+): React.LazyExoticComponent<T> {
+  return React.lazy(async () => {
+    try {
+      return await loader();
+    } catch (error) {
+      console.warn(`[Lazy] ${label} failed to load on first attempt; retrying once.`, error);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return loader();
+    }
+  });
+}
 
-const HomeTab = React.lazy(() => import('./tabs/HomeTab.js'));
-const ExploreTab = React.lazy(() => import('./tabs/ExploreTab.js'));
-const ActivityTab = React.lazy(() => import('./tabs/ActivityTab.js'));
-const ProfileTab = React.lazy(() => import('./tabs/ProfileTab.js'));
-const OverlayHost = React.lazy(() => import('./shell/OverlayHost.js'));
-const TimedMuteWatcherBridge = React.lazy(() => import('./components/TimedMuteWatcherBridge.js'));
+type LazyModuleBoundaryProps = {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+  resetKey?: string | number;
+};
+
+type LazyModuleBoundaryState = {
+  hasError: boolean;
+};
+
+class LazyModuleBoundary extends React.Component<LazyModuleBoundaryProps, LazyModuleBoundaryState> {
+  state: LazyModuleBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): LazyModuleBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('[AppShell] Lazy module failed to render', error);
+  }
+
+  componentDidUpdate(prevProps: LazyModuleBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback ?? null;
+    }
+    return this.props.children;
+  }
+}
+
+function ShellModuleRecovery({ onReload }: { onReload: () => void }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+        background: 'var(--bg)',
+      }}
+    >
+      <div
+        style={{
+          width: 'min(420px, 100%)',
+          borderRadius: 24,
+          border: '1px solid var(--sep)',
+          background: 'var(--card)',
+          boxShadow: '0 24px 80px rgba(0,0,0,0.18)',
+          padding: '24px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: 12,
+        }}
+      >
+        <div style={{ width: 44, height: 44, borderRadius: 14, background: 'color-mix(in srgb, var(--blue) 16%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 9v4" />
+            <path d="M12 17h.01" />
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <h2 style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', letterSpacing: 'var(--type-ui-title-md-track)', color: 'var(--label-1)' }}>
+            Glimpse hit a loading problem
+          </h2>
+          <p style={{ margin: 0, fontFamily: 'var(--font-body)', fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-3)' }}>
+            This usually means the next screen could not finish loading. Reload the app to restore your session and continue.
+          </p>
+        </div>
+        <button
+          onClick={onReload}
+          style={{
+            appearance: 'none',
+            border: '1px solid color-mix(in srgb, var(--blue) 24%, var(--sep))',
+            background: 'var(--blue)',
+            color: '#fff',
+            borderRadius: 14,
+            minHeight: 44,
+            padding: '10px 16px',
+            font: 'inherit',
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          Reload app
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const ExploreTab = lazyWithRetry(() => import('./tabs/ExploreTab.js'), 'ExploreTab');
+const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab.js'), 'ActivityTab');
+const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab.js'), 'ProfileTab');
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
@@ -163,7 +277,13 @@ function AppShell() {
   const { session, isLoading } = useAtp();
   const { activeTab, prevTab, openStory, profileDid, openCompose, openPromptComposer } = useUiStore();
   const [isTabBarHidden, setIsTabBarHidden] = React.useState(false);
+  const [shellRetryKey, setShellRetryKey] = React.useState(0);
   const scrollIdleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    if (!session) return;
+    scheduleRuntimePrefetches();
+  }, [session]);
 
   React.useEffect(() => {
     const markScrolling = () => {
@@ -244,9 +364,11 @@ function AppShell() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: 'var(--bg)', overflow: 'hidden' }}>
       {/* Lazily mount ATProto timed mute watcher only after authenticated app shell is visible */}
-      <Suspense fallback={null}>
-        <TimedMuteWatcherBridge />
-      </Suspense>
+      <LazyModuleBoundary resetKey={`watcher:${shellRetryKey}`}>
+        <Suspense fallback={null}>
+          <TimedMuteWatcherBridge />
+        </Suspense>
+      </LazyModuleBoundary>
 
       {/* Main content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
@@ -259,12 +381,20 @@ function AppShell() {
             exit={{ opacity: 0, x: activeTab > prevTab ? -20 : 20 }}
             transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
           >
-            <Suspense fallback={tabLoadingFallback}>
-              {activeTab === 'home'    && <HomeTab onOpenStory={openStory} />}
-              {activeTab === 'explore' && <ExploreTab onOpenStory={openStory} />}
-              {activeTab === 'activity' && <ActivityTab />}
-              {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} actorDid={profileDid ?? undefined} />}
-            </Suspense>
+            <LazyModuleBoundary
+              resetKey={`${activeTab}:${shellRetryKey}`}
+              fallback={<ShellModuleRecovery onReload={() => {
+                setShellRetryKey((value) => value + 1);
+                window.location.reload();
+              }} />}
+            >
+              <Suspense fallback={tabLoadingFallback}>
+                {activeTab === 'home'    && <HomeTab onOpenStory={openStory} />}
+                {activeTab === 'explore' && <ExploreTab onOpenStory={openStory} />}
+                {activeTab === 'activity' && <ActivityTab />}
+                {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} actorDid={profileDid ?? undefined} />}
+              </Suspense>
+            </LazyModuleBoundary>
           </motion.div>
         </AnimatePresence>
 
@@ -276,9 +406,11 @@ function AppShell() {
       <TabBar hidden={isTabBarHidden} />
 
       {/* Overlays: ComposeSheet + StoryMode */}
-      <Suspense fallback={null}>
-        <OverlayHost />
-      </Suspense>
+      <LazyModuleBoundary resetKey={`overlay:${shellRetryKey}`}>
+        <Suspense fallback={null}>
+          <OverlayHost />
+        </Suspense>
+      </LazyModuleBoundary>
     </div>
   );
 }

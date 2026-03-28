@@ -9,6 +9,16 @@ type MaybeConnection = {
 
 function shouldSkipPrefetch(): boolean {
   if (typeof navigator === 'undefined') return true;
+  const ua = navigator.userAgent;
+  const isIOS = /iphone|ipad|ipod/i.test(ua);
+  const isAndroid = /android/i.test(ua);
+  const matchMedia = window.matchMedia?.bind(window);
+  const isStandalone =
+    (!!matchMedia && (matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: minimal-ui)').matches)) ||
+    (isIOS && 'standalone' in navigator && (navigator as Navigator & { standalone?: boolean }).standalone === true);
+  const deviceMemory = Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0);
+  const isLowMemoryDevice = Number.isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4;
+  if (isIOS || isAndroid || isStandalone || isLowMemoryDevice) return true;
   const connection = (navigator as Navigator & { connection?: MaybeConnection }).connection;
   if (!connection) return false;
   if (connection.saveData) return true;

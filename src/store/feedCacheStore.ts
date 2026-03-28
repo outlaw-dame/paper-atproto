@@ -76,7 +76,7 @@ export const useFeedCacheStore = create<FeedCacheState>()(
           // Cleanup old caches for this account (keep only recent modes)
           const accountCaches = Object.entries(updated)
             .filter(([k]) => k.startsWith(`${accountDid}:`))
-            .sort((a, b) => (updated[b[0]].savedAt ?? 0) - (updated[a[0]].savedAt ?? 0));
+            .sort((a, b) => (updated[b[0]]?.savedAt ?? 0) - (updated[a[0]]?.savedAt ?? 0));
 
           if (accountCaches.length > MAX_CACHED_MODES) {
             accountCaches.slice(MAX_CACHED_MODES).forEach(([k]) => {

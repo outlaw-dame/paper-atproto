@@ -65,6 +65,38 @@ const ALT_REQUIREMENT_KEY = 'paper.compose.requireAltText';
 const RECENT_HASHTAGS_KEY = 'paper.compose.recentHashtags';
 const FAVORITE_HASHTAGS_KEY = 'paper.compose.favoriteHashtags';
 
+interface BlobUploadResponse {
+  data: {
+    blob: unknown;
+  };
+}
+
+interface VideoJobStatus {
+  state: string;
+  progress?: number;
+  blob?: unknown;
+  message?: string;
+  error?: string;
+  jobId: string;
+}
+
+interface VideoJobStatusResponse {
+  data: {
+    jobStatus: VideoJobStatus;
+  };
+}
+
+interface VideoUploadLimits {
+  canUpload: boolean;
+  message?: string;
+  remainingDailyVideos?: number;
+  remainingDailyBytes?: number;
+}
+
+interface VideoUploadLimitsResponse {
+  data: VideoUploadLimits;
+}
+
 const POPULAR_HASHTAGS = [
   'bluesky', 'atproto', 'technology', 'ai', 'design',
   'photography', 'art', 'music', 'sports', 'science',
@@ -878,7 +910,7 @@ function HashtagInsightsPanel({
         )}
       </div>
       <div style={{ padding: '7px 12px 4px', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.4 }}>
-        Using local ML and real-time Bluesky data, Paper analyzes the reach of the hashtags you used.
+        Using local ML and real-time network data, Paper analyzes the reach of the hashtags you used.
       </div>
       <div style={{ padding: '4px 12px 10px' }}>
         {insights.map((insight) => {
@@ -1208,8 +1240,8 @@ export default function ComposeSheet({ onClose }: Props) {
         threadTexts: replyThreadContext.threadTexts,
         commentTexts: replyThreadContext.commentTexts,
         totalCommentCount: replyThreadContext.totalCommentCount,
-        parentReplyCount: replyTarget.replyCount,
-        parentThreadCount: replyTarget.threadCount,
+        ...(typeof replyTarget.replyCount === 'number' ? { parentReplyCount: replyTarget.replyCount } : {}),
+        ...(typeof replyTarget.threadCount === 'number' ? { parentThreadCount: replyTarget.threadCount } : {}),
       });
     }
 
@@ -1391,7 +1423,7 @@ export default function ComposeSheet({ onClose }: Props) {
     let delayMs = VIDEO_POLL_BASE_DELAY_MS;
 
     for (let attempt = 1; attempt <= VIDEO_POLL_MAX_ATTEMPTS; attempt += 1) {
-      const statusRes = await atpCall((signal) => agent.app.bsky.video.getJobStatus({ jobId }, { signal }), {
+      const statusRes = await atpCall<VideoJobStatusResponse>((signal) => agent.app.bsky.video.getJobStatus({ jobId }, { signal }), {
         maxAttempts: 3,
         timeoutMs: 12_000,
       });
@@ -1434,7 +1466,7 @@ export default function ComposeSheet({ onClose }: Props) {
     }
 
     setPostStatus('Checking video upload limits...');
-    const limitsRes = await atpCall((signal) => agent.app.bsky.video.getUploadLimits(undefined, { signal }), {
+    const limitsRes = await atpCall<VideoUploadLimitsResponse>((signal) => agent.app.bsky.video.getUploadLimits(undefined, { signal }), {
       maxAttempts: 2,
       timeoutMs: 12_000,
     });
@@ -1451,7 +1483,7 @@ export default function ComposeSheet({ onClose }: Props) {
 
     setPostStatus('Uploading video...');
     const videoEncoding = resolveVideoUploadMime(file);
-    const uploadRes = await atpCall(
+    const uploadRes = await atpCall<VideoJobStatusResponse>(
       (signal) => agent.app.bsky.video.uploadVideo(file, { signal, encoding: videoEncoding }),
       { maxAttempts: 2, timeoutMs: 180_000 }
     );
@@ -1552,7 +1584,7 @@ export default function ComposeSheet({ onClose }: Props) {
             throw new Error('Missing media data for upload.');
           }
 
-          const upload = await atpCall((signal) => agent.uploadBlob(blobToUpload!, {
+          const upload = await atpCall<BlobUploadResponse>((signal) => agent.uploadBlob(blobToUpload!, {
             encoding,
             signal,
           }), { maxAttempts: 2, timeoutMs: 60_000 });
@@ -2211,9 +2243,9 @@ export default function ComposeSheet({ onClose }: Props) {
                     audience={audience}
                     mediaItems={mediaItems}
                     linkPreview={linkPreview}
-                    profileDisplayName={profile?.displayName}
-                    profileHandle={profile?.handle}
-                    profileAvatar={profile?.avatar}
+                    {...(profile?.displayName !== undefined ? { profileDisplayName: profile.displayName } : {})}
+                    {...(profile?.handle !== undefined ? { profileHandle: profile.handle } : {})}
+                    {...(profile?.avatar !== undefined ? { profileAvatar: profile.avatar } : {})}
                   />
                 )}
               </AnimatePresence>
@@ -3019,7 +3051,7 @@ export default function ComposeSheet({ onClose }: Props) {
             >
               <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--label-1)' }}>Post without ALT text?</h3>
               <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--label-2)', lineHeight: 1.45 }}>
-                {missingAltCount} image{missingAltCount > 1 ? 's are' : ' is'} missing media descriptions. Mastodon-style clients usually warn here so you can add ALT before publishing.
+                {missingAltCount} image{missingAltCount > 1 ? 's are' : ' is'} missing media descriptions. Some clients usually warn here so you can add ALT before publishing.
               </p>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                 <button

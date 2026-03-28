@@ -1,4 +1,4 @@
-export type FilterContext = 'home' | 'explore' | 'profile' | 'thread' | 'notifications';
+export type FilterContext = 'home' | 'explore' | 'profile' | 'thread';
 
 export type FilterAction = 'warn' | 'hide';
 

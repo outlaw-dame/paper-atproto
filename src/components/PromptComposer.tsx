@@ -42,7 +42,7 @@ type Audience = 'Everyone' | 'Following' | 'Mentioned';
 type Step = 'form' | 'preview';
 
 const SUGGESTED_TOPICS = [
-  '#ATProto', '#Bluesky', '#decentralized', '#openprotocol',
+  '#OpenSocial', '#Community', '#decentralized', '#openprotocol',
   '#tech', '#ai', '#privacy', '#fediverse', '#web3', '#identity',
 ];
 
@@ -662,7 +662,7 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
                 border: `0.5px solid ${disc.lineSubtle}`,
               }}>
                 <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>
-                  This will be posted to Bluesky as a standard post. The Glympse Hosted Thread view is generated automatically when others engage with it.
+                  This will be published as a standard post. The hosted conversation view is generated automatically when others engage with it.
                 </p>
               </div>
 

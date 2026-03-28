@@ -7,8 +7,31 @@ export default function LoginScreen() {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPwHelp, setShowPwHelp] = useState(false);
+  const [focusedField, setFocusedField] = useState<'identifier' | 'password' | null>(null);
 
   const canSubmit = identifier.trim().length > 0 && password.trim().length > 0 && !isLoading;
+
+  const getFieldStyle = (field: 'identifier' | 'password', isSecret = false): React.CSSProperties => ({
+    padding: '13px 16px',
+    minHeight: 52,
+    borderRadius: 14,
+    background: 'var(--surface)',
+    border: `0.5px solid ${focusedField === field ? 'var(--sep-opaque)' : 'var(--sep)'}`,
+    boxShadow: focusedField === field ? '0 0 0 3px rgba(10,132,255,0.10)' : 'none',
+    fontFamily: isSecret ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'var(--font-ui)',
+    fontSize: 16,
+    lineHeight: '22px',
+    fontWeight: 400,
+    letterSpacing: isSecret ? 1 : 'var(--type-body-md-track)',
+    color: 'var(--label-1)',
+    outline: 'none',
+    width: '100%',
+    boxSizing: 'border-box',
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    WebkitTextSizeAdjust: '100%',
+    transition: 'border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease',
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,7 +74,7 @@ export default function LoginScreen() {
           </div>
           <h1 style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-headline-lg-size)', lineHeight: 'var(--type-ui-headline-lg-line)', fontWeight: 'var(--type-ui-headline-lg-weight)', letterSpacing: 'var(--type-ui-headline-lg-track)', color: 'var(--label-1)', marginBottom: 6 }}>Glimpse</h1>
           <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-3)', textAlign: 'center' }}>
-            Sign in with your Bluesky account
+            Sign in with your account
           </p>
         </div>
 
@@ -66,26 +89,14 @@ export default function LoginScreen() {
               type="text"
               value={identifier}
               onChange={e => setIdentifier(e.target.value)}
+              onFocus={() => setFocusedField('identifier')}
+              onBlur={() => setFocusedField((current) => (current === 'identifier' ? null : current))}
               placeholder="you.bsky.social"
               autoComplete="username"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
-              style={{
-                padding: '14px 16px',
-                borderRadius: 14,
-                background: 'var(--fill-2)',
-                border: '1px solid var(--sep)',
-                fontFamily: 'var(--font-ui)',
-                fontSize: 'var(--type-ui-title-md-size)',
-                lineHeight: 'var(--type-ui-title-md-line)',
-                fontWeight: 400,
-                letterSpacing: 'var(--type-ui-title-md-track)',
-                color: 'var(--label-1)',
-                outline: 'none',
-                width: '100%',
-                boxSizing: 'border-box',
-              }}
+              style={getFieldStyle('identifier')}
             />
           </div>
 
@@ -98,7 +109,22 @@ export default function LoginScreen() {
               <button
                 type="button"
                 onClick={() => setShowPwHelp(v => !v)}
-                style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: 600, letterSpacing: 'var(--type-label-md-track)', color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                style={{
+                  fontFamily: 'var(--font-ui)',
+                  fontSize: 'var(--type-label-md-size)',
+                  lineHeight: 'var(--type-label-md-line)',
+                  fontWeight: 600,
+                  letterSpacing: 'var(--type-label-md-track)',
+                  color: 'var(--blue)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '2px 0',
+                  minHeight: 24,
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  WebkitTextSizeAdjust: '100%',
+                }}
               >
                 What's this?
               </button>
@@ -107,21 +133,11 @@ export default function LoginScreen() {
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
+              onFocus={() => setFocusedField('password')}
+              onBlur={() => setFocusedField((current) => (current === 'password' ? null : current))}
               placeholder="xxxx-xxxx-xxxx-xxxx"
               autoComplete="current-password"
-              style={{
-                padding: '14px 16px',
-                borderRadius: 14,
-                background: 'var(--fill-2)',
-                border: '1px solid var(--sep)',
-                fontSize: 16,
-                color: 'var(--label-1)',
-                outline: 'none',
-                width: '100%',
-                boxSizing: 'border-box',
-                fontFamily: 'monospace',
-                letterSpacing: 1,
-              }}
+              style={getFieldStyle('password', true)}
             />
           </div>
 
@@ -175,13 +191,22 @@ export default function LoginScreen() {
             disabled={!canSubmit}
             whileTap={canSubmit ? { scale: 0.97 } : {}}
             style={{
-              padding: '16px', borderRadius: 16, marginTop: 4,
+              padding: '12px clamp(18px, 5vw, 26px)', borderRadius: 999, marginTop: 8,
               background: canSubmit ? 'var(--blue)' : 'var(--fill-3)',
               color: canSubmit ? '#fff' : 'var(--label-4)',
-              fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', fontWeight: 600, letterSpacing: 'var(--type-ui-title-md-track)',
+              fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-ui-title-sm-track)',
               border: 'none', cursor: canSubmit ? 'pointer' : 'default',
               transition: 'background 0.15s, color 0.15s',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              alignSelf: 'center',
+              width: 'fit-content',
+              minWidth: isLoading ? 124 : 104,
+              maxWidth: '100%',
+              minHeight: 44,
+              whiteSpace: 'nowrap',
+              appearance: 'none',
+              WebkitAppearance: 'none',
+              WebkitTextSizeAdjust: '100%',
             }}
           >
             {isLoading ? (
@@ -195,9 +220,7 @@ export default function LoginScreen() {
 
         {/* Footer */}
         <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-4)', textAlign: 'center', marginTop: 24 }}>
-          Glimpse connects to the open{' '}
-          <a href="https://atproto.com" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue)' }}>AT Protocol</a>
-          {' '}network. Your data stays yours.
+          Glimpse connects to the open social network. Your data stays yours.
         </p>
       </motion.div>
     </div>

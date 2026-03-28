@@ -1,5 +1,5 @@
 /**
- * InlineTranslation — Phanpy-inspired shared translation component.
+ * InlineTranslation — shared inline translation component.
  *
  * Handles all translation UX for a single piece of text:
  *  - Manual translate trigger (when language differs)
@@ -57,7 +57,7 @@ export interface InlineTranslationProps {
   targetLang: string;
   /**
    * When true, translation is triggered automatically on mount without user
-   * interaction (Phanpy's inlineTranslate / auto-translate for short posts).
+   * interaction (inline translate / auto-translate for short posts).
    */
   autoTranslate?: boolean;
   localOnlyMode?: boolean;

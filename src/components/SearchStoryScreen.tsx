@@ -26,6 +26,9 @@ import { translationClient } from '../lib/i18n/client.js';
 import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
+import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
+import type { PostFilterMatch } from '../lib/contentFilters/types.js';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
@@ -456,6 +459,82 @@ function BottomQueryDock({ query, onRefine }: { query: string; onRefine: (q: str
   );
 }
 
+function ModerationNoticeCard({
+  onReveal,
+  matches,
+  isHidden,
+}: {
+  onReveal: () => void;
+  matches?: PostFilterMatch[];
+  isHidden?: boolean;
+}) {
+  const reasons = warnMatchReasons(matches ?? []);
+  return (
+    <div style={{
+      borderRadius: ocTokens.radius,
+      background: 'color-mix(in srgb, var(--surface-card) 90%, var(--orange) 10%)',
+      border: `0.5px solid ${disc.lineSubtle}`,
+      padding: `${space[12]}px`,
+    }}>
+      {isHidden ? (
+        <>
+          <div style={{ fontSize: typeScale.chip[0], color: disc.textSecondary, fontWeight: 700, marginBottom: 4 }}>
+            Hidden by your moderation settings.
+          </div>
+          <div style={{ fontSize: 11, color: disc.textSecondary, marginBottom: 10 }}>
+            This post includes muted words or topics and is hidden in this view.
+          </div>
+        </>
+      ) : reasons.length > 0 ? (
+        <>
+          <div style={{ fontSize: typeScale.bodySm[0], color: disc.textPrimary, fontWeight: 700, marginBottom: 4 }}>
+            Content warning
+          </div>
+          <div style={{ fontSize: 11, color: disc.textSecondary, marginBottom: 8 }}>
+            This post may include words or topics you asked to warn about.
+          </div>
+          <div style={{ fontSize: typeScale.chip[0], color: disc.textSecondary, fontWeight: 700, marginBottom: 6 }}>
+            Matches filter:
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            {reasons.map((entry) => (
+              <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: `0.5px solid ${disc.lineSubtle}`, padding: '3px 8px', background: disc.surfaceCard }}>
+                <span style={{ fontSize: 11, color: disc.textPrimary, fontWeight: 700 }}>{entry.phrase}</span>
+                <span style={{ fontSize: 10, color: disc.textSecondary, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                </span>
+              </span>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: typeScale.chip[0], color: disc.textSecondary, fontWeight: 700, marginBottom: 4 }}>
+            Hidden by your moderation settings.
+          </div>
+          <div style={{ fontSize: 11, color: disc.textSecondary, marginBottom: 10 }}>
+            This post includes muted words or topics and is hidden in this view.
+          </div>
+        </>
+      )}
+      <button
+        onClick={onReveal}
+        style={{
+          border: 'none',
+          background: 'transparent',
+          color: accent.primary,
+          fontSize: typeScale.chip[0],
+          fontWeight: 700,
+          padding: 0,
+          cursor: 'pointer',
+        }}
+      >
+        Show post
+      </button>
+    </div>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
 export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props) {
   const { agent, session } = useSessionStore();
@@ -465,6 +544,34 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
   const [cardIdx, setCardIdx] = useState(0);
   const [dir, setDir] = useState(1);
   const [refinedQuery, setRefinedQuery] = useState(query);
+  const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const filterResults = usePostFilterResults(posts, 'explore');
+
+  const getModerationMatches = useCallback((postId: string) => filterResults[postId] ?? [], [filterResults]);
+  const isSuppressedByModeration = useCallback((postId: string) => {
+    if (revealedFilteredPosts[postId]) return false;
+    const matches = getModerationMatches(postId);
+    return matches.some((m) => m.action === 'hide' || m.action === 'warn');
+  }, [getModerationMatches, revealedFilteredPosts]);
+
+  const visiblePosts = useMemo(
+    () => posts.filter((post) => !isSuppressedByModeration(post.id)),
+    [posts, isSuppressedByModeration],
+  );
+  const firstSuppressedPost = useMemo(
+    () => {
+      const post = posts.find((candidate) => isSuppressedByModeration(candidate.id));
+      if (!post) return null;
+      const matches = getModerationMatches(post.id);
+      const isHidden = matches.some((match) => match.action === 'hide');
+      return { post, matches, isHidden };
+    },
+    [posts, isSuppressedByModeration],
+  );
+
+  useEffect(() => {
+    setRevealedFilteredPosts({});
+  }, [refinedQuery]);
 
   useEffect(() => {
     if (!session) return;
@@ -534,11 +641,14 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
   }, { axis: 'x', swipe: { velocity: 0.3 } });
 
   const cards = [
-    <OverviewCard key="overview" posts={posts} query={refinedQuery} getTranslatedText={getTranslatedText} />,
-    <BestSourceCard key="source" posts={posts} getTranslatedText={getTranslatedText} />,
-    <RelatedEntitiesCard key="entities" posts={posts} />,
-    <RelatedConversationCard key="conversation" posts={posts} onOpenStory={onOpenStory} getTranslatedText={getTranslatedText} />,
+    <OverviewCard key="overview" posts={visiblePosts} query={refinedQuery} getTranslatedText={getTranslatedText} />,
+    <BestSourceCard key="source" posts={visiblePosts} getTranslatedText={getTranslatedText} />,
+    <RelatedEntitiesCard key="entities" posts={visiblePosts} />,
+    <RelatedConversationCard key="conversation" posts={visiblePosts} onOpenStory={onOpenStory} getTranslatedText={getTranslatedText} />,
   ];
+
+  const activeCard = cards[cardIdx];
+  const allSuppressed = posts.length > 0 && visiblePosts.length === 0;
 
   return (
     <motion.div
@@ -617,7 +727,15 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
                   exit="exit"
                   transition={transitions.storyCard}
                 >
-                  {cards[cardIdx]}
+                  {allSuppressed && firstSuppressedPost
+                    ? (
+                      <ModerationNoticeCard
+                        matches={firstSuppressedPost.matches}
+                        isHidden={firstSuppressedPost.isHidden}
+                        onReveal={() => setRevealedFilteredPosts((prev) => ({ ...prev, [firstSuppressedPost.post.id]: true }))}
+                      />
+                    )
+                    : activeCard}
                 </motion.div>
               </AnimatePresence>
             </div>

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslationStore } from '../store/translationStore.js';
 import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
-import BlueskyPrefsSection from './BlueskyPrefsSection.js';
+import AccountPrefsSection from './AccountPrefsSection.js';
 import ModerationSettingsPage from './ModerationSettingsPage.js';
 import FeedsSettingsPage from './FeedsSettingsPage.js';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
@@ -236,7 +236,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>Settings</h3>
                 <p style={{ fontSize: 12, color: 'var(--label-3)' }}>
                   {page === 'translation'
-                    ? 'Phanpy-style inline + auto translation'
+                    ? 'Inline + automatic translation'
                     : page === 'moderation'
                       ? 'Sensitive media, filters, and moderation controls'
                       : page === 'feeds'
@@ -385,8 +385,8 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     touchLike={platform.prefersCoarsePointer || platform.isMobile}
                   />
                   <ToggleRow
-                    label="Auto translate Story threads"
-                    helper="Pre-translate thread content used by Story Mode."
+                    label="Auto translate Story view"
+                    helper="Pre-translate content used by Story Mode."
                     checked={policy.autoTranslateThreads}
                     onChange={(checked) => setPolicy({ autoTranslateThreads: checked })}
                     touchLike={platform.prefersCoarsePointer || platform.isMobile}
@@ -405,7 +405,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
 
                   <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
 
-                  <BlueskyPrefsSection />
+                  <AccountPrefsSection />
 
                 </>
               )}

@@ -430,6 +430,9 @@ function WePresentWarningCard({
         Filtered Story
       </div>
       <p style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600 }}>{getLibraryStoryTitle(post)}</p>
+      <p style={{ margin: '0 0 10px', fontSize: 12, color: 'rgba(58,42,27,0.82)', fontWeight: 600 }}>
+        This story may include words or topics you asked to warn about.
+      </p>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
         {reasons.map((entry) => (
           <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid rgba(58,42,27,0.2)', padding: '3px 8px', background: 'rgba(255,255,255,0.75)' }}>
@@ -608,6 +611,8 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                 const reasons = warnMatchReasons(matches);
                 return (
                   <div key={p.id} style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', marginBottom: 8, background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }}>Content warning</div>
+                    <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 8 }}>This post may include words or topics you asked to warn about.</div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Matches filter:</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                       {reasons.map((entry) => (
