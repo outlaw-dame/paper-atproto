@@ -42,4 +42,12 @@ void import('./bootstrap.js')
   .then(({ initApp }) => initApp())
   .catch((error) => {
     console.error('[Bootstrap] Failed to initialize background services', error);
+    // Notify the UI so the user isn't left with a silently broken experience.
+    // Common on iOS Safari Private Browsing (IndexedDB disabled) and when
+    // storage quota is exceeded.
+    window.dispatchEvent(
+      new CustomEvent('paper:bootstrap-error', {
+        detail: { message: error?.message ?? 'Storage unavailable' },
+      }),
+    );
   });

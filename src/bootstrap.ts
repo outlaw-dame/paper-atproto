@@ -16,7 +16,23 @@ export async function initApp() {
   await migratePostsTable();
 
   // 3. Warmup Inference (optional, deferred to keep startup fast)
-  // inferenceClient.init(); 
+  // inferenceClient.init();
+
+  // 4. Build HNSW vector indexes after an idle period.
+  // Index construction loads the full embedding column into the WASM heap, which
+  // can spike memory by 100-300 MB. Deferring past first paint avoids OOM kills
+  // on iOS Safari and other low-memory environments.
+  const scheduleIndexBuild = () => {
+    paperDB.buildIndexes().catch((err) => {
+      console.warn('[Bootstrap] HNSW index build failed (non-fatal):', err);
+    });
+  };
+
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(scheduleIndexBuild, { timeout: 10_000 });
+  } else {
+    setTimeout(scheduleIndexBuild, 5_000);
+  }
 
   console.log('[Bootstrap] Done.');
 }

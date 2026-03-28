@@ -86,11 +86,6 @@ export class PaperDB {
       -- Create index for full-text search (GIN)
       CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN(search_vector);
       CREATE INDEX IF NOT EXISTS idx_feed_items_search_vector ON feed_items USING GIN(search_vector);
-      
-      -- Create index for semantic search (HNSW)
-      -- Using cosine similarity for better semantic matching
-      CREATE INDEX IF NOT EXISTS idx_posts_embedding ON posts USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
-      CREATE INDEX IF NOT EXISTS idx_feed_items_embedding ON feed_items USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
     `);
 
     // Trigger to update search_vector on insert/update
@@ -119,6 +114,18 @@ export class PaperDB {
       CREATE TRIGGER trg_feed_items_search_vector_update
       BEFORE INSERT OR UPDATE ON feed_items
       FOR EACH ROW EXECUTE FUNCTION feed_items_search_vector_update();
+    `);
+  }
+
+  // Build HNSW vector indexes separately — deferred after startup so the memory
+  // spike from index construction (pgvector loads the full embedding column into
+  // the WASM heap) doesn't hit during first paint or on low-memory mobile devices.
+  async buildIndexes() {
+    await this.pg.exec(`
+      CREATE INDEX IF NOT EXISTS idx_posts_embedding
+        ON posts USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+      CREATE INDEX IF NOT EXISTS idx_feed_items_embedding
+        ON feed_items USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
     `);
   }
 

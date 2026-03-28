@@ -26,17 +26,78 @@ export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
 export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; name: string; reason: string }
 
+// ─── Bootstrap error banner ────────────────────────────────────────────────
+// Shown when IndexedDB is unavailable (e.g. iOS Private Browsing) or storage
+// quota is exceeded. Dismissible — app still functions but won't persist data.
+function BootstrapErrorBanner() {
+  const [message, setMessage] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ message: string }>).detail;
+      setMessage(detail?.message ?? 'Local storage unavailable');
+    };
+    window.addEventListener('paper:bootstrap-error', handler);
+    return () => window.removeEventListener('paper:bootstrap-error', handler);
+  }, []);
+
+  if (!message) return null;
+
+  return (
+    <div
+      role="alert"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        background: 'var(--yellow, #ff9f0a)',
+        color: '#000',
+        fontSize: 13,
+        fontWeight: 500,
+        lineHeight: 1.4,
+      }}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <span style={{ flex: 1 }}>
+        Local storage unavailable — data won't be saved. {/private browsing/i.test(message) || /mutation/i.test(message) ? 'Try disabling Private Browsing.' : message}
+      </span>
+      <button
+        onClick={() => setMessage(null)}
+        aria-label="Dismiss"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'inherit', lineHeight: 1 }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 // ─── Root wrapper ──────────────────────────────────────────────────────────
 export default function App() {
   return (
-    <AtpProvider>
-      <MiniPlayerProvider>
-        <AppShell />
-        <Suspense fallback={null}>
-          <MiniPlayer />
-        </Suspense>
-      </MiniPlayerProvider>
-    </AtpProvider>
+    <>
+      <BootstrapErrorBanner />
+      <AtpProvider>
+        <MiniPlayerProvider>
+          <AppShell />
+          <Suspense fallback={null}>
+            <MiniPlayer />
+          </Suspense>
+        </MiniPlayerProvider>
+      </AtpProvider>
+    </>
   );
 }
 

@@ -27,6 +27,23 @@ class InferenceClient {
   private getWorker(): Worker {
     if (this.worker) return this.worker;
 
+    // SharedArrayBuffer requires Cross-Origin-Opener-Policy: same-origin and
+    // Cross-Origin-Embedder-Policy: credentialless/require-corp headers.
+    // GitHub Pages and most static hosts don't send these, so SAB is unavailable
+    // in production. The inference worker already sets numThreads=1 to avoid
+    // needing SAB, but guard here so any future code that tries to pass a SAB
+    // across the worker boundary fails loudly at the call site instead of with
+    // a cryptic DataCloneError at runtime.
+    if (typeof SharedArrayBuffer !== 'undefined' && !self.crossOriginIsolated) {
+      // SAB exists in the global scope but the page isn't isolated — using it
+      // would throw. Warn once so it's visible in dev tools.
+      console.warn(
+        '[InferenceClient] SharedArrayBuffer is available but crossOriginIsolated is false. ' +
+        'Do not pass SharedArrayBuffer to the inference worker — it will throw a DataCloneError. ' +
+        'Set VITE_ENABLE_ISOLATION_HEADERS=1 in dev or configure COOP/COEP headers in production.',
+      );
+    }
+
     this.worker = new Worker(
       new URL('./inference.worker.ts', import.meta.url),
       { type: 'module' },

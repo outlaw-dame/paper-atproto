@@ -24,9 +24,34 @@ import type {
 } from '../lib/composerMl.js';
 import type { ToneModelLabel, ToneModelResult, ToneModelScores } from '../lib/toneModel.js';
 
+// Clamp to single-threaded WASM. Multi-threaded ONNX requires SharedArrayBuffer
+// which needs COOP+COEP headers — unavailable on GitHub Pages and iOS Safari
+// without explicit server config. crossOriginIsolated is false in those envs,
+// so we must not set numThreads > 1 or the ONNX backend will try to allocate
+// a SAB and throw a DataCloneError when posting it back to the main thread.
 env.backends.onnx.wasm.numThreads = 1;
 env.backends.onnx.wasm.proxy = false;
 env.localModelPath = '/models/';
+
+// Detect mobile/low-memory environments. Workers have access to navigator.
+// iOS Safari and Android Chrome both report touch UA strings.
+const IS_MOBILE = /iphone|ipad|ipod|android/i.test(
+  typeof navigator !== 'undefined' ? navigator.userAgent : '',
+);
+
+// On mobile, serialize model loads so at most one large ONNX model is
+// initializing at a time. Without this, triggering composer guidance can
+// start 6+ model downloads/parses simultaneously, easily exceeding the
+// iOS Safari per-tab WASM heap budget (~300-500 MB).
+let modelLoadQueue: Promise<void> = Promise.resolve();
+
+function enqueueModelLoad(load: () => Promise<void>): Promise<void> {
+  if (!IS_MOBILE) return load();
+  const next = modelLoadQueue.then(load);
+  // Keep the chain alive even if one load fails, so subsequent loads still run.
+  modelLoadQueue = next.catch(() => {});
+  return next;
+}
 
 type WorkerMsg = {
   id: string;
@@ -192,18 +217,20 @@ async function ensureModel(): Promise<void> {
   }
 
   modelStatus = 'loading';
-  try {
-    extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-      quantized: true,
-    });
-    modelStatus = 'ready';
-    self.postMessage({ id: '__system__', type: 'ready', result: { model: 'all-MiniLM-L6-v2' } });
-  } catch (err: any) {
-    modelStatus = 'error';
-    modelError = err?.message ?? 'Unknown error';
-    self.postMessage({ id: '__system__', type: 'error', error: modelError });
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        quantized: true,
+      });
+      modelStatus = 'ready';
+      self.postMessage({ id: '__system__', type: 'ready', result: { model: 'all-MiniLM-L6-v2' } });
+    } catch (err: any) {
+      modelStatus = 'error';
+      modelError = err?.message ?? 'Unknown error';
+      self.postMessage({ id: '__system__', type: 'error', error: modelError });
+      throw err;
+    }
+  });
 }
 
 async function ensureCaptionModel(): Promise<void> {
@@ -214,16 +241,18 @@ async function ensureCaptionModel(): Promise<void> {
   }
 
   captionStatus = 'loading';
-  try {
-    captioner = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning', {
-      quantized: true,
-    });
-    captionStatus = 'ready';
-  } catch (err: any) {
-    captionStatus = 'error';
-    captionError = err?.message ?? 'Unknown caption model error';
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      captioner = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning', {
+        quantized: true,
+      });
+      captionStatus = 'ready';
+    } catch (err: any) {
+      captionStatus = 'error';
+      captionError = err?.message ?? 'Unknown caption model error';
+      throw err;
+    }
+  });
 }
 
 async function ensureToneModel(): Promise<void> {
@@ -234,16 +263,18 @@ async function ensureToneModel(): Promise<void> {
   }
 
   toneStatus = 'loading';
-  try {
-    toneClassifier = await pipeline('zero-shot-classification', TONE_MODEL_NAME, {
-      quantized: true,
-    });
-    toneStatus = 'ready';
-  } catch (err: any) {
-    toneStatus = 'error';
-    toneError = err?.message ?? 'Unknown tone model error';
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      toneClassifier = await pipeline('zero-shot-classification', TONE_MODEL_NAME, {
+        quantized: true,
+      });
+      toneStatus = 'ready';
+    } catch (err: any) {
+      toneStatus = 'error';
+      toneError = err?.message ?? 'Unknown tone model error';
+      throw err;
+    }
+  });
 }
 
 async function ensureAbuseModel(): Promise<void> {
@@ -254,16 +285,18 @@ async function ensureAbuseModel(): Promise<void> {
   }
 
   abuseStatus = 'loading';
-  try {
-    abuseClassifier = await pipeline('text-classification', ABUSE_MODEL_NAME, {
-      quantized: true,
-    });
-    abuseStatus = 'ready';
-  } catch (err: any) {
-    abuseStatus = 'error';
-    abuseError = err?.message ?? 'Unknown abuse model error';
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      abuseClassifier = await pipeline('text-classification', ABUSE_MODEL_NAME, {
+        quantized: true,
+      });
+      abuseStatus = 'ready';
+    } catch (err: any) {
+      abuseStatus = 'error';
+      abuseError = err?.message ?? 'Unknown abuse model error';
+      throw err;
+    }
+  });
 }
 
 async function ensureSentimentModel(): Promise<void> {
@@ -274,16 +307,18 @@ async function ensureSentimentModel(): Promise<void> {
   }
 
   sentimentStatus = 'loading';
-  try {
-    sentimentClassifier = await pipeline('text-classification', SENTIMENT_MODEL_NAME, {
-      quantized: true,
-    });
-    sentimentStatus = 'ready';
-  } catch (err: any) {
-    sentimentStatus = 'error';
-    sentimentError = err?.message ?? 'Unknown sentiment model error';
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      sentimentClassifier = await pipeline('text-classification', SENTIMENT_MODEL_NAME, {
+        quantized: true,
+      });
+      sentimentStatus = 'ready';
+    } catch (err: any) {
+      sentimentStatus = 'error';
+      sentimentError = err?.message ?? 'Unknown sentiment model error';
+      throw err;
+    }
+  });
 }
 
 async function ensureEmotionModel(): Promise<void> {
@@ -294,16 +329,18 @@ async function ensureEmotionModel(): Promise<void> {
   }
 
   emotionStatus = 'loading';
-  try {
-    emotionClassifier = await pipeline('text-classification', EMOTION_MODEL_NAME, {
-      quantized: true,
-    });
-    emotionStatus = 'ready';
-  } catch (err: any) {
-    emotionStatus = 'error';
-    emotionError = err?.message ?? 'Unknown emotion model error';
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      emotionClassifier = await pipeline('text-classification', EMOTION_MODEL_NAME, {
+        quantized: true,
+      });
+      emotionStatus = 'ready';
+    } catch (err: any) {
+      emotionStatus = 'error';
+      emotionError = err?.message ?? 'Unknown emotion model error';
+      throw err;
+    }
+  });
 }
 
 async function ensureTargetedToneModel(): Promise<void> {
@@ -314,16 +351,18 @@ async function ensureTargetedToneModel(): Promise<void> {
   }
 
   targetedToneStatus = 'loading';
-  try {
-    targetedToneClassifier = await pipeline('text-classification', TARGETED_TONE_MODEL_NAME, {
-      quantized: true,
-    });
-    targetedToneStatus = 'ready';
-  } catch (err: any) {
-    targetedToneStatus = 'error';
-    targetedToneError = err?.message ?? 'Unknown targeted sentiment model error';
-    throw err;
-  }
+  await enqueueModelLoad(async () => {
+    try {
+      targetedToneClassifier = await pipeline('text-classification', TARGETED_TONE_MODEL_NAME, {
+        quantized: true,
+      });
+      targetedToneStatus = 'ready';
+    } catch (err: any) {
+      targetedToneStatus = 'error';
+      targetedToneError = err?.message ?? 'Unknown targeted sentiment model error';
+      throw err;
+    }
+  });
 }
 
 async function ensureQualityHead(): Promise<void> {
@@ -334,37 +373,39 @@ async function ensureQualityHead(): Promise<void> {
   }
 
   qualityStatus = 'loading';
-  try {
-    const response = await fetch(localModelUrl(`${QUALITY_MODEL_NAME}/model.json`));
-    if (!response.ok) {
-      throw new Error(`Failed to fetch quality classifier head: ${response.status} ${response.statusText}`);
-    }
+  await enqueueModelLoad(async () => {
+    try {
+      const response = await fetch(localModelUrl(`${QUALITY_MODEL_NAME}/model.json`));
+      if (!response.ok) {
+        throw new Error(`Failed to fetch quality classifier head: ${response.status} ${response.statusText}`);
+      }
 
-    const data = await response.json() as Partial<ComposerQualityHead>;
-    if (
-      !Array.isArray(data.labels)
-      || !Array.isArray(data.coefficients)
-      || !Array.isArray(data.intercepts)
-      || typeof data.base_model !== 'string'
-    ) {
-      throw new Error('Quality classifier head is missing required fields');
-    }
+      const data = await response.json() as Partial<ComposerQualityHead>;
+      if (
+        !Array.isArray(data.labels)
+        || !Array.isArray(data.coefficients)
+        || !Array.isArray(data.intercepts)
+        || typeof data.base_model !== 'string'
+      ) {
+        throw new Error('Quality classifier head is missing required fields');
+      }
 
-    qualityHead = {
-      model: data.model ?? QUALITY_MODEL_NAME,
-      provider: data.provider ?? QUALITY_MODEL_PROVIDER,
-      base_model: data.base_model,
-      normalize_embeddings: Boolean(data.normalize_embeddings),
-      labels: data.labels as ComposerQualityLabel[],
-      coefficients: data.coefficients,
-      intercepts: data.intercepts,
-    };
-    qualityStatus = 'ready';
-  } catch (err: any) {
-    qualityStatus = 'error';
-    qualityError = err?.message ?? 'Unknown quality model error';
-    throw err;
-  }
+      qualityHead = {
+        model: data.model ?? QUALITY_MODEL_NAME,
+        provider: data.provider ?? QUALITY_MODEL_PROVIDER,
+        base_model: data.base_model,
+        normalize_embeddings: Boolean(data.normalize_embeddings),
+        labels: data.labels as ComposerQualityLabel[],
+        coefficients: data.coefficients,
+        intercepts: data.intercepts,
+      };
+      qualityStatus = 'ready';
+    } catch (err: any) {
+      qualityStatus = 'error';
+      qualityError = err?.message ?? 'Unknown quality model error';
+      throw err;
+    }
+  });
 }
 
 function normalizeCaptionText(text: string): string {
