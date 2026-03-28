@@ -13,14 +13,16 @@
 //
 // All functions are pure and synchronous — safe to call anywhere.
 
+import {
+  AppBskyEmbedExternal,
+  AppBskyEmbedRecordWithMedia,
+} from '@atproto/api';
 import type {
   AppBskyFeedDefs,
   AppBskyFeedPost,
   AppBskyRichtextFacet,
   AppBskyEmbedImages,
-  AppBskyEmbedExternal,
   AppBskyEmbedRecord,
-  AppBskyEmbedRecordWithMedia,
   ComAtprotoLabelDefs,
 } from '@atproto/api';
 import { extractRecordDisplayText } from '../atproto/recordContent.js';
@@ -156,9 +158,36 @@ export interface ResolvedEmbed {
   quotedAuthorHandle?: string;
   quotedAuthorDisplayName?: string;
   quotedText?: string;
+  quotedExternal?: { uri: string; domain: string; title?: string; description?: string; thumb?: string };
   // recordWithMedia: both images/external and record
   mediaImages?: { url: string; alt: string }[];
   mediaExternal?: { uri: string; domain: string; title?: string; description?: string; thumb?: string };
+}
+
+function resolveExternalPreview(externalEmbed: any): { uri: string; domain: string; title?: string; description?: string; thumb?: string } | undefined {
+  const ext = externalEmbed?.external ?? externalEmbed;
+  const uri = ext?.uri ?? '';
+  if (!uri) return undefined;
+  return {
+    uri,
+    domain: canonicalDomain(uri),
+    title: ext.title,
+    description: ext.description,
+    thumb: ext.thumb,
+  };
+}
+
+function resolveQuotedExternalPreview(recordView: any): ResolvedEmbed['quotedExternal'] | undefined {
+  const embeds = Array.isArray(recordView?.embeds) ? recordView.embeds : [];
+  for (const embedded of embeds) {
+    if (AppBskyEmbedExternal.isView(embedded)) {
+      return resolveExternalPreview(embedded);
+    }
+    if (AppBskyEmbedRecordWithMedia.isView(embedded) && AppBskyEmbedExternal.isView((embedded as any).media)) {
+      return resolveExternalPreview((embedded as any).media);
+    }
+  }
+  return undefined;
 }
 
 export function resolveEmbed(embed: any): ResolvedEmbed | null {
@@ -196,6 +225,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
   if (type === 'app.bsky.embed.record#view' || type === 'app.bsky.embed.record') {
     const rec = embed.record ?? embed;
     const quotedRecord = (rec.value ?? rec.record) as unknown;
+    const quotedExternal = resolveQuotedExternalPreview(rec);
     return {
       kind: 'record',
       quotedUri: rec.uri,
@@ -203,6 +233,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
       quotedAuthorHandle: rec.author?.handle,
       quotedAuthorDisplayName: rec.author?.displayName,
       quotedText: extractRecordDisplayText(quotedRecord),
+      ...(quotedExternal ? { quotedExternal } : {}),
     };
   }
 
@@ -212,6 +243,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
     const mediaType = media.$type as string ?? '';
     const imgs = (media.images ?? []) as any[];
     const ext = media.external ?? null;
+    const quotedExternal = resolveQuotedExternalPreview(rec);
     return {
       kind: 'recordWithMedia',
       quotedUri: rec.uri,
@@ -219,6 +251,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
       quotedAuthorHandle: rec.author?.handle,
       quotedAuthorDisplayName: rec.author?.displayName,
       quotedText: extractRecordDisplayText((rec.value ?? rec.record) as unknown),
+      ...(quotedExternal ? { quotedExternal } : {}),
       ...(imgs.length > 0 ? { mediaImages: imgs.map(i => ({ url: i.fullsize ?? i.thumb ?? '', alt: i.alt ?? '' })) } : {}),
       ...(ext && mediaType.includes('external') ? {
         mediaExternal: {

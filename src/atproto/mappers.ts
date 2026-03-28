@@ -5,6 +5,7 @@ import {
   AppBskyEmbedExternal,
   AppBskyEmbedRecord,
   AppBskyEmbedRecordWithMedia,
+  AppBskyEmbedVideo,
   AppBskyActorDefs,
   AppBskyNotificationListNotifications,
 } from '@atproto/api';
@@ -13,6 +14,7 @@ import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensi
 import {
   asTrimmedString,
   contentUnionToText,
+  extractRecordDisplayText,
   hasDisplayableRecordContent,
 } from '../lib/atproto/recordContent.js';
 
@@ -81,8 +83,21 @@ function mapImageViewToMedia(embed: AppBskyEmbedImages.View): NonNullable<MockPo
     type: 'image' as const,
     url: img.fullsize,
     alt: img.alt,
-    aspectRatio: img.aspectRatio ? img.aspectRatio.width / img.aspectRatio.height : undefined,
+    ...(img.aspectRatio ? { aspectRatio: img.aspectRatio.width / img.aspectRatio.height } : {}),
   }));
+}
+
+function mapVideoViewToEmbed(embed: AppBskyEmbedVideo.View): Extract<NonNullable<MockPost['embed']>, { type: 'video' }> {
+  const aspectRatio = embed.aspectRatio ? embed.aspectRatio.width / embed.aspectRatio.height : undefined;
+  const domain = extractDomain(embed.playlist);
+  return {
+    type: 'video',
+    url: embed.playlist,
+    ...(embed.thumbnail ? { thumb: embed.thumbnail } : {}),
+    ...(embed.alt ? { description: embed.alt } : {}),
+    ...(aspectRatio ? { aspectRatio } : {}),
+    domain: domain === 'video.bsky.app' ? 'bsky.app' : domain,
+  };
 }
 
 function buildExternalEmbedData(embed: AppBskyEmbedExternal.View): Extract<NonNullable<MockPost['embed']>, { type: 'external' }> {
@@ -91,11 +106,15 @@ function buildExternalEmbedData(embed: AppBskyEmbedExternal.View): Extract<NonNu
     url: embed.external.uri,
     title: embed.external.title,
     description: embed.external.description,
-    thumb: embed.external.thumb,
     domain: extractDomain(embed.external.uri),
-    authorName: (embed.external as any).author || (embed.external as any).authorName,
-    authorUrl: (embed.external as any).authorUrl,
-    publisher: (embed.external as any).siteName || (embed.external as any).publisher,
+    ...(embed.external.thumb ? { thumb: embed.external.thumb } : {}),
+    ...(((embed.external as any).author || (embed.external as any).authorName)
+      ? { authorName: (embed.external as any).author || (embed.external as any).authorName }
+      : {}),
+    ...((embed.external as any).authorUrl ? { authorUrl: (embed.external as any).authorUrl } : {}),
+    ...(((embed.external as any).siteName || (embed.external as any).publisher)
+      ? { publisher: (embed.external as any).siteName || (embed.external as any).publisher }
+      : {}),
   };
 }
 
@@ -115,6 +134,11 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
 
     if (!embed && AppBskyEmbedExternal.isView(quotedEmbed)) {
       embed = buildExternalEmbedData(quotedEmbed);
+      continue;
+    }
+
+    if (!embed && AppBskyEmbedVideo.isView(quotedEmbed)) {
+      embed = mapVideoViewToEmbed(quotedEmbed);
       continue;
     }
 
@@ -151,7 +175,9 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     }
   }
 
-  return {
+  const quotedLabelValues = mapRawLabelValues((record as any).labels);
+
+  const mapped: Omit<MockPost, 'replyTo' | 'threadRoot'> = {
     id: record.uri,
     cid: record.cid,
     author: {
@@ -168,9 +194,17 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     repostCount: record.repostCount || 0,
     bookmarkCount: 0,
     chips: [],
+    ...(quotedLabelValues.length > 0 ? { contentLabels: quotedLabelValues } : {}),
     ...(media ? { media } : {}),
     ...(embed ? { embed } : {}),
   };
+
+  const sensitiveResult = detectSensitiveMedia(mapped as MockPost);
+  if (sensitiveResult.isSensitive) {
+    mapped.sensitiveMedia = { isSensitive: true, reasons: sensitiveResult.reasons };
+  }
+
+  return mapped;
 }
 
 // ─── Post View Mapper ──────────────────────────────────────────────────────
@@ -254,7 +288,8 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     } else {
       embedData = buildExternalEmbedData(embed);
     }
-
+  } else if (AppBskyEmbedVideo.isView(embed)) {
+    embedData = mapVideoViewToEmbed(embed);
   } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView((embed as any).record)) {
     embedData = {
       type: 'quote' as const,

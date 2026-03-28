@@ -34,9 +34,10 @@ export interface MockPost {
     title?: string;
     description?: string;
     domain: string;
+    aspectRatio?: number;
   } | {
     type: 'quote';
-    post: Omit<MockPost, 'embed' | 'replyTo' | 'threadRoot'>;
+    post: Omit<MockPost, 'replyTo' | 'threadRoot'>;
     externalLink?: { url: string; title?: string; description?: string; thumb?: string; domain: string };
   };
   chips: ChipType[];

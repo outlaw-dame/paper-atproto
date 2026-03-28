@@ -1,6 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useMiniPlayer } from '../context/MiniPlayerContext.js';
 import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
+import {
+  describeSourceKind,
+  describeSupportLevel,
+  detectVideoSourceKind,
+  getLikelySourceSupport,
+  getLikelyUnsupportedReason,
+  getVideoPlaybackCapabilities,
+} from '../lib/mediaSupport.js';
 
 interface VideoPlayerProps {
   url: string;
@@ -22,11 +30,29 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const [playbackRate, setPlaybackRate] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [showCapabilities, setShowCapabilities] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastPersistAtRef = useRef(0);
   const { entry: miniEntry, activate } = useMiniPlayer();
   const mediaKey = `video:${postId ?? url}`;
+  const [capabilities] = useState(() => getVideoPlaybackCapabilities());
+  const sourceKind = detectVideoSourceKind(url);
+  const likelySourceSupport = getLikelySourceSupport(capabilities, sourceKind);
+  const likelyUnsupportedReason = getLikelyUnsupportedReason(capabilities, sourceKind);
+  const sourceSupportWarning = playbackError ?? likelyUnsupportedReason;
+  const capabilityRows = [
+    capabilities.hls,
+    capabilities.mp4,
+    capabilities.mp4H264Aac,
+    capabilities.mp4HevcAac,
+    capabilities.mp4Av1Aac,
+    capabilities.webm,
+    capabilities.webmVp9Opus,
+    capabilities.webmVp8Vorbis,
+  ];
+  const shouldShowCapabilityPanel = showCapabilities || playbackError !== null;
 
   // Is the floating mini-player currently showing this video?
   const isInMiniPlayer = miniEntry?.url === url && miniEntry?.postId === (postId ?? url);
@@ -130,6 +156,13 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     saveMediaPlaybackPrefs(mediaKey, { playbackRate: nextRate });
   };
 
+  const handlePlaybackError = () => {
+    const generic = 'This browser could not play the current video source.';
+    setPlaybackError(likelyUnsupportedReason ?? generic);
+    setShowCapabilities(true);
+    setIsPlaying(false);
+  };
+
   return (
     <div
       ref={containerRef}
@@ -142,6 +175,69 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
       }}
     >
+      {shouldShowCapabilityPanel && !isInMiniPlayer && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            right: 10,
+            zIndex: 11,
+            background: 'rgba(0,0,0,0.78)',
+            color: '#fff',
+            borderRadius: 12,
+            border: '1px solid rgba(255,255,255,0.14)',
+            padding: '10px 12px',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+            <div>
+              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, letterSpacing: '0.02em' }}>Playback support</p>
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: 'rgba(255,255,255,0.74)' }}>
+                Current source: {describeSourceKind(sourceKind)}
+                {likelySourceSupport === true ? ' · likely supported' : ''}
+                {likelySourceSupport === false ? ' · likely unsupported' : ''}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setShowCapabilities(false);
+                setPlaybackError(null);
+              }}
+              style={{
+                border: 'none',
+                background: 'rgba(255,255,255,0.12)',
+                color: '#fff',
+                borderRadius: 999,
+                padding: '4px 8px',
+                cursor: 'pointer',
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              Hide
+            </button>
+          </div>
+          {sourceSupportWarning && (
+            <p style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.4, color: '#FFD7A8' }}>
+              {sourceSupportWarning}
+            </p>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px 10px', fontSize: 11 }}>
+            {capabilityRows.map((row) => (
+              <React.Fragment key={row.key}>
+                <span style={{ color: 'rgba(255,255,255,0.82)' }}>{row.label}</span>
+                <span style={{ color: row.supported ? '#97F0C2' : 'rgba(255,255,255,0.62)', fontWeight: 700 }}>
+                  {describeSupportLevel(row.level)}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Thumbnail */}
       {thumb && (
         <img
@@ -205,6 +301,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
               objectFit: 'cover',
             }}
             onClick={togglePlay}
+            onCanPlay={() => setPlaybackError(null)}
             onLoadedMetadata={(event) => {
               const nextDuration = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0;
               const prefs = getMediaPlaybackPrefs(mediaKey);
@@ -218,6 +315,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
               setCurrentTime(event.currentTarget.currentTime || 0);
               setIsMuted(event.currentTarget.muted);
               setPlaybackRate(event.currentTarget.playbackRate || 1);
+              setPlaybackError(null);
             }}
             onTimeUpdate={(event) => {
               const nextTime = event.currentTarget.currentTime;
@@ -239,6 +337,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
                 playbackRate: event.currentTarget.playbackRate,
               });
             }}
+            onError={handlePlaybackError}
             onEnded={(event) => {
               setIsPlaying(false);
               saveMediaPlaybackPrefs(mediaKey, {
@@ -342,6 +441,15 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
                 </label>
                 <button onClick={enterFullscreen} type="button" aria-label="Open fullscreen" style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
                   Full
+                </button>
+                <button
+                  onClick={() => setShowCapabilities((prev) => !prev)}
+                  type="button"
+                  aria-label="Show playback formats"
+                  aria-pressed={showCapabilities}
+                  style={{ border: 'none', background: 'rgba(0,0,0,0.52)', color: '#fff', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}
+                >
+                  Formats
                 </button>
               </div>
             </div>
