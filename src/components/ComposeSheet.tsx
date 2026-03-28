@@ -45,7 +45,7 @@ interface ComposeMediaItem {
   alt: string;
   width: number;
   height: number;
-  mediaType: 'image' | 'video'; // support images and videos
+  mediaType: 'image' | 'video';
   // Video-specific fields
   captions?: Array<{
     lang: string; // ISO 639-1 code (e.g., 'en', 'pt', 'es')
@@ -56,6 +56,11 @@ interface ComposeMediaItem {
 }
 
 const MAX_MEDIA = 4;
+const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
+const VIDEO_UPLOAD_MIME = 'video/mp4';
+const VIDEO_POLL_MAX_ATTEMPTS = 12;
+const VIDEO_POLL_BASE_DELAY_MS = 900;
+const VIDEO_POLL_CAP_DELAY_MS = 8_000;
 const ALT_REQUIREMENT_KEY = 'paper.compose.requireAltText';
 const RECENT_HASHTAGS_KEY = 'paper.compose.recentHashtags';
 const FAVORITE_HASHTAGS_KEY = 'paper.compose.favoriteHashtags';
@@ -132,6 +137,72 @@ function describeAltQuality(value: string): string | null {
   return issues[0]?.message ?? null;
 }
 
+function sanitizeUserText(value: string): string {
+  // Strip control characters except tab/newline to avoid malformed payloads.
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+}
+
+function sanitizeAltText(value: string): string {
+  return sanitizeUserText(value).trim().slice(0, ALT_MAX_CHARS);
+}
+
+function isAcceptedVideoFile(file: File): boolean {
+  return file.type.toLowerCase() === VIDEO_UPLOAD_MIME;
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value.toFixed(value >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function jitteredPollDelayMs(previous: number): number {
+  const nextBase = Math.min(VIDEO_POLL_CAP_DELAY_MS, Math.max(VIDEO_POLL_BASE_DELAY_MS, previous * 1.8));
+  const jitter = 0.75 + Math.random() * 0.5;
+  return Math.min(VIDEO_POLL_CAP_DELAY_MS, Math.round(nextBase * jitter));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function toUserFacingPostError(err: unknown): string {
+  const rawMessage = (err as { message?: string })?.message?.trim();
+  if (!rawMessage) return 'Failed to post. Please try again.';
+
+  if (/authentication|required|invalid token|expired/i.test(rawMessage)) {
+    return 'Your session expired. Please sign in again and retry.';
+  }
+
+  if (/network|fetch|timeout|abort/i.test(rawMessage)) {
+    return 'Network issue while publishing. Please check your connection and try again.';
+  }
+
+  if (rawMessage.length > 220) {
+    return 'Failed to post due to a server error. Please try again.';
+  }
+
+  return rawMessage;
+}
+
+function buildUnsupportedVideoHint(files: File[]): string {
+  if (files.length === 0) return '';
+  const labels = files
+    .map((file) => file.name?.trim() || 'Unnamed video')
+    .slice(0, 2)
+    .join(', ');
+  const moreCount = Math.max(0, files.length - 2);
+  return `Skipped unsupported video format${files.length > 1 ? 's' : ''} (${labels}${moreCount > 0 ? `, +${moreCount} more` : ''}). Convert to MP4 to upload.`;
+}
+
 async function loadImageDimensions(file: File): Promise<{ width: number; height: number }> {
   const url = URL.createObjectURL(file);
   try {
@@ -149,18 +220,23 @@ async function loadImageDimensions(file: File): Promise<{ width: number; height:
   }
 }
 
-async function loadVideoDimensions(file: File): Promise<{ width: number; height: number }> {
+async function loadVideoMetadata(file: File): Promise<{ width: number; height: number; duration: number }> {
   const url = URL.createObjectURL(file);
   try {
-    const dims = await new Promise<{ width: number; height: number }>((resolve) => {
-      const vid = document.createElement('video');
-      vid.onloadedmetadata = () => {
-        resolve({ width: vid.videoWidth || 1920, height: vid.videoHeight || 1080 });
+    const metadata = await new Promise<{ width: number; height: number; duration: number }>((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        resolve({
+          width: video.videoWidth || 1920,
+          height: video.videoHeight || 1080,
+          duration: Number.isFinite(video.duration) ? video.duration : 0,
+        });
       };
-      vid.onerror = () => resolve({ width: 1920, height: 1080 });
-      vid.src = url;
+      video.onerror = () => resolve({ width: 1920, height: 1080, duration: 0 });
+      video.src = url;
     });
-    return dims;
+    return metadata;
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -455,9 +531,45 @@ function AudienceIcon({ audience }: { audience: AudienceOption }) {
 }
 
 // ─── Live preview card ─────────────────────────────────────────────────────
-function LivePreview({ text, audience }: { text: string; audience: AudienceOption }) {
+function LivePreview({
+  text,
+  audience,
+  mediaItems,
+  linkPreview,
+  profileDisplayName,
+  profileHandle,
+  profileAvatar,
+}: {
+  text: string;
+  audience: AudienceOption;
+  mediaItems: ComposeMediaItem[];
+  linkPreview: ComposeLinkPreview | null;
+  profileDisplayName?: string;
+  profileHandle?: string;
+  profileAvatar?: string;
+}) {
   const links = detectLinks(text);
   const hashtags = text.match(/#\w+/g) ?? [];
+  const canShowLinkPreview = !mediaItems.length && !!linkPreview && linkPreview.safetyStatus !== 'unsafe';
+  const previewMediaItems = mediaItems.slice(0, 4);
+  const mediaCarouselRef = useRef<HTMLDivElement>(null);
+  const [activeMediaSlide, setActiveMediaSlide] = useState(0);
+  const identityName = profileDisplayName?.trim() || profileHandle?.trim() || 'you.bsky.social';
+  const identityHandle = profileHandle?.trim() || 'you.bsky.social';
+  const avatarInitial = (profileDisplayName?.[0] ?? profileHandle?.[0] ?? 'Y').toUpperCase();
+
+  useEffect(() => {
+    setActiveMediaSlide((prev) => Math.min(prev, Math.max(0, previewMediaItems.length - 1)));
+  }, [previewMediaItems.length]);
+
+  const handlePreviewMediaScroll = useCallback(() => {
+    const el = mediaCarouselRef.current;
+    if (!el || previewMediaItems.length <= 1) return;
+    const itemWidth = el.scrollWidth / previewMediaItems.length;
+    if (!Number.isFinite(itemWidth) || itemWidth <= 0) return;
+    const idx = Math.round(el.scrollLeft / itemWidth);
+    setActiveMediaSlide(Math.min(Math.max(idx, 0), previewMediaItems.length - 1));
+  }, [previewMediaItems.length]);
 
   return (
     <motion.div
@@ -490,16 +602,114 @@ function LivePreview({ text, audience }: { text: string; audience: AudienceOptio
       <div style={{ padding: '12px 14px' }}>
         {/* Author mock */}
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>Y</div>
+          <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 700, flexShrink: 0, overflow: 'hidden' }}>
+            {profileAvatar ? (
+              <img src={profileAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : avatarInitial}
+          </div>
           <div>
-            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2 }}>you.bsky.social</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)', letterSpacing: -0.2 }}>{identityName}</p>
+            {identityName !== identityHandle && (
+              <p style={{ fontSize: 12, color: 'var(--label-3)', marginTop: 1 }}>@{identityHandle}</p>
+            )}
             <p style={{ fontSize: 11, color: 'var(--label-4)' }}>just now</p>
           </div>
         </div>
         {/* Rendered text */}
-        <p style={{ fontSize: 15, lineHeight: 1.45, letterSpacing: -0.2, color: 'var(--label-1)', wordBreak: 'break-word' }}>
-          {linkifyText(text)}
-        </p>
+        {text.trim().length > 0 && (
+          <p style={{ fontSize: 15, lineHeight: 1.45, letterSpacing: -0.2, color: 'var(--label-1)', wordBreak: 'break-word' }}>
+            {linkifyText(text)}
+          </p>
+        )}
+
+        {previewMediaItems.length > 0 && (
+          <div style={{
+            marginTop: text.trim().length > 0 ? 10 : 2,
+            borderRadius: 12,
+            overflow: 'hidden',
+          }}>
+            <div
+              ref={mediaCarouselRef}
+              onScroll={handlePreviewMediaScroll}
+              style={{
+                display: 'flex',
+                overflowX: previewMediaItems.length > 1 ? 'auto' : 'hidden',
+                scrollSnapType: previewMediaItems.length > 1 ? 'x mandatory' : 'none',
+                scrollBehavior: 'smooth',
+                gap: 8,
+                WebkitOverflowScrolling: 'touch',
+                scrollbarWidth: 'none',
+              }}
+            >
+              {previewMediaItems.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    position: 'relative',
+                    aspectRatio: '4 / 3',
+                    background: 'var(--fill-2)',
+                    flexShrink: 0,
+                    width: previewMediaItems.length === 1 ? '100%' : '100%',
+                    scrollSnapAlign: 'start',
+                  }}
+                >
+                  {item.mediaType === 'video' ? (
+                    <video
+                      src={item.previewUrl}
+                      muted
+                      playsInline
+                      loop
+                      autoPlay
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <img src={item.previewUrl} alt={item.alt || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  )}
+                  {item.mediaType === 'video' && (
+                    <div style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,0.6)', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, padding: '2px 7px' }}>
+                      VIDEO
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {previewMediaItems.length > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 5, marginTop: 7, marginBottom: 2 }}>
+                {previewMediaItems.map((item, idx) => (
+                  <div
+                    key={`preview-dot-${item.id}`}
+                    style={{
+                      width: activeMediaSlide === idx ? 16 : 6,
+                      height: 6,
+                      borderRadius: 999,
+                      background: activeMediaSlide === idx ? 'var(--blue)' : 'var(--fill-3)',
+                      transition: 'width 0.2s ease, background 0.2s ease',
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {canShowLinkPreview && linkPreview && (
+          <div style={{ marginTop: 10, border: '1px solid var(--sep)', borderRadius: 12, overflow: 'hidden', background: 'var(--fill-1)' }}>
+            {linkPreview.image && (
+              <div style={{ height: 130, background: 'var(--fill-2)' }}>
+                <img src={linkPreview.image} alt={linkPreview.title || 'Link preview image'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+            )}
+            <div style={{ padding: '9px 10px' }}>
+              <p style={{ margin: 0, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--label-3)' }}>{linkPreview.siteName}</p>
+              <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 700, color: 'var(--label-1)', lineHeight: 1.35 }}>{linkPreview.title}</p>
+              {linkPreview.description && (
+                <p style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35 }}>{linkPreview.description}</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Hashtag chips */}
         {hashtags.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
@@ -509,7 +719,7 @@ function LivePreview({ text, audience }: { text: string; audience: AudienceOptio
           </div>
         )}
         {/* Detected link pill */}
-        {links.length > 0 && (
+        {links.length > 0 && !canShowLinkPreview && (
           <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, padding: '7px 10px', borderRadius: 10, background: 'var(--fill-2)' }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--label-3)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
@@ -813,7 +1023,10 @@ export default function ComposeSheet({ onClose }: Props) {
   const [showFormatBar, setShowFormatBar] = useState(false);
   const [activeTool, setActiveTool] = useState<ActiveTool>(null);
   const [posting, setPosting] = useState(false);
+  const [postStatus, setPostStatus] = useState<string | null>(null);
+  const [videoJobProgress, setVideoJobProgress] = useState<number | null>(null);
   const [postError, setPostError] = useState<string | null>(null);
+  const [mediaHint, setMediaHint] = useState<string | null>(null);
   const [mediaItems, setMediaItems] = useState<ComposeMediaItem[]>([]);
   const [editingAltId, setEditingAltId] = useState<string | null>(null);
   const [altDraft, setAltDraft] = useState('');
@@ -843,6 +1056,7 @@ export default function ComposeSheet({ onClose }: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const altTaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const mediaCarouselRef = useRef<HTMLDivElement>(null);
   const linkPreviewRequestIdRef = useRef(0);
   const mentalHealthGuidanceDraftRef = useRef<string | null>(null);
@@ -858,6 +1072,10 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const missingAltCount = useMemo(
     () => mediaItems.reduce((count, item) => count + (item.alt.trim().length === 0 ? 1 : 0), 0),
+    [mediaItems]
+  );
+  const missingImageAltCount = useMemo(
+    () => mediaItems.reduce((count, item) => count + (item.mediaType === 'image' && item.alt.trim().length === 0 ? 1 : 0), 0),
     [mediaItems]
   );
   const describedMediaCount = mediaItems.length - missingAltCount;
@@ -1125,15 +1343,115 @@ export default function ComposeSheet({ onClose }: Props) {
     };
   }, [agent]);
 
+  const waitForVideoBlob = useCallback(async (jobId: string): Promise<unknown> => {
+    let delayMs = VIDEO_POLL_BASE_DELAY_MS;
+
+    for (let attempt = 1; attempt <= VIDEO_POLL_MAX_ATTEMPTS; attempt += 1) {
+      const statusRes = await atpCall((signal) => agent.app.bsky.video.getJobStatus({ jobId }, { signal }), {
+        maxAttempts: 3,
+        timeoutMs: 12_000,
+      });
+      const status = statusRes.data.jobStatus;
+
+      if (typeof status.progress === 'number') {
+        setVideoJobProgress(Math.max(0, Math.min(100, status.progress)));
+      }
+
+      if (status.state === 'JOB_STATE_COMPLETED') {
+        if (!status.blob) {
+          throw new Error('Video processing completed, but no media blob was returned.');
+        }
+        return status.blob;
+      }
+
+      if (status.state === 'JOB_STATE_FAILED') {
+        throw new Error(status.message || status.error || 'Video processing failed on the server.');
+      }
+
+      if (attempt < VIDEO_POLL_MAX_ATTEMPTS) {
+        await delay(delayMs);
+        delayMs = jitteredPollDelayMs(delayMs);
+      }
+    }
+
+    throw new Error('Video processing timed out. Please retry with a shorter clip or try again later.');
+  }, [agent]);
+
+  const buildVideoEmbed = useCallback(async (videoItem: ComposeMediaItem) => {
+    const file = videoItem.file;
+    if (!file) {
+      throw new Error('Missing local video file for upload.');
+    }
+    if (!isAcceptedVideoFile(file)) {
+      throw new Error('Only MP4 videos are currently supported for posting.');
+    }
+    if (file.size > VIDEO_MAX_BYTES) {
+      throw new Error(`Video is too large (${formatBytes(file.size)}). Maximum supported size is ${formatBytes(VIDEO_MAX_BYTES)}.`);
+    }
+
+    setPostStatus('Checking video upload limits...');
+    const limitsRes = await atpCall((signal) => agent.app.bsky.video.getUploadLimits(undefined, { signal }), {
+      maxAttempts: 2,
+      timeoutMs: 12_000,
+    });
+    const limits = limitsRes.data;
+    if (!limits.canUpload) {
+      throw new Error(limits.message || 'Your account cannot upload videos right now.');
+    }
+    if (typeof limits.remainingDailyVideos === 'number' && limits.remainingDailyVideos <= 0) {
+      throw new Error('You reached your daily video upload limit. Please try again tomorrow.');
+    }
+    if (typeof limits.remainingDailyBytes === 'number' && file.size > limits.remainingDailyBytes) {
+      throw new Error(`This video exceeds your remaining daily quota (${formatBytes(limits.remainingDailyBytes)} left).`);
+    }
+
+    setPostStatus('Uploading video...');
+    const uploadRes = await atpCall(
+      (signal) => agent.app.bsky.video.uploadVideo(file, { signal, encoding: VIDEO_UPLOAD_MIME }),
+      { maxAttempts: 2, timeoutMs: 180_000 }
+    );
+    const initialStatus = uploadRes.data.jobStatus;
+
+    let videoBlob = initialStatus.blob;
+    if (!videoBlob) {
+      if (initialStatus.state === 'JOB_STATE_FAILED') {
+        throw new Error(initialStatus.message || initialStatus.error || 'Video upload failed.');
+      }
+      setPostStatus('Processing video...');
+      setVideoJobProgress(typeof initialStatus.progress === 'number' ? initialStatus.progress : 0);
+      videoBlob = await waitForVideoBlob(initialStatus.jobId);
+    }
+
+    return {
+      $type: 'app.bsky.embed.video' as const,
+      video: videoBlob,
+      ...(sanitizeAltText(videoItem.alt) ? { alt: sanitizeAltText(videoItem.alt) } : {}),
+      ...(videoItem.width > 0 && videoItem.height > 0 ? { aspectRatio: { width: videoItem.width, height: videoItem.height } } : {}),
+    };
+  }, [agent, waitForVideoBlob]);
+
   const commitPost = useCallback(async () => {
     if (!canPost || !agent.session) return;
     setPosting(true);
+    setPostStatus('Preparing post...');
+    setVideoJobProgress(null);
     setPostError(null);
     try {
-      const trimmedText = text.trim();
+      const sanitizedText = sanitizeUserText(text);
+      const trimmedText = sanitizedText.trim();
       const rt = new RichText({ text: trimmedText });
       if (trimmedText.length > 0) {
         await rt.detectFacets(agent);
+      }
+
+      const videoItems = mediaItems.filter((item) => item.mediaType === 'video');
+      const imageItems = mediaItems.filter((item) => item.mediaType === 'image');
+
+      if (videoItems.length > 1) {
+        throw new Error('Please attach only one video per post.');
+      }
+      if (videoItems.length > 0 && imageItems.length > 0) {
+        throw new Error('Mixing photos and video in one post is not supported yet. Use either photos/GIFs or one video.');
       }
 
       let embed:
@@ -1146,6 +1464,12 @@ export default function ComposeSheet({ onClose }: Props) {
             }>;
           }
         | {
+            $type: 'app.bsky.embed.video';
+            video: unknown;
+            alt?: string;
+            aspectRatio?: { width: number; height: number };
+          }
+        | {
             $type: 'app.bsky.embed.external';
             external: {
               uri: string;
@@ -1156,13 +1480,17 @@ export default function ComposeSheet({ onClose }: Props) {
           }
         | undefined;
 
-      if (mediaItems.length > 0) {
+      if (videoItems.length === 1) {
+        const videoItem = videoItems[0]!;
+        embed = await buildVideoEmbed(videoItem);
+      } else if (imageItems.length > 0) {
+        setPostStatus('Uploading media...');
         const uploadedImages: Array<{
           image: unknown;
           alt: string;
           aspectRatio?: { width: number; height: number };
         }> = [];
-        for (const item of mediaItems) {
+        for (const item of imageItems) {
           let blobToUpload: Blob | File | null = item.file;
           let encoding = item.file?.type || 'image/jpeg';
 
@@ -1179,10 +1507,11 @@ export default function ComposeSheet({ onClose }: Props) {
             throw new Error('Missing media data for upload.');
           }
 
-          const upload = await agent.uploadBlob(blobToUpload, {
+          const upload = await atpCall((signal) => agent.uploadBlob(blobToUpload!, {
             encoding,
-          });
-          const alt = item.alt.trim();
+            signal,
+          }), { maxAttempts: 2, timeoutMs: 60_000 });
+          const alt = sanitizeAltText(item.alt);
           uploadedImages.push({
             image: upload.data.blob,
             alt,
@@ -1194,10 +1523,10 @@ export default function ComposeSheet({ onClose }: Props) {
           images: uploadedImages,
         };
       } else if (linkPreview && linkPreview.safetyStatus !== 'unsafe') {
+        setPostStatus('Preparing link preview...');
         embed = await buildExternalEmbed(linkPreview);
       }
 
-      // Build reply ref when replying to an existing post.
       const replyRef = replyTarget ? {
         root: {
           uri: replyTarget.threadRoot?.id ?? replyTarget.id,
@@ -1209,30 +1538,33 @@ export default function ComposeSheet({ onClose }: Props) {
         },
       } : undefined;
 
-      await agent.post({
+      setPostStatus('Publishing post...');
+      await atpCall((signal) => agent.post({
         text: rt.text,
         facets: rt.facets,
         createdAt: new Date().toISOString(),
         ...(embed ? { embed } : {}),
         ...(replyRef ? { reply: replyRef } : {}),
-      });
+      }, { signal }), { maxAttempts: 2, timeoutMs: 20_000 });
 
       if (mediaItems.length > 0) {
-        const describedItems = mediaItems.reduce((count, item) => count + (item.alt.trim().length > 0 ? 1 : 0), 0);
+        const describedItems = mediaItems.reduce((count, item) => count + (sanitizeAltText(item.alt).length > 0 ? 1 : 0), 0);
         recordAltPostCoverage(mediaItems.length, describedItems);
         setAltMetrics(getAltTextMetricsSnapshot());
       }
 
-      const usedTags = extractHashtags(text);
+      const usedTags = extractHashtags(sanitizedText);
       if (usedTags.length > 0) saveRecentHashtags(usedTags);
 
       onClose();
-    } catch (err: any) {
-      setPostError(err?.message ?? 'Failed to post. Please try again.');
+    } catch (err: unknown) {
+      setPostError(toUserFacingPostError(err));
     } finally {
       setPosting(false);
+      setPostStatus(null);
+      setVideoJobProgress(null);
     }
-  }, [agent, buildExternalEmbed, canPost, linkPreview, mediaItems, onClose, replyTarget, text]);
+  }, [agent, buildExternalEmbed, buildVideoEmbed, canPost, linkPreview, mediaItems, onClose, replyTarget, text]);
 
   const handlePost = useCallback(() => {
     if (!canPost) return;
@@ -1266,8 +1598,8 @@ export default function ComposeSheet({ onClose }: Props) {
       }
     }
     // Auto-show preview once there's meaningful content
-    if (val.trim().length > 15 && !showPreview) setShowPreview(true);
-    if (val.trim().length === 0) setShowPreview(false);
+    if (val.trim().length > 12 && !showPreview) setShowPreview(true);
+    if (val.trim().length === 0 && mediaItems.length === 0 && !linkPreview) setShowPreview(false);
     // Auto-resize
     const ta = e.target;
     ta.style.height = 'auto';
@@ -1296,6 +1628,10 @@ export default function ComposeSheet({ onClose }: Props) {
     fileInputRef.current?.click();
   };
 
+  const openCameraPicker = () => {
+    cameraInputRef.current?.click();
+  };
+
   const handleAddLink = useCallback(() => {
     const urlInText = getFirstPreviewUrl(text);
     if (!urlInText) {
@@ -1317,35 +1653,93 @@ export default function ComposeSheet({ onClose }: Props) {
   const handleMediaSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
+
+    setPostError(null);
+    setMediaHint(null);
+
+    const existingVideos = mediaItems.filter((item) => item.mediaType === 'video').length;
+    const existingImages = mediaItems.filter((item) => item.mediaType === 'image').length;
     const slotsLeft = Math.max(0, MAX_MEDIA - mediaItems.length);
-    const acceptedFiles = files
-      .filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/'))
-      .slice(0, slotsLeft);
+
+    const acceptedFiles = files.filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/')).slice(0, slotsLeft);
     if (acceptedFiles.length === 0) {
-      setPostError(`You can attach up to ${MAX_MEDIA} photos or videos.`);
+      setPostError(`You can attach up to ${MAX_MEDIA} media items.`);
       e.target.value = '';
       return;
     }
 
-    const items = await Promise.all(
-      acceptedFiles.map(async (file) => {
-        const isVideo = file.type.startsWith('video/');
-        const { width, height } = isVideo
-          ? await loadVideoDimensions(file)
-          : await loadImageDimensions(file);
-        return {
+    const newVideoCount = acceptedFiles.filter((file) => file.type.startsWith('video/')).length;
+    const newImageCount = acceptedFiles.filter((file) => file.type.startsWith('image/')).length;
+
+    if (existingVideos > 0 && newImageCount > 0) {
+      setPostError('You already attached a video. Remove it before adding photos or GIFs.');
+      e.target.value = '';
+      return;
+    }
+    if (existingImages > 0 && newVideoCount > 0) {
+      setPostError('You already attached photos/GIFs. Remove them before adding a video.');
+      e.target.value = '';
+      return;
+    }
+    if (existingVideos + newVideoCount > 1) {
+      setPostError('Only one video can be attached per post.');
+      e.target.value = '';
+      return;
+    }
+
+    const items: ComposeMediaItem[] = [];
+    const unsupportedVideoFiles: File[] = [];
+    for (const file of acceptedFiles) {
+      const isVideo = file.type.startsWith('video/');
+
+      if (isVideo) {
+        if (!isAcceptedVideoFile(file)) {
+          unsupportedVideoFiles.push(file);
+          continue;
+        }
+        if (file.size > VIDEO_MAX_BYTES) {
+          setPostError(`Selected video is too large (${formatBytes(file.size)}). Max allowed is ${formatBytes(VIDEO_MAX_BYTES)}.`);
+          continue;
+        }
+        const meta = await loadVideoMetadata(file);
+        items.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          alt: '',
+          width: meta.width,
+          height: meta.height,
+          mediaType: 'video',
+          videoDuration: meta.duration,
+        });
+      } else {
+        const { width, height } = await loadImageDimensions(file);
+        items.push({
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
           file,
           previewUrl: URL.createObjectURL(file),
           alt: '',
           width,
           height,
-          mediaType: (isVideo ? 'video' : 'image') as 'image' | 'video',
-        } satisfies ComposeMediaItem;
-      })
-    );
+          mediaType: 'image',
+        });
+      }
+    }
+
+    if (unsupportedVideoFiles.length > 0) {
+      setMediaHint(buildUnsupportedVideoHint(unsupportedVideoFiles));
+    }
+
+    if (items.length === 0) {
+      if (unsupportedVideoFiles.length > 0) {
+        setPostError('No compatible media selected.');
+      }
+      e.target.value = '';
+      return;
+    }
 
     setMediaItems(prev => [...prev, ...items]);
+    setShowPreview(true);
     setActiveTool(null);
     setShowAttachMenu(false);
     e.target.value = '';
@@ -1365,7 +1759,7 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const handleGifSelected = useCallback((gif: TenorGif) => {
     if (mediaItems.length >= MAX_MEDIA) {
-      setPostError(`You can attach up to ${MAX_MEDIA} photos or videos.`);
+      setPostError(`You can attach up to ${MAX_MEDIA} photos or GIFs.`);
       return;
     }
 
@@ -1380,7 +1774,7 @@ export default function ComposeSheet({ onClose }: Props) {
         file: null,
         previewUrl: gif.media_formats.gif.url,
         remoteUrl: gif.media_formats.gif.url,
-        alt: gif.title?.trim() || 'Animated GIF',
+        alt: sanitizeAltText(gif.title?.trim() || 'Animated GIF'),
         width,
         height,
         mediaType: 'image',
@@ -1408,7 +1802,8 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const saveAltDraft = useCallback(() => {
     if (!editingAltId) return;
-    setMediaItems(prev => prev.map((item) => (item.id === editingAltId ? { ...item, alt: altDraft } : item)));
+    const cleanedAlt = sanitizeAltText(altDraft);
+    setMediaItems(prev => prev.map((item) => (item.id === editingAltId ? { ...item, alt: cleanedAlt } : item)));
     closeAltEditor();
   }, [altDraft, closeAltEditor, editingAltId]);
 
@@ -1421,13 +1816,17 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const suggestAltDraft = useCallback(async () => {
     if (!editingMedia) return;
+    if (editingMedia.mediaType === 'video') {
+      setAltSuggestionError('Auto ALT suggestion is currently available for images only.');
+      return;
+    }
     setIsGeneratingAltSuggestion(true);
     setAltSuggestionError(null);
     try {
       const caption = await inferenceClient.captionImage(editingMedia.previewUrl);
-      const normalized = caption.trim();
+      const normalized = sanitizeAltText(caption);
       if (!normalized) throw new Error('No caption generated');
-      setAltDraft(normalized.slice(0, ALT_MAX_CHARS));
+      setAltDraft(normalized);
     } catch {
       setAltSuggestionError('Suggestion failed. You can still write ALT manually.');
     } finally {
@@ -1437,13 +1836,17 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const regenerateAltDraft = useCallback(async () => {
     if (!editingMedia || isGeneratingAltSuggestion) return;
+    if (editingMedia.mediaType === 'video') {
+      setAltSuggestionError('Auto ALT suggestion is currently available for images only.');
+      return;
+    }
     setIsGeneratingAltSuggestion(true);
     setAltSuggestionError(null);
     try {
       const caption = await inferenceClient.captionImage(editingMedia.previewUrl);
-      const normalized = caption.trim();
+      const normalized = sanitizeAltText(caption);
       if (!normalized) throw new Error('No caption generated');
-      setAltDraft(normalized.slice(0, ALT_MAX_CHARS));
+      setAltDraft(normalized);
     } catch {
       setAltSuggestionError('Regeneration failed. You can still edit ALT manually.');
     } finally {
@@ -1452,7 +1855,7 @@ export default function ComposeSheet({ onClose }: Props) {
   }, [editingMedia, isGeneratingAltSuggestion]);
 
   const generateMissingAltDrafts = useCallback(async () => {
-    const missing = mediaItems.filter((item) => item.alt.trim().length === 0);
+    const missing = mediaItems.filter((item) => item.mediaType === 'image' && item.alt.trim().length === 0);
     if (missing.length === 0 || isGeneratingBulkAlt) return;
 
     setIsGeneratingBulkAlt(true);
@@ -1468,9 +1871,9 @@ export default function ComposeSheet({ onClose }: Props) {
         if (!item) continue;
         try {
           const caption = await inferenceClient.captionImage(item.previewUrl);
-          const normalized = caption.trim();
+          const normalized = sanitizeAltText(caption);
           if (normalized) {
-            generated.set(item.id, normalized.slice(0, ALT_MAX_CHARS));
+            generated.set(item.id, normalized);
           } else {
             failures += 1;
           }
@@ -1605,7 +2008,7 @@ export default function ComposeSheet({ onClose }: Props) {
               }}
             >
               {posting ? (
-                <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>Posting…</>
+                <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>Working…</>
               ) : 'Post'}
             </motion.button>
           </div>
@@ -1620,6 +2023,27 @@ export default function ComposeSheet({ onClose }: Props) {
         {postError && (
           <div style={{ padding: '8px 16px', background: 'rgba(255,59,48,0.08)', borderBottom: '0.5px solid rgba(255,59,48,0.2)' }}>
             <p style={{ fontSize: 13, color: 'var(--red)' }}>{postError}</p>
+          </div>
+        )}
+
+        {mediaHint && (
+          <div style={{ padding: '8px 16px', background: 'rgba(255,149,0,0.10)', borderBottom: '0.5px solid rgba(255,149,0,0.24)' }}>
+            <p style={{ fontSize: 12, color: 'var(--orange)', lineHeight: 1.4 }}>{mediaHint}</p>
+          </div>
+        )}
+
+        {/* Posting status */}
+        {posting && postStatus && (
+          <div style={{ padding: '8px 16px', background: 'rgba(10,132,255,0.08)', borderBottom: '0.5px solid rgba(10,132,255,0.2)' }}>
+            <p style={{ fontSize: 13, color: 'var(--blue)', fontWeight: 600 }}>{postStatus}</p>
+            {typeof videoJobProgress === 'number' && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ height: 4, borderRadius: 999, background: 'rgba(10,132,255,0.16)', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.max(0, Math.min(100, videoJobProgress))}%`, height: '100%', background: 'var(--blue)', transition: 'width 0.22s ease' }} />
+                </div>
+                <p style={{ marginTop: 4, fontSize: 11, color: 'var(--label-3)' }}>{Math.round(videoJobProgress)}%</p>
+              </div>
+            )}
           </div>
         )}
 
@@ -1731,8 +2155,16 @@ export default function ComposeSheet({ onClose }: Props) {
 
               {/* Live preview */}
               <AnimatePresence>
-                {showPreview && text.trim().length > 15 && (
-                  <LivePreview text={text} audience={audience} />
+                {showPreview && (text.trim().length > 0 || mediaItems.length > 0 || !!linkPreview) && (
+                  <LivePreview
+                    text={text}
+                    audience={audience}
+                    mediaItems={mediaItems}
+                    linkPreview={linkPreview}
+                    profileDisplayName={profile?.displayName}
+                    profileHandle={profile?.handle}
+                    profileAvatar={profile?.avatar}
+                  />
                 )}
               </AnimatePresence>
 
@@ -1882,7 +2314,7 @@ export default function ComposeSheet({ onClose }: Props) {
                     <button
                       type="button"
                       onClick={() => { void generateMissingAltDrafts(); }}
-                      disabled={isGeneratingBulkAlt || missingAltCount === 0}
+                      disabled={isGeneratingBulkAlt || missingImageAltCount === 0}
                       style={{
                         border: 'none',
                         background: 'var(--blue)',
@@ -1891,11 +2323,11 @@ export default function ComposeSheet({ onClose }: Props) {
                         fontWeight: 800,
                         borderRadius: 999,
                         padding: '6px 12px',
-                        cursor: isGeneratingBulkAlt || missingAltCount === 0 ? 'default' : 'pointer',
-                        opacity: isGeneratingBulkAlt || missingAltCount === 0 ? 0.65 : 1,
+                        cursor: isGeneratingBulkAlt || missingImageAltCount === 0 ? 'default' : 'pointer',
+                        opacity: isGeneratingBulkAlt || missingImageAltCount === 0 ? 0.65 : 1,
                       }}
                     >
-                      {isGeneratingBulkAlt ? 'Generating ALT…' : 'Generate Missing ALT'}
+                      {isGeneratingBulkAlt ? 'Generating ALT…' : 'Generate Missing Image ALT'}
                     </button>
                     <button
                       type="button"
@@ -2021,7 +2453,7 @@ export default function ComposeSheet({ onClose }: Props) {
 
                   {missingAltCount > 0 && (
                     <p style={{ marginTop: 8, fontSize: 12, color: 'var(--orange)', lineHeight: 1.35 }}>
-                      {missingAltCount} image{missingAltCount > 1 ? 's are' : ' is'} missing ALT text.
+                      {missingAltCount} media item{missingAltCount > 1 ? 's are' : ' is'} missing ALT text.
                     </p>
                   )}
 
@@ -2068,8 +2500,11 @@ export default function ComposeSheet({ onClose }: Props) {
                 transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }}
                 style={{ overflow: 'hidden', borderBottom: '0.5px solid var(--sep)' }}
               >
+                <p style={{ margin: '0 14px 6px', fontSize: 11, color: 'var(--label-4)' }}>
+                  Video upload supports MP4 only (up to 100MB).
+                </p>
                 <div style={{ display: 'flex', flexDirection: 'row', gap: 4, padding: '12px 14px 10px' }}>
-                  {/* Photos & Videos */}
+                  {/* Media */}
                   <button
                     onClick={() => { openMediaPicker(); setShowAttachMenu(false); }}
                     disabled={mediaItems.length >= MAX_MEDIA}
@@ -2086,6 +2521,24 @@ export default function ComposeSheet({ onClose }: Props) {
                       <polyline points="21 15 16 10 5 21"/>
                     </svg>
                     <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--label-2)', letterSpacing: 0.1 }}>Media</span>
+                  </button>
+
+                  {/* Camera */}
+                  <button
+                    onClick={() => { openCameraPicker(); setShowAttachMenu(false); }}
+                    disabled={mediaItems.length >= MAX_MEDIA}
+                    style={{
+                      flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                      padding: '10px 6px', borderRadius: 14,
+                      background: 'var(--fill-1)', border: 'none', cursor: mediaItems.length >= MAX_MEDIA ? 'default' : 'pointer',
+                      opacity: mediaItems.length >= MAX_MEDIA ? 0.45 : 1,
+                    }}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--label-2)" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                      <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--label-2)', letterSpacing: 0.1 }}>Camera</span>
                   </button>
 
                   {/* GIF */}
@@ -2227,6 +2680,15 @@ export default function ComposeSheet({ onClose }: Props) {
         type="file"
         accept="image/*,video/*"
         multiple
+        onChange={handleMediaSelected}
+        style={{ display: 'none' }}
+      />
+
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*,video/*"
+        capture="environment"
         onChange={handleMediaSelected}
         style={{ display: 'none' }}
       />
