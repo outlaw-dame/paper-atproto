@@ -36,6 +36,7 @@ const metrics: SensitiveMediaMetricsSnapshot = {
 const queue: SensitiveMediaEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let flushing = false;
+let latestOptedIn = false;
 
 function endpoint(): string {
   const value = (import.meta as any).env?.VITE_GLYMPSE_SENSITIVE_TELEMETRY_URL;
@@ -162,11 +163,12 @@ async function flushNowInternal(optedIn: boolean): Promise<void> {
 }
 
 function scheduleFlush(optedIn: boolean): void {
+  latestOptedIn = optedIn;
   if (flushTimer) return;
 
   flushTimer = setTimeout(() => {
     flushTimer = null;
-    void flushNowInternal(optedIn);
+    void flushNowInternal(latestOptedIn);
   }, FLUSH_DEBOUNCE_MS);
 }
 

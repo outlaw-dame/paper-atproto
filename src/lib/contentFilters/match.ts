@@ -2,6 +2,7 @@ import { inferenceClient } from '../../workers/InferenceClient.js';
 import type { MockPost } from '../../data/mockData.js';
 import type { FilterContext, KeywordFilterRule, PostFilterMatch } from './types.js';
 
+const EMBEDDING_CACHE_MAX = 1_000;
 const embeddingCache = new Map<string, number[]>();
 
 function sanitizeForBoundary(value: string): string {
@@ -32,6 +33,9 @@ async function embedText(text: string): Promise<number[]> {
   if (cached) return cached;
   const embedding = await inferenceClient.embed(key);
   embeddingCache.set(key, embedding);
+  if (embeddingCache.size > EMBEDDING_CACHE_MAX) {
+    embeddingCache.delete(embeddingCache.keys().next().value!);
+  }
   return embedding;
 }
 

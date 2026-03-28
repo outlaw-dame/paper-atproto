@@ -4,6 +4,7 @@ import { formatTime } from '../data/mockData.js';
 import TwemojiText from './TwemojiText.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import { useUiStore } from '../store/uiStore.js';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
 
 export const ContextPost = ({
   post,
@@ -16,12 +17,16 @@ export const ContextPost = ({
 }) => {
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((state) => state.openExploreSearch);
+  const sensitivePolicy = useSensitiveMediaStore((s) => s.policy);
+  const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quoteEmbed?.post.sensitiveMedia?.isSensitive);
   const authorActor = post.author.did || post.author.handle;
   const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
   const contextLabel = type === 'thread' ? 'Thread start' : 'Earlier reply';
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const externalEmbed = post.embed?.type === 'external' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
+  const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
+  const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
   const secondaryLabel = quoteEmbed
     ? 'Quote post'
     : post.article
@@ -109,10 +114,11 @@ export const ContextPost = ({
     {/* Right column: author + content preview */}
     <div style={{ flex: 1, minWidth: 0, paddingBottom: 8, paddingTop: 2 }}>
       <div style={{
-        border: '0.5px solid var(--stroke-dim)',
-        borderRadius: 16,
-        background: 'var(--surface-card)',
-        padding: '12px 14px',
+        border: 'none',
+        borderRadius: 0,
+        background: 'transparent',
+        padding: '10px 0 12px',
+        borderBottom: '0.5px solid color-mix(in srgb, var(--sep) 40%, transparent)',
       }}>
         <div style={{
           display: 'flex',
@@ -234,9 +240,9 @@ export const ContextPost = ({
         {quoteEmbed && (
           <div style={{
             marginTop: post.content.trim().length > 0 ? 10 : 0,
-            border: '1px solid var(--stroke-dim)',
+            border: '1px solid var(--quote-border)',
             borderRadius: 12,
-            background: 'var(--fill-1)',
+            background: 'var(--quote-surface)',
             padding: '10px 12px',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -290,56 +296,315 @@ export const ContextPost = ({
                 <TwemojiText text={quoteEmbed.post.content} onMention={(handle) => { void navigateToProfile(handle); }} onHashtag={handleHashtagClick} />
               </p>
             )}
+            {quoteEmbed.post.media && quoteEmbed.post.media.length > 0 && (
+              <div style={{
+                marginTop: quoteEmbed.post.content.trim().length > 0 ? 8 : 0,
+                position: 'relative',
+                borderRadius: 8,
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: quoteEmbed.post.media.length === 1 ? '1fr' : '1fr 1fr',
+                  gap: 2,
+                  filter: shouldBlurQuotedImages ? 'blur(22px)' : 'none',
+                  transition: 'filter 0.18s ease',
+                  pointerEvents: shouldBlurQuotedImages ? 'none' : 'auto',
+                }}>
+                  {quoteEmbed.post.media.slice(0, 4).map((img, idx) => (
+                    <div key={idx} style={{
+                      aspectRatio: quoteEmbed.post.media!.length === 1 && img.aspectRatio ? String(img.aspectRatio) : '1 / 1',
+                      background: 'var(--fill-2)',
+                      overflow: 'hidden',
+                      borderRadius: quoteEmbed.post.media!.length === 1 ? 8 : 0,
+                    }}>
+                      <img src={img.url} alt={img.alt ?? ''} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                    </div>
+                  ))}
+                </div>
+                {shouldBlurQuotedImages && (
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 5,
+                    color: 'var(--label-2)',
+                    fontSize: 'var(--type-meta-sm-size)',
+                    fontWeight: 700,
+                    letterSpacing: '0.02em',
+                  }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19M1 1l22 22"/>
+                    </svg>
+                    Sensitive content
+                  </div>
+                )}
+              </div>
+            )}
+            {quotedExternalEmbed && (
+              <div style={{
+                marginTop: 8,
+                borderTop: '0.5px solid var(--quote-preview-border)',
+                paddingTop: 8,
+              }}>
+                <a
+                  href={quotedExternalEmbed.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    textDecoration: 'none',
+                    color: 'inherit',
+                  }}
+                >
+                <div style={{
+                  border: '1px solid var(--quote-preview-border)',
+                  borderRadius: 12,
+                  background: 'var(--quote-preview-surface)',
+                  overflow: 'hidden',
+                }}>
+                  {quotedExternalEmbed.thumb && (
+                    <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                      <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                  )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{
+                      fontSize: 'var(--type-meta-sm-size)',
+                      lineHeight: 'var(--type-meta-sm-line)',
+                      color: 'var(--label-3)',
+                      fontWeight: 700,
+                      marginBottom: 4,
+                    }}>
+                      Linked preview
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--type-label-md-size)',
+                      lineHeight: 'var(--type-label-md-line)',
+                      color: 'var(--label-1)',
+                      fontWeight: 700,
+                      marginBottom: 2,
+                    }}>
+                      {quotedExternalEmbed.title}
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--type-meta-md-size)',
+                      lineHeight: 'var(--type-meta-md-line)',
+                      color: 'var(--label-3)',
+                    }}>
+                      {quotedExternalEmbed.domain}
+                    </div>
+                    {quotedExternalEmbed.description && (
+                      <p className="clamp-2" style={{
+                        margin: '6px 0 0',
+                        fontSize: 'var(--type-meta-md-size)',
+                        lineHeight: 'var(--type-meta-md-line)',
+                        color: 'var(--label-2)',
+                      }}>
+                        {quotedExternalEmbed.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                </a>
+              </div>
+            )}
+            {quotedVideoEmbed && (
+              <div style={{
+                marginTop: 8,
+                borderTop: '0.5px solid var(--quote-preview-border)',
+                paddingTop: 8,
+              }}>
+                <a
+                  href={quotedVideoEmbed.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    textDecoration: 'none',
+                    color: 'inherit',
+                  }}
+                >
+                <div style={{
+                  border: '1px solid var(--quote-preview-border)',
+                  borderRadius: 12,
+                  background: 'var(--quote-preview-surface)',
+                  overflow: 'hidden',
+                }}>
+                  {quotedVideoEmbed.thumb && (
+                    <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                      <img src={quotedVideoEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                  )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{
+                      fontSize: 'var(--type-meta-sm-size)',
+                      lineHeight: 'var(--type-meta-sm-line)',
+                      color: 'var(--label-3)',
+                      fontWeight: 700,
+                      marginBottom: 4,
+                    }}>
+                      Linked media
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--type-label-md-size)',
+                      lineHeight: 'var(--type-label-md-line)',
+                      color: 'var(--label-1)',
+                      fontWeight: 700,
+                      marginBottom: 2,
+                    }}>
+                      {quotedVideoEmbed.title || quotedVideoEmbed.domain}
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--type-meta-md-size)',
+                      lineHeight: 'var(--type-meta-md-line)',
+                      color: 'var(--label-3)',
+                    }}>
+                      {quotedVideoEmbed.domain}
+                    </div>
+                  </div>
+                </div>
+                </a>
+              </div>
+            )}
             {quoteEmbed.externalLink && (
               <div style={{
                 marginTop: 8,
                 paddingTop: 8,
-                borderTop: '0.5px solid var(--stroke-dim)',
-                fontSize: 'var(--type-meta-sm-size)',
-                lineHeight: 'var(--type-meta-sm-line)',
-                color: 'var(--label-3)',
-                fontWeight: 600,
+                borderTop: '0.5px solid var(--quote-preview-border)',
               }}>
-                {quoteEmbed.externalLink.title || quoteEmbed.externalLink.domain}
+                <a
+                  href={quoteEmbed.externalLink.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    textDecoration: 'none',
+                    color: 'inherit',
+                  }}
+                >
+                <div style={{
+                  border: '1px solid var(--quote-preview-border)',
+                  borderRadius: 12,
+                  background: 'var(--quote-preview-surface)',
+                  overflow: 'hidden',
+                }}>
+                  {quoteEmbed.externalLink.thumb && (
+                    <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                      <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                  )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{
+                      fontSize: 'var(--type-meta-sm-size)',
+                      lineHeight: 'var(--type-meta-sm-line)',
+                      color: 'var(--label-3)',
+                      fontWeight: 700,
+                      marginBottom: 4,
+                    }}>
+                      Shared link
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--type-label-md-size)',
+                      lineHeight: 'var(--type-label-md-line)',
+                      color: 'var(--label-1)',
+                      fontWeight: 700,
+                      marginBottom: 2,
+                    }}>
+                      {quoteEmbed.externalLink.title || quoteEmbed.externalLink.domain}
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--type-meta-md-size)',
+                      lineHeight: 'var(--type-meta-md-line)',
+                      color: 'var(--label-3)',
+                    }}>
+                      {quoteEmbed.externalLink.domain}
+                    </div>
+                    {quoteEmbed.externalLink.description && (
+                      <p className="clamp-2" style={{
+                        margin: '6px 0 0',
+                        fontSize: 'var(--type-meta-md-size)',
+                        lineHeight: 'var(--type-meta-md-line)',
+                        color: 'var(--label-2)',
+                      }}>
+                        {quoteEmbed.externalLink.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                </a>
               </div>
             )}
           </div>
         )}
 
         {externalEmbed && (
-          <div style={{
-            marginTop: post.content.trim().length > 0 ? 10 : 0,
-            border: '1px solid var(--stroke-dim)',
-            borderRadius: 12,
-            background: 'var(--fill-1)',
-            padding: '10px 12px',
-          }}>
+          <a
+            href={externalEmbed.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: 'block',
+              marginTop: post.content.trim().length > 0 ? 10 : 0,
+              border: '1px solid var(--quote-preview-border)',
+              borderRadius: 12,
+              background: 'var(--quote-preview-surface)',
+              overflow: 'hidden',
+              textDecoration: 'none',
+              color: 'inherit',
+            }}
+          >
+            {externalEmbed.thumb && (
+              <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                <img src={externalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+            )}
             <div style={{
-              fontSize: 'var(--type-meta-sm-size)',
-              lineHeight: 'var(--type-meta-sm-line)',
-              color: 'var(--label-3)',
-              fontWeight: 700,
-              marginBottom: 4,
+              padding: '10px 12px',
             }}>
-              Shared link
+              <div style={{
+                fontSize: 'var(--type-meta-sm-size)',
+                lineHeight: 'var(--type-meta-sm-line)',
+                color: 'var(--label-3)',
+                fontWeight: 700,
+                marginBottom: 4,
+              }}>
+                Shared link
+              </div>
+              <div style={{
+                fontSize: 'var(--type-label-md-size)',
+                lineHeight: 'var(--type-label-md-line)',
+                color: 'var(--label-1)',
+                fontWeight: 700,
+                marginBottom: 2,
+              }}>
+                {externalEmbed.title || externalEmbed.domain}
+              </div>
+              <div style={{
+                fontSize: 'var(--type-meta-md-size)',
+                lineHeight: 'var(--type-meta-md-line)',
+                color: 'var(--label-3)',
+              }}>
+                {externalEmbed.domain}
+              </div>
+              {externalEmbed.description && (
+                <p className="clamp-2" style={{
+                  margin: '6px 0 0',
+                  fontSize: 'var(--type-meta-md-size)',
+                  lineHeight: 'var(--type-meta-md-line)',
+                  color: 'var(--label-2)',
+                }}>
+                  {externalEmbed.description}
+                </p>
+              )}
             </div>
-            <div style={{
-              fontSize: 'var(--type-label-md-size)',
-              lineHeight: 'var(--type-label-md-line)',
-              color: 'var(--label-1)',
-              fontWeight: 700,
-              marginBottom: 2,
-            }}>
-              {externalEmbed.title}
-            </div>
-            <div style={{
-              fontSize: 'var(--type-meta-md-size)',
-              lineHeight: 'var(--type-meta-md-line)',
-              color: 'var(--label-3)',
-            }}>
-              {externalEmbed.domain}
-            </div>
-          </div>
+          </a>
         )}
       </div>
     </div>

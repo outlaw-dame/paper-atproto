@@ -12,7 +12,7 @@ import { atpCall, atpMutate } from '../lib/atproto/client.js';
 import { qk } from '../lib/atproto/queries.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
 import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
 import type { MockPost } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
 
@@ -65,8 +65,10 @@ export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
   const { openProfile, openComposeReply } = useUiStore();
   const platform = usePlatform();
-  const buttonTokens = getButtonTokens(platform);
   const iconTokens = getIconBtnTokens(platform);
+  const topModePillHeight = platform.prefersCoarsePointer ? 34 : 30;
+  const topModePillPaddingX = platform.prefersCoarsePointer ? 14 : 12;
+  const topModePillBadgeSize = platform.prefersCoarsePointer ? 18 : 16;
   const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>('Following');
   const [posts, setPosts] = useState<MockPost[]>([]);
@@ -245,12 +247,6 @@ export default function HomeTab({ onOpenStory }: Props) {
     }
   }, [agent, session, getFeedCache, incrementFeedUnreadCount]);
 
-  useEffect(() => {
-    setPosts([]);
-    setCursor(undefined);
-    fetchFeed(mode);
-  }, [mode, fetchFeed]);
-
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || loadingMore || !cursor) return;
@@ -388,9 +384,7 @@ export default function HomeTab({ onOpenStory }: Props) {
       <div style={{
         flexShrink: 0,
         paddingTop: 'calc(var(--safe-top) + 12px)',
-        background: 'var(--chrome-bg)',
-        backdropFilter: 'blur(20px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        background: 'transparent',
       }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
           <div style={{
@@ -449,7 +443,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         </div>
 
         {/* Mode pills */}
-        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 12px', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 10px', gap: 6 }}>
           {MODES.map(m => {
             const unreadCount = unreadCounts[m] ?? 0;
             return (
@@ -457,10 +451,10 @@ export default function HomeTab({ onOpenStory }: Props) {
                 key={m}
                 onClick={() => setMode(m)}
                 style={{
-                  minHeight: platform.prefersCoarsePointer ? 40 : 34,
-                  padding: `0 ${buttonTokens.paddingH - 2}px`,
+                  minHeight: topModePillHeight,
+                  padding: `0 ${topModePillPaddingX}px`,
                   borderRadius: 100,
-                  fontFamily: 'var(--font-ui)', fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', fontWeight: mode === m ? 600 : 400, letterSpacing: 'var(--type-label-md-track)',
+                  fontFamily: 'var(--font-ui)', fontSize: '14px', lineHeight: '18px', fontWeight: mode === m ? 600 : 500, letterSpacing: '0',
                   color: mode === m ? '#fff' : 'var(--label-2)',
                   background: mode === m ? 'var(--blue)' : 'var(--fill-2)',
                   border: 'none', cursor: 'pointer',
@@ -473,10 +467,11 @@ export default function HomeTab({ onOpenStory }: Props) {
                 {unreadCount > 0 && (
                   <span style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    minWidth: 20, height: 20, borderRadius: '50%',
+                    minWidth: topModePillBadgeSize, height: topModePillBadgeSize, borderRadius: '50%',
                     background: mode === m ? 'rgba(255,255,255,0.3)' : 'var(--red)',
                     color: mode === m ? '#fff' : '#fff',
-                    fontFamily: 'var(--font-ui)', fontSize: '11px', fontWeight: 700,
+                    fontFamily: 'var(--font-ui)', fontSize: '10px', fontWeight: 700,
+                    padding: '0 4px',
                   }}>
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </span>

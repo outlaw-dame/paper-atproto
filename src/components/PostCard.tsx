@@ -54,6 +54,7 @@ type MediaCarouselItem =
       thumb?: string;
       title?: string;
       domain: string;
+      aspectRatio?: number;
     };
 
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
@@ -94,6 +95,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         ...(post.embed.thumb ? { thumb: post.embed.thumb } : {}),
         ...(post.embed.title ? { title: post.embed.title } : {}),
         domain: post.embed.domain,
+        ...(typeof post.embed.aspectRatio === 'number' ? { aspectRatio: post.embed.aspectRatio } : {}),
       });
     }
 
@@ -330,15 +332,16 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
       onClick={handleCardClick}
       style={{
-        background: 'var(--surface-card)',
-        borderRadius: 16,
+        background: 'transparent',
+        borderRadius: 0,
         padding: '14px 16px 12px',
-        marginBottom: 10,
+        marginBottom: 0,
         boxShadow: 'none',
-        border: '0.5px solid var(--stroke-dim)',
+        border: 'none',
+        borderBottom: '0.5px solid color-mix(in srgb, var(--sep) 40%, transparent)',
         cursor: 'pointer',
         position: 'relative',
-        overflow: 'hidden',
+        overflow: 'visible',
       }}
     >
       {/* Author Header */}
@@ -348,8 +351,8 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           top: 0,
           left: 35,
           width: 2,
-          // Runs from top of card to the avatar vertical center (padding-top 14px + half avatar 20px = 34px)
-          height: 34,
+          // Stop just above the avatar so the connector does not cut through it.
+          height: 12,
           backgroundColor: 'var(--sep-opaque)',
         }} />
       )}
@@ -557,7 +560,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                     mass: 0.7,
                   }}
                   style={{
-                    aspectRatio: item.kind === 'image' && item.aspectRatio ? String(item.aspectRatio) : '16/9',
+                    aspectRatio: typeof item.aspectRatio === 'number' ? String(item.aspectRatio) : '16/9',
                     position: 'relative',
                     background: 'var(--fill-2)',
                     flex: carouselItems.length > 1 ? '0 0 calc(100% - 28px)' : '0 0 100%',
@@ -591,6 +594,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                         url={item.url}
                         postId={post.id}
                         {...(item.thumb ? { thumb: item.thumb } : {})}
+                        {...(typeof item.aspectRatio === 'number' ? { aspectRatio: item.aspectRatio } : {})}
                         autoplay={false}
                       />
                       {item.title && (
@@ -1048,10 +1052,13 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       {post.embed?.type === 'quote' && (() => {
         const quotedPost = post.embed.post;
         const quotedActor = quotedPost.author.did || quotedPost.author.handle;
+        const quotedExternalEmbed = quotedPost.embed?.type === 'external' ? quotedPost.embed : null;
+        const quotedVideoEmbed = quotedPost.embed?.type === 'video' ? quotedPost.embed : null;
+        const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quotedPost.sensitiveMedia?.isSensitive);
         return (
         <div style={{
-          border: '1px solid var(--stroke-dim)', borderRadius: 12,
-          padding: '10px 12px', marginTop: 8, background: 'var(--fill-1)'
+          border: '1px solid var(--quote-border)', borderRadius: 12,
+          padding: '10px 12px', marginTop: 8, background: 'var(--quote-surface)'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
             <span style={{
@@ -1087,20 +1094,127 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
             <TwemojiText text={quotedPost.content} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
           </p>
+          {quotedPost.media && quotedPost.media.length > 0 && (
+            <div style={{
+              marginTop: quotedPost.content.trim().length > 0 ? 8 : 0,
+              position: 'relative',
+              borderRadius: 8,
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: quotedPost.media.length === 1 ? '1fr' : '1fr 1fr',
+                gap: 2,
+                filter: shouldBlurQuotedImages ? 'blur(22px)' : 'none',
+                transition: 'filter 0.18s ease',
+                pointerEvents: shouldBlurQuotedImages ? 'none' : 'auto',
+              }}>
+                {quotedPost.media.slice(0, 4).map((img, idx) => (
+                  <div key={idx} style={{
+                    aspectRatio: quotedPost.media!.length === 1 && img.aspectRatio ? String(img.aspectRatio) : '1 / 1',
+                    background: 'var(--fill-2)',
+                    overflow: 'hidden',
+                    borderRadius: quotedPost.media!.length === 1 ? 8 : 0,
+                  }}>
+                    <img src={img.url} alt={img.alt ?? ''} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                  </div>
+                ))}
+              </div>
+              {shouldBlurQuotedImages && (
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  color: 'var(--label-2)',
+                  fontSize: 'var(--type-meta-sm-size)',
+                  fontWeight: 700,
+                  letterSpacing: '0.02em',
+                }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19M1 1l22 22"/>
+                  </svg>
+                  Sensitive content
+                </div>
+              )}
+            </div>
+          )}
+          {quotedExternalEmbed && (
+            <div style={{
+              marginTop: 8,
+              borderTop: '0.5px solid var(--quote-preview-border)',
+              paddingTop: 8,
+            }}>
+              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                {quotedExternalEmbed.thumb && (
+                  <div style={{ marginBottom: 0, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                    <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
+                <div style={{ padding: '9px 10px 10px' }}>
+                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 3 }}>
+                    {quotedExternalEmbed.domain}
+                  </div>
+                  <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: quotedExternalEmbed.description ? 4 : 0 }}>
+                    {quotedExternalEmbed.title}
+                  </div>
+                  {quotedExternalEmbed.description && (
+                    <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)' }}>
+                      {quotedExternalEmbed.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          {quotedVideoEmbed && (
+            <div style={{
+              marginTop: 8,
+              borderTop: '0.5px solid var(--quote-preview-border)',
+              paddingTop: 8,
+            }}>
+              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                {quotedVideoEmbed.thumb && (
+                  <div style={{ marginBottom: 0, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                    <img src={quotedVideoEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
+                <div style={{ padding: '9px 10px 10px' }}>
+                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 3 }}>
+                    {quotedVideoEmbed.domain}
+                  </div>
+                  <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
+                    {quotedVideoEmbed.title || quotedVideoEmbed.domain}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {post.embed.externalLink && (
             <div style={{
               marginTop: 8,
               paddingTop: 8,
-              borderTop: '0.5px solid var(--stroke-dim)',
+              borderTop: '0.5px solid var(--quote-preview-border)',
             }}>
-              <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
-                {post.embed.externalLink.domain}
-              </div>
-              {post.embed.externalLink.title && (
-                <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
-                  {post.embed.externalLink.title}
+              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                {post.embed.externalLink.thumb && (
+                  <div style={{ overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                    <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
+                <div style={{ padding: '9px 10px 10px' }}>
+                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
+                    {post.embed.externalLink.domain}
+                  </div>
+                  {post.embed.externalLink.title && (
+                    <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
+                      {post.embed.externalLink.title}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>

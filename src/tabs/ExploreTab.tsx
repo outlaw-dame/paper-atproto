@@ -122,8 +122,25 @@ function scorePostEngagement(post: MockPost): number {
   return post.likeCount + post.repostCount * 2 + post.replyCount * 1.5 + quoteCount * 1.5;
 }
 
-const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Packs', 'Sources'] as const;
+const QUICK_FILTERS = ['Live', 'Topics', 'Threads', 'Feeds', 'Sources'] as const;
 type QuickFilter = typeof QUICK_FILTERS[number];
+type DiscoverSectionKey =
+  | 'live-sports'
+  | 'sports-pulse'
+  | 'feed-items'
+  | 'top-stories'
+  | 'trending-topics'
+  | 'live-clusters'
+  | 'feeds-to-follow'
+  | 'sources';
+
+const QUICK_FILTER_SECTION_MAP: Record<QuickFilter, readonly DiscoverSectionKey[]> = {
+  Live: ['live-sports', 'sports-pulse', 'live-clusters'],
+  Topics: ['top-stories', 'trending-topics'],
+  Threads: ['top-stories', 'live-clusters'],
+  Feeds: ['feed-items', 'feeds-to-follow'],
+  Sources: ['sources', 'top-stories'],
+} as const;
 
 function canAutoInlineTranslateExplore(post: MockPost): boolean {
   const textLength = post.content.trim().length;
@@ -944,6 +961,14 @@ export default function ExploreTab({ onOpenStory }: Props) {
     () => sidePosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')),
     [filterResults, sidePosts],
   );
+  const visibleDiscoverSections = useMemo(
+    () => (activeFilter ? new Set<DiscoverSectionKey>(QUICK_FILTER_SECTION_MAP[activeFilter]) : null),
+    [activeFilter],
+  );
+  const showDiscoverSection = useCallback(
+    (section: DiscoverSectionKey) => visibleDiscoverSections == null || visibleDiscoverSections.has(section),
+    [visibleDiscoverSections],
+  );
 
   const sportsPulsePosts = useMemo(() => {
     const candidates = [...filteredLinkPosts, ...filteredSidePosts, ...trendingPosts];
@@ -1247,6 +1272,28 @@ export default function ExploreTab({ onOpenStory }: Props) {
     .filter(Boolean)
     .filter((v, i, a) => a.findIndex(x => x?.domain === v?.domain) === i)
     .slice(0, 6) as { domain: string; description: string }[];
+  const hasVisibleDiscoverContent = useMemo(() => {
+    if (visibleDiscoverSections == null) return true;
+    return (
+      visibleDiscoverSections.has('live-sports') ||
+      (visibleDiscoverSections.has('sports-pulse') && sportsPulsePosts.length > 0) ||
+      (visibleDiscoverSections.has('feed-items') && recentFeedItems.length > 0) ||
+      (visibleDiscoverSections.has('top-stories') && filteredLinkPosts.length > 0) ||
+      (visibleDiscoverSections.has('trending-topics') && trendingTopics.length > 0) ||
+      (visibleDiscoverSections.has('live-clusters') && liveClusters.length > 0) ||
+      (visibleDiscoverSections.has('feeds-to-follow') && suggestedFeeds.length > 0) ||
+      (visibleDiscoverSections.has('sources') && domains.length > 0)
+    );
+  }, [
+    domains.length,
+    filteredLinkPosts.length,
+    liveClusters.length,
+    recentFeedItems.length,
+    sportsPulsePosts.length,
+    suggestedFeeds.length,
+    trendingTopics.length,
+    visibleDiscoverSections,
+  ]);
 
   const handleToggleTranslate = useCallback(async (event: React.MouseEvent, post: MockPost) => {
     event.stopPropagation();
@@ -1576,7 +1623,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                style={{ display: 'flex', gap: qfcTokens.gap, overflowX: 'auto', paddingBottom: 4, marginBottom: 20, scrollbarWidth: 'none' }}
+                style={{ display: 'flex', gap: qfcTokens.gap, overflowX: 'auto', paddingBottom: 4, marginBottom: 18, scrollbarWidth: 'none' }}
               >
                 {QUICK_FILTERS.map(f => (
                   <button
@@ -1584,14 +1631,14 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     onClick={() => setActiveFilter(activeFilter === f ? null : f)}
                     style={{
                       flexShrink: 0,
-                      minHeight: touchLike ? 42 : qfcTokens.height,
-                      padding: `0 ${touchLike ? Math.max(qfcTokens.paddingX, 12) : qfcTokens.paddingX}px`,
+                      minHeight: touchLike ? 34 : qfcTokens.height,
+                      padding: `0 ${touchLike ? Math.max(qfcTokens.paddingX - 1, 11) : qfcTokens.paddingX}px`,
                       borderRadius: qfcTokens.radius,
                       background: activeFilter === f ? qfcTokens.discovery.activeBg : qfcTokens.discovery.bg,
                       border: `0.5px solid ${qfcTokens.discovery.border}`,
                       color: activeFilter === f ? qfcTokens.discovery.activeText : qfcTokens.discovery.text,
-                      fontSize: touchLike ? Math.max(typeScale.chip[0], 14) : typeScale.chip[0],
-                      fontWeight: typeScale.chip[2],
+                      fontSize: 13,
+                      fontWeight: 600,
                       cursor: 'pointer',
                       transition: 'all 0.14s',
                     }}
@@ -1846,6 +1893,20 @@ export default function ExploreTab({ onOpenStory }: Props) {
               ) : (
                 <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 28 }}>
 
+                  {activeFilter && !hasVisibleDiscoverContent && (
+                    <div style={{
+                      borderRadius: radius[20],
+                      background: disc.surfaceCard,
+                      border: `0.5px solid ${disc.lineSubtle}`,
+                      padding: `${space[8]}px ${space[10]}px`,
+                    }}>
+                      <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary }}>
+                        No {activeFilter.toLowerCase()} results are available right now.
+                      </p>
+                    </div>
+                  )}
+
+                  {showDiscoverSection('live-sports') && (
                   <div>
                     <SectionHeader title="Live Sports Moments" />
                     <LiveSportsMoments
@@ -1859,8 +1920,9 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       }}
                     />
                   </div>
+                  )}
 
-                  {sportsPulsePosts.length > 0 && (
+                  {showDiscoverSection('sports-pulse') && sportsPulsePosts.length > 0 && (
                     <div>
                       <SectionHeader title="Sports Pulse" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
@@ -1883,7 +1945,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     </div>
                   )}
 
-                  {recentFeedItems.length > 0 && (
+                  {showDiscoverSection('feed-items') && recentFeedItems.length > 0 && (
                     <div>
                       <SectionHeader title="From Your Feeds" />
                       <div style={{ display: 'grid', gap: 10 }}>
@@ -1923,7 +1985,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* Featured Story Carousel */}
-                  {filteredLinkPosts.length > 0 && (
+                  {showDiscoverSection('top-stories') && filteredLinkPosts.length > 0 && (
                     <div style={{ marginBottom: 24 }}>
                       <SectionHeader title="Top Stories" />
 
@@ -2072,7 +2134,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* Trending Topics */}
-                  {trendingTopics.length > 0 && (
+                  {showDiscoverSection('trending-topics') && trendingTopics.length > 0 && (
                     <div>
                       <SectionHeader title="Trending Topics" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 4 }}>
@@ -2089,7 +2151,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* Live Clusters */}
-                  {liveClusters.length > 0 && (
+                  {showDiscoverSection('live-clusters') && liveClusters.length > 0 && (
                     <div>
                       <SectionHeader title="Live Clusters" />
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -2107,7 +2169,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* Feeds & Packs */}
-                  {suggestedFeeds.length > 0 && (
+                  {showDiscoverSection('feeds-to-follow') && suggestedFeeds.length > 0 && (
                     <div>
                       <SectionHeader title="Feeds to Follow" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 4 }}>
@@ -2117,7 +2179,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* Sources & Domains */}
-                  {domains.length > 0 && (
+                  {showDiscoverSection('sources') && domains.length > 0 && (
                     <div>
                       <SectionHeader title="Sources" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 4 }}>
@@ -2127,7 +2189,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* People to follow */}
-                  {suggestedActors.length > 0 && (
+                  {!activeFilter && suggestedActors.length > 0 && (
                     <div>
                       <SectionHeader title="People to Follow" />
                       <div style={{ background: disc.surfaceCard, borderRadius: radius[24], padding: `0 ${space[8]}px`, border: `0.5px solid ${disc.lineSubtle}` }}>

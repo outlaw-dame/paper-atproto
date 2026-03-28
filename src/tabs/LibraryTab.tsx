@@ -8,7 +8,7 @@ import type { MockPost } from '../data/mockData.js';
 import { formatTime, formatCount } from '../data/mockData.js';
 import type { AppBskyGraphDefs } from '@atproto/api';
 import type { StoryEntry } from '../App.js';
-import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -256,9 +256,10 @@ function SectionHeader({ title, count }: { title: string; count?: number }) {
 // ─── Main component ────────────────────────────────────────────────────────
 export default function LibraryTab({ onOpenStory }: Props) {
   const platform = usePlatform();
-  const buttonTokens = getButtonTokens(platform);
   const iconBtnTokens = getIconBtnTokens(platform);
   const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
+  const topTabPillHeight = touchLike ? 34 : 30;
+  const topTabPillPaddingX = touchLike ? 14 : 12;
   const { agent, session } = useSessionStore();
   const [tab, setTab] = useState<Tab>('Saved');
   const [savedPosts, setSavedPosts] = useState<MockPost[]>([]);
@@ -339,12 +340,12 @@ export default function LibraryTab({ onOpenStory }: Props) {
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px' }}>
           <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--label-1)', letterSpacing: -0.8 }}>Library</span>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 12px', gap: 8, overflowX: 'auto' }}>
+        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 10px', gap: 6, overflowX: 'auto' }}>
           {TABS.map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
-              minHeight: touchLike ? 42 : buttonTokens.height,
-              padding: touchLike ? '0 18px' : '6px 16px', borderRadius: 100, flexShrink: 0,
-              fontSize: touchLike ? 15 : 14, fontWeight: tab === t ? 700 : 500,
+              minHeight: topTabPillHeight,
+              padding: `0 ${topTabPillPaddingX}px`, borderRadius: 100, flexShrink: 0,
+              fontSize: 14, lineHeight: '18px', fontWeight: tab === t ? 600 : 500,
               color: tab === t ? '#fff' : 'var(--label-2)',
               background: tab === t ? 'var(--blue)' : 'var(--fill-2)',
               border: 'none', cursor: 'pointer', transition: 'all 0.18s',

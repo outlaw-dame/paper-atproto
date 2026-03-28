@@ -161,6 +161,10 @@ a { text-decoration: none; color: inherit; }
   /* ── Semantic aliases used by feed/card components ── */
   --surface-card:    var(--surface);
   --stroke-dim:      rgba(60,60,67,0.06);
+  --quote-surface:   color-mix(in srgb, var(--surface) 90%, var(--blue) 10%);
+  --quote-border:    color-mix(in srgb, var(--sep) 78%, var(--blue) 22%);
+  --quote-preview-surface: color-mix(in srgb, var(--surface) 95%, var(--blue) 5%);
+  --quote-preview-border:  color-mix(in srgb, var(--sep) 86%, var(--blue) 14%);
 
   --safe-top:        env(safe-area-inset-top, 0px);
   --safe-bottom:     env(safe-area-inset-bottom, 0px);
@@ -320,6 +324,10 @@ a { text-decoration: none; color: inherit; }
     /* ── Semantic aliases — dark overrides ── */
     --surface-card:    var(--surface);
     --stroke-dim:      rgba(84,84,88,0.12);
+    --quote-surface:   #0B1018;
+    --quote-border:    rgba(90, 173, 255, 0.16);
+    --quote-preview-surface: #101722;
+    --quote-preview-border:  rgba(90, 173, 255, 0.12);
   }
 }
 

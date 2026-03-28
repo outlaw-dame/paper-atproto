@@ -41,6 +41,7 @@ import { buildThreadStateForWriter } from '../intelligence/writerInput.js';
 import { callInterpolatorWriter } from '../intelligence/modelClient.js';
 import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts.js';
 import { WriterEntitySheet, EntityChip } from './EntitySheet.js';
+import VideoPlayer from './VideoPlayer.js';
 import { translateWriterInput } from '../lib/i18n/threadTranslation.js';
 import { useTranslationStore } from '../store/translationStore.js';
 import { useUiStore } from '../store/uiStore.js';
@@ -71,6 +72,13 @@ interface Props {
 }
 
 type ThreadFilter = 'Top' | 'Latest' | 'Clarifying' | 'New angles' | 'Source-backed' | 'Open Story';
+
+const threadControlChrome = {
+  surface: 'rgba(255,255,255,0.045)',
+  surfaceHover: 'rgba(255,255,255,0.06)',
+  border: 'rgba(156, 182, 220, 0.08)',
+  borderStrong: 'rgba(156, 182, 220, 0.12)',
+} as const;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -131,13 +139,14 @@ function HostBar({ onClose }: { onClose: () => void }) {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: 'calc(var(--safe-top) + 12px) 16px 12px',
       background: disc.bgBase,
-      borderBottom: `0.5px solid ${disc.lineStrong}`,
     }}>
       <button
         onClick={onClose}
         style={{
           width: 36, height: 36, borderRadius: '50%',
-          background: disc.surfaceCard2, border: `0.5px solid ${disc.lineSubtle}`,
+          background: threadControlChrome.surface,
+          border: `1px solid ${threadControlChrome.border}`,
+          boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03)`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           cursor: 'pointer',
         }}
@@ -152,7 +161,9 @@ function HostBar({ onClose }: { onClose: () => void }) {
       }}>Thread</span>
       <button style={{
         width: 36, height: 36, borderRadius: '50%',
-        background: disc.surfaceCard2, border: `0.5px solid ${disc.lineSubtle}`,
+        background: threadControlChrome.surface,
+        border: `1px solid ${threadControlChrome.border}`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03)`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'pointer',
       }}>
@@ -231,6 +242,9 @@ function PromptHeroCard({
   const embedThumb = post.embed && post.embed.type !== 'quote' ? post.embed.thumb : undefined;
   const img = post.media?.[0]?.url ?? embedThumb;
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
+  const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
+  const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
+  const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
   return (
     <div style={{
       borderRadius: phTokens.radius,
@@ -352,6 +366,22 @@ function PromptHeroCard({
         </div>
         )}
 
+        {videoEmbed && (
+          <div
+            className="video-player-wrapper"
+            onClick={(e) => e.stopPropagation()}
+            style={{ marginBottom: 16 }}
+          >
+            <VideoPlayer
+              url={videoEmbed.url}
+              postId={post.id}
+              {...(videoEmbed.thumb ? { thumb: videoEmbed.thumb } : {})}
+              {...(typeof videoEmbed.aspectRatio === 'number' ? { aspectRatio: videoEmbed.aspectRatio } : {})}
+              autoplay={false}
+            />
+          </div>
+        )}
+
         {/* Embed source */}
         {post.embed && (post.embed.type === 'external' || post.embed.type === 'video') && (
           <div style={{
@@ -371,9 +401,9 @@ function PromptHeroCard({
         {quoteEmbed?.post && (
           <div style={{
             padding: `${space[6]}px ${space[8]}px`,
-            background: 'rgba(255,255,255,0.06)',
+            background: 'var(--quote-surface)',
             borderRadius: radius[12],
-            border: `0.5px solid ${phTokens.line}`,
+            border: '1px solid var(--quote-border)',
             marginBottom: 16,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -413,6 +443,63 @@ function PromptHeroCard({
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: phTokens.meta, opacity: 0.85, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               <RichText text={quoteEmbed.post.content} baseColor={phTokens.meta} onHashtag={handleHashtagClick} />
             </p>
+            {quotedExternalEmbed && (
+              <a
+                href={quotedExternalEmbed.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{
+                  display: 'block',
+                  marginTop: 10,
+                  background: 'var(--quote-preview-surface)',
+                  borderRadius: radius[12],
+                  border: '1px solid var(--quote-preview-border)',
+                  textDecoration: 'none',
+                  overflow: 'hidden',
+                }}
+              >
+                {quotedExternalEmbed.thumb && (
+                  <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: 112, objectFit: 'cover' }} />
+                )}
+                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quotedExternalEmbed.title}</p>
+                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quotedExternalEmbed.domain}</p>
+                  {quotedExternalEmbed.description && (
+                    <p style={{
+                      margin: '6px 0 0',
+                      fontSize: typeScale.metaSm[0],
+                      lineHeight: '18px',
+                      color: phTokens.meta,
+                      opacity: 0.82,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}>
+                      {quotedExternalEmbed.description}
+                    </p>
+                  )}
+                </div>
+              </a>
+            )}
+            {quotedVideoEmbed && (
+              <div style={{
+                marginTop: 10,
+                background: 'var(--quote-preview-surface)',
+                borderRadius: radius[12],
+                border: '1px solid var(--quote-preview-border)',
+                overflow: 'hidden',
+              }}>
+                {quotedVideoEmbed.thumb && (
+                  <img src={quotedVideoEmbed.thumb} alt="" style={{ width: '100%', height: 112, objectFit: 'cover' }} />
+                )}
+                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quotedVideoEmbed.title || quotedVideoEmbed.domain}</p>
+                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quotedVideoEmbed.domain}</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -425,9 +512,9 @@ function PromptHeroCard({
             onClick={e => e.stopPropagation()}
             style={{
               display: 'block', marginBottom: 16,
-              background: 'rgba(255,255,255,0.06)',
+              background: 'var(--quote-preview-surface)',
               borderRadius: radius[12],
-              border: `0.5px solid ${phTokens.line}`,
+              border: '1px solid var(--quote-preview-border)',
               textDecoration: 'none', overflow: 'hidden',
             }}
           >
@@ -439,6 +526,21 @@ function PromptHeroCard({
                 <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quoteEmbed.externalLink.title}</p>
               )}
               <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quoteEmbed.externalLink.domain}</p>
+              {quoteEmbed.externalLink.description && (
+                <p style={{
+                  margin: '6px 0 0',
+                  fontSize: typeScale.metaSm[0],
+                  lineHeight: '18px',
+                  color: phTokens.meta,
+                  opacity: 0.82,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}>
+                  {quoteEmbed.externalLink.description}
+                </p>
+              )}
             </div>
           </a>
         )}
@@ -990,19 +1092,19 @@ const THREAD_FILTERS: ThreadFilter[] = ['Top', 'Latest', 'Clarifying', 'New angl
 
 function ThreadControls({ active, onChange }: { active: ThreadFilter; onChange: (f: ThreadFilter) => void }) {
   return (
-    <div style={{ display: 'flex', gap: 8, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
+    <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
       {THREAD_FILTERS.map(f => (
         <button
           key={f}
           onClick={() => onChange(f)}
           style={{
             flexShrink: 0,
-            height: 36, padding: '0 14px',
+            height: 32, padding: '0 12px',
             borderRadius: radius.full,
             background: active === f ? accent.primary : disc.surfaceCard,
             border: `0.5px solid ${active === f ? accent.primary : disc.lineStrong}`,
             color: active === f ? '#fff' : disc.textSecondary,
-            fontSize: typeScale.chip[0], fontWeight: 600,
+            fontSize: 13, fontWeight: 600,
             cursor: 'pointer',
             transition: 'all 0.14s',
           }}
@@ -1392,10 +1494,10 @@ function ContributionCard({
         return (
           <div style={{
             marginBottom: contTokens.gap,
-            background: disc.surfaceCard2,
+            background: 'var(--quote-surface)',
             borderRadius: radius[12],
             padding: `${space[6]}px ${space[8]}px`,
-            border: `0.5px solid ${disc.lineSubtle}`,
+            border: '1px solid var(--quote-border)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <span style={{
@@ -1428,6 +1530,52 @@ function ContributionCard({
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               <RichText text={quoteEmbed.quotedText} baseColor={disc.textSecondary} onHashtag={handleHashtagClick} />
             </p>
+            {quoteEmbed.quotedExternal && (
+              <a
+                href={quoteEmbed.quotedExternal.uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{
+                  display: 'block',
+                  marginTop: 10,
+                  background: 'var(--quote-preview-surface)',
+                  borderRadius: radius[12],
+                  border: '1px solid var(--quote-preview-border)',
+                  textDecoration: 'none',
+                  overflow: 'hidden',
+                }}
+              >
+                {quoteEmbed.quotedExternal.thumb && (
+                  <img src={quoteEmbed.quotedExternal.thumb} alt="" style={{ width: '100%', height: 96, objectFit: 'cover' }} />
+                )}
+                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                  {quoteEmbed.quotedExternal.title && (
+                    <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>
+                      {quoteEmbed.quotedExternal.title}
+                    </p>
+                  )}
+                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+                    {quoteEmbed.quotedExternal.domain}
+                  </p>
+                  {quoteEmbed.quotedExternal.description && (
+                    <p style={{
+                      margin: '6px 0 0',
+                      fontSize: typeScale.metaSm[0],
+                      lineHeight: '18px',
+                      color: disc.textTertiary,
+                      opacity: 0.88,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}>
+                      {quoteEmbed.quotedExternal.description}
+                    </p>
+                  )}
+                </div>
+              </a>
+            )}
           </div>
         );
       })()}
@@ -1779,7 +1927,6 @@ function ReplyBar({ userAvatar, onActivate, disabled = false }: { userAvatar?: s
       padding: '10px 16px',
       paddingBottom: 'calc(var(--safe-bottom, 0px) + 10px)',
       background: disc.bgBase,
-      borderTop: `0.5px solid ${disc.lineSubtle}`,
     }}>
       <div style={{
         width: 32, height: 32, borderRadius: '50%',
@@ -1796,8 +1943,9 @@ function ReplyBar({ userAvatar, onActivate, disabled = false }: { userAvatar?: s
         aria-label="Write your reply"
         style={{
         flex: 1, height: 36, borderRadius: 18,
-        background: disc.surfaceCard2,
-        border: `0.5px solid ${disc.lineStrong}`,
+        background: threadControlChrome.surface,
+        border: `1px solid ${threadControlChrome.borderStrong}`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.03)`,
         display: 'flex', alignItems: 'center',
         padding: '0 14px',
         cursor: disabled ? 'default' : 'text',

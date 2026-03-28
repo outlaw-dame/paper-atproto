@@ -222,10 +222,10 @@ export const entitySheet = {
 
 // ─── QuickFilterChip ──────────────────────────────────────────────────────
 export const quickFilterChip = {
-  height:   36,
-  paddingX: 16,
+  height:   32,
+  paddingX: 13,
   radius:   radius.full,
-  gap:      8,
+  gap:      6,
   discovery: {
     bg:         'rgba(255,255,255,0.07)',
     border:     'rgba(255,255,255,0.12)',

@@ -833,10 +833,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
       <div style={{
         flexShrink: 0,
         paddingTop: 'var(--safe-top)',
-        background: 'var(--chrome-bg)',
-        backdropFilter: 'blur(20px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        borderBottom: '0.5px solid var(--sep)',
+        background: 'transparent',
         zIndex: 10,
       }}>
         <div style={{

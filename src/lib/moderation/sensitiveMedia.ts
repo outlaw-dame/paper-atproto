@@ -43,7 +43,12 @@ function isSensitiveLabel(value: string): boolean {
 }
 
 function hasVisualMedia(post: MockPost): boolean {
-  return Boolean(post.media?.length) || post.embed?.type === 'video';
+  if (Boolean(post.media?.length) || post.embed?.type === 'video') return true;
+  if (post.embed?.type === 'quote') {
+    const q = post.embed.post;
+    return Boolean(q.media?.length) || q.embed?.type === 'video';
+  }
+  return false;
 }
 
 export function detectSensitiveMedia(post: MockPost): SensitiveMediaAssessment {
