@@ -55,7 +55,11 @@ const tabBarStyle: React.CSSProperties = {
   paddingBottom: 'var(--safe-bottom)',
 };
 
-export default function TabBar() {
+interface TabBarProps {
+  hidden?: boolean;
+}
+
+export default function TabBar({ hidden = false }: TabBarProps) {
   const { activeTab, unreadCount, setTab } = useUiStore();
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
@@ -72,7 +76,20 @@ export default function TabBar() {
   };
 
   return (
-    <nav style={tabBarStyle} role="tablist" aria-label="Main navigation">
+    <nav
+      style={{
+        ...tabBarStyle,
+        maxHeight: hidden ? 0 : 120,
+        opacity: hidden ? 0 : 1,
+        transform: hidden ? 'translateY(12px)' : 'translateY(0)',
+        pointerEvents: hidden ? 'none' : 'auto',
+        overflow: 'hidden',
+        transition: 'max-height 0.18s ease, opacity 0.16s ease, transform 0.16s ease',
+      }}
+      role="tablist"
+      aria-label="Main navigation"
+      aria-hidden={hidden}
+    >
       {TABS.map(({ id, label, icon }) => {
         const active = id === activeTab;
         return (

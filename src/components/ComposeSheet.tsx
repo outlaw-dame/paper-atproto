@@ -57,7 +57,7 @@ interface ComposeMediaItem {
 
 const MAX_MEDIA = 4;
 const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
-const VIDEO_UPLOAD_MIME = 'video/mp4';
+const VIDEO_UPLOAD_FALLBACK_MIME = 'video/mp4';
 const VIDEO_POLL_MAX_ATTEMPTS = 12;
 const VIDEO_POLL_BASE_DELAY_MS = 900;
 const VIDEO_POLL_CAP_DELAY_MS = 8_000;
@@ -146,8 +146,23 @@ function sanitizeAltText(value: string): string {
   return sanitizeUserText(value).trim().slice(0, ALT_MAX_CHARS);
 }
 
-function isAcceptedVideoFile(file: File): boolean {
-  return file.type.toLowerCase() === VIDEO_UPLOAD_MIME;
+function isLikelyVideoFile(file: File): boolean {
+  const mime = file.type.toLowerCase();
+  if (mime.startsWith('video/')) return true;
+  return /\.(mp4|m4v|mov|webm|mkv|avi|3gp|mpeg|mpg)$/i.test(file.name || '');
+}
+
+function resolveVideoUploadMime(file: File): string {
+  const mime = file.type.trim().toLowerCase();
+  if (mime.startsWith('video/')) return mime;
+
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith('.mov')) return 'video/quicktime';
+  if (lowerName.endsWith('.webm')) return 'video/webm';
+  if (lowerName.endsWith('.mkv')) return 'video/x-matroska';
+  if (lowerName.endsWith('.avi')) return 'video/x-msvideo';
+
+  return VIDEO_UPLOAD_FALLBACK_MIME;
 }
 
 function formatBytes(bytes: number): string {
@@ -193,14 +208,42 @@ function toUserFacingPostError(err: unknown): string {
   return rawMessage;
 }
 
-function buildUnsupportedVideoHint(files: File[]): string {
-  if (files.length === 0) return '';
-  const labels = files
-    .map((file) => file.name?.trim() || 'Unnamed video')
-    .slice(0, 2)
-    .join(', ');
-  const moreCount = Math.max(0, files.length - 2);
-  return `Skipped unsupported video format${files.length > 1 ? 's' : ''} (${labels}${moreCount > 0 ? `, +${moreCount} more` : ''}). Convert to MP4 to upload.`;
+function isVideoFormatCompatibilityError(message: string): boolean {
+  return /(video|codec|container|format|transcod|quicktime|webm|matroska|mkv|avi|hevc|h265)/i.test(message);
+}
+
+function getMp4ConversionHelpLink(): { label: string; url: string } {
+  if (typeof navigator === 'undefined') {
+    return {
+      label: 'How to convert this video to MP4',
+      url: 'https://handbrake.fr/docs/en/latest/introduction/quick-start.html',
+    };
+  }
+
+  const ua = navigator.userAgent.toLowerCase();
+  if (/iphone|ipad|ipod/.test(ua)) {
+    return {
+      label: 'iPhone/iPad guide: record or convert to MP4',
+      url: 'https://support.apple.com/guide/iphone/change-video-recording-settings-iph61f49e4bb/ios',
+    };
+  }
+  if (/android/.test(ua)) {
+    return {
+      label: 'Android guide: convert this video to MP4',
+      url: 'https://support.google.com/photos/answer/6193313',
+    };
+  }
+  if (/mac os x|macintosh/.test(ua)) {
+    return {
+      label: 'Mac guide: export this video as MP4',
+      url: 'https://support.apple.com/guide/quicktime-player/welcome/mac',
+    };
+  }
+
+  return {
+    label: 'How to convert this video to MP4',
+    url: 'https://handbrake.fr/docs/en/latest/introduction/quick-start.html',
+  };
 }
 
 async function loadImageDimensions(file: File): Promise<{ width: number; height: number }> {
@@ -1058,6 +1101,7 @@ export default function ComposeSheet({ onClose }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const mediaCarouselRef = useRef<HTMLDivElement>(null);
+  const mp4ConversionHelp = useMemo(() => getMp4ConversionHelpLink(), []);
   const linkPreviewRequestIdRef = useRef(0);
   const mentalHealthGuidanceDraftRef = useRef<string | null>(null);
   const remaining = MAX - text.length;
@@ -1382,8 +1426,8 @@ export default function ComposeSheet({ onClose }: Props) {
     if (!file) {
       throw new Error('Missing local video file for upload.');
     }
-    if (!isAcceptedVideoFile(file)) {
-      throw new Error('Only MP4 videos are currently supported for posting.');
+    if (!isLikelyVideoFile(file)) {
+      throw new Error('Selected file is not recognized as a video.');
     }
     if (file.size > VIDEO_MAX_BYTES) {
       throw new Error(`Video is too large (${formatBytes(file.size)}). Maximum supported size is ${formatBytes(VIDEO_MAX_BYTES)}.`);
@@ -1406,8 +1450,9 @@ export default function ComposeSheet({ onClose }: Props) {
     }
 
     setPostStatus('Uploading video...');
+    const videoEncoding = resolveVideoUploadMime(file);
     const uploadRes = await atpCall(
-      (signal) => agent.app.bsky.video.uploadVideo(file, { signal, encoding: VIDEO_UPLOAD_MIME }),
+      (signal) => agent.app.bsky.video.uploadVideo(file, { signal, encoding: videoEncoding }),
       { maxAttempts: 2, timeoutMs: 180_000 }
     );
     const initialStatus = uploadRes.data.jobStatus;
@@ -1558,6 +1603,10 @@ export default function ComposeSheet({ onClose }: Props) {
 
       onClose();
     } catch (err: unknown) {
+      const rawMessage = (err as { message?: string })?.message?.trim() || '';
+      if (isVideoFormatCompatibilityError(rawMessage)) {
+        setMediaHint('This video format is not supported yet. Convert it to MP4, then try again.');
+      }
       setPostError(toUserFacingPostError(err));
     } finally {
       setPosting(false);
@@ -1661,14 +1710,16 @@ export default function ComposeSheet({ onClose }: Props) {
     const existingImages = mediaItems.filter((item) => item.mediaType === 'image').length;
     const slotsLeft = Math.max(0, MAX_MEDIA - mediaItems.length);
 
-    const acceptedFiles = files.filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/')).slice(0, slotsLeft);
+    const acceptedFiles = files
+      .filter((file) => file.type.startsWith('image/') || isLikelyVideoFile(file))
+      .slice(0, slotsLeft);
     if (acceptedFiles.length === 0) {
       setPostError(`You can attach up to ${MAX_MEDIA} media items.`);
       e.target.value = '';
       return;
     }
 
-    const newVideoCount = acceptedFiles.filter((file) => file.type.startsWith('video/')).length;
+    const newVideoCount = acceptedFiles.filter((file) => isLikelyVideoFile(file)).length;
     const newImageCount = acceptedFiles.filter((file) => file.type.startsWith('image/')).length;
 
     if (existingVideos > 0 && newImageCount > 0) {
@@ -1688,15 +1739,10 @@ export default function ComposeSheet({ onClose }: Props) {
     }
 
     const items: ComposeMediaItem[] = [];
-    const unsupportedVideoFiles: File[] = [];
     for (const file of acceptedFiles) {
-      const isVideo = file.type.startsWith('video/');
+      const isVideo = isLikelyVideoFile(file) && !file.type.startsWith('image/');
 
       if (isVideo) {
-        if (!isAcceptedVideoFile(file)) {
-          unsupportedVideoFiles.push(file);
-          continue;
-        }
         if (file.size > VIDEO_MAX_BYTES) {
           setPostError(`Selected video is too large (${formatBytes(file.size)}). Max allowed is ${formatBytes(VIDEO_MAX_BYTES)}.`);
           continue;
@@ -1726,14 +1772,8 @@ export default function ComposeSheet({ onClose }: Props) {
       }
     }
 
-    if (unsupportedVideoFiles.length > 0) {
-      setMediaHint(buildUnsupportedVideoHint(unsupportedVideoFiles));
-    }
-
     if (items.length === 0) {
-      if (unsupportedVideoFiles.length > 0) {
-        setPostError('No compatible media selected.');
-      }
+      setPostError('No compatible media selected.');
       e.target.value = '';
       return;
     }
@@ -2029,6 +2069,16 @@ export default function ComposeSheet({ onClose }: Props) {
         {mediaHint && (
           <div style={{ padding: '8px 16px', background: 'rgba(255,149,0,0.10)', borderBottom: '0.5px solid rgba(255,149,0,0.24)' }}>
             <p style={{ fontSize: 12, color: 'var(--orange)', lineHeight: 1.4 }}>{mediaHint}</p>
+            {isVideoFormatCompatibilityError(mediaHint) && (
+              <a
+                href={mp4ConversionHelp.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                style={{ fontSize: 12, color: 'var(--blue)', fontWeight: 600, textDecoration: 'underline' }}
+              >
+                {mp4ConversionHelp.label}
+              </a>
+            )}
           </div>
         )}
 
@@ -2501,7 +2551,7 @@ export default function ComposeSheet({ onClose }: Props) {
                 style={{ overflow: 'hidden', borderBottom: '0.5px solid var(--sep)' }}
               >
                 <p style={{ margin: '0 14px 6px', fontSize: 11, color: 'var(--label-4)' }}>
-                  Video upload supports MP4 only (up to 100MB).
+                  Upload videos up to 100MB. If a format is not supported, we will show how to convert it to MP4.
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'row', gap: 4, padding: '12px 14px 10px' }}>
                   {/* Media */}

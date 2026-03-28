@@ -101,6 +101,37 @@ function FloatingComposeFab({ onCompose, onPromptComposer }: { onCompose: () => 
 function AppShell() {
   const { session, isLoading } = useAtp();
   const { activeTab, prevTab, openStory, profileDid, openCompose, openPromptComposer } = useUiStore();
+  const [isTabBarHidden, setIsTabBarHidden] = React.useState(false);
+  const scrollIdleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    const markScrolling = () => {
+      setIsTabBarHidden(true);
+
+      if (scrollIdleTimerRef.current) {
+        clearTimeout(scrollIdleTimerRef.current);
+      }
+
+      // Show the bar again shortly after scrolling stops.
+      scrollIdleTimerRef.current = setTimeout(() => {
+        setIsTabBarHidden(false);
+        scrollIdleTimerRef.current = null;
+      }, 180);
+    };
+
+    window.addEventListener('wheel', markScrolling, { passive: true });
+    window.addEventListener('touchmove', markScrolling, { passive: true });
+    window.addEventListener('scroll', markScrolling, { capture: true, passive: true });
+
+    return () => {
+      window.removeEventListener('wheel', markScrolling);
+      window.removeEventListener('touchmove', markScrolling);
+      window.removeEventListener('scroll', markScrolling, { capture: true });
+      if (scrollIdleTimerRef.current) {
+        clearTimeout(scrollIdleTimerRef.current);
+      }
+    };
+  }, []);
 
   const tabLoadingFallback = (
     <div style={{
@@ -181,7 +212,7 @@ function AppShell() {
       </div>
 
       {/* Bottom tab bar */}
-      <TabBar />
+      <TabBar hidden={isTabBarHidden} />
 
       {/* Overlays: ComposeSheet + StoryMode */}
       <Suspense fallback={null}>
