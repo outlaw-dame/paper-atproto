@@ -16,7 +16,8 @@
     "models:export-cardiff-composer": "./.venv/bin/python scripts/export_cardiff_composer_models.py",
     "models:train-setfit-quality": "./.venv/bin/python scripts/train_export_setfit_quality.py",
     "preview": "vite preview",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "deploy": "gh-pages -d dist"
   },
   "keywords": [],
@@ -36,10 +37,13 @@
     "tailwindcss": "^4.2.2",
     "tsconfig": "^7.0.0",
     "typescript": "^5.9.3",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "vitest": "^4.1.2"
   },
   "dependencies": {
     "@atproto/api": "^0.19.4",
+    "@atproto/oauth-client": "^0.6.0",
+    "@atproto/oauth-client-browser": "^0.3.41",
     "@electric-sql/pglite": "^0.4.1",
     "@tanstack/react-query": "^5.94.5",
     "@use-gesture/react": "^10.3.1",

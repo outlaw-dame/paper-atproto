@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
 import { Emoji } from './Emoji.js';
+import { sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
 
 interface MarkdownProps {
   content: string;
@@ -83,8 +84,12 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
                 </a>
               );
             }
+            const safeHref = href ? sanitizeExternalUrl(href) : null;
+            if (!safeHref) {
+              return <span>{children}</span>;
+            }
             return (
-              <a href={href} className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">
+              <a href={safeHref} className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">
                 {children}
               </a>
             );

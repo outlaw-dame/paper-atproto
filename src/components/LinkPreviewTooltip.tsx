@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchOGData, type OGMetadata } from '../og.js';
 import { checkUrlSafety, type UrlSafetyVerdict } from '../lib/safety/urlSafety.js';
+import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
 
 /**
  * Wraps an inline link and shows a rich OG preview card on hover.
@@ -34,6 +35,7 @@ interface Props {
 }
 
 export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) {
+  const safeUrl = sanitizeExternalUrl(url);
   const anchorRef = useRef<HTMLAnchorElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetched = useRef(false);
@@ -46,19 +48,20 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
   const hasCard = hasPreview || isUnsafe;
 
   const prefetch = useCallback(() => {
+    if (!safeUrl) return;
     if (prefetched.current) return;
     prefetched.current = true;
-    void checkUrlSafety(url)
+    void checkUrlSafety(safeUrl)
       .then((verdict) => {
         setSafety(verdict);
         if (verdict.status === 'unsafe') return null;
-        return fetchOGData(url);
+        return fetchOGData(safeUrl);
       })
       .then((m) => {
         if (m) setMeta(m);
       })
       .catch(() => {});
-  }, [url]);
+  }, [safeUrl]);
 
   const showCard = useCallback(() => {
     const anchor = anchorRef.current;
@@ -97,16 +100,27 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
     setCardPos(null);
   }, []);
 
-  const hostname = (() => {
-    try { return new URL(url).hostname.replace(/^www\./, ''); }
-    catch { return url; }
-  })();
+  const hostname = getSafeExternalHostname(safeUrl ?? '') ?? safeUrl ?? url;
 
   const handleLinkClick = useCallback(async (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     event.stopPropagation();
 
-    const verdict = safety ?? await checkUrlSafety(url);
+    if (!safeUrl) {
+      setSafety({
+        url,
+        checked: false,
+        status: 'unsafe',
+        safe: false,
+        blocked: true,
+        reason: 'This link uses an unsupported or invalid URL scheme.',
+        threats: [],
+      });
+      showCard();
+      return;
+    }
+
+    const verdict = safety ?? await checkUrlSafety(safeUrl);
     setSafety(verdict);
 
     if (verdict.status === 'unsafe') {
@@ -114,14 +128,14 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
       return;
     }
 
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }, [safety, showCard, url]);
+    openExternalUrl(safeUrl);
+  }, [safeUrl, safety, showCard, url]);
 
   return (
     <>
       <a
         ref={anchorRef}
-        href={url}
+        href={safeUrl ?? '#'}
         target="_blank"
         rel="noopener noreferrer"
         onClick={handleLinkClick}
@@ -162,6 +176,8 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
                 src={meta.image}
                 alt=""
                 style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top', display: 'block' }}
+                referrerPolicy="no-referrer"
+                decoding="async"
               />
             </div>
           )}

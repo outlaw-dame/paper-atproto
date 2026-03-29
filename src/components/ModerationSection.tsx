@@ -5,7 +5,7 @@
 // Timed mutes: the mute form lets users pick a duration;
 // the store manages expiry and useTimedMuteWatcher auto-unmutes when expired.
 
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSessionStore } from '../store/sessionStore.js';
 import {
   useGetBlocks,
@@ -20,6 +20,7 @@ import {
   MUTE_DURATIONS,
   type MuteDuration,
 } from '../store/moderationStore.js';
+import { atpCall } from '../lib/atproto/client.js';
 
 // ─── Styles (inline — consistent with the rest of the settings sheet) ─────
 const styles = {
@@ -157,6 +158,211 @@ const styles = {
   },
 } as const;
 
+// ─── Actor search result type ─────────────────────────────────────────────
+interface ActorSuggestion {
+  did: string;
+  handle: string;
+  displayName?: string;
+  avatar?: string;
+}
+
+// ─── Inline actor-search hook ─────────────────────────────────────────────
+// Used by the mute-input to show @handle suggestions.
+function useActorSearchSuggestions(query: string) {
+  const { agent, session } = useSessionStore();
+  const [suggestions, setSuggestions] = useState<ActorSuggestion[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Sanitize before sending to the API.
+  const sanitize = (q: string) =>
+    q.replace(/[\u0000-\u001F\u007F]/g, '').normalize('NFKC').trim().slice(0, 64);
+
+  useEffect(() => {
+    const q = sanitize(query.replace(/^@/, ''));
+    if (!q || !session) {
+      setSuggestions([]);
+      setIsLoading(false);
+      return;
+    }
+
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    abortRef.current?.abort();
+    setIsLoading(true);
+
+    debounceRef.current = setTimeout(() => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      atpCall(
+        () => agent.searchActors({ q, limit: 5 }),
+        { signal: controller.signal, timeoutMs: 5_000, maxAttempts: 1 },
+      )
+        .then((res) => {
+          if (controller.signal.aborted) return;
+          setSuggestions(
+            res.data.actors.slice(0, 5).map((a): ActorSuggestion => ({
+              did: a.did,
+              handle: a.handle,
+              ...(a.displayName ? { displayName: a.displayName } : {}),
+              ...(a.avatar ? { avatar: a.avatar } : {}),
+            })),
+          );
+          setIsLoading(false);
+        })
+        .catch((err: unknown) => {
+          if ((err as Error | undefined)?.name === 'AbortError') return;
+          if (controller.signal.aborted) return;
+          setSuggestions([]);
+          setIsLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
+    };
+  }, [query, agent, session]);
+
+  const dismiss = useCallback(() => {
+    setSuggestions([]);
+    setIsLoading(false);
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    abortRef.current?.abort();
+  }, []);
+
+  return { suggestions, isLoading, dismiss };
+}
+
+// ─── Shared actor-suggestion dropdown ─────────────────────────────────────
+function ActorSuggestionDropdown({
+  suggestions,
+  isLoading,
+  selectedIndex,
+  onSelect,
+  onPointerEnterRow,
+}: {
+  suggestions: ActorSuggestion[];
+  isLoading: boolean;
+  selectedIndex: number;
+  onSelect: (s: ActorSuggestion) => void;
+  onPointerEnterRow: (idx: number) => void;
+}) {
+  if (!isLoading && suggestions.length === 0) return null;
+
+  return (
+    <div
+      role="listbox"
+      aria-label="Account suggestions"
+      style={{
+        position: 'absolute',
+        top: '100%',
+        left: 0,
+        right: 0,
+        zIndex: 100,
+        marginTop: 3,
+        background: 'var(--surface)',
+        border: '0.5px solid var(--sep)',
+        borderRadius: 10,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.16)',
+        overflow: 'hidden',
+      }}
+    >
+      {isLoading && suggestions.length === 0 && (
+        <div style={{ padding: '9px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+          Searching…
+        </div>
+      )}
+      {suggestions.map((s, idx) => {
+        const initials = (s.displayName?.[0] ?? s.handle[0] ?? '?').toUpperCase();
+        return (
+          <button
+            key={s.did}
+            role="option"
+            aria-selected={idx === selectedIndex}
+            onPointerEnter={() => onPointerEnterRow(idx)}
+            onPointerDown={(e) => {
+              // Prevent input blur before selection commits.
+              e.preventDefault();
+              onSelect(s);
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              width: '100%',
+              padding: '7px 10px',
+              background: idx === selectedIndex ? 'rgba(10,132,255,0.10)' : 'none',
+              border: 'none',
+              borderBottom: idx < suggestions.length - 1 ? '0.5px solid var(--sep)' : 'none',
+              cursor: 'pointer',
+              textAlign: 'left',
+              transition: 'background 0.1s ease',
+            }}
+          >
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, var(--accent) 0%, #7c5cbf 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontSize: 12,
+                fontWeight: 700,
+                flexShrink: 0,
+                overflow: 'hidden',
+              }}
+            >
+              {s.avatar ? (
+                <img
+                  src={s.avatar}
+                  alt=""
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  loading="lazy"
+                  decoding="async"
+                />
+              ) : (
+                initials
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {s.displayName && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {s.displayName}
+                </div>
+              )}
+              <div
+                style={{
+                  fontSize: 12,
+                  color: 'var(--text-muted)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                @{s.handle}
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Blocked accounts subsection ─────────────────────────────────────────
 function BlockedAccountsSection() {
   const [open, setOpen] = useState(false);
@@ -216,6 +422,8 @@ function MutedAccountsSection() {
   const [open, setOpen] = useState(false);
   const [muteHandle, setMuteHandle] = useState('');
   const [muteDuration, setMuteDuration] = useState<MuteDuration>(null);
+  const [acSelectedIndex, setAcSelectedIndex] = useState(0);
+  const muteInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useGetMutes();
   const { mutate: unmute, isPending: unmuting } = useUnmuteActor();
@@ -224,10 +432,55 @@ function MutedAccountsSection() {
 
   const mutes = data?.data.mutes ?? [];
 
+  // Actor search autocomplete for the mute input.
+  const {
+    suggestions: acSuggestions,
+    isLoading: acLoading,
+    dismiss: acDismiss,
+  } = useActorSearchSuggestions(muteHandle);
+
+  // Reset selected index when the suggestion list changes.
+  useEffect(() => {
+    setAcSelectedIndex(0);
+  }, [acSuggestions.length]);
+
+  const handleSelectSuggestion = useCallback(
+    (s: ActorSuggestion) => {
+      setMuteHandle(s.handle);
+      acDismiss();
+      muteInputRef.current?.focus();
+    },
+    [acDismiss],
+  );
+
+  const handleMuteInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (acSuggestions.length === 0) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setAcSelectedIndex((i) => Math.min(i + 1, acSuggestions.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setAcSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        const s = acSuggestions[acSelectedIndex];
+        if (s) {
+          e.preventDefault();
+          handleSelectSuggestion(s);
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        acDismiss();
+      }
+    },
+    [acSuggestions, acSelectedIndex, handleSelectSuggestion, acDismiss],
+  );
+
   function handleMuteSubmit(e: React.FormEvent) {
     e.preventDefault();
     const handle = muteHandle.trim().replace(/^@/, '');
     if (!handle) return;
+    acDismiss();
     // handle may be a DID or a handle — the API accepts both via actor parameter
     mute(
       { did: handle, durationMs: muteDuration },
@@ -249,14 +502,32 @@ function MutedAccountsSection() {
         <div>
           {/* Quick-mute form */}
           <form onSubmit={handleMuteSubmit} style={styles.muteFormRow}>
-            <input
-              style={styles.input}
-              placeholder="@handle or DID"
-              value={muteHandle}
-              onChange={(e) => setMuteHandle(e.target.value)}
-              disabled={muting}
-              aria-label="Account to mute"
-            />
+            <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+              <input
+                ref={muteInputRef}
+                style={{ ...styles.input, flex: undefined, width: '100%' }}
+                placeholder="@handle or DID"
+                value={muteHandle}
+                onChange={(e) => setMuteHandle(e.target.value)}
+                onKeyDown={handleMuteInputKeyDown}
+                onBlur={acDismiss}
+                disabled={muting}
+                aria-label="Account to mute"
+                aria-autocomplete="list"
+                aria-expanded={acSuggestions.length > 0 || acLoading}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <ActorSuggestionDropdown
+                suggestions={acSuggestions}
+                isLoading={acLoading}
+                selectedIndex={acSelectedIndex}
+                onSelect={handleSelectSuggestion}
+                onPointerEnterRow={setAcSelectedIndex}
+              />
+            </div>
             <select
               style={styles.select}
               value={muteDuration ?? 'null'}

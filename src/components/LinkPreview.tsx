@@ -1,5 +1,6 @@
 import React from 'react';
 import { Card } from 'konsta/react';
+import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
 
 interface LinkPreviewProps {
   url: string;
@@ -16,11 +17,10 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({
   image,
   siteName,
 }) => {
-  let hostname = '';
-  try {
-    hostname = new URL(url).hostname;
-  } catch (e) {
-    console.error('Invalid URL in LinkPreview:', url);
+  const safeUrl = sanitizeExternalUrl(url);
+  const hostname = getSafeExternalHostname(url);
+
+  if (!safeUrl || !hostname) {
     return null;
   }
 
@@ -28,7 +28,7 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({
     <Card
       margin="m-0"
       className="overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition-colors"
-      onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+      onClick={() => { openExternalUrl(safeUrl); }}
     >
       {image && (
         <div className="aspect-video w-full overflow-hidden border-b border-zinc-200 dark:border-zinc-800">
@@ -37,6 +37,8 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({
             alt={title || 'Link preview'}
             className="w-full h-full object-cover"
             loading="lazy"
+            referrerPolicy="no-referrer"
+            decoding="async"
           />
         </div>
       )}

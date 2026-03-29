@@ -556,10 +556,9 @@ export default function HomeTab({ onOpenStory }: Props) {
                   );
                 }
 
-                const storyRootId = post.threadRoot?.id ?? post.id;
-                const storyTitle = (post.threadRoot?.content ?? post.content).slice(0, 80);
+                const storyTitle = post.content.slice(0, 80);
                 const openThreadStory = () => {
-                  onOpenStory({ id: storyRootId, type: 'post', title: storyTitle });
+                  onOpenStory({ id: post.id, type: 'post', title: storyTitle });
                 };
                 const openContextTarget = (target?: MockPost) => {
                   if (!target?.id) {

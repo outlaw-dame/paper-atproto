@@ -68,6 +68,7 @@ import {
   transitions,
   slideUpVariants,
 } from '../design/index.js';
+import { openExternalUrl } from '../lib/safety/externalUrl.js';
 
 interface Props {
   entry: StoryEntry;
@@ -485,8 +486,8 @@ function PromptHeroCard({
             <div
               role="link"
               tabIndex={0}
-              onClick={(e) => { e.stopPropagation(); window.open(ext.url, '_blank', 'noopener,noreferrer'); }}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.open(ext.url, '_blank', 'noopener,noreferrer'); } }}
+              onClick={(e) => { e.stopPropagation(); openExternalUrl(ext.url); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openExternalUrl(ext.url); } }}
               style={{
                 borderRadius: radius[12],
                 border: `0.5px solid ${phTokens.line}`,

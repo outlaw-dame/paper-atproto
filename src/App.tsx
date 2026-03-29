@@ -43,6 +43,14 @@ type LazyModuleBoundaryState = {
   hasError: boolean;
 };
 
+type RuntimeBoundaryProps = {
+  children: React.ReactNode;
+};
+
+type RuntimeBoundaryState = {
+  hasError: boolean;
+};
+
 class LazyModuleBoundary extends React.Component<LazyModuleBoundaryProps, LazyModuleBoundaryState> {
   state: LazyModuleBoundaryState = { hasError: false };
 
@@ -68,7 +76,44 @@ class LazyModuleBoundary extends React.Component<LazyModuleBoundaryProps, LazyMo
   }
 }
 
-function ShellModuleRecovery({ onReload }: { onReload: () => void }) {
+class AppRuntimeBoundary extends React.Component<RuntimeBoundaryProps, RuntimeBoundaryState> {
+  state: RuntimeBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): RuntimeBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('[App] Runtime render failure', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <ShellModuleRecovery
+          title="Glimpse needs a clean restart"
+          body="The app hit an unexpected render failure. Reloading restores a clean state without exposing sensitive auth details."
+          buttonLabel="Reload app"
+          onReload={() => window.location.reload()}
+        />
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function ShellModuleRecovery({
+  onReload,
+  title = 'Glimpse hit a loading problem',
+  body = 'This usually means the next screen could not finish loading. Reload the app to restore your session and continue.',
+  buttonLabel = 'Reload app',
+}: {
+  onReload: () => void;
+  title?: string;
+  body?: string;
+  buttonLabel?: string;
+}) {
   return (
     <div
       style={{
@@ -104,10 +149,10 @@ function ShellModuleRecovery({ onReload }: { onReload: () => void }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <h2 style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', letterSpacing: 'var(--type-ui-title-md-track)', color: 'var(--label-1)' }}>
-            Glimpse hit a loading problem
+            {title}
           </h2>
           <p style={{ margin: 0, fontFamily: 'var(--font-body)', fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-3)' }}>
-            This usually means the next screen could not finish loading. Reload the app to restore your session and continue.
+            {body}
           </p>
         </div>
         <button
@@ -125,7 +170,7 @@ function ShellModuleRecovery({ onReload }: { onReload: () => void }) {
             cursor: 'pointer',
           }}
         >
-          Reload app
+          {buttonLabel}
         </button>
       </div>
     </div>
@@ -203,14 +248,16 @@ export default function App() {
   return (
     <>
       <BootstrapErrorBanner />
-      <AtpProvider>
-        <MiniPlayerProvider>
-          <AppShell />
-          <Suspense fallback={null}>
-            <MiniPlayer />
-          </Suspense>
-        </MiniPlayerProvider>
-      </AtpProvider>
+      <AppRuntimeBoundary>
+        <AtpProvider>
+          <MiniPlayerProvider>
+            <AppShell />
+            <Suspense fallback={null}>
+              <MiniPlayer />
+            </Suspense>
+          </MiniPlayerProvider>
+        </AtpProvider>
+      </AppRuntimeBoundary>
     </>
   );
 }
@@ -278,7 +325,21 @@ function AppShell() {
   const { activeTab, prevTab, openStory, profileDid, openCompose, openPromptComposer } = useUiStore();
   const [isTabBarHidden, setIsTabBarHidden] = React.useState(false);
   const [shellRetryKey, setShellRetryKey] = React.useState(0);
+  const [loadingTimedOut, setLoadingTimedOut] = React.useState(false);
   const scrollIdleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    if (!isLoading) {
+      setLoadingTimedOut(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setLoadingTimedOut(true);
+    }, 12_000);
+
+    return () => clearTimeout(timer);
+  }, [isLoading]);
 
   React.useEffect(() => {
     if (!session) return;
@@ -332,7 +393,7 @@ function AppShell() {
   );
 
   // Loading splash while restoring persisted session
-  if (isLoading) {
+  if (isLoading && !loadingTimedOut) {
     return (
       <div style={{
         position: 'fixed', inset: 0,

@@ -7,8 +7,11 @@ type MaybeConnection = {
   effectiveType?: string;
 };
 
-function shouldSkipPrefetch(): boolean {
+export function shouldSkipPrefetch(): boolean {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return true;
   if (typeof navigator === 'undefined') return true;
+  if (document.visibilityState === 'hidden') return true;
+  if (navigator.onLine === false) return true;
   const ua = navigator.userAgent;
   const isIOS = /iphone|ipad|ipod/i.test(ua);
   const isAndroid = /android/i.test(ua);
@@ -17,13 +20,16 @@ function shouldSkipPrefetch(): boolean {
     (!!matchMedia && (matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: minimal-ui)').matches)) ||
     (isIOS && 'standalone' in navigator && (navigator as Navigator & { standalone?: boolean }).standalone === true);
   const deviceMemory = Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0);
+  const hardwareConcurrency = Number((navigator as Navigator & { hardwareConcurrency?: number }).hardwareConcurrency ?? 0);
   const isLowMemoryDevice = Number.isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4;
-  if (isIOS || isAndroid || isStandalone || isLowMemoryDevice) return true;
+  const isLowCpuDevice = Number.isFinite(hardwareConcurrency) && hardwareConcurrency > 0 && hardwareConcurrency <= 4;
+  if (isIOS || isAndroid || isStandalone || isLowMemoryDevice || isLowCpuDevice) return true;
   const connection = (navigator as Navigator & { connection?: MaybeConnection }).connection;
+  if (!!matchMedia && matchMedia('(prefers-reduced-data: reduce)').matches) return true;
   if (!connection) return false;
   if (connection.saveData) return true;
   const effectiveType = connection.effectiveType ?? '';
-  return effectiveType.includes('2g');
+  return effectiveType.includes('2g') || effectiveType.includes('3g');
 }
 
 type PrefetchTask = {

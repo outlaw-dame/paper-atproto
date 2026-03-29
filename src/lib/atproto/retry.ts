@@ -27,6 +27,10 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
 export async function withRetry<T>(
   fn: (attempt: number, signal?: AbortSignal) => Promise<T>,
   opts: RetryOptions = {}
@@ -48,6 +52,9 @@ export async function withRetry<T>(
       const err = normalizeError(raw);
       lastError = err;
 
+      // Avoid useless backoff loops when the browser already knows it is offline.
+      if (err.kind === 'network' && isOffline()) throw raw;
+
       // Never retry non-retryable errors
       if (!isRetryable(err)) throw raw;
 
@@ -55,7 +62,7 @@ export async function withRetry<T>(
       if (attempt === maxAttempts) throw raw;
 
       // If the server told us when to retry, respect it
-      const delay = err.retryAfterMs ?? jitteredDelay(baseDelayMs, prevDelay, capDelayMs);
+      const delay = Math.max(0, Math.round(err.retryAfterMs ?? jitteredDelay(baseDelayMs, prevDelay, capDelayMs)));
       prevDelay = delay;
 
       await sleep(delay, signal);

@@ -25,6 +25,8 @@ import {
 } from '../intelligence/composer/contextBuilder.js';
 import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { useComposerAutocomplete } from '../hooks/useComposerAutocomplete.js';
+import ComposerAutocompleteDropdown from './ComposerAutocompleteDropdown.js';
 
 interface Props {
   onClose: () => void;
@@ -1128,6 +1130,23 @@ export default function ComposeSheet({ onClose }: Props) {
   const [hashtagInsights, setHashtagInsights] = useState<HashtagInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [mentalHealthDismissedAt, setMentalHealthDismissedAt] = useState<number | null>(null);
+  // ── Autocomplete: hashtag sources ────────────────────────────────────────
+  const [acTrendingTopics, setAcTrendingTopics] = useState<string[]>([]);
+  const [acRecentHashtags] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(RECENT_HASHTAGS_KEY) ?? '[]') as string[]; } catch { return []; }
+  });
+  const [acFavoriteHashtags] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(FAVORITE_HASHTAGS_KEY) ?? '[]') as string[]; } catch { return []; }
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchTrendingTopics(agent).then((topics) => {
+      if (!cancelled) setAcTrendingTopics(topics.map((t) => t.slug));
+    });
+    return () => { cancelled = true; };
+  }, [agent]);
+
   const taRef = useRef<HTMLTextAreaElement>(null);
   const altTaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1647,6 +1666,31 @@ export default function ComposeSheet({ onClose }: Props) {
     }
   }, [agent, buildExternalEmbed, buildVideoEmbed, canPost, linkPreview, mediaItems, onClose, replyTarget, text]);
 
+  // ── Autocomplete: insert completion back into textarea ────────────────────
+  const handleInsertCompletion = useCallback((newText: string, newCursor: number) => {
+    setText(newText.slice(0, MAX + 10));
+    // Keep preview logic consistent with handleChange
+    if (newText.trim().length > 12 && !showPreview) setShowPreview(true);
+    setTimeout(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(newCursor, newCursor);
+      // Re-run auto-resize
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
+    }, 0);
+  }, [showPreview]);
+
+  // ── Autocomplete hook ─────────────────────────────────────────────────────
+  const autocomplete = useComposerAutocomplete({
+    agent,
+    trendingTopics: acTrendingTopics,
+    recentHashtags: acRecentHashtags,
+    favoriteHashtags: acFavoriteHashtags,
+    onInsertCompletion: handleInsertCompletion,
+  });
+
   const handlePost = useCallback(() => {
     if (!canPost) return;
     if (missingAltCount > 0) {
@@ -1671,7 +1715,9 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
+    const cursor = e.target.selectionStart ?? 0;
     setText(val.slice(0, MAX + 10));
+    autocomplete.notifyTextChange(val, cursor);
     if (dismissedPreviewUrl) {
       const nextUrl = getFirstPreviewUrl(val);
       if (nextUrl !== dismissedPreviewUrl) {
@@ -2199,20 +2245,39 @@ export default function ComposeSheet({ onClose }: Props) {
                 <AudiencePicker value={audience} onChange={setAudience} />
               </div>
 
-              {/* Textarea */}
-              <textarea
-                ref={taRef}
-                value={text}
-                onChange={handleChange}
-                placeholder="What's on your mind?"
-                rows={4}
-                style={{
-                  width: '100%', fontSize: 17, lineHeight: 1.48, letterSpacing: -0.3,
-                  color: 'var(--label-1)', background: 'none', border: 'none', outline: 'none',
-                  resize: 'none', fontFamily: 'inherit', minHeight: 100, maxHeight: 220,
-                  caretColor: 'var(--blue)',
-                }}
-              />
+              {/* Textarea + autocomplete dropdown */}
+              <div style={{ position: 'relative' }}>
+                <textarea
+                  ref={taRef}
+                  value={text}
+                  onChange={handleChange}
+                  onKeyDown={(e) => {
+                    autocomplete.onKeyDown(e, text, e.currentTarget.selectionStart ?? 0);
+                  }}
+                  onBlur={autocomplete.dismiss}
+                  placeholder="What's on your mind?"
+                  rows={4}
+                  aria-autocomplete="list"
+                  aria-expanded={autocomplete.isOpen}
+                  style={{
+                    width: '100%', fontSize: 17, lineHeight: 1.48, letterSpacing: -0.3,
+                    color: 'var(--label-1)', background: 'none', border: 'none', outline: 'none',
+                    resize: 'none', fontFamily: 'inherit', minHeight: 100, maxHeight: 220,
+                    caretColor: 'var(--blue)',
+                  }}
+                />
+                <ComposerAutocompleteDropdown
+                  isOpen={autocomplete.isOpen}
+                  candidates={autocomplete.candidates}
+                  selectedIndex={autocomplete.selectedIndex}
+                  setSelectedIndex={autocomplete.setSelectedIndex}
+                  isLoading={autocomplete.isLoading}
+                  triggerType={autocomplete.triggerType}
+                  onSelect={(candidate) =>
+                    autocomplete.select(candidate, text, taRef.current?.selectionStart ?? 0)
+                  }
+                />
+              </div>
 
               {/* Sentiment / content analysis banner */}
               <AnimatePresence>

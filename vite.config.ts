@@ -13,12 +13,137 @@ const hmrPort = process.env.VITE_HMR_PORT
   ? Number(process.env.VITE_HMR_PORT)
   : undefined;
 const enableIsolationHeaders = process.env.VITE_ENABLE_ISOLATION_HEADERS === '1';
+const oauthClientName = process.env.VITE_ATPROTO_OAUTH_CLIENT_NAME?.trim() || 'Glimpse';
+const oauthClientTos = process.env.VITE_ATPROTO_OAUTH_TOS_URI?.trim();
+const oauthClientPrivacy = process.env.VITE_ATPROTO_OAUTH_PRIVACY_URI?.trim();
+const oauthScope = normalizeOAuthScope(process.env.VITE_ATPROTO_OAUTH_SCOPE);
+const oauthMetadataOrigin = process.env.VITE_ATPROTO_OAUTH_METADATA_ORIGIN?.trim();
+const oauthRedirectUrisOverride = process.env.VITE_ATPROTO_OAUTH_REDIRECT_URIS
+  ?.split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+function getRequestOrigin(req: { headers: Record<string, string | string[] | undefined> }): string | null {
+  const rawHostHeader = req.headers.host;
+  const host = Array.isArray(rawHostHeader) ? rawHostHeader[0] : rawHostHeader;
+  if (!host) return null;
+
+  const rawProtoHeader = req.headers['x-forwarded-proto'];
+  const forwardedProto = Array.isArray(rawProtoHeader) ? rawProtoHeader[0] : rawProtoHeader;
+  const protocol = forwardedProto?.split(',')[0]?.trim() || 'http';
+  return `${protocol}://${host}`;
+}
+
+function sanitizeHttpUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOAuthScope(rawValue: string | undefined): string {
+  const raw = rawValue?.trim();
+  const defaults = ['atproto', 'transition:generic'];
+  if (!raw) return defaults.join(' ');
+
+  const deduped = Array.from(
+    new Set(
+      raw
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter(Boolean)
+        .filter((token) => /^[a-z][a-z0-9:._-]*$/i.test(token)),
+    ),
+  );
+
+  if (!deduped.length) return defaults.join(' ');
+  if (!deduped.includes('atproto')) {
+    deduped.unshift('atproto');
+  }
+  return deduped.join(' ');
+}
+
+function buildRedirectUris(origin: string): string[] {
+  if (oauthRedirectUrisOverride?.length) {
+    const sanitized = oauthRedirectUrisOverride
+      .map(sanitizeHttpUrl)
+      .filter((value): value is string => Boolean(value));
+    if (sanitized.length) {
+      return Array.from(new Set(sanitized));
+    }
+  }
+
+  return [new URL('/', origin).toString()];
+}
+
+function createOAuthClientMetadataResponse(req: { headers: Record<string, string | string[] | undefined> }) {
+  const requestOrigin = getRequestOrigin(req);
+  const effectiveOrigin = sanitizeHttpUrl(oauthMetadataOrigin || '') || requestOrigin;
+
+  if (!effectiveOrigin) {
+    return {
+      status: 500,
+      body: {
+        error: 'OAuth metadata origin could not be determined.',
+      },
+    };
+  }
+
+  const metadataUrl = new URL('/oauth/client-metadata.json', effectiveOrigin).toString();
+  const responseBody: Record<string, unknown> = {
+    $schema: 'https://atproto.com/specs/oauth-client-metadata#',
+    client_id: metadataUrl,
+    client_name: oauthClientName,
+    client_uri: effectiveOrigin,
+    redirect_uris: buildRedirectUris(effectiveOrigin),
+    scope: oauthScope,
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    application_type: 'web',
+    dpop_bound_access_tokens: true,
+  };
+
+  const tosUri = oauthClientTos && sanitizeHttpUrl(oauthClientTos);
+  const privacyUri = oauthClientPrivacy && sanitizeHttpUrl(oauthClientPrivacy);
+  if (tosUri) responseBody.tos_uri = tosUri;
+  if (privacyUri) responseBody.policy_uri = privacyUri;
+
+  return {
+    status: 200,
+    body: responseBody,
+  };
+}
 
 export default defineConfig(({ command }) => ({
   // Keep the GitHub Pages base in production builds, but do not force local
   // development under a subpath.
   base: command === 'serve' ? '/' : '/paper-atproto/',
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'oauth-client-metadata-endpoint',
+      configureServer(server) {
+        server.middlewares.use('/oauth/client-metadata.json', (req, res) => {
+          if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+            res.statusCode = 405;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify({ error: 'Method not allowed' }));
+            return;
+          }
+
+          const response = createOAuthClientMetadataResponse(req as { headers: Record<string, string | string[] | undefined> });
+          res.statusCode = response.status;
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(JSON.stringify(response.body));
+        });
+      },
+    },
+  ],
   server: {
     port: devPort,
     strictPort: false,

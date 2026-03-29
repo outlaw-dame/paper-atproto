@@ -1,14 +1,7 @@
 import React, { useCallback, useMemo } from 'react';
-import twemoji from 'twemoji';
 import LinkPreviewTooltip from './LinkPreviewTooltip.js';
+import { Emoji } from './Emoji.js';
 import type { ResolvedFacet } from '../lib/resolver/atproto.js';
-
-// Using the jdecked fork via jsdelivr to get the latest Unicode 15+ assets.
-const TWEMOJI_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/';
-
-const escapeHtml = (str: string) => str.replace(/[&<>"']/g, (m) => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-}[m] ?? m));
 
 type OnMention = (handle: string) => void;
 type OnHashtag = (tag: string) => void;
@@ -103,19 +96,7 @@ interface Props {
 }
 
 export default function TwemojiText({ text, facets, className, style, onMention, onHashtag, onCashtag }: Props) {
-  const renderText = useCallback((raw: string) => {
-    const encoded = escapeHtml(raw);
-    const parsed = twemoji.parse(encoded, {
-      folder: 'svg',
-      ext: '.svg',
-      base: TWEMOJI_BASE,
-      attributes: () => ({
-        style: 'height: 1.2em; width: 1.2em; margin: 0 0.05em 0 0.1em; vertical-align: -0.2em; display: inline-block;',
-        loading: 'lazy',
-      }),
-    });
-    return <span dangerouslySetInnerHTML={{ __html: parsed }} />;
-  }, []);
+  const renderText = useCallback((raw: string) => <Emoji>{raw}</Emoji>, []);
 
   const tokens = useMemo(
     () => facets?.length ? tokenizeWithFacets(text, facets) : tokenizeRichText(text),

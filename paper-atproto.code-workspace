@@ -49,7 +49,9 @@
 			"printf": true,
 			"git remote": true,
 			"npm --prefix /Users/damonoutlaw/paper-atproto/server": true,
-			"mv": true
+			"mv": true,
+			"corepack": true,
+			"lsof": true
 		}
 	}
 }

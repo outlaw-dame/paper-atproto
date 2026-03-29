@@ -26,6 +26,41 @@ export const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 // HTTP status codes that must NEVER be retried
 export const FATAL_STATUSES = new Set([400, 401, 403, 404]);
 
+function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.max(0, Math.round(seconds * 1000));
+  }
+
+  const retryAt = Date.parse(trimmed);
+  if (!Number.isNaN(retryAt)) {
+    return Math.max(0, retryAt - Date.now());
+  }
+
+  return undefined;
+}
+
+function isNetworkLikeError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+
+  const name = err.name.toLowerCase();
+  const message = err.message.toLowerCase();
+  return (
+    name === 'typeerror' ||
+    name === 'networkerror' ||
+    message.includes('fetch') ||
+    message.includes('networkerror') ||
+    message.includes('load failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('network request failed')
+  );
+}
+
 export function normalizeError(err: unknown): AtpError {
   // AbortError — request was cancelled intentionally
   if (err instanceof DOMException && err.name === 'AbortError') {
@@ -33,7 +68,7 @@ export function normalizeError(err: unknown): AtpError {
   }
 
   // Network failure (fetch threw before getting a response)
-  if (err instanceof TypeError && err.message.toLowerCase().includes('fetch')) {
+  if (isNetworkLikeError(err)) {
     return { kind: 'network', message: 'Network error — check your connection', original: err };
   }
 
@@ -42,10 +77,26 @@ export function normalizeError(err: unknown): AtpError {
   const status: number | undefined = anyErr?.status ?? anyErr?.error?.status;
   const message: string = anyErr?.message ?? anyErr?.error?.message ?? String(err);
 
-  if (status === 401 || message.includes('AuthenticationRequired') || message.includes('ExpiredToken')) {
+  const lowerMessage = message.toLowerCase();
+
+  if (status === 401 || lowerMessage.includes('authenticationrequired') || lowerMessage.includes('expiredtoken')) {
     return { kind: 'auth', message: 'Session expired — please sign in again', status, original: err };
   }
   if (status === 403) {
+    if (
+      lowerMessage.includes('insufficient_scope')
+      || lowerMessage.includes('insufficient scope')
+      || lowerMessage.includes('invalid_token')
+      || lowerMessage.includes('invalid token')
+      || lowerMessage.includes('permission scope')
+    ) {
+      return {
+        kind: 'auth',
+        message: 'Your granted permissions are insufficient. Please sign in again and approve access.',
+        status,
+        original: err,
+      };
+    }
     return { kind: 'forbidden', message: 'You do not have permission to do that', status, original: err };
   }
   if (status === 404) {
@@ -53,7 +104,7 @@ export function normalizeError(err: unknown): AtpError {
   }
   if (status === 429) {
     const retryAfter = anyErr?.headers?.get?.('Retry-After');
-    const retryAfterMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : undefined;
+    const retryAfterMs = parseRetryAfterMs(retryAfter);
     return { kind: 'rate_limit', message: 'Rate limited — please wait a moment', status, retryAfterMs, original: err };
   }
   if (status && status >= 500) {

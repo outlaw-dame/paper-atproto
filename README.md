@@ -32,9 +32,52 @@ pnpm install
 pnpm dev
 ```
 
+Run the auth/retry hardening checks with:
+
+```bash
+pnpm test
+```
+
 For GIF search, create a `.env` file from `.env.example` and set `VITE_TENOR_API_KEY` to a valid Tenor API key.
 
-Open `http://localhost:5173` and login with a Bluesky handle and **App Password**.
+Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
+
+OAuth setup notes:
+
+*   For local development, OAuth loopback mode works without a hosted `client_id`.
+*   For full Bluesky app permissions, use a secure hosted metadata URL (HTTPS). Loopback-only OAuth can be permission-limited.
+*   For secure origins, the app now auto-derives `client_id` as `<origin>/oauth/client-metadata.json` when `VITE_ATPROTO_OAUTH_CLIENT_ID` is unset.
+*   Vite dev server now serves dynamic metadata at `/oauth/client-metadata.json` with strict sanitization and no-store caching.
+*   A starter static metadata template is still included at `public/oauth/client-metadata.json` for fully static hosting scenarios.
+*   Hardened client config validation is enabled: invalid or insecure OAuth URLs are ignored and the app falls back to safe defaults.
+*   Auth identifiers are sanitized before sign-in and raw provider/network errors are not shown directly to users.
+*   Runtime guardrails now block browser OAuth on non-HTTPS origins and block loopback-only mode outside localhost so broken deploys fail closed.
+
+### Production OAuth checklist
+
+1. Serve the app from an HTTPS origin (deployed domain or tunnel).
+2. Ensure metadata is reachable at `<origin>/oauth/client-metadata.json`.
+3. If using dynamic metadata in dev, optionally set:
+    - `VITE_ATPROTO_OAUTH_METADATA_ORIGIN`
+    - `VITE_ATPROTO_OAUTH_REDIRECT_URIS` (comma-separated)
+4. Keep `VITE_ATPROTO_OAUTH_SCOPE=atproto transition:generic` unless your provider requires otherwise.
+5. If metadata is hosted on a different origin, set `VITE_ATPROTO_OAUTH_CLIENT_ID` explicitly.
+6. Confirm consent/technical details include required app permissions (not only `atproto`).
+7. Run sign-in + OTP + consent + callback smoke tests on the final origin.
+8. Use HTTPS everywhere except intentional localhost loopback development.
+9. Validate cancel and retry behavior to ensure no stale callback/session state remains.
+
+### Localhost permissions troubleshooting
+
+If login succeeds but app data loads fail with permissions errors:
+
+1. Start app on a public HTTPS URL (for example, a tunnel to local dev server).
+2. Open the app through that HTTPS URL (not `http://127.0.0.1:*`).
+3. Re-run OAuth and verify technical details on consent screen include required app permissions.
+4. If still blocked, set explicit metadata values:
+    - `VITE_ATPROTO_OAUTH_CLIENT_ID=https://<your-host>/oauth/client-metadata.json`
+    - `VITE_ATPROTO_OAUTH_METADATA_ORIGIN=https://<your-host>`
+    - `VITE_ATPROTO_OAUTH_REDIRECT_URIS=https://<your-host>/`
 
 ## External Entity Linking (Enabled)
 
@@ -142,3 +185,4 @@ Configure:
 *   Refactoring sync pipeline
 *   Migrating thread scoring to SetFit
 *   Adding unit tests
+*   OAuth protocol compliance planning (see `OAUTH_COMPLIANCE_RESEARCH.md`)

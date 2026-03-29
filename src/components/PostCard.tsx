@@ -21,6 +21,7 @@ import {
   recordSensitiveMediaReveal,
   recordSensitiveMediaRehide,
 } from '../perf/sensitiveMediaTelemetry.js';
+import { openExternalUrl } from '../lib/safety/externalUrl.js';
 
 interface PostCardProps {
   post: MockPost;
@@ -143,8 +144,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     return () => { cancelled = true; };
   }, [externalEmbedUrl]);
 
-  const storyRootId = post.threadRoot?.id ?? post.id;
-  const storyTitle = post.threadRoot?.content?.slice(0, 80) ?? post.content.slice(0, 80);
+  const storyTitle = post.content.slice(0, 80);
 
   const openActorProfile = (actor: string) => {
     if (!actor) return;
@@ -176,7 +176,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     if ((e.target as HTMLElement).closest('button, a, .video-player-wrapper')) {
       return;
     }
-    onOpenStory({ id: storyRootId, type: 'post', title: storyTitle });
+    onOpenStory({ id: post.id, type: 'post', title: storyTitle });
   };
 
   const handleRepostToggle = (e: React.MouseEvent) => {
@@ -967,13 +967,13 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           tabIndex={0}
           onClick={(e) => {
             e.stopPropagation();
-            window.open(externalUrl, '_blank', 'noopener,noreferrer');
+            openExternalUrl(externalUrl);
           }}
           onKeyDown={(e) => {
             if (e.key !== 'Enter' && e.key !== ' ') return;
             e.preventDefault();
             e.stopPropagation();
-            window.open(externalUrl, '_blank', 'noopener,noreferrer');
+            openExternalUrl(externalUrl);
           }}
           style={{
             display: 'block', textDecoration: 'none',

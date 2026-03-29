@@ -25,6 +25,8 @@ export default function ModerationSettingsPage() {
         </p>
       </div>
 
+      <ModerationPolicySummaryCard />
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
         <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }}>
           <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }}>Moderation tools</p>
@@ -45,8 +47,6 @@ export default function ModerationSettingsPage() {
           </p>
         </div>
       </div>
-
-      <ModerationPolicySummaryCard />
 
       <ModerationSection />
 
