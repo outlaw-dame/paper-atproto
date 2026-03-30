@@ -7,7 +7,7 @@
 //   • a single place to add logging, metrics, or mocking later
 //
 // Usage:
-//   import { atpCall } from '../lib/atproto/client.js';
+//   import { atpCall } from '../lib/atproto/client';
 //   const feed = await atpCall(() => agent.getTimeline({ limit: 30 }), { signal });
 
 import { withRetry, type RetryOptions } from './retry';
