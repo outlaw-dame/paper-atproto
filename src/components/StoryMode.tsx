@@ -17,18 +17,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { StoryEntry } from '../App.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost } from '../atproto/mappers.js';
 import type { MockPost, ChipType } from '../data/mockData.js';
 import { formatTime, formatCount } from '../data/mockData.js';
 import {
-  resolveThread, extractClusterSignals, isAtUri,
+  extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
 } from '../lib/resolver/atproto.js';
-import { useThreadStore } from '../store/threadStore.js';
 import {
-  runVerifiedThreadPipeline,
-  buildInterpolatorSummary,
-  nodeToThreadPost,
   type ContributionRole,
   type ContributionScores,
   type ContributorImpact,
@@ -37,12 +32,9 @@ import {
 } from '../intelligence/index.js';
 import { createVerificationProviders } from '../intelligence/verification/providerFactory.js';
 import { InMemoryVerificationCache } from '../intelligence/verification/cache.js';
-import { buildThreadStateForWriter } from '../intelligence/writerInput.js';
-import { callInterpolatorWriter } from '../intelligence/modelClient.js';
 import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts.js';
 import { WriterEntitySheet, EntityChip } from './EntitySheet.js';
 import VideoPlayer from './VideoPlayer.js';
-import { translateWriterInput } from '../lib/i18n/threadTranslation.js';
 import { useTranslationStore } from '../store/translationStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { translationClient } from '../lib/i18n/client.js';
@@ -69,13 +61,25 @@ import {
   slideUpVariants,
 } from '../design/index.js';
 import { openExternalUrl } from '../lib/safety/externalUrl.js';
+import { hydrateConversationSession } from '../conversation/sessionAssembler.js';
+import type { ThreadFilter } from '../conversation/projections/threadProjection.js';
+import {
+  useConversationSession,
+  useThreadProjection,
+  useConversationMeta,
+  useConversationInterpolatedState,
+  useComposerContextProjection,
+} from '../conversation/sessionSelectors.js';
+import { useConversationActions } from '../conversation/sessionActions.js';
+import { projectComposerContext } from '../conversation/projections/composerProjection.js';
+import { projectModerationDecision } from '../conversation/projections/moderationProjection.js';
 
 interface Props {
   entry: StoryEntry;
   onClose: () => void;
 }
 
-type ThreadFilter = 'Top' | 'Latest' | 'Clarifying' | 'New angles' | 'Source-backed' | 'Open Story';
+type ThreadFilterOption = ThreadFilter | 'Open Story';
 
 const threadControlChrome = {
   surface: 'rgba(255,255,255,0.045)',
@@ -98,34 +102,12 @@ function Spinner() {
   );
 }
 
-function toFilterableThreadPost(node: ThreadNode): MockPost {
-  return {
-    id: node.uri,
-    author: {
-      did: node.authorDid,
-      handle: node.authorHandle,
-      displayName: node.authorName ?? node.authorHandle,
-      ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
-    },
-    content: node.text,
-    facets: node.facets,
-    createdAt: node.createdAt,
-    likeCount: node.likeCount,
-    replyCount: node.replyCount,
-    repostCount: node.repostCount,
-    bookmarkCount: 0,
-    chips: [],
-  };
-}
-
 function ThreadModerationNotice({
   onReveal,
   matches,
-  isHidden,
 }: {
-  onReveal: () => void;
+  onReveal?: () => void;
   matches?: PostFilterMatch[];
-  isHidden?: boolean;
 }) {
   const reasons = warnMatchReasons(matches ?? []);
   return (
@@ -135,16 +117,7 @@ function ThreadModerationNotice({
       padding: '12px 14px',
       background: 'color-mix(in srgb, var(--surface-card) 90%, var(--orange) 10%)',
     }}>
-      {isHidden ? (
-        <>
-          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)', fontWeight: 700, marginBottom: 4 }}>
-            Hidden by your moderation settings.
-          </div>
-          <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 10 }}>
-            This post includes muted words or topics and is hidden in this view.
-          </div>
-        </>
-      ) : reasons.length > 0 ? (
+      {reasons.length > 0 ? (
         <>
           <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: 4 }}>
             Content warning
@@ -168,20 +141,22 @@ function ThreadModerationNotice({
         </>
       ) : (
         <>
-          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)', fontWeight: 700, marginBottom: 4 }}>
-            Hidden by your moderation settings.
+          <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: 4 }}>
+            Content warning
           </div>
           <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 10 }}>
-            This post includes muted words or topics and is hidden in this view.
+            This post may include content you asked to warn about.
           </div>
         </>
       )}
-      <button
-        onClick={onReveal}
-        style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
-      >
-        Show post
-      </button>
+      {onReveal && (
+        <button
+          onClick={onReveal}
+          style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
+        >
+          Show post
+        </button>
+      )}
     </div>
   );
 }
@@ -1225,10 +1200,19 @@ function InterpolatorCard({
 // ─── ThreadControls ───────────────────────────────────────────────────────
 const THREAD_FILTERS: ThreadFilter[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Source-backed', 'Open Story'];
 
-function ThreadControls({ active, onChange }: { active: ThreadFilter; onChange: (f: ThreadFilter) => void }) {
+function ThreadControls({
+  active,
+  onChange,
+  available,
+}: {
+  active: ThreadFilterOption;
+  onChange: (f: ThreadFilterOption) => void;
+  available?: ThreadFilterOption[];
+}) {
+  const filters = available && available.length > 0 ? available : THREAD_FILTERS;
   return (
     <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
-      {THREAD_FILTERS.map(f => (
+      {filters.map(f => (
         <button
           key={f}
           onClick={() => onChange(f)}
@@ -1370,7 +1354,7 @@ function BranchSummaryPill({
 
 function ContributionCard({
   node, score, rootUri, featured, nested, isOp,
-  onFeedback, onQuoteComment, isFollowed,
+  onFeedback, onQuoteComment, isFollowed, onReplyComment,
 }: {
   node: ThreadNode;
   score?: ContributionScores;
@@ -1382,6 +1366,7 @@ function ContributionCard({
   isFollowed?: boolean;
   onFeedback: (uri: string, fb: ContributionScores['userFeedback']) => void;
   onQuoteComment?: (node: ThreadNode) => void;
+  onReplyComment?: (node: ThreadNode) => void;
 }) {
   const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(score?.userFeedback);
   const [liked, setLiked] = useState(false);
@@ -1843,7 +1828,13 @@ function ContributionCard({
           position: 'relative',
         }}>
           {/* Reply */}
-          <button style={actionBtnStyle} onClick={e => e.stopPropagation()}>
+          <button
+            style={actionBtnStyle}
+            onClick={(e) => {
+              e.stopPropagation();
+              onReplyComment?.(node);
+            }}
+          >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={disc.textTertiary} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
             </svg>
@@ -2140,15 +2131,16 @@ export default function StoryMode({ entry, onClose }: Props) {
   const { agent, session, profile } = useSessionStore();
   const { openComposeReply } = useUiStore();
   const translationPolicy = useTranslationStore((state) => state.policy);
-  const { ensureThread, upsertThreadResult, setWriterResult, setUserFeedback, getThread } = useThreadStore();
+  const conversationSession = useConversationSession(entry.id);
+  const [activeFilter, setActiveFilter] = useState<ThreadFilterOption>('Top');
+  const projectionFilter: ThreadFilter = activeFilter === 'Open Story' ? 'Top' : activeFilter;
+  const threadVm = useThreadProjection(entry.id, projectionFilter);
+  const conversationMeta = useConversationMeta(entry.id);
+  const interpolatedState = useConversationInterpolatedState(entry.id);
+  const actions = useConversationActions(entry.id);
+  const rootComposerContext = useComposerContextProjection(entry.id, threadVm?.hero.rootNode?.uri, '');
   const verificationCache = React.useRef(new InMemoryVerificationCache());
-  const [rootPost, setRootPost] = useState<MockPost | null>(null);
-  const [replies, setReplies] = useState<ThreadNode[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [activeFilter, setActiveFilter] = useState<ThreadFilter>('Top');
   const [quoteTarget, setQuoteTarget] = useState<ThreadNode | null>(null);
-  const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
   // Set of DIDs the current user follows — used only for bold username treatment
   const [followedDids, setFollowedDids] = useState<Set<string>>(new Set());
   // Entity sheet — Narwhal v3 Phase C
@@ -2164,238 +2156,214 @@ export default function StoryMode({ entry, onClose }: Props) {
       })
       .catch(() => {}); // non-critical, fail silently
   }, [session?.did]);
+  const loading = conversationMeta?.status === 'loading';
+  const error = conversationMeta?.error ?? null;
+  const rootPost = useMemo(() => {
+    if (!threadVm?.hero.rootNode) return null;
 
-  const thread = getThread(entry.id);
+    const root = threadVm.hero.rootNode;
+    return {
+      id: root.uri,
+      author: {
+        did: root.authorDid,
+        handle: root.authorHandle,
+        displayName: root.authorName ?? root.authorHandle,
+        ...(root.authorAvatar ? { avatar: root.authorAvatar } : {}),
+      },
+      content: root.text,
+      facets: root.facets,
+      createdAt: root.createdAt,
+      likeCount: root.likeCount,
+      replyCount: root.replyCount,
+      repostCount: root.repostCount,
+      bookmarkCount: 0,
+      chips: [],
+      ...(root.embed ? { embed: root.embed as any } : {}),
+    };
+  }, [threadVm]);
+  const replies = useMemo(() => {
+    return threadVm?.contributions.map((contribution) => ({
+      uri: contribution.uri,
+      cid: '',
+      authorDid: contribution.authorDid,
+      authorHandle: contribution.authorHandle,
+      ...(contribution.authorName ? { authorName: contribution.authorName } : {}),
+      ...(contribution.authorAvatar ? { authorAvatar: contribution.authorAvatar } : {}),
+      text: contribution.text,
+      createdAt: contribution.createdAt,
+      likeCount: contribution.likeCount,
+      replyCount: contribution.replyCount,
+      repostCount: contribution.repostCount,
+      facets: contribution.facets as ResolvedFacet[],
+      embed: contribution.embed,
+      labels: [],
+      depth: contribution.depth,
+      replies: (contribution.replies ?? []) as ThreadNode[],
+      ...(contribution.parentAuthorHandle
+        ? { parentAuthorHandle: contribution.parentAuthorHandle }
+        : {}),
+    })) ?? [];
+  }, [threadVm]);
+  const replyByUri = useMemo(() => {
+    const map = new Map<string, ThreadNode>();
+    for (const reply of replies) {
+      map.set(reply.uri, reply);
+    }
+    return map;
+  }, [replies]);
   const threadFilterPool = useMemo(() => {
     const posts: MockPost[] = [];
     if (rootPost) posts.push(rootPost);
-    for (const reply of replies) {
-      posts.push(toFilterableThreadPost(reply));
-    }
+    posts.push(...replies.map((reply) => ({
+      id: reply.uri,
+      author: {
+        did: reply.authorDid,
+        handle: reply.authorHandle,
+        displayName: reply.authorName ?? reply.authorHandle,
+        ...(reply.authorAvatar ? { avatar: reply.authorAvatar } : {}),
+      },
+      content: reply.text,
+      facets: reply.facets,
+      createdAt: reply.createdAt,
+      likeCount: reply.likeCount,
+      replyCount: reply.replyCount,
+      repostCount: reply.repostCount,
+      bookmarkCount: 0,
+      chips: [],
+    })));
     return posts;
-  }, [rootPost, replies]);
+  }, [replies, rootPost]);
   const threadFilterResults = usePostFilterResults(threadFilterPool, 'thread');
 
-  useEffect(() => {
-    setRevealedFilteredPosts({});
-  }, [entry.id]);
-
-  // ── Fetch thread + polling ────────────────────────────────────────────────
-  // Initial load shows the loading spinner; background re-polls at 60s are
-  // silent — detectTrigger short-circuits if nothing meaningful changed.
-  const pollInFlight = React.useRef(false);
+  // Hydration and polling are delegated to the shared ConversationSession subsystem.
   const providersRef = React.useRef(createVerificationProviders());
 
   useEffect(() => {
-    if (!session) return;
-    ensureThread(entry.id);
+    if (!session || !agent) return;
 
     const controller = new AbortController();
 
-    async function fetchAndRun(isInitial: boolean): Promise<void> {
-      if (pollInFlight.current) return;
-      pollInFlight.current = true;
-      if (isInitial) { setLoading(true); setError(null); }
+    void hydrateConversationSession({
+      sessionId: entry.id,
+      rootUri: entry.id,
+      agent,
+      translationPolicy,
+      providers: providersRef.current,
+      cache: verificationCache.current,
+      signal: controller.signal,
+    }).catch((err) => {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      console.warn('[StoryMode] hydrateConversationSession failed:', err);
+    });
 
-      try {
-        if (!isAtUri(entry.id)) {
-          if (isInitial) setError('This discussion is not linked to a conversation yet.');
-          return;
-        }
-        const res = await atpCall(
-          () => agent.getPostThread({ uri: entry.id, depth: 6 }),
-          { signal: controller.signal },
-        );
-        const threadData = res?.data?.thread;
-        if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') {
-          if (isInitial) setError('Thread not found');
-          return;
-        }
-        const rootNode = resolveThread(threadData as any);
-        if (!rootNode) return;
-
-        if (isInitial) {
-          const mapped = mapFeedViewPost({ post: (threadData as any).post } as any);
-          setRootPost(mapped);
-          setReplies(rootNode.replies ?? []);
-        } else {
-          // On re-polls only update reply list if count changed
-          setReplies(prev => {
-            const next = rootNode.replies ?? [];
-            return next.length !== prev.length ? next : prev;
-          });
-        }
-
-        const result = await runVerifiedThreadPipeline({
-          input: {
-            rootUri: entry.id,
-            rootText: rootNode.text,
-            rootPost: nodeToThreadPost(rootNode),
-            replies: rootNode.replies ?? [],
-          },
-          previous: getThread(entry.id)?.interpolator ?? null,
-          providers: providersRef.current,
-          cache: verificationCache.current,
-          signal: controller.signal,
-        });
-
-        if (result.didMeaningfullyChange) {
-          upsertThreadResult(entry.id, {
-            interpolator: result.interpolator,
-            scores: result.scores,
-            verificationByPost: result.verificationByPost,
-            rootVerification: result.rootVerification,
-            confidence: result.confidence,
-            summaryMode: result.summaryMode,
-          });
-
-          // ── Writer call (Qwen3-4B) ─────────────────────────────────────
-          // Fire-and-forget after storing deterministic results.
-          // Failure falls back silently to heuristic summaryText.
-          const threadReplies = rootNode.replies ?? [];
-
-          try {
-            const translationOutput = await translateWriterInput({
-              rootPost: {
-                id: rootNode.uri,
-                text: rootNode.text,
-              },
-              selectedComments: threadReplies.map((reply) => ({
-                id: reply.uri,
-                text: reply.text,
-              })),
-              targetLang: translationPolicy.userLanguage,
-              mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
-            });
-
-            const translationById = {
-              [translationOutput.rootPost.id]: {
-                ...(translationOutput.rootPost.translatedText
-                  ? { translatedText: translationOutput.rootPost.translatedText }
-                  : {}),
-                sourceLang: translationOutput.rootPost.sourceLang,
-              },
-              ...Object.fromEntries(
-                translationOutput.selectedComments.map((comment) => [
-                  comment.id,
-                  {
-                    ...(comment.translatedText ? { translatedText: comment.translatedText } : {}),
-                    sourceLang: comment.sourceLang,
-                  },
-                ]),
-              ),
-            };
-
-            const translatedRootText = translationById[rootNode.uri]?.translatedText ?? rootNode.text;
-            const translatedReplies = threadReplies.map((reply) => ({
-              ...reply,
-              text: translationById[reply.uri]?.translatedText ?? reply.text,
-            }));
-            const hasTranslatedThreadText = translatedRootText !== rootNode.text
-              || translatedReplies.some((reply, index) => reply.text !== threadReplies[index]?.text);
-            const interpolatorForWriter = hasTranslatedThreadText
-              ? {
-                  ...result.interpolator,
-                  ...buildInterpolatorSummary(translatedRootText, translatedReplies, result.scores as any),
-                }
-              : result.interpolator;
-
-            if (hasTranslatedThreadText) {
-              upsertThreadResult(entry.id, {
-                interpolator: interpolatorForWriter,
-                scores: result.scores,
-                verificationByPost: result.verificationByPost,
-                rootVerification: result.rootVerification,
-                confidence: result.confidence,
-                summaryMode: result.summaryMode,
-              });
-            }
-
-            const writerInput = buildThreadStateForWriter(
-              entry.id,
-              rootNode.text,
-              interpolatorForWriter,
-              result.scores,
-              threadReplies,
-              result.confidence,
-              translationById,
-              rootNode.authorHandle ?? undefined,
-            );
-            const writerResult = await callInterpolatorWriter(writerInput, controller.signal);
-            if (!writerResult.abstained) {
-              setWriterResult(entry.id, writerResult);
-            }
-          } catch (writerErr) {
-            // AbortError is expected on unmount — not a real failure
-            if (writerErr instanceof Error && writerErr.name === 'AbortError') return;
-            // All other writer failures are non-fatal — heuristic summary remains visible
-            console.warn('[StoryMode] writer call failed:', writerErr);
-          }
-        }
-      } catch (e: any) {
-        if (e?.name === 'AbortError') return;
-        if (isInitial) setError(e?.message ?? 'Failed to load thread');
-      } finally {
-        pollInFlight.current = false;
-        if (isInitial) setLoading(false);
-      }
-    }
-
-    fetchAndRun(true);
-    const pollInterval = setInterval(() => fetchAndRun(false), 60_000);
+    const pollInterval = window.setInterval(() => {
+      void hydrateConversationSession({
+        sessionId: entry.id,
+        rootUri: entry.id,
+        agent,
+        translationPolicy,
+        providers: providersRef.current,
+        cache: verificationCache.current,
+        signal: controller.signal,
+      }).catch((err) => {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.warn('[StoryMode] background hydrate failed:', err);
+      });
+    }, 60_000);
 
     return () => {
-      clearInterval(pollInterval);
+      window.clearInterval(pollInterval);
       controller.abort();
     };
-  }, [entry.id, session, translationPolicy.localOnlyMode, translationPolicy.userLanguage]);
+  }, [entry.id, session, agent, translationPolicy.localOnlyMode, translationPolicy.userLanguage]);
 
   const handleFeedback = useCallback((replyUri: string, fb: ContributionScores['userFeedback']) => {
-    setUserFeedback(entry.id, replyUri, fb);
-  }, [entry.id]);
+    actions.onUserFeedback(replyUri, fb);
+  }, [actions]);
+  const revealedWarnUris = conversationSession?.structure.revealedWarnUris ?? [];
+  const revealedWarnSet = useMemo(() => new Set(revealedWarnUris), [revealedWarnUris]);
 
-  // ── Filter replies ────────────────────────────────────────────────────────
-  const filteredReplies = useMemo(() => {
-    const scores = getThread(entry.id)?.scores ?? {};
-    let sorted = [...replies];
-    if (activeFilter === 'Top') {
-      sorted.sort((a, b) => (scores[b.uri]?.finalInfluenceScore ?? 0) - (scores[a.uri]?.finalInfluenceScore ?? 0));
-    } else if (activeFilter === 'Latest') {
-      sorted.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
-    } else if (activeFilter === 'Clarifying') {
-      sorted = sorted.filter(r => scores[r.uri]?.role === 'clarifying');
-    } else if (activeFilter === 'New angles') {
-      sorted = sorted.filter(r => ['new_information', 'useful_counterpoint'].includes(scores[r.uri]?.role ?? ''));
-    } else if (activeFilter === 'Source-backed') {
-      sorted = sorted.filter(r => {
-        const s = scores[r.uri];
-        return (s?.factual?.factualContributionScore ?? 0) > 0.4 && (s?.factual?.factualConfidence ?? 0) > 0.5;
+  const contributionModeration = useMemo(() => {
+    const byUri: Record<string, { decision: 'visible' | 'warn' | 'hide'; canRevealWarn: boolean }> = {};
+    const contributions = threadVm?.contributions ?? [];
+
+    for (const contribution of contributions) {
+      const decision = projectModerationDecision({
+        hasUserHide: false,
+        hasUserWarn: false,
+        hiddenBySession: contribution.isHidden,
+        warnedBySession: contribution.isWarned,
+        revealedWarn: revealedWarnSet.has(contribution.uri) || contribution.isRevealedWarn,
       });
+
+      byUri[contribution.uri] = decision;
     }
-    return sorted;
-  }, [replies, activeFilter, entry.id, thread?.lastComputedAt]);
 
-  const getModerationMatches = useCallback((postId: string) => threadFilterResults[postId] ?? [], [threadFilterResults]);
-  const isHiddenByModeration = useCallback((postId: string) => {
-    const matches = getModerationMatches(postId);
-    return matches.some((m) => m.action === 'hide') && !revealedFilteredPosts[postId];
-  }, [getModerationMatches, revealedFilteredPosts]);
-  const isWarnedByModeration = useCallback((postId: string) => {
-    const matches = getModerationMatches(postId);
-    return matches.some((m) => m.action === 'warn') && !revealedFilteredPosts[postId];
-  }, [getModerationMatches, revealedFilteredPosts]);
+    return byUri;
+  }, [revealedWarnSet, threadVm?.contributions]);
 
-  const featuredReply = filteredReplies.find(r => {
-    if (isHiddenByModeration(r.uri) || isWarnedByModeration(r.uri)) return false;
-    const s = getThread(entry.id)?.scores[r.uri];
-    return (s?.finalInfluenceScore ?? 0) > 0.75;
+  const hiddenContributionCount = useMemo(() => {
+    return Object.values(contributionModeration).filter((item) => item.decision === 'hide').length;
+  }, [contributionModeration]);
+
+  const warnedContributionCount = useMemo(() => {
+    return Object.values(contributionModeration).filter((item) => item.decision === 'warn').length;
+  }, [contributionModeration]);
+
+  const rootNodeSession = conversationSession?.graph.nodesByUri[conversationSession.graph.rootUri];
+  const rootMatches = rootPost ? (threadFilterResults[rootPost.id] ?? []) : [];
+  const rootModeration = projectModerationDecision({
+    hasUserHide: false,
+    hasUserWarn: false,
+    hiddenBySession: !!rootNodeSession?.hiddenByModeration,
+    warnedBySession: !!rootNodeSession?.warnedByModeration,
+    revealedWarn: !!rootPost && revealedWarnSet.has(rootPost.id),
   });
 
   const handleReplyToRoot = useCallback(() => {
     if (!rootPost) return;
+    if (rootModeration.decision !== 'visible') return;
     onClose();
-    openComposeReply(rootPost);
-  }, [onClose, openComposeReply, rootPost]);
+    openComposeReply({
+      ...rootPost,
+      ...(rootComposerContext ? { glympseComposerContext: rootComposerContext } : {}),
+    });
+  }, [onClose, openComposeReply, rootPost, rootComposerContext, rootModeration.decision]);
+
+  const getReplyComposerPayload = useCallback((node: ThreadNode): MockPost => {
+    const context = conversationSession
+      ? projectComposerContext({
+          session: conversationSession,
+          replyToUri: node.uri,
+          draftText: '',
+        })
+      : null;
+
+    return {
+      id: node.uri,
+      author: {
+        did: node.authorDid,
+        handle: node.authorHandle,
+        displayName: node.authorName ?? node.authorHandle,
+        ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
+      },
+      content: node.text,
+      facets: node.facets,
+      createdAt: node.createdAt,
+      likeCount: node.likeCount,
+      replyCount: node.replyCount,
+      repostCount: node.repostCount,
+      bookmarkCount: 0,
+      chips: [],
+      ...(node.embed ? { embed: node.embed as any } : {}),
+      ...(context ? { glympseComposerContext: context } : {}),
+    };
+  }, [conversationSession]);
+
+  const handleReplyToNode = useCallback((node: ThreadNode) => {
+    onClose();
+    openComposeReply(getReplyComposerPayload(node));
+  }, [getReplyComposerPayload, onClose, openComposeReply]);
 
   return (
     <motion.div
@@ -2438,141 +2406,153 @@ export default function StoryMode({ entry, onClose }: Props) {
           <div style={{ padding: '20px 16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* PromptHeroCard */}
-            {rootPost && (() => {
-              const rootMatches = getModerationMatches(rootPost.id);
-              const rootHidden = rootMatches.some((m) => m.action === 'hide') && !revealedFilteredPosts[rootPost.id];
-              const rootWarned = rootMatches.some((m) => m.action === 'warn') && !revealedFilteredPosts[rootPost.id];
+            {rootPost && rootModeration.decision === 'warn' ? (
+              <ThreadModerationNotice
+                matches={rootMatches}
+                {...(rootModeration.canRevealWarn ? { onReveal: () => actions.onRevealWarnedPost(rootPost.id) } : {})}
+              />
+            ) : rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
+              <PromptHeroCard
+                post={rootPost}
+                participantCount={threadVm?.hero.participantCount ?? replies.length}
+                {...(interpolatedState?.rootVerification !== undefined
+                  ? { rootVerification: interpolatedState.rootVerification }
+                  : {})}
+              />
+            ) : null}
 
-              if (rootHidden || rootWarned) {
-                return (
-                  <ThreadModerationNotice
-                    matches={rootMatches}
-                    isHidden={rootHidden}
-                    onReveal={() => setRevealedFilteredPosts((prev) => ({ ...prev, [rootPost.id]: true }))}
-                  />
-                );
-              }
-
-              return (
-                <PromptHeroCard
-                  post={rootPost}
-                  participantCount={replies.length}
-                  {...(thread?.rootVerification !== undefined ? { rootVerification: thread.rootVerification } : {})}
-                />
-              );
-            })()}
-
-            {/* InterpolatorCard */}
-            <InterpolatorCard
-              rootUri={entry.id}
-              summaryText={thread?.interpolator?.summaryText ?? ''}
-              writerSummary={thread?.writerResult?.collapsedSummary}
-              summaryMode={thread?.summaryMode ?? undefined}
-              writerWhatChanged={thread?.writerResult?.whatChanged}
-              writerContributorBlurbs={thread?.writerResult?.contributorBlurbs}
-              safeEntities={
-                thread?.interpolator?.entityLandscape
-                  ?.filter(e => (e.matchConfidence ?? 0) >= 0.50 && e.mentionCount >= 2)
-                  .slice(0, 6)
-                  .map(e => ({
-                    id: e.canonicalEntityId ?? e.entityText.toLowerCase().replace(/\s+/g, '-'),
-                    label: e.canonicalLabel ?? e.entityText,
-                    type: (e.entityKind === 'person' ? 'person' : e.entityKind === 'org' ? 'organization' : 'topic') as WriterEntity['type'],
-                    confidence: e.matchConfidence ?? 0.50,
-                    impact: Math.min(1, e.mentionCount / 10),
-                  }))
-              }
-              clarifications={thread?.interpolator?.clarificationsAdded ?? []}
-              newAngles={thread?.interpolator?.newAnglesAdded ?? []}
-              heatLevel={thread?.interpolator?.heatLevel ?? 0}
-              repetitionLevel={thread?.interpolator?.repetitionLevel ?? 0}
-              sourceSupportPresent={thread?.interpolator?.sourceSupportPresent ?? false}
-              replyCount={replies.length}
-              updatedAt={thread?.interpolator?.updatedAt ?? new Date().toISOString()}
-              topContributors={thread?.interpolator?.topContributors ?? []}
-              entityLandscape={thread?.interpolator?.entityLandscape ?? []}
-              factualSignalPresent={thread?.interpolator?.factualSignalPresent ?? false}
-              onEntityTap={setActiveEntity}
-            />
-
-            {/* ThreadControls */}
-            {replies.length > 0 && (
-              <ThreadControls active={activeFilter} onChange={setActiveFilter} />
-            )}
-
-            {/* Featured contribution */}
-            {featuredReply && activeFilter === 'Top' && (() => {
-              const featuredScore = getThread(entry.id)?.scores[featuredReply.uri];
-              const isOp = !!(rootPost?.author.did && featuredReply.authorDid === rootPost.author.did);
-              return (
-                <ContributionCard
-                  key={`featured-${featuredReply.uri}`}
-                  node={featuredReply}
-                  {...(featuredScore !== undefined ? { score: featuredScore } : {})}
+            {rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
+              <>
+                {/* InterpolatorCard */}
+                <InterpolatorCard
                   rootUri={entry.id}
-                  featured
-                  isOp={isOp}
-                  {...(followedDids.has(featuredReply.authorDid ?? '') ? { isFollowed: true } : {})}
-                  onFeedback={handleFeedback}
-                  onQuoteComment={setQuoteTarget}
+                  summaryText={threadVm?.interpolator.summaryText ?? ''}
+                  writerSummary={threadVm?.interpolator.writerSummary}
+                  summaryMode={(threadVm?.interpolator.summaryMode ?? undefined) as SummaryMode | undefined}
+                  writerWhatChanged={interpolatedState?.writerResult?.whatChanged}
+                  writerContributorBlurbs={interpolatedState?.writerResult?.contributorBlurbs}
+                  safeEntities={interpolatedState?.writerEntities}
+                  clarifications={interpolatedState?.interpolator?.clarificationsAdded ?? []}
+                  newAngles={interpolatedState?.interpolator?.newAnglesAdded ?? []}
+                  heatLevel={threadVm?.interpolator.heatLevel ?? 0}
+                  repetitionLevel={threadVm?.interpolator.repetitionLevel ?? 0}
+                  sourceSupportPresent={threadVm?.interpolator.sourceSupportPresent ?? false}
+                  replyCount={threadVm?.hero.participantCount ?? replies.length}
+                  updatedAt={conversationSession?.interpretation.lastComputedAt ?? new Date().toISOString()}
+                  topContributors={threadVm?.interpolator.topContributors ?? []}
+                  entityLandscape={threadVm?.interpolator.entityLandscape ?? []}
+                  factualSignalPresent={threadVm?.interpolator.factualSignalPresent ?? false}
+                  onEntityTap={setActiveEntity}
                 />
-              );
-            })()}
 
-            {/* Contribution stack */}
-            {(() => {
-              const rootAuthorDid = rootPost?.author.did;
-              const shownReplies = filteredReplies.filter(r => r.uri !== featuredReply?.uri || activeFilter !== 'Top');
-              return shownReplies.map((node, idx) => {
-                const moderationMatches = getModerationMatches(node.uri);
-                const isHidden = moderationMatches.some((m) => m.action === 'hide') && !revealedFilteredPosts[node.uri];
-                const isWarned = moderationMatches.some((m) => m.action === 'warn') && !revealedFilteredPosts[node.uri];
+                {/* ThreadControls */}
+                {(threadVm?.hero.participantCount ?? replies.length) > 0 && (
+                  <ThreadControls
+                    active={activeFilter}
+                    onChange={setActiveFilter}
+                    available={[
+                      ...((threadVm?.filters.available ?? []) as ThreadFilter[]),
+                      'Open Story',
+                    ]}
+                  />
+                )}
 
-                if (isHidden || isWarned) {
+                {/* Featured contribution */}
+                {threadVm?.featuredContribution && activeFilter === 'Top' && (() => {
+                  const featured = threadVm.featuredContribution;
+                  const featuredNode = replyByUri.get(featured.uri);
+                  if (!featuredNode) return null;
+                  if (contributionModeration[featured.uri]?.decision !== 'visible') return null;
+
+                  const featuredScore = interpolatedState?.scoresByUri[featured.uri];
                   return (
-                    <ThreadModerationNotice
-                      key={`moderation-${node.uri}`}
-                      matches={moderationMatches}
-                      isHidden={isHidden}
-                      onReveal={() => setRevealedFilteredPosts((prev) => ({ ...prev, [node.uri]: true }))}
-                    />
-                  );
-                }
-
-                const isOp = !!(rootAuthorDid && node.authorDid === rootAuthorDid);
-                const prevNode = shownReplies[idx - 1];
-                const prevIsOp = !!(prevNode && rootAuthorDid && prevNode.authorDid === rootAuthorDid);
-                // Draw a short connector line between consecutive OP self-replies
-                const showChain = isOp && prevIsOp;
-                const nodeScore = getThread(entry.id)?.scores[node.uri];
-                return (
-                  <React.Fragment key={node.uri}>
-                    {showChain && (
-                      <div style={{
-                        height: 10, marginTop: -8,
-                        marginLeft: 20,
-                        borderLeft: '2px solid var(--sep-opaque)',
-                      }} />
-                    )}
                     <ContributionCard
-                      node={node}
-                      {...(nodeScore !== undefined ? { score: nodeScore } : {})}
+                      key={`featured-${featured.uri}`}
+                      node={featuredNode}
+                      {...(featuredScore !== undefined ? { score: featuredScore } : {})}
                       rootUri={entry.id}
-                      isOp={isOp}
-                      {...(followedDids.has(node.authorDid ?? '') ? { isFollowed: true } : {})}
+                      featured
+                      isOp={featured.isOp}
+                      {...(followedDids.has(featured.authorDid ?? '') ? { isFollowed: true } : {})}
                       onFeedback={handleFeedback}
+                      onReplyComment={handleReplyToNode}
                       onQuoteComment={setQuoteTarget}
                     />
-                  </React.Fragment>
-                );
-              });
-            })()}
+                  );
+                })()}
 
-            {replies.length === 0 && !loading && (
-              <div style={{ padding: '24px 0', textAlign: 'center' }}>
-                <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No replies yet. Be the first to contribute.</p>
-              </div>
-            )}
+                {/* Contribution stack */}
+                {(() => {
+                  const featuredUri = (threadVm?.featuredContribution && activeFilter === 'Top')
+                    ? threadVm.featuredContribution.uri : undefined;
+                  const visible = (threadVm?.visibleContributions ?? []).filter(
+                    (c) => !featuredUri || c.uri !== featuredUri,
+                  );
+                  return visible.map((contribution, idx) => {
+                    const node = replyByUri.get(contribution.uri);
+                    if (!node) return null;
+
+                    const moderationMatches = threadFilterResults[contribution.uri] ?? [];
+                    const moderation = contributionModeration[contribution.uri];
+                    if (!moderation) return null;
+
+                    if (moderation.decision === 'hide') {
+                      return null;
+                    }
+
+                    if (moderation.decision === 'warn') {
+                      return (
+                        <ThreadModerationNotice
+                          key={`moderation-${contribution.uri}`}
+                          matches={moderationMatches}
+                          {...(moderation.canRevealWarn
+                            ? { onReveal: () => actions.onRevealWarnedPost(contribution.uri) }
+                            : {})}
+                        />
+                      );
+                    }
+
+                    const prev = visible[idx - 1];
+                    const prevIsVisible = !!prev && contributionModeration[prev.uri]?.decision === 'visible';
+                    const showChain = contribution.isOp && !!prev?.isOp && prevIsVisible;
+                    const nodeScore = interpolatedState?.scoresByUri[contribution.uri];
+                    return (
+                      <React.Fragment key={node.uri}>
+                        {showChain && (
+                          <div style={{
+                            height: 10, marginTop: -8,
+                            marginLeft: 20,
+                            borderLeft: '2px solid var(--sep-opaque)',
+                          }} />
+                        )}
+                        <ContributionCard
+                          node={node}
+                          {...(nodeScore !== undefined ? { score: nodeScore } : {})}
+                          rootUri={entry.id}
+                          isOp={contribution.isOp}
+                          {...(followedDids.has(contribution.authorDid ?? '') ? { isFollowed: true } : {})}
+                          onFeedback={handleFeedback}
+                          onReplyComment={handleReplyToNode}
+                          onQuoteComment={setQuoteTarget}
+                        />
+                      </React.Fragment>
+                    );
+                  });
+                })()}
+
+                {(threadVm?.hero.participantCount ?? replies.length) === 0 && !loading && (
+                  <div style={{ padding: '24px 0', textAlign: 'center' }}>
+                    <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No replies yet. Be the first to contribute.</p>
+                  </div>
+                )}
+
+                {warnedContributionCount > 0 && (
+                  <div style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, padding: '2px 2px 0' }}>
+                    {`${warnedContributionCount} warned`}
+                  </div>
+                )}
+              </>
+            ) : null}
 
             {/* Related footer */}
             <RelatedFooter onClose={onClose} />
@@ -2585,7 +2565,7 @@ export default function StoryMode({ entry, onClose }: Props) {
       <ReplyBar
         {...(profile?.avatar !== undefined ? { userAvatar: profile.avatar } : {})}
         onActivate={handleReplyToRoot}
-        disabled={!rootPost}
+        disabled={!rootPost || rootModeration.decision !== 'visible'}
       />
 
       {/* Quote composer overlay */}

@@ -23,8 +23,18 @@ const queryClient = new QueryClient({
 
 // ─── Dark mode ────────────────────────────────────────────────────────────
 const applyDark = (dark: boolean) => document.documentElement.classList.toggle('dark', dark);
-applyDark(window.matchMedia('(prefers-color-scheme: dark)').matches);
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => applyDark(e.matches));
+const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+applyDark(darkModeQuery.matches);
+
+const handleDarkModeChange = (event: MediaQueryListEvent | MediaQueryList) => {
+  applyDark(event.matches);
+};
+
+if (typeof darkModeQuery.addEventListener === 'function') {
+  darkModeQuery.addEventListener('change', handleDarkModeChange);
+} else if (typeof darkModeQuery.addListener === 'function') {
+  darkModeQuery.addListener(handleDarkModeChange);
+}
 
 // Render immediately, then initialize DB/bootstrap in the background.
 ReactDOM.createRoot(document.getElementById('root')!).render(

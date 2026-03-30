@@ -289,7 +289,9 @@ llmRouter.post('/write/composer-guidance', async (c) => {
   }
 
   try {
-    const result = await runComposerGuidanceWriter(parsed.data);
+    const { parentText, ...rest } = parsed.data;
+    const request = parentText === undefined ? rest : { ...rest, parentText };
+    const result = await runComposerGuidanceWriter(request);
     return c.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Composer guidance writer failed';

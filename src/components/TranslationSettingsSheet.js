@@ -1,0 +1,234 @@
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import React, { useEffect, useMemo, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useTranslationStore } from '../store/translationStore.js';
+import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
+import AccountPrefsSection from './AccountPrefsSection.js';
+import ModerationSettingsPage from './ModerationSettingsPage.js';
+import FeedsSettingsPage from './FeedsSettingsPage.js';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry.js';
+const BASE_LANG_OPTIONS = [
+    'en',
+    'es',
+    'fr',
+    'de',
+    'pt',
+    'it',
+    'nl',
+    'sv',
+    'pl',
+    'uk',
+    'ru',
+    'tr',
+    'ar',
+    'he',
+    'hi',
+    'ja',
+    'ko',
+    'zh',
+    'zh-CN',
+    'zh-TW',
+];
+function buildLanguageOptions(systemLang) {
+    const display = typeof Intl.DisplayNames === 'function'
+        ? new Intl.DisplayNames([systemLang], { type: 'language' })
+        : null;
+    const seen = new Set();
+    const list = [];
+    [systemLang, ...BASE_LANG_OPTIONS].forEach((rawCode) => {
+        const code = rawCode.toLowerCase();
+        if (seen.has(code))
+            return;
+        seen.add(code);
+        const englishCode = rawCode.split('-')[0] ?? rawCode;
+        const label = display?.of(englishCode) ?? rawCode;
+        const prettyCode = rawCode.toLowerCase();
+        list.push({ code: prettyCode, label: `${label} (${prettyCode})` });
+    });
+    return list;
+}
+function ToggleRow({ label, helper, checked, onChange, touchLike, }) {
+    const trackWidth = touchLike ? 50 : 42;
+    const trackHeight = touchLike ? 30 : 26;
+    const thumbSize = touchLike ? 24 : 20;
+    const thumbTop = touchLike ? 2 : 2;
+    const thumbLeft = checked ? trackWidth - thumbSize - 2 : 2;
+    return (_jsxs("label", { style: {
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '10px 0',
+            cursor: 'pointer',
+        }, children: [_jsxs("span", { style: { display: 'flex', flexDirection: 'column', gap: 3 }, children: [_jsx("span", { style: { fontSize: 14, fontWeight: 600, color: 'var(--label-1)' }, children: label }), helper && (_jsx("span", { style: { fontSize: 12, lineHeight: 1.35, color: 'var(--label-3)' }, children: helper }))] }), _jsxs("span", { style: {
+                    width: trackWidth,
+                    height: trackHeight,
+                    borderRadius: 999,
+                    background: checked ? 'var(--blue)' : 'var(--fill-3)',
+                    border: `1px solid ${checked ? 'color-mix(in srgb, var(--blue) 70%, #000 30%)' : 'var(--sep)'}`,
+                    position: 'relative',
+                    transition: 'all 0.16s ease',
+                    flexShrink: 0,
+                }, children: [_jsx("input", { type: "checkbox", checked: checked, onChange: (e) => onChange(e.target.checked), style: { position: 'absolute', opacity: 0, pointerEvents: 'none' }, "aria-label": label }), _jsx("span", { style: {
+                            position: 'absolute',
+                            top: thumbTop,
+                            left: thumbLeft,
+                            width: thumbSize,
+                            height: thumbSize,
+                            borderRadius: '50%',
+                            background: '#fff',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.22)',
+                            transition: 'left 0.16s ease',
+                        } })] })] }));
+}
+export default function TranslationSettingsSheet({ open, onClose }) {
+    const { policy, setPolicy } = useTranslationStore();
+    const platform = usePlatform();
+    const iconTokens = getIconBtnTokens(platform);
+    const [page, setPage] = useState('translation');
+    const [altMetrics, setAltMetrics] = useState(() => getAltTextMetricsSnapshot());
+    const [composeDebug, setComposeDebug] = useState(null);
+    const systemLang = useMemo(() => {
+        try {
+            return (navigator.language || 'en').toLowerCase();
+        }
+        catch {
+            return 'en';
+        }
+    }, []);
+    const languageOptions = useMemo(() => buildLanguageOptions(systemLang), [systemLang]);
+    useEffect(() => {
+        if (!open)
+            return;
+        const refresh = () => {
+            setAltMetrics(getAltTextMetricsSnapshot());
+            if (typeof window !== 'undefined') {
+                const snapshot = window.__PAPER_COMPOSE_DEBUG__;
+                setComposeDebug((snapshot ?? null));
+            }
+        };
+        refresh();
+        const timer = setInterval(refresh, 1500);
+        return () => clearInterval(timer);
+    }, [open]);
+    useEffect(() => {
+        if (!open)
+            return;
+        setPage('translation');
+    }, [open]);
+    return (_jsx(AnimatePresence, { children: open && (_jsxs(_Fragment, { children: [_jsx(motion.button, { type: "button", "aria-label": "Close translation settings", initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, onClick: onClose, style: {
+                        position: 'fixed',
+                        inset: 0,
+                        background: 'rgba(0,0,0,0.42)',
+                        border: 'none',
+                        zIndex: 500,
+                        cursor: 'pointer',
+                    } }), _jsxs(motion.div, { initial: { y: 30, opacity: 0 }, animate: { y: 0, opacity: 1 }, exit: { y: 24, opacity: 0 }, transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }, style: {
+                        position: 'fixed',
+                        left: 12,
+                        right: 12,
+                        bottom: 'calc(var(--safe-bottom) + 10px)',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--sep)',
+                        borderRadius: 20,
+                        boxShadow: '0 14px 36px rgba(0,0,0,0.28)',
+                        zIndex: 501,
+                        overflow: 'hidden',
+                    }, children: [_jsxs("div", { style: {
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '14px 16px 12px',
+                                borderBottom: '1px solid var(--sep)',
+                            }, children: [_jsxs("div", { children: [_jsx("h3", { style: { fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }, children: "Settings" }), _jsx("p", { style: { fontSize: 12, color: 'var(--label-3)' }, children: page === 'translation'
+                                                ? 'Inline + automatic translation'
+                                                : page === 'moderation'
+                                                    ? 'Sensitive media, filters, and moderation controls'
+                                                    : page === 'feeds'
+                                                        ? 'Manage News, Podcasts, Videos, and other feed subscriptions'
+                                                        : 'Diagnostics and QA details for internal testing' })] }), _jsx("button", { type: "button", onClick: onClose, style: {
+                                        width: iconTokens.size,
+                                        height: iconTokens.size,
+                                        borderRadius: '50%',
+                                        border: 'none',
+                                        background: 'var(--fill-2)',
+                                        color: 'var(--label-2)',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                    }, children: _jsxs("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", children: [_jsx("line", { x1: "18", y1: "6", x2: "6", y2: "18" }), _jsx("line", { x1: "6", y1: "6", x2: "18", y2: "18" })] }) })] }), _jsxs("div", { style: { padding: '12px 16px 16px', maxHeight: '64vh', overflowY: 'auto' }, children: [_jsxs("div", { style: { display: 'flex', gap: 8, marginBottom: 12 }, children: [_jsx("button", { type: "button", onClick: () => setPage('translation'), style: {
+                                                flex: 1,
+                                                height: 34,
+                                                borderRadius: 10,
+                                                border: 'none',
+                                                background: page === 'translation' ? 'var(--blue)' : 'var(--fill-2)',
+                                                color: page === 'translation' ? '#fff' : 'var(--label-2)',
+                                                fontSize: 12,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                            }, children: "Translation" }), _jsx("button", { type: "button", onClick: () => setPage('moderation'), style: {
+                                                flex: 1,
+                                                height: 34,
+                                                borderRadius: 10,
+                                                border: 'none',
+                                                background: page === 'moderation' ? 'var(--blue)' : 'var(--fill-2)',
+                                                color: page === 'moderation' ? '#fff' : 'var(--label-2)',
+                                                fontSize: 12,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                            }, children: "Moderation" }), _jsx("button", { type: "button", onClick: () => setPage('debug'), style: {
+                                                flex: 1,
+                                                height: 34,
+                                                borderRadius: 10,
+                                                border: 'none',
+                                                background: page === 'debug' ? 'var(--blue)' : 'var(--fill-2)',
+                                                color: page === 'debug' ? '#fff' : 'var(--label-2)',
+                                                fontSize: 12,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                            }, children: "Debug" }), _jsx("button", { type: "button", onClick: () => setPage('feeds'), style: {
+                                                flex: 1,
+                                                height: 34,
+                                                borderRadius: 10,
+                                                border: 'none',
+                                                background: page === 'feeds' ? 'var(--blue)' : 'var(--fill-2)',
+                                                color: page === 'feeds' ? '#fff' : 'var(--label-2)',
+                                                fontSize: 12,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                            }, children: "Feeds" })] }), page === 'translation' && (_jsxs(_Fragment, { children: [_jsxs("div", { style: { marginBottom: 8 }, children: [_jsx("label", { style: { display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }, children: "Translate to" }), _jsx("select", { value: policy.userLanguage, onChange: (e) => setPolicy({ userLanguage: e.target.value }), style: {
+                                                        width: '100%',
+                                                        height: platform.prefersCoarsePointer ? 44 : 40,
+                                                        borderRadius: 12,
+                                                        border: '1px solid var(--sep)',
+                                                        background: 'var(--fill-1)',
+                                                        color: 'var(--label-1)',
+                                                        padding: '0 12px',
+                                                        fontSize: 14,
+                                                        fontWeight: 500,
+                                                    }, children: languageOptions.map((lang) => (_jsx("option", { value: lang.code, children: lang.label }, lang.code))) })] }), _jsx("hr", { style: { border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' } }), _jsx(ToggleRow, { label: "Auto inline translation", helper: "Automatically translate short timeline posts without media or embeds.", checked: policy.autoTranslateFeed, onChange: (checked) => setPolicy({ autoTranslateFeed: checked }), touchLike: platform.prefersCoarsePointer || platform.isMobile }), _jsx(ToggleRow, { label: "Auto translate Explore", helper: "Translate discovery snippets in Explore cards.", checked: policy.autoTranslateExplore, onChange: (checked) => setPolicy({ autoTranslateExplore: checked }), touchLike: platform.prefersCoarsePointer || platform.isMobile }), _jsx(ToggleRow, { label: "Auto translate Story view", helper: "Pre-translate content used by Story Mode.", checked: policy.autoTranslateThreads, onChange: (checked) => setPolicy({ autoTranslateThreads: checked }), touchLike: platform.prefersCoarsePointer || platform.isMobile }), _jsx(ToggleRow, { label: "Local/private mode", helper: "Prefer local translation path when available.", checked: policy.localOnlyMode, onChange: (checked) => setPolicy({ localOnlyMode: checked }), touchLike: platform.prefersCoarsePointer || platform.isMobile }), _jsx("p", { style: { fontSize: 11, color: 'var(--label-4)', marginTop: 10, lineHeight: 1.35 }, children: "Note: translation may use external services depending on the selected mode and language pair." }), _jsx("hr", { style: { border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' } }), _jsx(AccountPrefsSection, {})] })), page === 'moderation' && _jsx(ModerationSettingsPage, {}), page === 'feeds' && _jsx(FeedsSettingsPage, {}), page === 'debug' && (_jsxs(_Fragment, { children: [_jsxs("div", { children: [_jsxs("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, children: [_jsx("h4", { style: { fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }, children: "Compose sentiment (debug)" }), _jsx("button", { type: "button", onClick: () => {
+                                                                const snapshot = window.__PAPER_COMPOSE_DEBUG__;
+                                                                setComposeDebug((snapshot ?? null));
+                                                            }, style: {
+                                                                border: '1px solid var(--sep)',
+                                                                borderRadius: 8,
+                                                                background: 'var(--fill-1)',
+                                                                color: 'var(--label-2)',
+                                                                fontSize: 11,
+                                                                fontWeight: 700,
+                                                                padding: '4px 8px',
+                                                                cursor: 'pointer',
+                                                            }, children: "Refresh" })] }), _jsx("p", { style: { fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }, children: "Mirrors window.__PAPER_COMPOSE_DEBUG__ and keeps debug output out of the composer UI." }), !composeDebug && (_jsx("div", { style: { marginTop: 8, border: '1px solid var(--sep)', borderRadius: 10, padding: 10, background: 'var(--fill-1)' }, children: _jsx("p", { style: { margin: 0, fontSize: 12, color: 'var(--label-3)' }, children: "No compose debug snapshot found yet. Open the composer and type to generate one." }) })), composeDebug && (_jsxs("div", { style: { marginTop: 8, border: '1px dashed var(--sep)', borderRadius: 10, padding: 10, background: 'var(--fill-1)', display: 'grid', gap: 6 }, children: [_jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["level=", composeDebug.sentimentResult?.level ?? 'ok', " | draftLength=", composeDebug.draftText?.trim().length ?? 0, " | replyContext=", String(!!composeDebug.sentimentResult?.isReplyContext), " | dismissed=", composeDebug.sentimentDismissedAt === null ? 'false' : 'true'] }), _jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["draft=\"", composeDebug.draftText?.trim() || '(empty)', "\""] }), composeDebug.replyParentText && (_jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["parent=\"", composeDebug.replyParentText.length > 120 ? `${composeDebug.replyParentText.slice(0, 117)}...` : composeDebug.replyParentText, "\""] })), _jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["signals=", composeDebug.sentimentResult?.signals?.length ? composeDebug.sentimentResult.signals.join(' | ') : '(none)'] }), _jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["supportiveReplySignals=", composeDebug.sentimentResult?.supportiveReplySignals?.length ? composeDebug.sentimentResult.supportiveReplySignals.join(' | ') : '(none)'] }), _jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["constructiveSignals=", composeDebug.sentimentResult?.constructiveSignals?.length ? composeDebug.sentimentResult.constructiveSignals.join(' | ') : '(none)'] }), _jsxs("p", { style: { margin: 0, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }, children: ["parentSignals=", composeDebug.sentimentResult?.parentSignals?.length ? composeDebug.sentimentResult.parentSignals.join(' | ') : '(none)'] })] }))] }), _jsx("hr", { style: { border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' } }), _jsxs("div", { children: [_jsxs("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, children: [_jsx("h4", { style: { fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }, children: "ALT telemetry (debug)" }), _jsx("button", { type: "button", onClick: () => setAltMetrics(getAltTextMetricsSnapshot()), style: {
+                                                                border: '1px solid var(--sep)',
+                                                                borderRadius: 8,
+                                                                background: 'var(--fill-1)',
+                                                                color: 'var(--label-2)',
+                                                                fontSize: 11,
+                                                                fontWeight: 700,
+                                                                padding: '4px 8px',
+                                                                cursor: 'pointer',
+                                                            }, children: "Refresh" })] }), _jsx("p", { style: { fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }, children: "Mirrors window.__GLYMPSE_ALT_METRICS__ for quick QA checks." }), _jsxs("div", { style: { marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }, children: [_jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }, children: [_jsx("div", { style: { fontSize: 11, color: 'var(--label-3)' }, children: "Completion Rate" }), _jsxs("div", { style: { fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }, children: [(altMetrics.completionRate * 100).toFixed(0), "%"] })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }, children: [_jsx("div", { style: { fontSize: 11, color: 'var(--label-3)' }, children: "Bulk Success Rate" }), _jsxs("div", { style: { fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }, children: [(altMetrics.bulkSuccessRate * 100).toFixed(0), "%"] })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }, children: [_jsx("div", { style: { fontSize: 11, color: 'var(--label-3)' }, children: "Posts With Full ALT" }), _jsx("div", { style: { fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }, children: altMetrics.postsWithFullAlt })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }, children: [_jsx("div", { style: { fontSize: 11, color: 'var(--label-3)' }, children: "Posts Missing ALT" }), _jsx("div", { style: { fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }, children: altMetrics.postsWithMissingAlt })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }, children: [_jsx("div", { style: { fontSize: 11, color: 'var(--label-3)' }, children: "Bulk Runs" }), _jsx("div", { style: { fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }, children: altMetrics.bulkRuns })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }, children: [_jsx("div", { style: { fontSize: 11, color: 'var(--label-3)' }, children: "Bulk Generated / Requested" }), _jsxs("div", { style: { fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }, children: [altMetrics.bulkGeneratedItems, "/", altMetrics.bulkRequestedItems] })] })] })] })] }))] })] })] })) }));
+}
+//# sourceMappingURL=TranslationSettingsSheet.js.map

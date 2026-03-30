@@ -51,7 +51,8 @@
 			"npm --prefix /Users/damonoutlaw/paper-atproto/server": true,
 			"mv": true,
 			"corepack": true,
-			"lsof": true
+			"lsof": true,
+			"env": true
 		}
 	}
 }

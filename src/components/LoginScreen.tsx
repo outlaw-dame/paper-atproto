@@ -154,7 +154,13 @@ function RecentHandleDropdown({
 
 // ─── LoginScreen ──────────────────────────────────────────────────────────────
 export default function LoginScreen() {
-  const { login, error, isHostedOAuthClientConfigured } = useAtp();
+  const {
+    login,
+    error,
+    isHostedOAuthClientConfigured,
+    oauthConfigWarning,
+    oauthConfigBlockingError,
+  } = useAtp();
   const [identifier, setIdentifier] = useState('');
   const [showHelp, setShowHelp] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -484,9 +490,41 @@ export default function LoginScreen() {
               </p>
               {!isHostedOAuthClientConfigured && (
                 <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-2)' }}>
-                  Development mode: no hosted `client_id` is configured, so a local loopback OAuth client is used.
+                  Development mode: no hosted OAuth client metadata is configured. Local sign-ins can work, but full Following permission may require a hosted `client_id`.
                 </p>
               )}
+            </motion.div>
+          )}
+
+          {oauthConfigWarning && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{
+                padding: '12px 14px', borderRadius: 12,
+                background: 'rgba(255,159,10,0.10)',
+                border: '1px solid rgba(255,159,10,0.25)',
+              }}
+            >
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-2)' }}>
+                {oauthConfigWarning}
+              </p>
+            </motion.div>
+          )}
+
+          {oauthConfigBlockingError && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{
+                padding: '12px 14px', borderRadius: 12,
+                background: 'rgba(255,59,48,0.08)',
+                border: '1px solid rgba(255,59,48,0.2)',
+              }}
+            >
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--red)' }}>
+                {oauthConfigBlockingError}
+              </p>
             </motion.div>
           )}
 

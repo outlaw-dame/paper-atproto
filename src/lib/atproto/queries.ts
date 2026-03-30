@@ -394,6 +394,22 @@ export function useMuteActor() {
   });
 }
 
+export function useMuteList() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        await agent.app.bsky.graph.muteActorList({ list: listUri });
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listMutes() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
+    },
+  });
+}
+
 export function useUnmuteActor() {
   const { agent } = useSessionStore();
   const qc = useQueryClient();
@@ -412,6 +428,22 @@ export function useUnmuteActor() {
   });
 }
 
+export function useUnmuteList() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        await agent.app.bsky.graph.unmuteActorList({ list: listUri });
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listMutes() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
+    },
+  });
+}
+
 // ─── Blocked accounts ─────────────────────────────────────────────────────
 export function useGetBlocks() {
   const { session, agent } = useSessionStore();
@@ -421,6 +453,30 @@ export function useGetBlocks() {
     enabled: !!session,
     staleTime: 60_000,
   });
+}
+
+async function resolveActorBlockRkey(
+  agent: ReturnType<typeof useSessionStore.getState>['agent'],
+  did: string,
+): Promise<string | undefined> {
+  const profileRes = await atpCall(() => agent.getProfile({ actor: did }));
+  const profileBlockingUri = profileRes.data.viewer?.blocking;
+  if (profileBlockingUri) {
+    return new AtUri(profileBlockingUri).rkey;
+  }
+
+  let cursor: string | undefined;
+  do {
+    const res = await atpCall(() => agent.app.bsky.graph.getBlocks({ limit: 100, ...(cursor ? { cursor } : {}) }));
+    const record = res.data.blocks.find((b) => b.did === did);
+    const blockingUri = record?.viewer?.blocking;
+    if (blockingUri) {
+      return new AtUri(blockingUri).rkey;
+    }
+    cursor = res.data.cursor;
+  } while (cursor);
+
+  return undefined;
 }
 
 export function useBlockActor() {
@@ -454,14 +510,10 @@ export function useUnblockActor() {
   return useMutation({
     mutationFn: ({ did }: { did: string }) =>
       atpCall(async () => {
-        // Try cached rkey first; fall back to fetching the blocks list.
+        // Try cached rkey first; otherwise resolve from profile or paginated block list.
         let rkey = blockRkeys[did];
         if (!rkey) {
-          const res = await agent.app.bsky.graph.getBlocks({ limit: 100 });
-          const record = res.data.blocks.find((b) => b.did === did);
-          if (record?.viewer?.blocking) {
-            rkey = new AtUri(record.viewer.blocking).rkey;
-          }
+          rkey = await resolveActorBlockRkey(agent, did);
         }
         if (!rkey) throw new Error(`No block record found for ${did}`);
         await agent.app.bsky.graph.block.delete({ repo: session!.did, rkey });
@@ -470,6 +522,62 @@ export function useUnblockActor() {
     onSuccess: (_data, { did }) => {
       void qc.invalidateQueries({ queryKey: qk.blocks() });
       void qc.invalidateQueries({ queryKey: qk.profile(did) });
+    },
+  });
+}
+
+export function useBlockList() {
+  const { session, agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        await agent.app.bsky.graph.listblock.create(
+          { repo: session!.did },
+          { subject: listUri, createdAt: new Date().toISOString() },
+        );
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listBlocks() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
+    },
+  });
+}
+
+async function resolveListBlockRkey(
+  agent: ReturnType<typeof useSessionStore.getState>['agent'],
+  listUri: string,
+): Promise<string | undefined> {
+  let cursor: string | undefined;
+
+  do {
+    const res = await atpCall(() => agent.app.bsky.graph.getListBlocks({ limit: 100, ...(cursor ? { cursor } : {}) }));
+    const record = res.data.lists.find((l) => l.uri === listUri);
+    const blockedUri = (record?.viewer as any)?.blocked ?? (record?.viewer as any)?.blocking;
+    if (typeof blockedUri === 'string' && blockedUri.length > 0) {
+      return new AtUri(blockedUri).rkey;
+    }
+    cursor = res.data.cursor;
+  } while (cursor);
+
+  return undefined;
+}
+
+export function useUnblockList() {
+  const { session, agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        const rkey = await resolveListBlockRkey(agent, listUri);
+        if (!rkey) throw new Error(`No list block record found for ${listUri}`);
+        await agent.app.bsky.graph.listblock.delete({ repo: session!.did, rkey });
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listBlocks() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
     },
   });
 }

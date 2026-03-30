@@ -17,6 +17,10 @@ import MiniPlayer from './components/MiniPlayer.js';
 import HomeTab from './tabs/HomeTab.js';
 import OverlayHost from './shell/OverlayHost.js';
 import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge.js';
+import PlatformBanners from './shell/PlatformBanners.js';
+import BadgeSyncBridge from './components/BadgeSyncBridge.js';
+import PushLifecycleBridge from './components/PushLifecycleBridge.js';
+import AppleEnhancementBridge from './components/AppleEnhancementBridge.js';
 
 function lazyWithRetry<T extends React.ComponentType<any>>(
   loader: () => Promise<{ default: T }>,
@@ -248,8 +252,12 @@ export default function App() {
   return (
     <>
       <BootstrapErrorBanner />
+      <PlatformBanners />
       <AppRuntimeBoundary>
         <AtpProvider>
+          <BadgeSyncBridge />
+          <PushLifecycleBridge />
+          <AppleEnhancementBridge />
           <MiniPlayerProvider>
             <AppShell />
             <Suspense fallback={null}>
@@ -453,7 +461,12 @@ function AppShell() {
                 {activeTab === 'home'    && <HomeTab onOpenStory={openStory} />}
                 {activeTab === 'explore' && <ExploreTab onOpenStory={openStory} />}
                 {activeTab === 'activity' && <ActivityTab />}
-                {activeTab === 'profile' && <ProfileTab onOpenStory={openStory} actorDid={profileDid ?? undefined} />}
+                {activeTab === 'profile' && (
+                  <ProfileTab
+                    onOpenStory={openStory}
+                    {...(profileDid ? { actorDid: profileDid } : {})}
+                  />
+                )}
               </Suspense>
             </LazyModuleBoundary>
           </motion.div>

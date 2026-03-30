@@ -3,8 +3,15 @@
 // search story query, and prompt composer.
 
 import { create } from 'zustand';
-import type { TabId, StoryEntry } from '../App.js';
 import type { MockPost } from '../data/mockData.js';
+
+export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
+
+export interface StoryEntry {
+  type: 'post' | 'topic';
+  id: string;
+  title: string;
+}
 
 interface UiState {
   activeTab: TabId;

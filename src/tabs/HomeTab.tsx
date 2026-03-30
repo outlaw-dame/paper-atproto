@@ -1,11 +1,14 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Agent } from '@atproto/api';
 import { useQueryClient } from '@tanstack/react-query';
 import PostCard from '../components/PostCard.js';
 import ContextPost from '../components/ContextPost.js';
 import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
+import { hasFollowingFeedScope } from '../atproto/oauthClient.js';
 import { useSessionStore } from '../store/sessionStore.js';
 import { useUiStore } from '../store/uiStore.js';
+import { useTranslationStore } from '../store/translationStore.js';
 import { useFeedCacheStore } from '../store/feedCacheStore.js';
 import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
 import { atpCall, atpMutate } from '../lib/atproto/client.js';
@@ -13,6 +16,12 @@ import { qk } from '../lib/atproto/queries.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
 import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { isAtUri } from '../lib/resolver/atproto.js';
+import { createVerificationProviders } from '../intelligence/verification/providerFactory.js';
+import { InMemoryVerificationCache } from '../intelligence/verification/cache.js';
+import { hydrateConversationSession } from '../conversation/sessionAssembler.js';
+import { useConversationSessionStore } from '../conversation/sessionStore.js';
+import { projectTimelineConversationHint } from '../conversation/projections/timelineProjection.js';
 import type { MockPost } from '../data/mockData.js';
 import type { StoryEntry } from '../App.js';
 
@@ -24,6 +33,8 @@ const MODES = ['Following', 'Discover', 'Feeds'] as const;
 type Mode = typeof MODES[number];
 
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
+const PUBLIC_APPVIEW_SERVICE = 'https://public.api.bsky.app';
+const LIMITED_SCOPE_BANNER_COPY = 'This session does not include Following feed access yet. Discover and public author feeds still work here, but Following needs the Bluesky timeline permission from the HTTPS sign-in.';
 
 function dedupePostsById(items: MockPost[]): MockPost[] {
   const seen = new Set<string>();
@@ -64,6 +75,7 @@ function EmptyState({ label }: { label: string }) {
 export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
   const { openProfile, openComposeReply } = useUiStore();
+  const translationPolicy = useTranslationStore((state) => state.policy);
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
   const topModePillHeight = platform.prefersCoarsePointer ? 34 : 30;
@@ -78,9 +90,103 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const conversationSessions = useConversationSessionStore((state) => state.byId);
+  const publicReadAgent = useMemo(() => new Agent({ service: PUBLIC_APPVIEW_SERVICE }), []);
+  const hasLimitedScopeSession = !hasFollowingFeedScope(session?.scope);
+  const visibleModes = useMemo(
+    () => MODES.filter((item) => !hasLimitedScopeSession || item !== 'Following') as Mode[],
+    [hasLimitedScopeSession],
+  );
+  const conversationProvidersRef = useRef(createVerificationProviders());
+  const conversationCacheRef = useRef(new InMemoryVerificationCache());
+  const hydratedSessionRootsRef = useRef<Set<string>>(new Set());
+  const hydrationInFlightRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollCleanupRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoRedirectedLimitedScopeRef = useRef(false);
   const filterResults = usePostFilterResults(posts, 'home');
+
+  const timelineHintByPostId = useMemo(() => {
+    const hints: Record<string, ReturnType<typeof projectTimelineConversationHint>> = {};
+    for (const post of posts) {
+      const rootUri = post.threadRoot?.id ?? post.id;
+      if (!rootUri) continue;
+      const sessionState = conversationSessions[rootUri];
+      if (!sessionState) continue;
+      const hint = projectTimelineConversationHint(sessionState, post.id);
+      if (hint) hints[post.id] = hint;
+    }
+    return hints;
+  }, [conversationSessions, posts]);
+
+  useEffect(() => {
+    if (!agent || !session || posts.length === 0) return;
+
+    const hydrationAgent = hasLimitedScopeSession ? publicReadAgent : agent;
+
+    const controller = new AbortController();
+    const targets = Array.from(new Set(
+      posts
+        .map((post) => post.threadRoot?.id ?? post.id)
+        .filter((uri): uri is string => !!uri && isAtUri(uri)),
+    )).slice(0, 8);
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const backoffMs = (attempt: number) => {
+      const base = Math.min(4_000, 350 * (2 ** attempt));
+      return Math.floor(base * (0.75 + Math.random() * 0.5));
+    };
+
+    const hydrateWithRetry = async (rootUri: string) => {
+      if (hydratedSessionRootsRef.current.has(rootUri)) return;
+      if (hydrationInFlightRef.current.has(rootUri)) return;
+      hydrationInFlightRef.current.add(rootUri);
+
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            await hydrateConversationSession({
+              sessionId: rootUri,
+              rootUri,
+              agent: hydrationAgent,
+              translationPolicy,
+              providers: conversationProvidersRef.current,
+              cache: conversationCacheRef.current,
+              signal: controller.signal,
+            });
+            hydratedSessionRootsRef.current.add(rootUri);
+            return;
+          } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') return;
+            if (attempt >= 2) return;
+            await sleep(backoffMs(attempt));
+          }
+        }
+      } finally {
+        hydrationInFlightRef.current.delete(rootUri);
+      }
+    };
+
+    void Promise.all(targets.map((target) => hydrateWithRetry(target)));
+
+    return () => {
+      controller.abort();
+    };
+  }, [agent, hasLimitedScopeSession, posts, publicReadAgent, session, translationPolicy]);
+
+  useEffect(() => {
+    if (!hasLimitedScopeSession) {
+      autoRedirectedLimitedScopeRef.current = false;
+      return;
+    }
+
+    if (autoRedirectedLimitedScopeRef.current || mode !== 'Following') {
+      return;
+    }
+
+    autoRedirectedLimitedScopeRef.current = true;
+    setMode('Discover');
+  }, [hasLimitedScopeSession, mode]);
   
   // Feed cache integration
   const getFeedCache = useFeedCacheStore((state) => state.getCache);
@@ -146,6 +252,12 @@ export default function HomeTab({ onOpenStory }: Props) {
    */
   useEffect(() => {
     if (!session) return;
+    if (hasLimitedScopeSession && mode === 'Following') {
+      setPosts([]);
+      setCursor(undefined);
+      setUnreadCounts((prev) => ({ ...prev, Following: 0 }));
+      return;
+    }
     
     const cached = getFeedCache(session.did, mode);
     if (cached && cached.posts.length > 0) {
@@ -174,7 +286,7 @@ export default function HomeTab({ onOpenStory }: Props) {
     setCursor(undefined);
     setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
     fetchFeed(mode);
-  }, [mode, session, getFeedCache]);
+  }, [mode, session, getFeedCache, hasLimitedScopeSession]);
 
   /**
    * Save cache after posts change
@@ -199,8 +311,16 @@ export default function HomeTab({ onOpenStory }: Props) {
     if (isInitial) setLoading(true); else setLoadingMore(true);
     setError(null);
     try {
+      if (m === 'Following' && hasLimitedScopeSession) {
+        setPosts([]);
+        setCursor(undefined);
+        setError(LIMITED_SCOPE_BANNER_COPY);
+        return;
+      }
+
       let feed: any[] = [];
       let nextCursor: string | undefined;
+      const readAgent = m === 'Following' ? agent : publicReadAgent;
 
       if (m === 'Following') {
         const params: any = { limit: 30, ...(cur ? { cursor: cur } : {}) };
@@ -209,12 +329,12 @@ export default function HomeTab({ onOpenStory }: Props) {
         nextCursor = res.data.cursor;
       } else if (m === 'Discover') {
         const params: any = { feed: DISCOVER_FEED_URI, limit: 30, ...(cur ? { cursor: cur } : {}) };
-        const res = await atpCall(s => agent.app.bsky.feed.getFeed(params));
+        const res = await atpCall(s => readAgent.app.bsky.feed.getFeed(params));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else {
         const params: any = { actor: session.did, limit: 30, ...(cur ? { cursor: cur } : {}) };
-        const res = await atpCall(s => agent.getAuthorFeed(params));
+        const res = await atpCall(s => readAgent.getAuthorFeed(params));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       }
@@ -245,7 +365,7 @@ export default function HomeTab({ onOpenStory }: Props) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [agent, session, getFeedCache, incrementFeedUnreadCount]);
+  }, [agent, session, getFeedCache, incrementFeedUnreadCount, hasLimitedScopeSession, publicReadAgent]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -442,9 +562,27 @@ export default function HomeTab({ onOpenStory }: Props) {
           </div>
         </div>
 
+        {hasLimitedScopeSession && (
+          <div style={{ padding: '0 16px 10px' }}>
+            <div
+              role="status"
+              style={{
+                borderRadius: 16,
+                border: '1px solid color-mix(in srgb, var(--orange) 28%, var(--sep))',
+                background: 'color-mix(in srgb, var(--surface) 88%, var(--orange) 12%)',
+                padding: '10px 12px',
+              }}
+            >
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-2)' }}>
+                {LIMITED_SCOPE_BANNER_COPY}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Mode pills */}
         <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 10px', gap: 6 }}>
-          {MODES.map(m => {
+          {visibleModes.map(m => {
             const unreadCount = unreadCounts[m] ?? 0;
             return (
               <button
@@ -592,6 +730,7 @@ export default function HomeTab({ onOpenStory }: Props) {
                     onMore={handleMore}
                     onReply={openComposeReply}
                     index={i}
+                    timelineHint={timelineHintByPostId[post.id] ?? undefined}
                     hasContextAbove={isReply}
                     replyingTo={isReply ? undefined : (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)}
                   />

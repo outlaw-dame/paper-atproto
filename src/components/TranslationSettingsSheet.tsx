@@ -5,8 +5,10 @@ import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
 import AccountPrefsSection from './AccountPrefsSection.js';
 import ModerationSettingsPage from './ModerationSettingsPage.js';
 import FeedsSettingsPage from './FeedsSettingsPage.js';
+import AppleSettingsSection from './AppleSettingsSection.js';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
 import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry.js';
+import { useAppearanceStore } from '../store/appearanceStore.js';
 
 interface Props {
   open: boolean;
@@ -18,7 +20,7 @@ type LanguageOption = {
   label: string;
 };
 
-type SettingsPage = 'translation' | 'moderation' | 'feeds' | 'debug';
+type SettingsPage = 'translation' | 'moderation' | 'feeds' | 'appearance' | 'debug';
 
 interface ComposeDebugSnapshot {
   draftText: string;
@@ -150,6 +152,12 @@ function ToggleRow({
 
 export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const { policy, setPolicy } = useTranslationStore();
+  const {
+    showFeaturedHashtags,
+    setShowFeaturedHashtags,
+    useMlFeaturedHashtagRanking,
+    setUseMlFeaturedHashtagRanking,
+  } = useAppearanceStore();
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
   const [page, setPage] = useState<SettingsPage>('translation');
@@ -239,6 +247,8 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     ? 'Inline + automatic translation'
                     : page === 'moderation'
                       ? 'Sensitive media, filters, and moderation controls'
+                      : page === 'appearance'
+                        ? 'Visual display preferences for profile and timeline surfaces'
                       : page === 'feeds'
                         ? 'Manage News, Podcasts, Videos, and other feed subscriptions'
                       : 'Diagnostics and QA details for internal testing'}
@@ -268,7 +278,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
             </div>
 
             <div style={{ padding: '12px 16px 16px', maxHeight: '64vh', overflowY: 'auto' }}>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   onClick={() => setPage('translation')}
@@ -305,9 +315,28 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setPage('appearance')}
+                  style={{
+                    flex: 1,
+                    minWidth: 108,
+                    height: 34,
+                    borderRadius: 10,
+                    border: 'none',
+                    background: page === 'appearance' ? 'var(--blue)' : 'var(--fill-2)',
+                    color: page === 'appearance' ? '#fff' : 'var(--label-2)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Appearance
+                </button>
+                <button
+                  type="button"
                   onClick={() => setPage('debug')}
                   style={{
                     flex: 1,
+                    minWidth: 88,
                     height: 34,
                     borderRadius: 10,
                     border: 'none',
@@ -325,6 +354,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                   onClick={() => setPage('feeds')}
                   style={{
                     flex: 1,
+                    minWidth: 88,
                     height: 34,
                     borderRadius: 10,
                     border: 'none',
@@ -406,6 +436,8 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                   <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
 
                   <AccountPrefsSection />
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+                  <AppleSettingsSection />
 
                 </>
               )}
@@ -413,6 +445,31 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
               {page === 'moderation' && <ModerationSettingsPage />}
 
               {page === 'feeds' && <FeedsSettingsPage />}
+
+              {page === 'appearance' && (
+                <>
+                  <div style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', background: 'var(--surface)' }}>
+                    <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)', marginBottom: 2 }}>Profile</h4>
+                    <p style={{ fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35, marginBottom: 4 }}>
+                      Control visual elements in profile headers.
+                    </p>
+                    <ToggleRow
+                      label="Show featured hashtags"
+                      helper="Display hashtag highlights on profile headers, inspired by Mastodon featured tags."
+                      checked={showFeaturedHashtags}
+                      onChange={setShowFeaturedHashtags}
+                      touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                    />
+                    <ToggleRow
+                      label="Use ML ranking for featured hashtags"
+                      helper="Rerank featured hashtags using local embedding similarity to profile context."
+                      checked={useMlFeaturedHashtagRanking}
+                      onChange={setUseMlFeaturedHashtagRanking}
+                      touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                    />
+                  </div>
+                </>
+              )}
 
               {page === 'debug' && (
                 <>

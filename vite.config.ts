@@ -1,5 +1,7 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+
+Object.assign(process.env, loadEnv(process.env.NODE_ENV || 'development', process.cwd(), ''));
 
 const devPort = Number(process.env.VITE_DEV_PORT ?? 5180);
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? process.env.VITE_GLYMPSE_API_BASE_URL ?? 'http://localhost:3011';
@@ -46,7 +48,12 @@ function sanitizeHttpUrl(value: string): string | null {
 
 function normalizeOAuthScope(rawValue: string | undefined): string {
   const raw = rawValue?.trim();
-  const defaults = ['atproto', 'transition:generic'];
+  const defaults = [
+    'atproto',
+    'transition:generic',
+    'rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app#bsky_appview',
+    'rpc:app.bsky.actor.getProfile?aud=did:web:api.bsky.app#bsky_appview',
+  ];
   if (!raw) return defaults.join(' ');
 
   const deduped = Array.from(
@@ -55,7 +62,7 @@ function normalizeOAuthScope(rawValue: string | undefined): string {
         .split(/\s+/)
         .map((token) => token.trim())
         .filter(Boolean)
-        .filter((token) => /^[a-z][a-z0-9:._-]*$/i.test(token)),
+        .filter((token) => /^[\x21-\x7E]+$/.test(token)),
     ),
   );
 

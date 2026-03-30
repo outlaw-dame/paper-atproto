@@ -8,8 +8,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { AppBskyFeedDefs, AppBskyActorDefs, AppBskyGraphDefs } from '@atproto/api';
 import { useSessionStore } from '../store/sessionStore.js';
 import { useUiStore } from '../store/uiStore.js';
+import { inferenceClient } from '../workers/InferenceClient.js';
 import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost } from '../atproto/mappers.js';
+import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
 import PostCard from '../components/PostCard.js';
 import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
 import type { MockPost } from '../data/mockData.js';
@@ -18,6 +19,7 @@ import type { StoryEntry } from '../App.js';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
 import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
 import { usePlatform, getButtonTokens } from '../hooks/usePlatform.js';
+import { useAppearanceStore } from '../store/appearanceStore.js';
 import {
   useMuteActor,
   useUnmuteActor,
@@ -118,6 +120,219 @@ function StatItem({ count, label }: { count: number; label: string }) {
         {formatCount(count)}
       </span>
       <span style={{ fontSize: 12, color: 'var(--label-3)', fontWeight: 500, letterSpacing: 0.1 }}>{label}</span>
+    </div>
+  );
+}
+
+interface FeaturedHashtag {
+  name: string;
+  statusesCount: number;
+  lastStatusAt: string | null;
+}
+
+interface FeaturedHashtagCandidate extends FeaturedHashtag {
+  rankingScore: number;
+}
+
+type FeaturedTagSignal = 'post-facet' | 'post-text' | 'pinned' | 'bio' | 'counterpart' | 'popular';
+
+function formatFeaturedTagLastUsed(isoDate: string | null): string {
+  if (!isoDate) return 'No recent post';
+  const t = Date.parse(isoDate);
+  if (!Number.isFinite(t)) return 'No recent post';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(t));
+}
+
+function formatFeaturedTagRelativeLastUsed(isoDate: string | null): string {
+  if (!isoDate) return 'No recent post';
+  const t = Date.parse(isoDate);
+  if (!Number.isFinite(t)) return 'No recent post';
+
+  const deltaMs = Date.now() - t;
+  if (deltaMs < 0) return 'Just now';
+
+  const minutes = Math.floor(deltaMs / 60000);
+  if (minutes < 60) {
+    if (minutes <= 1) return 'Just now';
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? '1h ago' : `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days}d ago`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return weeks === 1 ? '1w ago' : `${weeks}w ago`;
+
+  const months = Math.floor(days / 30);
+  if (months < 12) return months === 1 ? '1mo ago' : `${months}mo ago`;
+
+  const years = Math.floor(days / 365);
+  return years === 1 ? '1y ago' : `${years}y ago`;
+}
+
+const HASHTAG_RE = /(^|\s)#([a-z0-9_]{2,64})\b/gi;
+const WORD_RE = /[a-z0-9_]{2,64}/gi;
+const POPULAR_TAG_FALLBACK = [
+  'news',
+  'tech',
+  'sports',
+  'music',
+  'art',
+  'gaming',
+  'books',
+  'movies',
+  'photography',
+  'travel',
+] as const;
+
+function normalizeTag(raw: string): string {
+  return raw.trim().replace(/^#/, '').toLowerCase();
+}
+
+function extractHashtagsFromText(text: string): string[] {
+  if (!text.trim()) return [];
+  const set = new Set<string>();
+  HASHTAG_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HASHTAG_RE.exec(text)) !== null) {
+    const tag = normalizeTag(match[2] ?? '');
+    if (tag) set.add(tag);
+  }
+  return [...set];
+}
+
+function extractWordsFromText(text: string): Set<string> {
+  const out = new Set<string>();
+  if (!text.trim()) return out;
+  WORD_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = WORD_RE.exec(text.toLowerCase())) !== null) {
+    const word = match[0]?.trim();
+    if (word) out.add(word);
+  }
+  return out;
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  if (!len) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < len; i += 1) {
+    const ai = a[i] ?? 0;
+    const bi = b[i] ?? 0;
+    dot += ai * bi;
+    normA += ai * ai;
+    normB += bi * bi;
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom > 0 ? dot / denom : 0;
+}
+
+function FeaturedHashtagsCard({
+  tags,
+  onTagClick,
+}: {
+  tags: FeaturedHashtag[];
+  onTagClick: (tag: string) => void;
+}) {
+  if (tags.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        width: 'calc(100% - 32px)',
+        margin: '12px 16px 0',
+        border: '1px solid var(--sep)',
+        borderRadius: 14,
+        background: 'var(--surface)',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--sep)' }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--label-3)' }}>
+          Featured Hashtags
+        </div>
+      </div>
+      <div style={{ display: 'grid' }}>
+        {tags.map((tag, index) => (
+          (() => {
+            const relativeLastUsed = formatFeaturedTagRelativeLastUsed(tag.lastStatusAt);
+            const absoluteLastUsed = formatFeaturedTagLastUsed(tag.lastStatusAt);
+            return (
+          <button
+            key={tag.name}
+            onClick={() => onTagClick(tag.name)}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 10,
+              textAlign: 'left',
+              width: '100%',
+              border: 'none',
+              borderTop: index === 0 ? 'none' : '1px solid var(--sep)',
+              background: 'transparent',
+              padding: '10px 12px',
+              cursor: 'pointer',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--blue)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                #{tag.name}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--label-3)', marginTop: 2 }}>
+                {tag.statusesCount} {tag.statusesCount === 1 ? 'post' : 'posts'}
+              </div>
+            </div>
+            <div
+              style={{
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-end',
+                gap: 2,
+                maxWidth: '42%',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: 'var(--label-2)',
+                  whiteSpace: 'nowrap',
+                }}
+                aria-label={`Last used ${relativeLastUsed}`}
+                title={`Last used ${absoluteLastUsed}`}
+              >
+                {relativeLastUsed}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--label-3)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {absoluteLastUsed}
+              </div>
+            </div>
+          </button>
+            );
+          })()
+        ))}
+      </div>
     </div>
   );
 }
@@ -454,6 +669,7 @@ function WePresentWarningCard({
 export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const { agent, session, profile: sessionProfile } = useSessionStore();
   const { openExploreSearch, openComposeReply, setTab: setAppTab } = useUiStore();
+  const { showFeaturedHashtags, useMlFeaturedHashtagRanking } = useAppearanceStore();
   const platform = usePlatform();
   const btnTokens = getButtonTokens(platform);
   const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
@@ -469,6 +685,9 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   // Tab data
   const [posts, setPosts]       = useState<MockPost[]>([]);
   const [likedPosts, setLiked]  = useState<MockPost[]>([]);
+  const [pinnedPost, setPinnedPost] = useState<MockPost | null>(null);
+  const [pinnedPostLoading, setPinnedPostLoading] = useState(false);
+  const [pinnedPostUnavailable, setPinnedPostUnavailable] = useState(false);
   const [feeds, setFeeds]       = useState<AppBskyFeedDefs.GeneratorView[]>([]);
   const [lists, setLists]       = useState<AppBskyGraphDefs.ListView[]>([]);
   const [loading, setLoading]   = useState(false);
@@ -477,6 +696,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
   const [viewerMutedOverride, setViewerMutedOverride] = useState<boolean | null>(null);
   const [viewerBlockedOverride, setViewerBlockedOverride] = useState<boolean | null>(null);
+  const [mlFeaturedHashtags, setMlFeaturedHashtags] = useState<FeaturedHashtag[] | null>(null);
 
   const muteActor = useMuteActor();
   const unmuteActor = useUnmuteActor();
@@ -489,6 +709,9 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   useEffect(() => {
     setPosts([]);
     setLiked([]);
+    setPinnedPost(null);
+    setPinnedPostLoading(false);
+    setPinnedPostUnavailable(false);
     setFeeds([]);
     setLists([]);
     setProfile(isOwnProfile ? sessionProfile : null);
@@ -507,6 +730,47 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
       .catch(() => {})
       .finally(() => setProfileLoading(false));
   }, [did, isOwnProfile, sessionProfile, agent]);
+
+  // ── Load pinned post from profile strongRef ─────────────────────────────
+  useEffect(() => {
+    const pinnedUri = profile?.pinnedPost?.uri;
+    if (!did || !pinnedUri) {
+      setPinnedPost(null);
+      setPinnedPostLoading(false);
+      setPinnedPostUnavailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPinnedPostLoading(true);
+    setPinnedPostUnavailable(false);
+
+    atpCall((s) => agent.getPosts({ uris: [pinnedUri] }))
+      .then((res) => {
+        if (cancelled) return;
+        const post = res.data.posts?.[0];
+        if (!post || !hasDisplayableRecordContent((post as any).record)) {
+          setPinnedPost(null);
+          setPinnedPostUnavailable(true);
+          return;
+        }
+        const mapped = mapFeedViewPost({ post } as AppBskyFeedDefs.FeedViewPost);
+        setPinnedPost(mapped);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPinnedPost(null);
+        setPinnedPostUnavailable(true);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setPinnedPostLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, did, profile?.pinnedPost?.uri]);
 
   // ── Load posts ─────────────────────────────────────────────────────────────
   const loadPosts = useCallback(async () => {
@@ -593,15 +857,279 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     return [...byId.values()];
   }, [posts, likedPosts]);
   const filterResults = usePostFilterResults(profileVisiblePool, 'profile');
+  const featuredHashtags = useMemo<FeaturedHashtagCandidate[]>(() => {
+    const byTag = new Map<string, { score: number; statusesCount: number; lastStatusAt: number; signals: Set<FeaturedTagSignal> }>();
+
+    const addSignal = (tag: string, signal: FeaturedTagSignal, timestamp: number, scoreDelta: number, countDelta: number) => {
+      const normalized = normalizeTag(tag);
+      if (!normalized) return;
+      const prev = byTag.get(normalized);
+      if (!prev) {
+        byTag.set(normalized, {
+          score: scoreDelta,
+          statusesCount: Math.max(0, countDelta),
+          lastStatusAt: timestamp,
+          signals: new Set<FeaturedTagSignal>([signal]),
+        });
+        return;
+      }
+      prev.score += scoreDelta;
+      prev.statusesCount += Math.max(0, countDelta);
+      prev.lastStatusAt = Math.max(prev.lastStatusAt, timestamp);
+      prev.signals.add(signal);
+    };
+
+    for (const post of posts) {
+      if (post.author.did !== did) continue;
+      const postTags = new Set<string>();
+
+      for (const facet of post.facets ?? []) {
+        if (facet.kind !== 'hashtag') continue;
+        const rawTag = (facet.tag ?? '').trim().toLowerCase();
+        if (!rawTag) continue;
+        postTags.add(rawTag);
+      }
+
+      for (const rawTag of extractHashtagsFromText(post.content)) {
+        postTags.add(rawTag);
+      }
+
+      if (postTags.size === 0) continue;
+      const ts = Date.parse(post.createdAt);
+      const postTime = Number.isFinite(ts) ? ts : 0;
+
+      for (const tag of postTags) {
+        const hasFacet = (post.facets ?? []).some((facet) => facet.kind === 'hashtag' && normalizeTag(facet.tag ?? '') === tag);
+        addSignal(tag, hasFacet ? 'post-facet' : 'post-text', postTime, hasFacet ? 3.5 : 2.0, 1);
+      }
+    }
+
+    // Pull explicit and implied tags from bio text so new accounts can still curate profile identity tags.
+    const bioText = bio ?? '';
+    const bioTags = extractHashtagsFromText(bioText);
+    for (const tag of bioTags) {
+      addSignal(tag, 'bio', Date.now(), 2.25, 0);
+    }
+
+    // Include pinned post signals with a higher boost because they are intentional profile-level content.
+    if (pinnedPost) {
+      const pinTsParsed = Date.parse(pinnedPost.createdAt);
+      const pinTime = Number.isFinite(pinTsParsed) ? pinTsParsed : Date.now();
+
+      for (const facet of pinnedPost.facets ?? []) {
+        if (facet.kind !== 'hashtag') continue;
+        const tag = normalizeTag(facet.tag ?? '');
+        if (!tag) continue;
+        addSignal(tag, 'pinned', pinTime, 4.0, 1);
+      }
+
+      for (const tag of extractHashtagsFromText(pinnedPost.content)) {
+        addSignal(tag, 'pinned', pinTime, 3.0, 1);
+      }
+    }
+
+    // Plain-text counterpart matching: if words in bio/pinned match known tags, promote them lightly.
+    const knownTags = new Set<string>([...byTag.keys()]);
+    for (const t of POPULAR_TAG_FALLBACK) knownTags.add(t);
+
+    const counterpartWordSets = [extractWordsFromText(bioText)];
+    if (pinnedPost?.content) counterpartWordSets.push(extractWordsFromText(pinnedPost.content));
+
+    for (const words of counterpartWordSets) {
+      for (const tag of knownTags) {
+        if (!words.has(tag)) continue;
+        addSignal(tag, 'counterpart', Date.now(), 1.1, 0);
+      }
+    }
+
+    // Lightweight popular fallback when account history is sparse.
+    if (byTag.size < 3) {
+      for (const tag of POPULAR_TAG_FALLBACK) {
+        const alreadyStrong = (byTag.get(tag)?.score ?? 0) >= 2;
+        if (alreadyStrong) continue;
+        addSignal(tag, 'popular', Date.now(), 0.35, 0);
+      }
+    }
+
+    return [...byTag.entries()]
+      .filter(([, data]) => data.score >= 1.5)
+      .map(([name, data]) => ({
+        name,
+        statusesCount: Math.max(1, data.statusesCount),
+        lastStatusAt: data.lastStatusAt > 0 ? new Date(data.lastStatusAt).toISOString() : null,
+        rankingScore: data.score,
+      }))
+      .sort((a, b) => {
+        if (b.rankingScore !== a.rankingScore) return b.rankingScore - a.rankingScore;
+        if (b.statusesCount !== a.statusesCount) return b.statusesCount - a.statusesCount;
+        const aTime = a.lastStatusAt ? Date.parse(a.lastStatusAt) : 0;
+        const bTime = b.lastStatusAt ? Date.parse(b.lastStatusAt) : 0;
+        if (bTime !== aTime) return bTime - aTime;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 12);
+  }, [bio, did, pinnedPost, posts]);
+
+  useEffect(() => {
+    if (!showFeaturedHashtags || !useMlFeaturedHashtagRanking) {
+      setMlFeaturedHashtags(null);
+      return;
+    }
+    if (featuredHashtags.length === 0) {
+      setMlFeaturedHashtags([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const contextParts = [
+          bio ?? '',
+          pinnedPost?.content ?? '',
+          ...posts.slice(0, 12).map((p) => p.content),
+        ].map((s) => s.trim()).filter(Boolean);
+        const contextText = contextParts.join('\n').slice(0, 6000);
+
+        if (!contextText) {
+          if (!cancelled) {
+            setMlFeaturedHashtags(featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt })));
+          }
+          return;
+        }
+
+        const [contextEmbedding, tagEmbeddings] = await Promise.all([
+          inferenceClient.embed(contextText),
+          inferenceClient.embedBatch(featuredHashtags.map((tag) => `#${tag.name} hashtag topic`)),
+        ]);
+
+        if (cancelled) return;
+
+        const reranked = featuredHashtags
+          .map((tag, idx) => {
+            const tagEmbedding = tagEmbeddings[idx] ?? [];
+            const similarity = cosineSimilarity(contextEmbedding, tagEmbedding);
+            const relevanceScore = ((similarity + 1) / 2) * 100;
+            const blended = tag.rankingScore * 0.7 + relevanceScore * 0.3;
+            return {
+              name: tag.name,
+              statusesCount: tag.statusesCount,
+              lastStatusAt: tag.lastStatusAt,
+              score: blended,
+            };
+          })
+          .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            if (b.statusesCount !== a.statusesCount) return b.statusesCount - a.statusesCount;
+            return a.name.localeCompare(b.name);
+          })
+          .slice(0, 10)
+          .map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt }));
+
+        setMlFeaturedHashtags(reranked);
+      } catch {
+        if (!cancelled) {
+          // Keep deterministic ranking as fallback when model inference fails.
+          setMlFeaturedHashtags(featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt })));
+        }
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [bio, featuredHashtags, pinnedPost?.content, posts, showFeaturedHashtags, useMlFeaturedHashtagRanking]);
+
+  const featuredHashtagsToRender = useMemo<FeaturedHashtag[]>(() => {
+    if (!showFeaturedHashtags) return [];
+    if (useMlFeaturedHashtagRanking) {
+      if (mlFeaturedHashtags) return mlFeaturedHashtags;
+      return featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt }));
+    }
+    return featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt }));
+  }, [featuredHashtags, mlFeaturedHashtags, showFeaturedHashtags, useMlFeaturedHashtagRanking]);
 
   function renderContent() {
     if (loading) return <Spinner />;
 
     switch (tab) {
       case 'Posts':
-        return posts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length === 0
-          ? <EmptyState message="No posts yet." />
-          : posts.map((p, i) => {
+        {
+          const pinnedMatches = pinnedPost ? (filterResults[pinnedPost.id] ?? []) : [];
+          const pinnedHidden = pinnedMatches.some((m) => m.action === 'hide');
+          const pinnedWarned = pinnedMatches.some((m) => m.action === 'warn');
+          const pinnedRevealed = pinnedPost ? !!revealedFilteredPosts[pinnedPost.id] : false;
+          const showPinned = !!pinnedPost && !pinnedHidden;
+
+          const timelinePosts = posts.filter((p) => p.id !== pinnedPost?.id);
+          const visibleTimelineCount = timelinePosts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length;
+
+          if (!showPinned && !pinnedPostUnavailable && !pinnedPostLoading && visibleTimelineCount === 0) {
+            return <EmptyState message="No posts yet." />;
+          }
+
+          return (
+            <>
+              {pinnedPostLoading && (
+                <div style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'var(--fill-1)', color: 'var(--label-3)', fontSize: 12, fontWeight: 600 }}>
+                  Loading pinned post...
+                </div>
+              )}
+
+              {pinnedPostUnavailable && (
+                <div style={{ marginBottom: 10, padding: '12px 14px', borderRadius: 12, border: '1px solid var(--sep)', background: 'var(--surface)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--label-3)', marginBottom: 6 }}>
+                    Pinned Post
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--label-2)', lineHeight: 1.4 }}>
+                    This profile has a pinned post, but it is currently unavailable.
+                  </div>
+                </div>
+              )}
+
+              {showPinned && pinnedPost && (
+                <div style={{ marginBottom: 10, borderRadius: 12, border: '1px solid color-mix(in srgb, var(--blue) 22%, var(--sep) 78%)', background: 'color-mix(in srgb, var(--surface) 92%, var(--blue) 8%)', overflow: 'hidden' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '10px 12px 4px', padding: '4px 9px', borderRadius: 999, background: 'color-mix(in srgb, var(--blue) 18%, var(--surface) 82%)', color: 'var(--blue)', fontSize: 11, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    <span style={{ fontSize: 10 }}>▲</span>
+                    Pinned
+                  </div>
+                  {pinnedWarned && !pinnedRevealed ? (
+                    <div style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', margin: '0 8px 8px', background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }}>Content warning</div>
+                      <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 8 }}>This pinned post may include words or topics you asked to warn about.</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Matches filter:</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                        {warnMatchReasons(pinnedMatches).map((entry) => (
+                          <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--sep)', padding: '3px 8px', background: 'var(--fill-1)' }}>
+                            <span style={{ fontSize: 11, color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
+                            <span style={{ fontSize: 10, color: 'var(--label-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                              {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                      <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [pinnedPost.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
+                        Show pinned post
+                      </button>
+                    </div>
+                  ) : (
+                    <PostCard
+                      key={pinnedPost.id}
+                      post={pinnedPost}
+                      onOpenStory={onOpenStory}
+                      onToggleRepost={handleToggleRepost}
+                      onToggleLike={handleToggleLike}
+                      onBookmark={handleBookmark}
+                      onMore={handleMore}
+                      onReply={openComposeReply}
+                      index={0}
+                    />
+                  )}
+                </div>
+              )}
+
+              {timelinePosts.map((p, i) => {
               const matches = filterResults[p.id] ?? [];
               const isHidden = matches.some((m) => m.action === 'hide');
               const isWarned = matches.some((m) => m.action === 'warn');
@@ -630,8 +1158,11 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                   </div>
                 );
               }
-              return <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} onReply={openComposeReply} index={i} />;
-            });
+              return <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} onReply={openComposeReply} index={i + (showPinned ? 1 : 0)} />;
+            })}
+            </>
+          );
+        }
 
       case 'Library':
         {
@@ -957,6 +1488,10 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
 
               {/* Bio — linkified */}
               {bio && <BioText text={bio} onHashtagClick={tag => openExploreSearch(tag)} />}
+
+              {showFeaturedHashtags && (
+                <FeaturedHashtagsCard tags={featuredHashtagsToRender} onTagClick={(tag) => openExploreSearch(tag)} />
+              )}
 
               {/* Stats row */}
               <div style={{

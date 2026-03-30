@@ -42,6 +42,20 @@ For GIF search, create a `.env` file from `.env.example` and set `VITE_TENOR_API
 
 Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
 
+### Optional platform env
+
+The platform layer is wired but remains opt-in and non-authoritative.
+
+* `VITE_WEB_PUSH_VAPID_PUBLIC_KEY` enables Web Push subscription setup.
+* `VITE_PUSH_SUBSCRIPTION_ENDPOINT` optionally overrides the default `/api/push/subscription` backend route.
+* `VITE_CLOUDKIT_CONTAINER_ID` and `VITE_CLOUDKIT_API_TOKEN` enable optional CloudKit mirroring.
+* `VITE_CLOUDKIT_ENVIRONMENT` optionally overrides the default CloudKit environment.
+* `VITE_CLOUDKIT_JS_SRC` optionally overrides the CloudKit JS script URL. Only same-origin or Apple-hosted HTTPS URLs are accepted.
+* `VITE_ENABLE_DRAFT_RECOVERY_MIRROR=true` enables encrypted CloudKit draft recovery mirroring.
+
+Push prompting stays explicit. CloudKit never blocks boot and does not become the source of truth for auth or session state.
+When enabled, the app now lazy-loads CloudKit JS on demand with bounded retry, full jitter, strict script URL validation, and same-origin or Apple CDN allowlisting.
+
 OAuth setup notes:
 
 *   For local development, OAuth loopback mode works without a hosted `client_id`.

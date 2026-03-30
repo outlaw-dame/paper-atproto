@@ -1,5 +1,6 @@
 import { paperDB } from './db.js';
 import { migratePostsTable } from './db/migrations.js';
+import { initPlatformBootstrap } from './pwa/bootstrap.js';
 // import { inferenceClient } from './workers/InferenceClient.js';
 
 function shouldSkipVectorIndexBuild(): boolean {
@@ -30,6 +31,12 @@ export async function initApp() {
 
   // 2. Run Migrations
   await migratePostsTable();
+
+  // 2.5. Start the platform layer in the background.
+  // Any failure here is non-fatal and must not block app boot.
+  void initPlatformBootstrap().catch((error) => {
+    console.warn('[Bootstrap] Platform bootstrap failed (non-fatal):', error);
+  });
 
   // 3. Warmup Inference (optional, deferred to keep startup fast)
   // inferenceClient.init();

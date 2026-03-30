@@ -11,18 +11,22 @@
 import React, { createContext, useContext, useEffect, useCallback } from 'react';
 import { Agent } from '@atproto/api';
 import type { AppBskyActorDefs } from '@atproto/api';
-import { useSessionStore, saveRecentHandle, type SessionData } from '../store/sessionStore.js';
+import { useSessionStore, saveRecentHandle, clearRecentHandles, type SessionData } from '../store/sessionStore.js';
 import { ATP_AUTH_EXPIRED_EVENT, atpCall } from '../lib/atproto/client.js';
 import { normalizeError } from '../lib/atproto/errors.js';
 import { withRetry } from '../lib/atproto/retry.js';
 import {
+  FOLLOWING_TIMELINE_SCOPE,
   createOAuthState,
   getOAuthClient,
   getOAuthRequestedScope,
   getOAuthRuntimeConfigStatus,
+  hasFollowingFeedScope,
   isHostedOAuthClientConfigured,
+  isLoopbackOAuthOrigin,
   isLikelyAuthIdentifier,
   sanitizeAuthIdentifier,
+  withRecoveredOAuthClient,
 } from './oauthClient.js';
 import {
   buildClearedOAuthCallbackUrl,
@@ -93,14 +97,30 @@ function hasRequiredGrantedScope(grantedScope: string | undefined, requestedScop
   const requested = normalizeScopeSet(requestedScope);
   if (!requested.size) return true;
 
+  // transition:* scopes are compatibility hints and may be omitted by providers.
+  // Keep `atproto` and any non-transition scopes as required permissions.
+  const required = new Set(
+    [...requested].filter((token) => token === 'atproto' || !token.startsWith('transition:')),
+  );
+  if (!required.size) return true;
+
   const granted = normalizeScopeSet(grantedScope);
-  for (const token of requested) {
+  for (const token of required) {
     if (!granted.has(token)) {
       return false;
     }
   }
 
   return true;
+}
+
+function shouldInvalidateHostedAuthOnlySession(
+  grantedScope: string | undefined,
+  requestedScope: string,
+): boolean {
+  const requested = normalizeScopeSet(requestedScope);
+  if (!requested.has(FOLLOWING_TIMELINE_SCOPE)) return false;
+  return !hasFollowingFeedScope(grantedScope);
 }
 
 function clearOAuthCallbackParams(): void {
@@ -110,6 +130,51 @@ function clearOAuthCallbackParams(): void {
   if (!nextUrl) return;
 
   window.history.replaceState(window.history.state, '', nextUrl);
+}
+
+function clearCachedOAuthBrowserState(): void {
+  if (typeof window === 'undefined') return;
+
+  const clearFromStorage = (storage: Storage) => {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith('@@atproto/oauth-client-browser')) {
+        keysToRemove.push(key);
+      }
+    }
+
+    for (const key of keysToRemove) {
+      storage.removeItem(key);
+    }
+  };
+
+  try {
+    clearFromStorage(localStorage);
+  } catch {
+    // Ignore storage failures.
+  }
+
+  try {
+    clearFromStorage(sessionStorage);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+async function clearInsufficientScopeSession(
+  oauthClient: Awaited<ReturnType<typeof getOAuthClient>>,
+  did: string,
+): Promise<void> {
+  try {
+    await oauthClient.revoke(did);
+  } catch (error) {
+    if (enableAuthDebugLogs) {
+      console.warn('[OAuth] Failed to revoke insufficient-scope session.', toSafeAuthDiagnostic(error));
+    }
+  }
+
+  clearCachedOAuthBrowserState();
 }
 
 type OAuthBootstrapDebugPhase = 'callback_error' | 'callback_no_session' | 'restored_session' | 'bootstrap_error';
@@ -209,16 +274,17 @@ async function startOAuthLogin(
   }
 
   try {
-    const oauthClient = await getOAuthClient();
     const requestedScope = getOAuthRequestedScope();
+    const effectiveRequestedScope = requestedScope;
     const state = createOAuthState();
 
-    try {
+    await withRecoveredOAuthClient(async (oauthClient) => {
       await oauthClient.signInRedirect(sanitizedIdentifier, {
-        scope: requestedScope,
+        scope: effectiveRequestedScope,
         state,
+        ...(isLoopbackOAuthOrigin() ? { prompt: 'login' } : { prompt: 'consent' }),
       });
-    } catch (err: unknown) {
+    }, 'sign-in redirect').catch((err: unknown) => {
       const normalized = normalizeError(err);
       recordOAuthLoginDebug({
         kind: normalized.kind,
@@ -226,18 +292,8 @@ async function startOAuthLogin(
         message: normalized.message,
         ...toSafeLoginErrorShape(err),
       });
-      if (normalized.status === 400 && requestedScope !== 'atproto') {
-        // Some provider/local loopback combinations reject transition scopes.
-        // Retry once with baseline scope so users can still complete sign-in.
-        const fallbackState = createOAuthState();
-        await oauthClient.signInRedirect(sanitizedIdentifier, {
-          scope: 'atproto',
-          state: fallbackState,
-        });
-        return;
-      }
       throw err;
-    }
+    });
   } catch (err: unknown) {
     const normalized = normalizeError(err);
     recordOAuthLoginDebug({
@@ -260,15 +316,14 @@ async function runLogout(
 ): Promise<void> {
   if (currentDid) {
     try {
-      const oauthClient = await getOAuthClient();
-      await withRetry(
+      await withRecoveredOAuthClient((oauthClient) => withRetry(
         () => oauthClient.revoke(currentDid),
         {
           maxAttempts: 2,
           baseDelayMs: 250,
           capDelayMs: 1_000,
         },
-      );
+      ), 'logout revoke');
     } catch (error) {
       // Ignore and proceed with local reset.
       if (enableAuthDebugLogs) {
@@ -277,6 +332,7 @@ async function runLogout(
     }
   }
   resetAgent();
+  clearRecentHandles();
   setError(null);
   setLoading(false);
 }
@@ -413,9 +469,29 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        const oauthClient = await getOAuthClient();
+        let oauthClient: Awaited<ReturnType<typeof getOAuthClient>> | null = null;
+        const initOAuthSession = (shouldProcessCallback: boolean) =>
+          withRecoveredOAuthClient(async (client) => {
+            oauthClient = client;
+            return initOAuthSessionOnce(client, shouldProcessCallback);
+          }, shouldProcessCallback ? 'oauth callback init' : 'oauth session restore');
         const shouldProcessCallback = hadCallbackParams;
-        const initResult = await initOAuthSessionOnce(oauthClient, shouldProcessCallback);
+        let initResult: Awaited<ReturnType<typeof initOAuthSessionOnce>>;
+        try {
+          initResult = await initOAuthSession(shouldProcessCallback);
+        } catch (initError) {
+          if (shouldProcessCallback) {
+            throw initError;
+          }
+
+          recordOAuthBootstrapDebug('bootstrap_error', {
+            kind: normalizeError(initError).kind,
+            status: normalizeError(initError).status,
+            reason: 'restore_init_first_attempt_failed',
+          });
+          clearCachedOAuthBrowserState();
+          initResult = await initOAuthSession(false);
+        }
         if (cancelled) return;
 
         if (!initResult?.session) {
@@ -457,10 +533,33 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
         }
 
         const requestedScope = getOAuthRequestedScope();
+        const effectiveRequestedScope = requestedScope;
         try {
           const tokenInfo = await oauthSession.getTokenInfo(false);
           if (!cancelled) {
-            if (!hasRequiredGrantedScope(tokenInfo.scope, requestedScope)) {
+            if (shouldInvalidateHostedAuthOnlySession(tokenInfo.scope, effectiveRequestedScope)) {
+              recordOAuthBootstrapDebug('bootstrap_error', {
+                kind: 'auth',
+                status: 403,
+                reason: 'hosted_auth_only_scope',
+                requestedScope,
+                grantedScope: tokenInfo.scope,
+              });
+              clearOAuthCallbackParams();
+              if (oauthClient) {
+                await clearInsufficientScopeSession(oauthClient, oauthSession.did);
+              } else {
+                clearCachedOAuthBrowserState();
+              }
+              resetAgent();
+              setSession(null);
+              setProfile(null);
+              setSessionReady(false);
+              setError('This HTTPS sign-in did not grant Following feed access. The partial session was cleared. Sign in again here and approve the Bluesky timeline permission if prompted.');
+              return;
+            }
+
+            if (!hasRequiredGrantedScope(tokenInfo.scope, effectiveRequestedScope)) {
               recordOAuthBootstrapDebug('bootstrap_error', {
                 kind: 'auth',
                 status: 403,
@@ -469,6 +568,11 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
                 grantedScope: tokenInfo.scope,
               });
               clearOAuthCallbackParams();
+              if (oauthClient) {
+                await clearInsufficientScopeSession(oauthClient, oauthSession.did);
+              } else {
+                clearCachedOAuthBrowserState();
+              }
               resetAgent();
               setSession(null);
               setProfile(null);
@@ -487,7 +591,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
           }
         } catch {
           if (!cancelled) {
-            if (shouldProcessCallback && normalizeScopeSet(requestedScope).size > 0) {
+            if (shouldProcessCallback && normalizeScopeSet(effectiveRequestedScope).size > 0) {
               recordOAuthBootstrapDebug('bootstrap_error', {
                 kind: 'auth',
                 status: 403,
@@ -510,6 +614,11 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
           recordOAuthBootstrapDebug('restored_session', {
             hadCallbackParams,
           });
+          try {
+            sessionStorage.removeItem('glimpse:oauth:last-auth-failure');
+          } catch {
+            // Ignore storage failures.
+          }
           clearOAuthCallbackParams();
           setError(null);
           setSessionReady(true);
@@ -519,6 +628,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
           recordOAuthBootstrapDebug('bootstrap_error', {
             kind: normalizeError(err).kind,
             status: normalizeError(err).status,
+            ...toSafeLoginErrorShape(err),
           });
           clearOAuthCallbackParams();
           resetAgent();

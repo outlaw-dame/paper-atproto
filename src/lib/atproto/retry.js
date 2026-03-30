@@ -1,0 +1,54 @@
+// ─── Retry with Exponential Backoff + Decorrelated Jitter ─────────────────
+// Implements the "decorrelated jitter" algorithm from the AWS architecture blog.
+// This avoids thundering-herd behaviour when many clients retry simultaneously.
+//
+// Formula:  sleep = min(cap, random_between(base, prev_sleep * 3))
+import { normalizeError, isRetryable } from './errors.js';
+function jitteredDelay(base, prev, cap) {
+    const lo = base;
+    const hi = Math.min(cap, prev * 3);
+    return lo + Math.random() * (hi - lo);
+}
+function sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('Aborted', 'AbortError'));
+            return;
+        }
+        const id = setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => { clearTimeout(id); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+    });
+}
+function isOffline() {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+export async function withRetry(fn, opts = {}) {
+    const { maxAttempts = 3, baseDelayMs = 300, capDelayMs = 10_000, signal, } = opts;
+    let prevDelay = baseDelayMs;
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            return await fn(attempt, signal);
+        }
+        catch (raw) {
+            const err = normalizeError(raw);
+            lastError = err;
+            // Avoid useless backoff loops when the browser already knows it is offline.
+            if (err.kind === 'network' && isOffline())
+                throw raw;
+            // Never retry non-retryable errors
+            if (!isRetryable(err))
+                throw raw;
+            // On the last attempt, give up
+            if (attempt === maxAttempts)
+                throw raw;
+            // If the server told us when to retry, respect it
+            const delay = Math.max(0, Math.round(err.retryAfterMs ?? jitteredDelay(baseDelayMs, prevDelay, capDelayMs)));
+            prevDelay = delay;
+            await sleep(delay, signal);
+        }
+    }
+    // Should never reach here, but TypeScript needs it
+    throw lastError?.original ?? new Error('Retry exhausted');
+}
+//# sourceMappingURL=retry.js.map

@@ -1,0 +1,57 @@
+import { jsx as _jsx } from "react/jsx-runtime";
+import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
+import rehypeRaw from 'rehype-raw';
+import { Emoji } from './Emoji.js';
+import { sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
+/**
+ * Pre-processes content to handle Discord-flavored markdown features
+ * like spoilers (||spoiler||) and blockquotes.
+ */
+const preprocessDiscordMarkdown = (content) => {
+    // Handle spoilers: ||text|| -> <span class="spoiler">text</span>
+    let processed = content.replace(/\|\|(.+?)\|\|/g, '<span class="spoiler">$1</span>');
+    // Handle hashtags: #tag -> <a href="hashtag:tag" class="hashtag">#tag</a>
+    // We use a custom protocol "hashtag:" to identify them in the renderer
+    processed = processed.replace(/(^|\s)#(\w+)/g, '$1<a href="hashtag:$2" class="hashtag">#$2</a>');
+    return processed;
+};
+/**
+ * A robust Markdown component that supports GFM and Discord-flavored features.
+ * It includes security sanitization and integrates with the Twemoji component.
+ */
+export const Markdown = ({ content, className }) => {
+    const processedContent = preprocessDiscordMarkdown(content);
+    return (_jsx("div", { className: `markdown-content ${className || ''}`, children: _jsx(ReactMarkdown, { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeRaw, rehypeSanitize], components: {
+                // Use the Emoji component for text nodes to ensure emojis are Twemojified
+                text: ({ value }) => _jsx(Emoji, { children: value }),
+                // Custom renderer for spoilers
+                span: ({ node, className, children, ...props }) => {
+                    if (className === 'spoiler') {
+                        return (_jsx("span", { className: "bg-zinc-800 text-transparent hover:text-inherit transition-colors duration-200 cursor-pointer rounded px-1", onClick: (e) => e.currentTarget.classList.remove('text-transparent'), ...props, children: children }));
+                    }
+                    return _jsx("span", { className: className, ...props, children: children });
+                },
+                // Style other elements to match the Apple/Paper aesthetic
+                blockquote: ({ children }) => (_jsx("blockquote", { className: "border-l-4 border-zinc-300 dark:border-zinc-700 pl-4 italic my-2", children: children })),
+                code: ({ inline, children, className }) => (_jsx("code", { className: `${inline ? 'bg-zinc-100 dark:bg-zinc-800 px-1 rounded' : 'block bg-zinc-100 dark:bg-zinc-800 p-2 rounded my-2 overflow-x-auto'} ${className}`, children: children })),
+                a: ({ href, children }) => {
+                    if (href?.startsWith('hashtag:')) {
+                        const tag = href.split(':')[1];
+                        return (_jsx("a", { href: "#", className: "text-blue-500 hover:underline font-medium", onClick: (e) => {
+                                e.preventDefault();
+                                // Dispatch a custom event that App.tsx can listen to
+                                window.dispatchEvent(new CustomEvent('hashtag-click', { detail: tag }));
+                            }, children: children }));
+                    }
+                    const safeHref = href ? sanitizeExternalUrl(href) : null;
+                    if (!safeHref) {
+                        return _jsx("span", { children: children });
+                    }
+                    return (_jsx("a", { href: safeHref, className: "text-blue-500 hover:underline", target: "_blank", rel: "noopener noreferrer", children: children }));
+                },
+            }, children: processedContent }) }));
+};
+//# sourceMappingURL=Markdown.js.map

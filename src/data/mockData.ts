@@ -58,6 +58,8 @@ export interface MockPost {
     repost?: string;
     bookmark?: string;
   };
+  /** Optional conversation-session context used to seed composer guidance. */
+  glympseComposerContext?: unknown;
   article?: {
     title?: string;
     body: string;

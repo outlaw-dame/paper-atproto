@@ -6,7 +6,6 @@ import { inferenceClient } from '../workers/InferenceClient.js';
 import { getAltTextMetricsSnapshot, recordAltPostCoverage, recordBulkAltRun } from '../perf/altTextTelemetry.js';
 import { useUiStore } from '../store/uiStore.js';
 import { atpCall } from '../lib/atproto/client.js';
-import { resolveThread, type ThreadNode } from '../lib/resolver/atproto.js';
 import { fetchOGData, type OGMetadata } from '../og.js';
 import { checkUrlSafety } from '../lib/safety/urlSafety.js';
 import { GifPicker, type TenorGif } from './GifPicker.js';
@@ -27,6 +26,7 @@ import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
 import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
 import { useComposerAutocomplete } from '../hooks/useComposerAutocomplete.js';
 import ComposerAutocompleteDropdown from './ComposerAutocompleteDropdown.js';
+import { useComposerProjection } from '../conversation/sessionSelectors.js';
 
 interface Props {
   onClose: () => void;
@@ -442,42 +442,6 @@ function removeCaptionFromVideo(
   return {
     ...mediaItem,
     captions: mediaItem.captions.filter((_, i) => i !== index),
-  };
-}
-
-function collectThreadContextTexts(root: ThreadNode): {
-  threadTexts: string[];
-  commentTexts: string[];
-  totalCommentCount: number;
-} {
-  const queue: ThreadNode[] = [root];
-  const threadTexts: string[] = [];
-  const commentTexts: string[] = [];
-  let seen = 0;
-
-  while (queue.length > 0 && seen < 120) {
-    const current = queue.shift();
-    if (!current) continue;
-    seen += 1;
-
-    const text = current.text?.trim();
-    if (text) {
-      if (current.depth <= 1 && threadTexts.length < 8) {
-        threadTexts.push(text);
-      } else if (commentTexts.length < 32) {
-        commentTexts.push(text);
-      }
-    }
-
-    for (const child of current.replies ?? []) {
-      queue.push(child);
-    }
-  }
-
-  return {
-    threadTexts,
-    commentTexts,
-    totalCommentCount: commentTexts.length,
   };
 }
 
@@ -1085,16 +1049,13 @@ export default function ComposeSheet({ onClose }: Props) {
   const openExploreSearch = useUiStore((s) => s.openExploreSearch);
   const replyTarget = useUiStore(s => s.replyTarget);
   const replyParentText = replyTarget?.content?.trim() || undefined;
-  const [replyThreadContext, setReplyThreadContext] = useState<{
-    threadTexts: string[];
-    commentTexts: string[];
-    totalCommentCount: number;
-  }>({
-    threadTexts: [],
-    commentTexts: [],
-    totalCommentCount: 0,
-  });
   const [text, setText] = useState('');
+  const replySessionId = replyTarget?.threadRoot?.id ?? replyTarget?.id ?? '';
+  const projectedComposerContext = useComposerProjection({
+    sessionId: replySessionId,
+    ...(replyTarget?.id ? { replyToUri: replyTarget.id } : {}),
+    draftText: text,
+  });
   const [audience, setAudience] = useState<AudienceOption>('Everyone');
   const [showPreview, setShowPreview] = useState(false);
   const [showFormatBar, setShowFormatBar] = useState(false);
@@ -1198,67 +1159,46 @@ export default function ComposeSheet({ onClose }: Props) {
     };
   }, [mediaItems]);
 
-  useEffect(() => {
-    if (!replyTarget?.id) {
-      setReplyThreadContext({ threadTexts: [], commentTexts: [], totalCommentCount: 0 });
-      return;
-    }
-
-    let cancelled = false;
-
-    const localThreadTexts = [replyTarget.threadRoot?.content, replyTarget.content]
-      .filter((v): v is string => !!v)
-      .map(v => v.trim())
-      .filter(Boolean);
-    const localCommentTexts = [replyTarget.replyTo?.content]
-      .filter((v): v is string => !!v)
-      .map(v => v.trim())
-      .filter(Boolean);
-
-    setReplyThreadContext({
-      threadTexts: Array.from(new Set(localThreadTexts)).slice(0, 8),
-      commentTexts: Array.from(new Set(localCommentTexts)).slice(0, 32),
-      totalCommentCount: Math.max(replyTarget.replyCount ?? 0, localCommentTexts.length),
-    });
-
-    void (async () => {
-      try {
-        const rootUri = replyTarget.threadRoot?.id ?? replyTarget.id;
-        if (!rootUri) return;
-
-        const response = await atpCall(() => agent.getPostThread({ uri: rootUri, depth: 6 }), { maxAttempts: 1 });
-        const threadData = (response as any)?.data?.thread;
-        if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') return;
-
-        const resolved = resolveThread(threadData as any);
-        const collected = collectThreadContextTexts(resolved);
-
-        if (cancelled) return;
-        setReplyThreadContext({
-          threadTexts: Array.from(new Set(collected.threadTexts)).slice(0, 8),
-          commentTexts: Array.from(new Set(collected.commentTexts)).slice(0, 32),
-          totalCommentCount: Math.max(replyTarget.replyCount ?? 0, collected.totalCommentCount),
-        });
-      } catch {
-        // Best effort only — local reply context remains available.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [agent, replyTarget?.id, replyTarget?.replyCount, replyTarget?.threadRoot?.id, replyTarget?.threadRoot?.content, replyTarget?.content, replyTarget?.replyTo?.content]);
-
   const composerContext = useMemo(() => {
     if (replyTarget) {
+      const projectedThreadTexts = projectedComposerContext
+        ? [
+            projectedComposerContext.threadContext?.rootText,
+            ...(projectedComposerContext.threadContext?.ancestorTexts ?? []),
+            ...(projectedComposerContext.threadContext?.branchTexts ?? []),
+          ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        : [];
+
+      const projectedCommentTexts = projectedComposerContext?.replyContext?.selectedCommentTexts
+        ?.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        ?? [];
+
+      const fallbackThreadTexts = [replyTarget.threadRoot?.content, replyTarget.content]
+        .filter((v): v is string => !!v)
+        .map((v) => v.trim())
+        .filter(Boolean);
+      const fallbackCommentTexts = [replyTarget.replyTo?.content]
+        .filter((v): v is string => !!v)
+        .map((v) => v.trim())
+        .filter(Boolean);
+
+      const threadTexts = Array.from(
+        new Set(projectedThreadTexts.length > 0 ? projectedThreadTexts : fallbackThreadTexts),
+      ).slice(0, 8);
+      const commentTexts = Array.from(
+        new Set(projectedCommentTexts.length > 0 ? projectedCommentTexts : fallbackCommentTexts),
+      ).slice(0, 32);
+
       return buildReplyComposerContext({
         draftText: text,
-        parentText: replyParentText ?? '',
+        parentText: projectedComposerContext?.directParent?.text ?? replyParentText ?? '',
         parentUri: replyTarget.id,
-        parentAuthorHandle: replyTarget.author.handle,
-        threadTexts: replyThreadContext.threadTexts,
-        commentTexts: replyThreadContext.commentTexts,
-        totalCommentCount: replyThreadContext.totalCommentCount,
+        parentAuthorHandle: projectedComposerContext?.directParent?.authorHandle ?? replyTarget.author.handle,
+        threadTexts,
+        commentTexts,
+        totalCommentCount:
+          projectedComposerContext?.replyContext?.totalCommentCount
+          ?? Math.max(replyTarget.replyCount ?? 0, commentTexts.length),
         ...(typeof replyTarget.replyCount === 'number' ? { parentReplyCount: replyTarget.replyCount } : {}),
         ...(typeof replyTarget.threadCount === 'number' ? { parentThreadCount: replyTarget.threadCount } : {}),
       });
@@ -1266,11 +1206,9 @@ export default function ComposeSheet({ onClose }: Props) {
 
     return buildPostComposerContext(text);
   }, [
+    projectedComposerContext,
     replyParentText,
     replyTarget,
-    replyThreadContext.commentTexts,
-    replyThreadContext.threadTexts,
-    replyThreadContext.totalCommentCount,
     text,
   ]);
 

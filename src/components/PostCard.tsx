@@ -22,6 +22,7 @@ import {
   recordSensitiveMediaRehide,
 } from '../perf/sensitiveMediaTelemetry.js';
 import { openExternalUrl } from '../lib/safety/externalUrl.js';
+import type { TimelineConversationHint } from '../conversation/projections/timelineProjection.js';
 
 interface PostCardProps {
   post: MockPost;
@@ -34,6 +35,7 @@ interface PostCardProps {
   onBookmark?: (post: MockPost) => void;
   onMore?: (post: MockPost) => void;
   index: number;
+  timelineHint?: TimelineConversationHint;
   /** Handle of the post being replied to — shown as "↳ Replying to @handle" when no ContextPost is visible */
   replyingTo?: string | undefined;
   /** When true, draws a connector line entering from the top of the card to the avatar, bridging a ContextPost above */
@@ -58,7 +60,7 @@ type MediaCarouselItem =
       aspectRatio?: number;
     };
 
-export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
+export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, timelineHint, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
@@ -409,6 +411,29 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <p style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', margin: '0 0 8px', fontWeight: 500 }}>
           ↳ Replying to <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); handleMentionClick(replyingTo); }} style={{ color: 'var(--blue)', font: 'inherit', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>@{replyingTo}</button>
         </p>
+      )}
+
+      {timelineHint && (
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          margin: replyingTo ? '0 0 10px' : '0 0 8px',
+          padding: '4px 9px',
+          borderRadius: 999,
+          border: '1px solid var(--stroke-dim)',
+          background: 'var(--surface-2)',
+          color: 'var(--label-3)',
+          fontSize: 'var(--type-meta-sm-size)',
+          lineHeight: 'var(--type-meta-sm-line)',
+          letterSpacing: 'var(--type-meta-sm-track)',
+          fontWeight: 600,
+        }}>
+          <span>{timelineHint.direction}</span>
+          {timelineHint.branchDepth > 0 && <span>depth {timelineHint.branchDepth}</span>}
+          {timelineHint.factualSignalPresent && <span>factual</span>}
+          {timelineHint.sourceSupportPresent && <span>source-backed</span>}
+        </div>
       )}
 
       {/* Article content preview */}

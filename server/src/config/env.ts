@@ -51,6 +51,19 @@ const EnvSchema = z.object({
   PODCASTINDEX_BASE_URL: z.string().url().default('https://api.podcastindex.org'),
   PODCASTINDEX_USER_AGENT: z.string().default('paper-atproto/1.0 (+https://github.com/damonoutlaw/paper-atproto)'),
   PORT: z.coerce.number().int().positive().default(3011),
+
+  // ── Web Push ──────────────────────────────────────────────────────────────
+  // VAPID keys are required when actually sending push notifications.
+  // They are optional here because the subscription endpoint only stores
+  // subscriptions — the fanout sender is a separate concern.
+  VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+  VAPID_PRIVATE_KEY: z.string().min(1).optional(),
+  /** mailto: or https: contact URI required by the VAPID spec */
+  VAPID_CONTACT: z.string().min(1).optional(),
+  /** Maximum subscriptions held in memory (evicts oldest on overflow) */
+  PUSH_MAX_SUBSCRIPTIONS: z.coerce.number().int().positive().default(10_000),
+  /** Days before a stored subscription is considered stale and purged */
+  PUSH_SUB_TTL_DAYS: z.coerce.number().int().positive().default(90),
 });
 
 export type AppEnv = z.infer<typeof EnvSchema>;

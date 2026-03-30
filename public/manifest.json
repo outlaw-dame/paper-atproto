@@ -1,10 +1,12 @@
 {
+  "id": "/paper-atproto/",
   "name": "Glimpse",
   "short_name": "Glimpse",
   "description": "A Paper × Gist × Apple HIG client for ATProto",
   "start_url": "/paper-atproto/",
   "scope": "/paper-atproto/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
   "orientation": "portrait",
   "background_color": "#000000",
   "theme_color": "#000000",

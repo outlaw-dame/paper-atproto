@@ -1,0 +1,2 @@
+export { analyzeSentiment, analyzeSentimentWithModel, type AnalyzeOptions, type SentimentLevel, type SentimentResult, type ToneClassifier, } from '../../lib/sentiment.js';
+//# sourceMappingURL=heuristics.d.ts.map

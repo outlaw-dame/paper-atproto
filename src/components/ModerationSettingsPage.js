@@ -1,0 +1,16 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import React from 'react';
+import SensitiveMediaSection from './SensitiveMediaSection.js';
+import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
+import ModerationSection from './ModerationSection.js';
+import ModerationPolicySummaryCard from './ModerationPolicySummaryCard.js';
+export default function ModerationSettingsPage() {
+    return (_jsxs("div", { children: [_jsxs("div", { style: {
+                    border: '1px solid var(--sep)',
+                    borderRadius: 12,
+                    padding: '10px 12px',
+                    background: 'var(--fill-1)',
+                    marginBottom: 12,
+                }, children: [_jsx("p", { style: { fontSize: 12, fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }, children: "Moderation control center" }), _jsx("p", { style: { fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35 }, children: "Centralized moderation settings: account-level controls first, then content filters and sensitive-media controls." })] }), _jsx(ModerationPolicySummaryCard, {}), _jsxs("div", { style: { display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }, children: [_jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }, children: [_jsx("p", { style: { margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }, children: "Moderation tools" }), _jsx("p", { style: { margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }, children: "Mutes and blocks are account-level controls and should be treated as canonical across feed, conversations, and notifications." })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }, children: [_jsx("p", { style: { margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }, children: "Content filters" }), _jsx("p", { style: { margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }, children: "Keyword and semantic rules are local-first controls with optional account-level sync." })] }), _jsxs("div", { style: { border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }, children: [_jsx("p", { style: { margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }, children: "Surface coverage" }), _jsx("p", { style: { margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }, children: "Explore context also applies to Search Story screens, so a single rule can cover both discovery surfaces." })] })] }), _jsx(ModerationSection, {}), _jsx("hr", { style: { border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' } }), _jsx(SensitiveMediaSection, {}), _jsx("hr", { style: { border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' } }), _jsx(ContentFilterSettingsSection, {})] }));
+}
+//# sourceMappingURL=ModerationSettingsPage.js.map

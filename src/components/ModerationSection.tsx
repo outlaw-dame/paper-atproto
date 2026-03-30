@@ -10,6 +10,9 @@ import { useSessionStore } from '../store/sessionStore.js';
 import {
   useGetBlocks,
   useGetMutes,
+  useSubscribedLists,
+  useUnmuteList,
+  useUnblockList,
   useUnblockActor,
   useUnmuteActor,
   useMuteActor,
@@ -155,6 +158,40 @@ const styles = {
     color: '#fff',
     cursor: 'pointer',
     flexShrink: 0,
+  },
+  listRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '7px 0',
+    borderBottom: '1px solid var(--sep)',
+  },
+  listAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    background: 'var(--surface-2)',
+    flexShrink: 0,
+    overflow: 'hidden' as const,
+  },
+  listInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  listName: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: 'var(--text)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+  },
+  listCreator: {
+    fontSize: 12,
+    color: 'var(--text-muted)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
   },
 } as const;
 
@@ -590,6 +627,104 @@ function MutedAccountsSection() {
   );
 }
 
+// ─── Moderation lists subsection ─────────────────────────────────────────
+function ModerationListsSection() {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useSubscribedLists();
+  const { mutate: unmuteList, isPending: unmutingList } = useUnmuteList();
+  const { mutate: unblockList, isPending: unblockingList } = useUnblockList();
+
+  const mutedLists = data?.muted ?? [];
+  const blockedLists = data?.blocked ?? [];
+  const totalCount = mutedLists.length + blockedLists.length;
+
+  return (
+    <div>
+      <div style={styles.subsectionHeader} onClick={() => setOpen((p) => !p)} role="button" aria-expanded={open}>
+        <span style={styles.subsectionTitle}>
+          Moderation lists
+          {totalCount > 0 && <span style={styles.badge}>{totalCount}</span>}
+        </span>
+        <span style={styles.chevron(open)}>›</span>
+      </div>
+
+      {open && (
+        <div>
+          {isLoading && <p style={styles.emptyText}>Loading…</p>}
+
+          {!isLoading && (
+            <>
+              <p style={{ margin: '8px 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Muted lists
+              </p>
+              {mutedLists.length === 0 ? (
+                <p style={styles.emptyText}>No muted lists</p>
+              ) : (
+                mutedLists.map((list) => (
+                  <div key={list.uri} style={styles.listRow}>
+                    <div style={styles.listAvatar}>
+                      {list.avatar && (
+                        <img
+                          src={list.avatar}
+                          alt=""
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      )}
+                    </div>
+                    <div style={styles.listInfo}>
+                      <div style={styles.listName}>{list.name}</div>
+                      <div style={styles.listCreator}>@{list.creator.handle}</div>
+                    </div>
+                    <button
+                      style={styles.actionBtn()}
+                      disabled={unmutingList}
+                      onClick={() => unmuteList({ listUri: list.uri })}
+                    >
+                      Unmute
+                    </button>
+                  </div>
+                ))
+              )}
+
+              <p style={{ margin: '10px 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Blocked lists
+              </p>
+              {blockedLists.length === 0 ? (
+                <p style={styles.emptyText}>No blocked lists</p>
+              ) : (
+                blockedLists.map((list) => (
+                  <div key={list.uri} style={styles.listRow}>
+                    <div style={styles.listAvatar}>
+                      {list.avatar && (
+                        <img
+                          src={list.avatar}
+                          alt=""
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      )}
+                    </div>
+                    <div style={styles.listInfo}>
+                      <div style={styles.listName}>{list.name}</div>
+                      <div style={styles.listCreator}>@{list.creator.handle}</div>
+                    </div>
+                    <button
+                      style={styles.actionBtn(true)}
+                      disabled={unblockingList}
+                      onClick={() => unblockList({ listUri: list.uri })}
+                    >
+                      Unblock
+                    </button>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Root export ─────────────────────────────────────────────────────────
 export default function ModerationSection() {
   const { session } = useSessionStore();
@@ -601,6 +736,8 @@ export default function ModerationSection() {
       <BlockedAccountsSection />
       <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '4px 0' }} />
       <MutedAccountsSection />
+      <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '4px 0' }} />
+      <ModerationListsSection />
     </section>
   );
 }

@@ -53,7 +53,9 @@ export interface RecentHandle {
 
 export function getRecentHandles(): RecentHandle[] {
   try {
-    const raw = localStorage.getItem(RECENT_HANDLES_KEY);
+    const storage = getRecentHandleStorage();
+    if (!storage) return [];
+    const raw = storage.getItem(RECENT_HANDLES_KEY);
     return raw ? (JSON.parse(raw) as RecentHandle[]) : [];
   } catch {
     return [];
@@ -62,13 +64,39 @@ export function getRecentHandles(): RecentHandle[] {
 
 export function saveRecentHandle(account: RecentHandle): void {
   try {
+    const storage = getRecentHandleStorage();
+    if (!storage) return;
     const existing = getRecentHandles().filter((a) => a.handle !== account.handle);
-    localStorage.setItem(
+    storage.setItem(
       RECENT_HANDLES_KEY,
       JSON.stringify([account, ...existing].slice(0, 5)),
     );
   } catch {
     // Storage unavailable — ignore silently.
+  }
+}
+
+export function clearRecentHandles(): void {
+  try {
+    sessionStorage.removeItem(RECENT_HANDLES_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+
+  try {
+    localStorage.removeItem(RECENT_HANDLES_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function getRecentHandleStorage(): Storage | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    return sessionStorage;
+  } catch {
+    return null;
   }
 }
 
@@ -80,6 +108,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
     localStorage.removeItem(LEGACY_SESSION_KEY);
   } catch {
     // Ignore storage failures (private browsing/quota constraints).
+  }
+
+  // Clear older persistent recent-account hints. We only keep recent handles
+  // for the current browser session to avoid implicit long-term remembrance.
+  try {
+    localStorage.removeItem(RECENT_HANDLES_KEY);
+  } catch {
+    // Ignore storage failures.
   }
 
   return {
