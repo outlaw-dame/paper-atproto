@@ -3,7 +3,7 @@
 // Populated once during bootstrap — do not re-detect on every render.
 
 import { create } from 'zustand';
-import type { PwaCapabilities, ServiceWorkerRegistrationState } from '../pwa/types.js';
+import type { PwaCapabilities, ServiceWorkerRegistrationState } from '../pwa/types';
 
 interface AppCapabilityState {
   capabilities: PwaCapabilities | null;

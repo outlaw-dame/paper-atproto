@@ -4,9 +4,9 @@
 // Local store writes first; this is async fire-and-forget with retry.
 // CloudKit failure never blocks UI.
 
-import { getCloudKitClient } from '../client.js';
-import { prefRecordName } from '../types.js';
-import type { UserPreferenceRecord } from '../types.js';
+import { getCloudKitClient } from '../client';
+import { prefRecordName } from '../types';
+import type { UserPreferenceRecord } from '../types';
 
 // Only these keys may be mirrored. No unbounded set.
 const ALLOWED_PREFERENCE_KEYS = new Set([

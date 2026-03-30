@@ -9,8 +9,8 @@ import type {
   MediaVerificationProvider,
   MediaVerificationResult,
   VerificationRequest,
-} from './types.js';
-import { checkabilityScore, inferClaimType } from './utils.js';
+} from './types';
+import { checkabilityScore, inferClaimType } from './utils';
 
 export class HeuristicClaimExtractorProvider implements ClaimExtractorProvider {
   async extractClaim(input: VerificationRequest): Promise<ClaimExtractionResult> {

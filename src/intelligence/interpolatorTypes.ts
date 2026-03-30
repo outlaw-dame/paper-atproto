@@ -9,7 +9,7 @@
 //     are present in the contract but Phase 1 populates them from local
 //     thread evidence only — not from a live external verifier service
 
-import type { ThreadNode } from '../lib/resolver/atproto.js';
+import type { ThreadNode } from '../lib/resolver/atproto';
 
 // ─── ContributionRole ─────────────────────────────────────────────────────
 export type ContributionRole =

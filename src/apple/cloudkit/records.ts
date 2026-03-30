@@ -1,7 +1,7 @@
 // ─── CloudKit Record Validation & Serialization ───────────────────────────────
 
-import { CloudKitSchemaError } from './errors.js';
-import type { MirrorRecordBase, CloudKitMirrorRecordType } from './types.js';
+import { CloudKitSchemaError } from './errors';
+import type { MirrorRecordBase, CloudKitMirrorRecordType } from './types';
 
 const VALID_RECORD_TYPES = new Set<CloudKitMirrorRecordType>([
   'UserPreference',

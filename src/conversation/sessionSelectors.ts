@@ -1,15 +1,15 @@
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useConversationSessionStore } from './sessionStore.js';
+import { useConversationSessionStore } from './sessionStore';
 import {
   defaultAnchorLinearPolicy,
-} from './sessionPolicies.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import type { PostFilterMatch } from '../lib/contentFilters/types.js';
-import type { MockPost } from '../data/mockData.js';
-import { projectThreadView, type ThreadFilter } from './projections/threadProjection.js';
-import { projectComposerContext } from './projections/composerProjection.js';
-import type { ComposerContext } from './projections/composerProjection.js';
+} from './sessionPolicies';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import type { PostFilterMatch } from '../lib/contentFilters/types';
+import type { MockPost } from '../data/mockData';
+import { projectThreadView, type ThreadFilter } from './projections/threadProjection';
+import { projectComposerContext } from './projections/composerProjection';
+import type { ComposerContext } from './projections/composerProjection';
 
 export function useConversationSession(sessionId: string) {
   return useConversationSessionStore((state) => state.byId[sessionId] ?? null);

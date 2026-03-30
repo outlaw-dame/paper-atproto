@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ComposerGuidanceResult } from '../intelligence/composer/types.js';
+import type { ComposerGuidanceResult } from '../intelligence/composer/types';
 
 interface ComposerGuidanceStore {
   byDraftId: Record<string, ComposerGuidanceResult>;

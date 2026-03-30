@@ -1,32 +1,32 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAtp } from '../atproto/AtpContext.js';
+import { useAtp } from '../atproto/AtpContext';
 import { RichText } from '@atproto/api';
-import { inferenceClient } from '../workers/InferenceClient.js';
-import { getAltTextMetricsSnapshot, recordAltPostCoverage, recordBulkAltRun } from '../perf/altTextTelemetry.js';
-import { useUiStore } from '../store/uiStore.js';
-import { atpCall } from '../lib/atproto/client.js';
-import { fetchOGData, type OGMetadata } from '../og.js';
-import { checkUrlSafety } from '../lib/safety/urlSafety.js';
-import { GifPicker, type TenorGif } from './GifPicker.js';
+import { inferenceClient } from '../workers/InferenceClient';
+import { getAltTextMetricsSnapshot, recordAltPostCoverage, recordBulkAltRun } from '../perf/altTextTelemetry';
+import { useUiStore } from '../store/uiStore';
+import { atpCall } from '../lib/atproto/client';
+import { fetchOGData, type OGMetadata } from '../og';
+import { checkUrlSafety } from '../lib/safety/urlSafety';
+import { GifPicker, type TenorGif } from './GifPicker';
 import {
   getHashtagInsights,
   fetchTrendingTopics,
   type HashtagInsight,
   type TrendingTopic,
-} from '../lib/hashtags/hashtagInsights.js';
-import TwemojiText from './TwemojiText.js';
-import ComposerGuidanceBanner from './ComposerGuidanceBanner.js';
-import MentalHealthSupportBanner from './MentalHealthSupportBanner.js';
+} from '../lib/hashtags/hashtagInsights';
+import TwemojiText from './TwemojiText';
+import ComposerGuidanceBanner from './ComposerGuidanceBanner';
+import MentalHealthSupportBanner from './MentalHealthSupportBanner';
 import {
   buildPostComposerContext,
   buildReplyComposerContext,
-} from '../intelligence/composer/contextBuilder.js';
-import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
-import { useComposerAutocomplete } from '../hooks/useComposerAutocomplete.js';
-import ComposerAutocompleteDropdown from './ComposerAutocompleteDropdown.js';
-import { useComposerProjection } from '../conversation/sessionSelectors.js';
+} from '../intelligence/composer/contextBuilder';
+import { useComposerGuidance } from '../hooks/useComposerGuidance';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { useComposerAutocomplete } from '../hooks/useComposerAutocomplete';
+import ComposerAutocompleteDropdown from './ComposerAutocompleteDropdown';
+import { useComposerProjection } from '../conversation/sessionSelectors';
 
 interface Props {
   onClose: () => void;

@@ -18,11 +18,11 @@
 // fetch that feeds this pipeline lives in retry.ts and is the caller's
 // responsibility (see StoryMode.tsx).
 
-import type { InterpolatorState, InterpolatorInput, ThreadPost, ThreadMediaItem } from './interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import { scoreAllReplies } from './scoreThread.js';
-import { buildInterpolatorSummary } from './buildInterpolatorSummary.js';
-import { detectTrigger, applyTriggerToState } from './updateInterpolatorState.js';
+import type { InterpolatorState, InterpolatorInput, ThreadPost, ThreadMediaItem } from './interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import { scoreAllReplies } from './scoreThread';
+import { buildInterpolatorSummary } from './buildInterpolatorSummary';
+import { detectTrigger, applyTriggerToState } from './updateInterpolatorState';
 
 // ─── emptyInterpolatorState ───────────────────────────────────────────────
 

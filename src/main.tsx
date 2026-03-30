@@ -45,7 +45,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>
 );
 
-void import('./bootstrap.js')
+void import('./bootstrap')
   .then(({ initApp }) => initApp())
   .catch((error) => {
     console.error('[Bootstrap] Failed to initialize background services', error);

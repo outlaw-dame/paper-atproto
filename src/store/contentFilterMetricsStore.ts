@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PostFilterMatch } from '../lib/contentFilters/types.js';
+import type { PostFilterMatch } from '../lib/contentFilters/types';
 
 type ResultByPostId = Record<string, PostFilterMatch[]>;
 

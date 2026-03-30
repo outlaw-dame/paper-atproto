@@ -19,9 +19,9 @@ import type {
   EvidenceSignal,
   EntityKind,
   ContributorImpact,
-} from './interpolatorTypes.js';
-import type { ThreadNode, ResolvedFacet, ResolvedEmbed } from '../lib/resolver/atproto.js';
-import { linkAndMatchEntities, type EntityCatalog } from './entityLinking.js';
+} from './interpolatorTypes';
+import type { ThreadNode, ResolvedFacet, ResolvedEmbed } from '../lib/resolver/atproto';
+import { linkAndMatchEntities, type EntityCatalog } from './entityLinking';
 
 // ─── Evidence extraction ──────────────────────────────────────────────────
 

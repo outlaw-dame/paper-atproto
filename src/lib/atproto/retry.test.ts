@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { normalizeError } from './errors.js';
-import { withRetry } from './retry.js';
+import { normalizeError } from './errors';
+import { withRetry } from './retry';
 
 describe('normalizeError', () => {
   it('parses Retry-After delay seconds', () => {

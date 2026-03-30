@@ -3,7 +3,7 @@ import {
   buildClearedOAuthCallbackUrl,
   getOAuthCallbackError,
   hasOAuthCallbackParams,
-} from './oauthCallback.js';
+} from './oauthCallback';
 
 describe('oauthCallback helpers', () => {
   it('detects OAuth callback query parameters', () => {

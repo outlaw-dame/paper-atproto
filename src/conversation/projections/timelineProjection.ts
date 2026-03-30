@@ -1,4 +1,4 @@
-import type { ConversationSession } from '../sessionTypes.js';
+import type { ConversationSession } from '../sessionTypes';
 
 export interface TimelineConversationHint {
   rootUri: string;

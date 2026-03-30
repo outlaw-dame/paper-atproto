@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { useContentFilterStore } from '../store/contentFilterStore.js';
-import { useContentFilterMetricsStore } from '../store/contentFilterMetricsStore.js';
-import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
-import { useGetBlocks, useGetMutes } from '../lib/atproto/queries.js';
-import type { KeywordFilterRule } from '../lib/contentFilters/types.js';
+import { useContentFilterStore } from '../store/contentFilterStore';
+import { useContentFilterMetricsStore } from '../store/contentFilterMetricsStore';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
+import { useGetBlocks, useGetMutes } from '../lib/atproto/queries';
+import type { KeywordFilterRule } from '../lib/contentFilters/types';
 
 function isRuleActive(rule: KeywordFilterRule, now: number): boolean {
   if (!rule.enabled) return false;

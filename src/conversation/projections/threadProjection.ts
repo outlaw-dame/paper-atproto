@@ -1,5 +1,5 @@
-import type { ConversationSession } from '../sessionTypes.js';
-import type { ProjectionPolicy } from '../sessionPolicies.js';
+import type { ConversationSession } from '../sessionTypes';
+import type { ProjectionPolicy } from '../sessionPolicies';
 
 export type ThreadFilter =
   | 'Top'

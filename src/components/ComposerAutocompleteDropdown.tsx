@@ -16,7 +16,7 @@ import type {
   AutocompleteCandidate,
   MentionCandidate,
   HashtagCandidate,
-} from '../hooks/useComposerAutocomplete.js';
+} from '../hooks/useComposerAutocomplete';
 
 // ─── Spinner ────────────────────────────────────────────────────────────────
 function Spinner() {

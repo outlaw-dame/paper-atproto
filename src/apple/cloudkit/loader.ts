@@ -3,7 +3,7 @@
 // Only allows the official Apple CDN or a same-origin override.
 // Never auto-loads during app boot; callers decide when to initialize it.
 
-import { CloudKitConfigError, CloudKitTransportError } from './errors.js';
+import { CloudKitConfigError, CloudKitTransportError } from './errors';
 
 const DEFAULT_CLOUDKIT_JS_SRC = 'https://cdn.apple-cloudkit.com/ck/2/cloudkit.js';
 const CLOUDKIT_SCRIPT_ATTR = 'data-paper-cloudkit';

@@ -1,4 +1,4 @@
-import type { ConversationalRole, ConversationSession } from '../sessionTypes.js';
+import type { ConversationalRole, ConversationSession } from '../sessionTypes';
 
 export type ProfileCardContext =
   | { type: 'global' }

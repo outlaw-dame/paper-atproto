@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { List, ListItem, Block, Button, Searchbar, Card, Navbar, Page, Toolbar, Link } from 'konsta/react';
-import { feedService } from '../feeds.js';
-import { Markdown } from './Markdown.js';
-import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
-import type { Feed, FeedItem } from '../schema.js';
+import { feedService } from '../feeds';
+import { Markdown } from './Markdown';
+import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback';
+import type { Feed, FeedItem } from '../schema';
 
 interface PodcastValueRecipient {
   name?: string;

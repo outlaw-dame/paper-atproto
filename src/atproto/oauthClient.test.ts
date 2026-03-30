@@ -8,7 +8,7 @@ import {
   isLoopbackOAuthOrigin,
   isLikelyAuthIdentifier,
   sanitizeAuthIdentifier,
-} from './oauthClient.js';
+} from './oauthClient';
 
 describe('oauthClient auth identifier handling', () => {
   it('sanitizes control and zero-width characters from identifiers', () => {

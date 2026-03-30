@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useTranslationStore } from '../store/translationStore.js';
-import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
-import AccountPrefsSection from './AccountPrefsSection.js';
-import ModerationSettingsPage from './ModerationSettingsPage.js';
-import FeedsSettingsPage from './FeedsSettingsPage.js';
-import AppleSettingsSection from './AppleSettingsSection.js';
-import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
-import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry.js';
-import { useAppearanceStore } from '../store/appearanceStore.js';
+import { useTranslationStore } from '../store/translationStore';
+import ContentFilterSettingsSection from './ContentFilterSettingsSection';
+import AccountPrefsSection from './AccountPrefsSection';
+import ModerationSettingsPage from './ModerationSettingsPage';
+import FeedsSettingsPage from './FeedsSettingsPage';
+import AppleSettingsSection from './AppleSettingsSection';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
+import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry';
+import { useAppearanceStore } from '../store/appearanceStore';
 
 interface Props {
   open: boolean;

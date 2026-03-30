@@ -3,7 +3,7 @@
 // Source of truth is core app state — never Apple-only mirrors.
 // No-ops silently on unsupported platforms.
 
-import { postToServiceWorker } from '../serviceWorkerMessages.js';
+import { postToServiceWorker } from '../serviceWorkerMessages';
 
 let _pendingBadgeUpdate: ReturnType<typeof setTimeout> | null = null;
 const DEBOUNCE_MS = 300;

@@ -3,7 +3,7 @@
 // search story query, and prompt composer.
 
 import { create } from 'zustand';
-import type { MockPost } from '../data/mockData.js';
+import type { MockPost } from '../data/mockData';
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 

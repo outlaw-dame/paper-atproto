@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
-import { atpCall } from '../lib/atproto/client.js';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useUiStore } from '../store/uiStore.js';
+import { atpCall } from '../lib/atproto/client';
+import { useSessionStore } from '../store/sessionStore';
+import { useUiStore } from '../store/uiStore';
 
 const resolvedActorCache = new Map<string, string>();
 

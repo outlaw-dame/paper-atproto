@@ -6,26 +6,26 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppBskyFeedDefs, AppBskyActorDefs, AppBskyGraphDefs } from '@atproto/api';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useUiStore } from '../store/uiStore.js';
-import { inferenceClient } from '../workers/InferenceClient.js';
-import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
-import PostCard from '../components/PostCard.js';
-import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
-import type { MockPost } from '../data/mockData.js';
-import { formatCount, formatTime } from '../data/mockData.js';
-import type { StoryEntry } from '../App.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import { usePlatform, getButtonTokens } from '../hooks/usePlatform.js';
-import { useAppearanceStore } from '../store/appearanceStore.js';
+import { useSessionStore } from '../store/sessionStore';
+import { useUiStore } from '../store/uiStore';
+import { inferenceClient } from '../workers/InferenceClient';
+import { atpCall } from '../lib/atproto/client';
+import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import PostCard from '../components/PostCard';
+import TranslationSettingsSheet from '../components/TranslationSettingsSheet';
+import type { MockPost } from '../data/mockData';
+import { formatCount, formatTime } from '../data/mockData';
+import type { StoryEntry } from '../App';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import { warnMatchReasons } from '../lib/contentFilters/presentation';
+import { usePlatform, getButtonTokens } from '../hooks/usePlatform';
+import { useAppearanceStore } from '../store/appearanceStore';
 import {
   useMuteActor,
   useUnmuteActor,
   useBlockActor,
   useUnblockActor,
-} from '../lib/atproto/queries.js';
+} from '../lib/atproto/queries';
 
 // ─── Sub-tabs ──────────────────────────────────────────────────────────────
 const PROFILE_TABS = ['Posts', 'Library', 'Media', 'Feeds', 'Starter Packs', 'Lists'] as const;

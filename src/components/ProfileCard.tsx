@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import type { ProfileCardData, CompactPostPreview, StarterPackRef } from '../types/profileCard.js';
+import type { ProfileCardData, CompactPostPreview, StarterPackRef } from '../types/profileCard';
 
 // ─── Inject keyframes once ────────────────────────────────────────────────────
 let keyframesInjected = false;

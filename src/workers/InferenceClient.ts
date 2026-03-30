@@ -1,14 +1,14 @@
 // ─── Inference Client ─────────────────────────────────────────────────────
 // Manages the inference web worker and exposes a clean Promise-based API.
 
-import type { AbuseModelResult } from '../lib/abuseModel.js';
+import type { AbuseModelResult } from '../lib/abuseModel';
 import type {
   ComposerEmotionResult,
   ComposerQualityResult,
   ComposerSentimentResult,
   ComposerTargetedToneResult,
-} from '../lib/composerMl.js';
-import type { ToneModelResult } from '../lib/toneModel.js';
+} from '../lib/composerMl';
+import type { ToneModelResult } from '../lib/toneModel';
 
 type PendingRequest = {
   resolve: (value: any) => void;

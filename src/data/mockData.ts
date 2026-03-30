@@ -1,4 +1,4 @@
-import type { ResolvedFacet } from '../lib/resolver/atproto.js';
+import type { ResolvedFacet } from '../lib/resolver/atproto';
 
 export interface MockPost {
   id: string;

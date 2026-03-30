@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { feedService } from '../feeds.js';
-import { useActivityStore } from '../store/activityStore.js';
-import { searchPodcastIndex, type PodcastIndexSearchFeed } from '../lib/podcastIndexClient.js';
-import type { Feed, FeedItem } from '../schema.js';
+import { feedService } from '../feeds';
+import { useActivityStore } from '../store/activityStore';
+import { searchPodcastIndex, type PodcastIndexSearchFeed } from '../lib/podcastIndexClient';
+import type { Feed, FeedItem } from '../schema';
 
 type FeedCategory = 'News' | 'Podcasts' | 'Videos' | 'General';
 

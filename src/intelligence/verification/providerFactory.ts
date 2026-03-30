@@ -9,19 +9,19 @@
 //   VITE_GLYMPSE_VERIFY_BASE_URL   — base URL of the verify-server (no trailing slash)
 //   VITE_GLYMPSE_VERIFY_TIMEOUT_MS — per-request timeout, default 6000ms
 
-import type { VerificationProviders } from './types.js';
+import type { VerificationProviders } from './types';
 import {
   HeuristicClaimExtractorProvider,
   NoopFactCheckProvider,
   NoopGroundingProvider,
   NoopMediaVerificationProvider,
-} from './noopProviders.js';
+} from './noopProviders';
 import {
   HttpClaimExtractorProvider,
   HttpFactCheckProvider,
   HttpGroundingProvider,
   HttpMediaVerificationProvider,
-} from './httpProviders.js';
+} from './httpProviders';
 
 let cachedProviders: VerificationProviders | null = null;
 

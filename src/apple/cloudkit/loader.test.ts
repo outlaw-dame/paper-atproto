@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CloudKitConfigError } from './errors.js';
-import { sanitizeCloudKitScriptUrl } from './loader.js';
+import { CloudKitConfigError } from './errors';
+import { sanitizeCloudKitScriptUrl } from './loader';
 
 describe('sanitizeCloudKitScriptUrl', () => {
   it('accepts the official Apple CDN URL', () => {

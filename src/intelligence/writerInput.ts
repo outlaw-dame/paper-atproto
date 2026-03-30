@@ -10,15 +10,15 @@ import type {
   WriterEntity,
   ConfidenceState,
   SummaryMode,
-} from './llmContracts.js';
-import type { InterpolatorState, ContributionScores, ContributionRole } from './interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
+} from './llmContracts';
+import type { InterpolatorState, ContributionScores, ContributionRole } from './interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
 import {
   chooseSummaryMode,
   selectTopCommentsForWriter,
   contributorMayBeNamed,
   entityMayBeNamed,
-} from './routing.js';
+} from './routing';
 
 export type WriterTranslationMap = Record<string, {
   translatedText?: string;

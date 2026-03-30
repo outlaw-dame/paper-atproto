@@ -1,9 +1,9 @@
 import React from 'react';
-import { NOTIFICATION_CLICK_EVENT } from '../pwa/bootstrap.js';
-import { getPushCapability } from '../pwa/push/pushCapability.js';
-import { reconcilePushSubscription } from '../pwa/push/pushSubscription.js';
-import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore.js';
-import { useUiStore } from '../store/uiStore.js';
+import { NOTIFICATION_CLICK_EVENT } from '../pwa/bootstrap';
+import { getPushCapability } from '../pwa/push/pushCapability';
+import { reconcilePushSubscription } from '../pwa/push/pushSubscription';
+import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore';
+import { useUiStore } from '../store/uiStore';
 
 const APP_BASE_PATH = '/paper-atproto';
 

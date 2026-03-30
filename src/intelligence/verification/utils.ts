@@ -1,4 +1,4 @@
-import type { SourceType, VerificationClaimType, VerificationEntityHint, VerificationReason, VerificationRequest } from './types.js';
+import type { SourceType, VerificationClaimType, VerificationEntityHint, VerificationReason, VerificationRequest } from './types';
 
 export function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;

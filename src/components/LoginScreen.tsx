@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAtp } from '../atproto/AtpContext.js';
-import { sanitizeAuthIdentifier } from '../atproto/oauthClient.js';
-import { getRecentHandles, type RecentHandle } from '../store/sessionStore.js';
+import { useAtp } from '../atproto/AtpContext';
+import { sanitizeAuthIdentifier } from '../atproto/oauthClient';
+import { getRecentHandles, type RecentHandle } from '../store/sessionStore';
 
 // ─── Recent-handle suggestion dropdown ───────────────────────────────────────
 function RecentHandleDropdown({

@@ -18,17 +18,17 @@ import type {
   ContributionScores,
   ThreadInterpolatorState,
   ThreadPost,
-} from './interpolatorTypes.js';
-import type { VerificationEntityHint, VerificationMediaItem, VerificationOutcome, VerificationProviders, VerificationRequest } from './verification/types.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import type { ConfidenceState, SummaryMode } from './llmContracts.js';
-import { runInterpolatorPipeline, nodeToThreadPost } from './atprotoInterpolatorAdapter.js';
-import { InMemoryVerificationCache, type VerificationCache } from './verification/cache.js';
-import { mergeVerificationIntoContributionScore } from './verification/mergeVerificationIntoScore.js';
-import { verifyEvidence } from './verification/verifyEvidence.js';
-import { withRetry } from './verification/retry.js';
-import { computeConfidenceState } from './confidence.js';
-import { chooseSummaryMode } from './routing.js';
+} from './interpolatorTypes';
+import type { VerificationEntityHint, VerificationMediaItem, VerificationOutcome, VerificationProviders, VerificationRequest } from './verification/types';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import type { ConfidenceState, SummaryMode } from './llmContracts';
+import { runInterpolatorPipeline, nodeToThreadPost } from './atprotoInterpolatorAdapter';
+import { InMemoryVerificationCache, type VerificationCache } from './verification/cache';
+import { mergeVerificationIntoContributionScore } from './verification/mergeVerificationIntoScore';
+import { verifyEvidence } from './verification/verifyEvidence';
+import { withRetry } from './verification/retry';
+import { computeConfidenceState } from './confidence';
+import { chooseSummaryMode } from './routing';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 

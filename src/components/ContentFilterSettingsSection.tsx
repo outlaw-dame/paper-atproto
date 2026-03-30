@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { useContentFilterStore } from '../store/contentFilterStore.js';
-import { useContentFilterMetricsStore } from '../store/contentFilterMetricsStore.js';
-import type { FilterContext, FilterAction } from '../lib/contentFilters/types.js';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useSyncMutedWords, useImportMutedWords } from '../lib/atproto/queries.js';
+import { useContentFilterStore } from '../store/contentFilterStore';
+import { useContentFilterMetricsStore } from '../store/contentFilterMetricsStore';
+import type { FilterContext, FilterAction } from '../lib/contentFilters/types';
+import { useSessionStore } from '../store/sessionStore';
+import { useSyncMutedWords, useImportMutedWords } from '../lib/atproto/queries';
 
 const CONTEXT_OPTIONS: Array<{ value: FilterContext; label: string }> = [
   { value: 'home', label: 'Home feed' },

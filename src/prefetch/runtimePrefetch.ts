@@ -1,4 +1,4 @@
-import { markPrefetchStart, markPrefetchEnd } from '../perf/prefetchTelemetry.js';
+import { markPrefetchStart, markPrefetchEnd } from '../perf/prefetchTelemetry';
 
 let scheduled = false;
 
@@ -66,17 +66,17 @@ export function scheduleRuntimePrefetches(): void {
   if (shouldSkipPrefetch()) return;
 
   const phase1: PrefetchTask[] = [
-    { key: 'tab-explore', load: () => import('../tabs/ExploreTab.js') },
-    { key: 'tab-profile', load: () => import('../tabs/ProfileTab.js') },
-    { key: 'overlay-host', load: () => import('../shell/OverlayHost.js') },
+    { key: 'tab-explore', load: () => import('../tabs/ExploreTab') },
+    { key: 'tab-profile', load: () => import('../tabs/ProfileTab') },
+    { key: 'overlay-host', load: () => import('../shell/OverlayHost') },
   ];
 
   const phase2: PrefetchTask[] = [
-    { key: 'compose-sheet', load: () => import('../components/ComposeSheet.js') },
-    { key: 'prompt-composer', load: () => import('../components/PromptComposer.js') },
-    { key: 'story-mode', load: () => import('../components/StoryMode.js') },
-    { key: 'search-story', load: () => import('../components/SearchStoryScreen.js') },
-    { key: 'atproto-queries', load: () => import('../lib/atproto/queries.js') },
+    { key: 'compose-sheet', load: () => import('../components/ComposeSheet') },
+    { key: 'prompt-composer', load: () => import('../components/PromptComposer') },
+    { key: 'story-mode', load: () => import('../components/StoryMode') },
+    { key: 'search-story', load: () => import('../components/SearchStoryScreen') },
+    { key: 'atproto-queries', load: () => import('../lib/atproto/queries') },
   ];
 
   const schedule = (cb: () => void, timeout: number) => {

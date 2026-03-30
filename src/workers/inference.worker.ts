@@ -7,7 +7,7 @@ import type {
   AbuseModelLabel,
   AbuseModelResult,
   AbuseModelScores,
-} from '../lib/abuseModel.js';
+} from '../lib/abuseModel';
 import type {
   ComposerEmotionLabel,
   ComposerEmotionResult,
@@ -21,8 +21,8 @@ import type {
   ComposerTargetedToneLabel,
   ComposerTargetedToneResult,
   ComposerTargetedToneScores,
-} from '../lib/composerMl.js';
-import type { ToneModelLabel, ToneModelResult, ToneModelScores } from '../lib/toneModel.js';
+} from '../lib/composerMl';
+import type { ToneModelLabel, ToneModelResult, ToneModelScores } from '../lib/toneModel';
 
 // Clamp to single-threaded WASM. Multi-threaded ONNX requires SharedArrayBuffer
 // which needs COOP+COEP headers — unavailable on GitHub Pages and iOS Safari

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import ProfileCard from './ProfileCard.js';
-import type { ProfileCardData } from '../types/profileCard.js';
+import ProfileCard from './ProfileCard';
+import type { ProfileCardData } from '../types/profileCard';
 
 /**
  * Wraps any element (avatar, handle link) and shows a ProfileCard on:

@@ -1,7 +1,7 @@
-import { paperDB } from './db.js';
-import { migratePostsTable } from './db/migrations.js';
-import { initPlatformBootstrap } from './pwa/bootstrap.js';
-// import { inferenceClient } from './workers/InferenceClient.js';
+import { paperDB } from './db';
+import { migratePostsTable } from './db/migrations';
+import { initPlatformBootstrap } from './pwa/bootstrap';
+// import { inferenceClient } from './workers/InferenceClient';
 
 function shouldSkipVectorIndexBuild(): boolean {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') return false;

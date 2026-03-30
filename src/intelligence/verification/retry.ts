@@ -1,4 +1,4 @@
-import { VerificationError, VerificationRateLimitError, VerificationTimeoutError } from './errors.js';
+import { VerificationError, VerificationRateLimitError, VerificationTimeoutError } from './errors';
 
 export interface RetryOptions {
   retries?: number;

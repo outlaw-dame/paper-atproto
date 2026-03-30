@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type {
   ConversationSession,
   ConversationSessionId,
-} from './sessionTypes.js';
+} from './sessionTypes';
 
 type ConversationSessionStore = {
   byId: Record<ConversationSessionId, ConversationSession>;

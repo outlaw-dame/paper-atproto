@@ -2,7 +2,7 @@
 // Single source of truth for platform feature detection.
 // Never throws — always returns a conservative capability object.
 
-import type { PwaCapabilities } from './types.js';
+import type { PwaCapabilities } from './types';
 
 export function detectPwaCapabilities(): PwaCapabilities {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') {

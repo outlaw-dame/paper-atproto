@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card } from 'konsta/react';
-import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
+import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl';
 
 interface LinkPreviewProps {
   url: string;

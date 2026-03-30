@@ -14,21 +14,21 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useUiStore } from '../store/uiStore.js';
-import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost, mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
-import type { MockPost } from '../data/mockData.js';
-import type { StoryEntry } from '../App.js';
-import { summarizeStoryEntities } from '../intelligence/entityLinking.js';
-import { useTranslationStore } from '../store/translationStore.js';
-import { translationClient } from '../lib/i18n/client.js';
-import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
-import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import type { PostFilterMatch } from '../lib/contentFilters/types.js';
+import { useSessionStore } from '../store/sessionStore';
+import { useUiStore } from '../store/uiStore';
+import { atpCall } from '../lib/atproto/client';
+import { mapFeedViewPost, mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import type { MockPost } from '../data/mockData';
+import type { StoryEntry } from '../App';
+import { summarizeStoryEntities } from '../intelligence/entityLinking';
+import { useTranslationStore } from '../store/translationStore';
+import { translationClient } from '../lib/i18n/client';
+import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import { warnMatchReasons } from '../lib/contentFilters/presentation';
+import type { PostFilterMatch } from '../lib/contentFilters/types';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
@@ -41,7 +41,7 @@ import {
   space,
   transitions,
   storyCardVariants,
-} from '../design/index.js';
+} from '../design/index';
 
 interface Props {
   query: string;

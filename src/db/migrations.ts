@@ -1,4 +1,4 @@
-import { paperDB } from '../db.js';
+import { paperDB } from '../db';
 
 /**
  * Runs SQL migrations to ensure the PGlite schema supports

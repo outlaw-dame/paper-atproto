@@ -1,4 +1,4 @@
-import { getConfiguredApiBaseUrl, resolveApiUrl } from '../apiBase.js';
+import { getConfiguredApiBaseUrl, resolveApiUrl } from '../apiBase';
 
 export interface UrlThreatMatch {
   threatType: string;

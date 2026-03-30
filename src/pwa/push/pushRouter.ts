@@ -2,7 +2,7 @@
 // Maps validated push payloads into app navigation and state refresh.
 // Only same-origin deep links are allowed.
 
-import type { PushPayload, PushKind } from './pushTypes.js';
+import type { PushPayload, PushKind } from './pushTypes';
 
 export interface RoutedPushAction {
   navigateTo?: string | undefined;

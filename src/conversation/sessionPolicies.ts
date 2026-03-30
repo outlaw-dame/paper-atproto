@@ -2,14 +2,14 @@ import type {
   AtUri,
   ContributionRole,
   ContributionScores,
-} from '../intelligence/interpolatorTypes.js';
-import type { VerificationOutcome } from '../intelligence/verification/index.js';
+} from '../intelligence/interpolatorTypes';
+import type { VerificationOutcome } from '../intelligence/verification/index';
 import type {
   ConversationNode,
   ConversationSession,
   ContributionSignal,
   ThreadStateSignal,
-} from './sessionTypes.js';
+} from './sessionTypes';
 
 export type ThreadViewPolicy =
   | 'anchor_linear'

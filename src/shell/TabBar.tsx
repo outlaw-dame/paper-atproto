@@ -3,9 +3,9 @@
 // back via setTab / openCompose. Renders the compose FAB in the centre slot.
 
 import React from 'react';
-import { useUiStore } from '../store/uiStore.js';
-import type { TabId } from '../App.js';
-import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { useUiStore } from '../store/uiStore';
+import type { TabId } from '../App';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 
 const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNode }[] = [
   {

@@ -7,20 +7,20 @@
 
 import React, { Suspense } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AtpProvider, useAtp } from './atproto/AtpContext.js';
-import { scheduleRuntimePrefetches } from './prefetch/runtimePrefetch.js';
-import { useUiStore } from './store/uiStore.js';
-import TabBar from './shell/TabBar.js';
-import LoginScreen from './components/LoginScreen.js';
-import { MiniPlayerProvider } from './context/MiniPlayerContext.js';
-import MiniPlayer from './components/MiniPlayer.js';
-import HomeTab from './tabs/HomeTab.js';
-import OverlayHost from './shell/OverlayHost.js';
-import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge.js';
-import PlatformBanners from './shell/PlatformBanners.js';
-import BadgeSyncBridge from './components/BadgeSyncBridge.js';
-import PushLifecycleBridge from './components/PushLifecycleBridge.js';
-import AppleEnhancementBridge from './components/AppleEnhancementBridge.js';
+import { AtpProvider, useAtp } from './atproto/AtpContext';
+import { scheduleRuntimePrefetches } from './prefetch/runtimePrefetch';
+import { useUiStore } from './store/uiStore';
+import TabBar from './shell/TabBar';
+import LoginScreen from './components/LoginScreen';
+import { MiniPlayerProvider } from './context/MiniPlayerContext';
+import MiniPlayer from './components/MiniPlayer';
+import HomeTab from './tabs/HomeTab';
+import OverlayHost from './shell/OverlayHost';
+import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge';
+import PlatformBanners from './shell/PlatformBanners';
+import BadgeSyncBridge from './components/BadgeSyncBridge';
+import PushLifecycleBridge from './components/PushLifecycleBridge';
+import AppleEnhancementBridge from './components/AppleEnhancementBridge';
 
 function lazyWithRetry<T extends React.ComponentType<any>>(
   loader: () => Promise<{ default: T }>,
@@ -181,9 +181,9 @@ function ShellModuleRecovery({
   );
 }
 
-const ExploreTab = lazyWithRetry(() => import('./tabs/ExploreTab.js'), 'ExploreTab');
-const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab.js'), 'ActivityTab');
-const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab.js'), 'ProfileTab');
+const ExploreTab = lazyWithRetry(() => import('./tabs/ExploreTab'), 'ExploreTab');
+const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab'), 'ActivityTab');
+const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab'), 'ProfileTab');
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }

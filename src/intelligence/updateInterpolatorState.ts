@@ -15,7 +15,7 @@ import type {
   InterpolatorTrigger,
   InterpolatorTriggerKind,
   ContributionScore,
-} from './interpolatorTypes.js';
+} from './interpolatorTypes';
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { shouldSkipPrefetch } from './runtimePrefetch.js';
+import { shouldSkipPrefetch } from './runtimePrefetch';
 
 type NavigatorLike = Navigator & {
   deviceMemory?: number;

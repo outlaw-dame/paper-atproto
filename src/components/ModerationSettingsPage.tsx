@@ -1,8 +1,8 @@
 import React from 'react';
-import SensitiveMediaSection from './SensitiveMediaSection.js';
-import ContentFilterSettingsSection from './ContentFilterSettingsSection.js';
-import ModerationSection from './ModerationSection.js';
-import ModerationPolicySummaryCard from './ModerationPolicySummaryCard.js';
+import SensitiveMediaSection from './SensitiveMediaSection';
+import ContentFilterSettingsSection from './ContentFilterSettingsSection';
+import ModerationSection from './ModerationSection';
+import ModerationPolicySummaryCard from './ModerationPolicySummaryCard';
 
 export default function ModerationSettingsPage() {
   return (

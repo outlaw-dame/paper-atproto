@@ -14,36 +14,36 @@
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { StoryEntry } from '../App.js';
-import { useSessionStore } from '../store/sessionStore.js';
-import { atpCall } from '../lib/atproto/client.js';
-import type { MockPost, ChipType } from '../data/mockData.js';
-import { formatTime, formatCount } from '../data/mockData.js';
+import type { StoryEntry } from '../App';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall } from '../lib/atproto/client';
+import type { MockPost, ChipType } from '../data/mockData';
+import { formatTime, formatCount } from '../data/mockData';
 import {
   extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
-} from '../lib/resolver/atproto.js';
+} from '../lib/resolver/atproto';
 import {
   type ContributionRole,
   type ContributionScores,
   type ContributorImpact,
   type EntityImpact,
   type VerificationOutcome,
-} from '../intelligence/index.js';
-import { createVerificationProviders } from '../intelligence/verification/providerFactory.js';
-import { InMemoryVerificationCache } from '../intelligence/verification/cache.js';
-import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts.js';
-import { WriterEntitySheet, EntityChip } from './EntitySheet.js';
-import VideoPlayer from './VideoPlayer.js';
-import { useTranslationStore } from '../store/translationStore.js';
-import { useUiStore } from '../store/uiStore.js';
-import { translationClient } from '../lib/i18n/client.js';
-import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
-import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import type { PostFilterMatch } from '../lib/contentFilters/types.js';
+} from '../intelligence/index';
+import { createVerificationProviders } from '../intelligence/verification/providerFactory';
+import { InMemoryVerificationCache } from '../intelligence/verification/cache';
+import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts';
+import { WriterEntitySheet, EntityChip } from './EntitySheet';
+import VideoPlayer from './VideoPlayer';
+import { useTranslationStore } from '../store/translationStore';
+import { useUiStore } from '../store/uiStore';
+import { translationClient } from '../lib/i18n/client';
+import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import { warnMatchReasons } from '../lib/contentFilters/presentation';
+import type { PostFilterMatch } from '../lib/contentFilters/types';
 import {
   promptHero as phTokens,
   interpolator as intTokens,
@@ -59,20 +59,20 @@ import {
   space,
   transitions,
   slideUpVariants,
-} from '../design/index.js';
-import { openExternalUrl } from '../lib/safety/externalUrl.js';
-import { hydrateConversationSession } from '../conversation/sessionAssembler.js';
-import type { ThreadFilter } from '../conversation/projections/threadProjection.js';
+} from '../design/index';
+import { openExternalUrl } from '../lib/safety/externalUrl';
+import { hydrateConversationSession } from '../conversation/sessionAssembler';
+import type { ThreadFilter } from '../conversation/projections/threadProjection';
 import {
   useConversationSession,
   useThreadProjection,
   useConversationMeta,
   useConversationInterpolatedState,
   useComposerContextProjection,
-} from '../conversation/sessionSelectors.js';
-import { useConversationActions } from '../conversation/sessionActions.js';
-import { projectComposerContext } from '../conversation/projections/composerProjection.js';
-import { projectModerationDecision } from '../conversation/projections/moderationProjection.js';
+} from '../conversation/sessionSelectors';
+import { useConversationActions } from '../conversation/sessionActions';
+import { projectComposerContext } from '../conversation/projections/composerProjection';
+import { projectModerationDecision } from '../conversation/projections/moderationProjection';
 
 interface Props {
   entry: StoryEntry;

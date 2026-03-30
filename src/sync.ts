@@ -15,7 +15,7 @@ import { paperDB } from './db';
 import { inferenceClient } from './workers/InferenceClient';
 import { atpCall, atpMutate } from './lib/atproto/client';
 import { resolveEmbed, resolveFacets, extractClusterSignals } from './lib/resolver/atproto';
-import { extractRecordDisplayText } from './lib/atproto/recordContent.js';
+import { extractRecordDisplayText } from './lib/atproto/recordContent';
 import { z } from 'zod';
 import { AppBskyFeedDefs } from '@atproto/api';
 

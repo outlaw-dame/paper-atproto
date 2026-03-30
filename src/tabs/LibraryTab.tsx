@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore.js';
-import { atpCall, type AtpError } from '../lib/atproto/client.js';
-import { mapFeedViewPost } from '../atproto/mappers.js';
-import type { MockPost } from '../data/mockData.js';
-import { formatTime, formatCount } from '../data/mockData.js';
-import type { StoryEntry } from '../App.js';
-import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall, type AtpError } from '../lib/atproto/client';
+import { mapFeedViewPost } from '../atproto/mappers';
+import type { MockPost } from '../data/mockData';
+import { formatTime, formatCount } from '../data/mockData';
+import type { StoryEntry } from '../App';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;

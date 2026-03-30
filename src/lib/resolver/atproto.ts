@@ -25,7 +25,7 @@ import type {
   AppBskyEmbedRecord,
   ComAtprotoLabelDefs,
 } from '@atproto/api';
-import { extractRecordDisplayText } from '../atproto/recordContent.js';
+import { extractRecordDisplayText } from '../atproto/recordContent';
 
 // ─── AT URI ───────────────────────────────────────────────────────────────
 export interface ParsedAtUri {

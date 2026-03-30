@@ -1,5 +1,5 @@
 import { BrowserOAuthClient } from '@atproto/oauth-client-browser';
-import { withRetry } from '../lib/atproto/retry.js';
+import { withRetry } from '../lib/atproto/retry';
 
 const DEFAULT_HANDLE_RESOLVER = 'https://bsky.social';
 const APPVIEW_AUDIENCE = 'did:web:api.bsky.app#bsky_appview';

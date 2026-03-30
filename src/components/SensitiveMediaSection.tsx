@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
-import { getSensitiveMediaMetricsSnapshot } from '../perf/sensitiveMediaTelemetry.js';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
+import { getSensitiveMediaMetricsSnapshot } from '../perf/sensitiveMediaTelemetry';
 
 export default function SensitiveMediaSection() {
   const { policy, setPolicy, clearReveals, revealedPostIds } = useSensitiveMediaStore();

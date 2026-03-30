@@ -20,7 +20,7 @@
  * can enrich the result when a tone classifier is provided.
  */
 
-import type { ToneModelResult } from './toneModel.js';
+import type { ToneModelResult } from './toneModel';
 
 export type SentimentLevel = 'ok' | 'positive' | 'warn' | 'alert';
 

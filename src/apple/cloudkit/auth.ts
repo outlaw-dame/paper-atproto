@@ -3,8 +3,8 @@
 // Entirely separate from ATProto session — never influences core login state.
 // Never logs tokens or raw auth responses.
 
-import { CloudKitConfigError, CloudKitAuthError, CloudKitTransportError } from './errors.js';
-import { ensureCloudKitLoaded, hasCloudKitConfiguration } from './loader.js';
+import { CloudKitConfigError, CloudKitAuthError, CloudKitTransportError } from './errors';
+import { ensureCloudKitLoaded, hasCloudKitConfiguration } from './loader';
 
 export interface CloudKitAuthState {
   ready: boolean;

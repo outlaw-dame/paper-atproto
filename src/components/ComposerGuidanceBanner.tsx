@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import type { ComposerGuidanceResult } from '../intelligence/composer/types.js';
+import type { ComposerGuidanceResult } from '../intelligence/composer/types';
 
 interface Props {
   guidance: ComposerGuidanceResult;

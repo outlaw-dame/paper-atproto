@@ -1,5 +1,5 @@
-import type { EntityImpact, EntityKind } from './interpolatorTypes.js';
-import type { ResolvedFacet } from '../lib/resolver/atproto.js';
+import type { EntityImpact, EntityKind } from './interpolatorTypes';
+import type { ResolvedFacet } from '../lib/resolver/atproto';
 
 export interface EntityCatalogEntry {
   canonicalId: string;

@@ -3,8 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
-import { Emoji } from './Emoji.js';
-import { sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
+import { Emoji } from './Emoji';
+import { sanitizeExternalUrl } from '../lib/safety/externalUrl';
 
 interface MarkdownProps {
   content: string;

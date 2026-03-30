@@ -1,18 +1,18 @@
-import type { AbuseModelLabel, AbuseModelResult } from '../lib/abuseModel.js';
+import type { AbuseModelLabel, AbuseModelResult } from '../lib/abuseModel';
 import type {
   ComposerEmotionResult,
   ComposerQualityResult,
   ComposerSentimentResult,
   ComposerTargetedToneResult,
-} from '../lib/composerMl.js';
+} from '../lib/composerMl';
 import {
   analyzeSentiment,
   analyzeSentimentWithModel,
   type AnalyzeOptions,
   type SentimentResult,
   type ToneClassifier,
-} from '../lib/sentiment.js';
-import type { ComposerMLSignals } from './composer/classifierContracts.js';
+} from '../lib/sentiment';
+import type { ComposerMLSignals } from './composer/classifierContracts';
 
 export type ComposeToneToolKey =
   | 'heuristic'
@@ -45,11 +45,11 @@ const ABUSE_INSULT_THRESHOLD = 0.78;
 const ABUSE_TOXIC_THRESHOLD = 0.76;
 const ML_MIN_LENGTH = 12;
 
-let inferenceClientModulePromise: Promise<typeof import('../workers/InferenceClient.js')> | null = null;
+let inferenceClientModulePromise: Promise<typeof import('../workers/InferenceClient')> | null = null;
 
 async function getInferenceClientModule() {
   if (!inferenceClientModulePromise) {
-    inferenceClientModulePromise = import('../workers/InferenceClient.js');
+    inferenceClientModulePromise = import('../workers/InferenceClient');
   }
 
   return inferenceClientModulePromise;

@@ -1,6 +1,6 @@
-import type { AbuseModelResult } from '../../lib/abuseModel.js';
-import type { SentimentResult } from '../../lib/sentiment.js';
-import type { ComposerMLSignals } from './classifierContracts.js';
+import type { AbuseModelResult } from '../../lib/abuseModel';
+import type { SentimentResult } from '../../lib/sentiment';
+import type { ComposerMLSignals } from './classifierContracts';
 
 export type ComposerMode = 'post' | 'reply' | 'hosted_thread';
 export type ComposerGuidanceLevel = 'ok' | 'positive' | 'caution' | 'warning' | 'alert';

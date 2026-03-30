@@ -14,13 +14,13 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { useSessionStore } from '../../store/sessionStore.js';
-import { atpCall, atpMutate } from './client.js';
-import { mapFeedViewPost, mapNotification, hasDisplayableRecordContent } from '../../atproto/mappers.js';
-import type { MockPost } from '../../data/mockData.js';
-import type { LiveNotification } from '../../atproto/mappers.js';
+import { useSessionStore } from '../../store/sessionStore';
+import { atpCall, atpMutate } from './client';
+import { mapFeedViewPost, mapNotification, hasDisplayableRecordContent } from '../../atproto/mappers';
+import type { MockPost } from '../../data/mockData';
+import type { LiveNotification } from '../../atproto/mappers';
 import { AtUri } from '@atproto/syntax';
-import { useModerationStore } from '../../store/moderationStore.js';
+import { useModerationStore } from '../../store/moderationStore';
 import type { AppBskyFeedDefs, AppBskyGraphDefs } from '@atproto/api';
 
 // ─── Query key factory ─────────────────────────────────────────────────────

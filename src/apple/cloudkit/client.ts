@@ -4,10 +4,10 @@
 // Maps transport/auth/schema failures to typed errors.
 // Validates all record shapes before sending and after receiving.
 
-import { CloudKitConfigError, CloudKitAuthError, CloudKitTransportError, CloudKitSchemaError } from './errors.js';
-import { validateMirrorRecord, serializeMirrorRecord, deserializeMirrorRecord } from './records.js';
-import { retryWithFullJitter } from './retry.js';
-import type { MirrorRecordBase, CloudKitMirrorRecordType } from './types.js';
+import { CloudKitConfigError, CloudKitAuthError, CloudKitTransportError, CloudKitSchemaError } from './errors';
+import { validateMirrorRecord, serializeMirrorRecord, deserializeMirrorRecord } from './records';
+import { retryWithFullJitter } from './retry';
+import type { MirrorRecordBase, CloudKitMirrorRecordType } from './types';
 
 export interface CloudKitClient {
   saveRecord(record: MirrorRecordBase): Promise<void>;

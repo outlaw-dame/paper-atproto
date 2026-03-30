@@ -2,9 +2,9 @@ import { useDeferredValue, useEffect, useMemo, useRef } from 'react';
 import {
   analyzeComposerGuidance,
   analyzeComposerGuidanceImmediate,
-} from '../intelligence/composer/guidancePipeline.js';
-import { createEmptyComposerGuidanceResult } from '../intelligence/composer/guidanceScoring.js';
-import { maybeWriteComposerGuidance } from '../intelligence/composer/guidanceWriter.js';
+} from '../intelligence/composer/guidancePipeline';
+import { createEmptyComposerGuidanceResult } from '../intelligence/composer/guidanceScoring';
+import { maybeWriteComposerGuidance } from '../intelligence/composer/guidanceWriter';
 import {
   getComposerModelDebounceMs,
   getComposerWriterDebounceMs,
@@ -13,9 +13,9 @@ import {
   shouldReuseCachedComposerGuidance,
   shouldRunComposerModelStageForDraft,
   shouldRunComposerWriterStage,
-} from '../intelligence/composer/routing.js';
-import type { ComposerContext, ComposerGuidanceResult } from '../intelligence/composer/types.js';
-import { useComposerGuidanceStore } from '../store/composerGuidanceStore.js';
+} from '../intelligence/composer/routing';
+import type { ComposerContext, ComposerGuidanceResult } from '../intelligence/composer/types';
+import { useComposerGuidanceStore } from '../store/composerGuidanceStore';
 
 interface UseComposerGuidanceOptions {
   surfaceId: string;

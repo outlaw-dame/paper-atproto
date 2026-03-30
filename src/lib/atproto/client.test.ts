@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { atpCall } from './client.js';
+import { atpCall } from './client';
 
 describe('atpCall', () => {
   it('aborts requests when the timeout is exceeded', async () => {

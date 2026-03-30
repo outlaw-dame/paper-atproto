@@ -1,5 +1,5 @@
-import type { ContributionScores, FactualEvidence, VisibleChip, VisibleChipKind } from '../interpolatorTypes.js';
-import type { VerificationOutcome } from './types.js';
+import type { ContributionScores, FactualEvidence, VisibleChip, VisibleChipKind } from '../interpolatorTypes';
+import type { VerificationOutcome } from './types';
 
 // ─── mapVisibleChips ──────────────────────────────────────────────────────
 // Derives UI chips from a VerificationOutcome, merging into any existing chips

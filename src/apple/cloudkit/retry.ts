@@ -1,6 +1,6 @@
 // ─── CloudKit Retry / Circuit Breaker ────────────────────────────────────────
 
-import { isRetryableCloudKitError } from './errors.js';
+import { isRetryableCloudKitError } from './errors';
 
 export interface RetryPolicy {
   baseDelayMs: number;

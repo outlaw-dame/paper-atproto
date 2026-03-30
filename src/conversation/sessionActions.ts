@@ -1,12 +1,12 @@
 import { useCallback } from 'react';
-import type { AtUri, ContributionScores } from '../intelligence/interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
+import type { AtUri, ContributionScores } from '../intelligence/interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
 import {
   insertOptimisticReply,
   revealWarnedPost,
   setConversationUserFeedback,
   setFocusedBranch,
-} from './sessionMutations.js';
+} from './sessionMutations';
 
 export function useConversationActions(sessionId: string) {
   const onUserFeedback = useCallback((replyUri: AtUri, feedback: ContributionScores['userFeedback']) => {

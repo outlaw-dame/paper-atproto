@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useOfflineStatusStore } from '../store/offlineStatusStore.js';
+import { useOfflineStatusStore } from '../store/offlineStatusStore';
 
 export default function OfflineStatusPill() {
   const network = useOfflineStatusStore((s) => s.network);

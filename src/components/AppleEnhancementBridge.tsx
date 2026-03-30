@@ -1,9 +1,9 @@
 import React from 'react';
-import { detectAppleEnhancementAvailability } from '../apple/availability.js';
-import { initializeCloudKit } from '../apple/cloudkit/auth.js';
-import { hydrateMirroredPreferences } from '../apple/cloudkit/mirror/preferenceMirror.js';
-import { useAppleEnhancementStore } from '../store/appleEnhancementStore.js';
-import { useSessionStore } from '../store/sessionStore.js';
+import { detectAppleEnhancementAvailability } from '../apple/availability';
+import { initializeCloudKit } from '../apple/cloudkit/auth';
+import { hydrateMirroredPreferences } from '../apple/cloudkit/mirror/preferenceMirror';
+import { useAppleEnhancementStore } from '../store/appleEnhancementStore';
+import { useSessionStore } from '../store/sessionStore';
 
 export default function AppleEnhancementBridge() {
   const sessionDid = useSessionStore((state) => state.session?.did ?? null);

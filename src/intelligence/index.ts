@@ -10,12 +10,12 @@
 //   atprotoInterpolatorAdapter — main pipeline entry point
 //   verification/      — Phase 2: provider abstraction + evidence aggregation layer
 
-export * from './interpolatorTypes.js';
-export * from './retry.js';
-export * from './scoreThread.js';
-export * from './buildInterpolatorSummary.js';
-export * from './updateInterpolatorState.js';
-export * from './atprotoInterpolatorAdapter.js';
-export * from './entityLinking.js';
-export * from './threadPipeline.js';
-export * from './verification/index.js';
+export * from './interpolatorTypes';
+export * from './retry';
+export * from './scoreThread';
+export * from './buildInterpolatorSummary';
+export * from './updateInterpolatorState';
+export * from './atprotoInterpolatorAdapter';
+export * from './entityLinking';
+export * from './threadPipeline';
+export * from './verification/index';

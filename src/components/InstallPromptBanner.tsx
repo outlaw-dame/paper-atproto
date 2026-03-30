@@ -10,7 +10,7 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { getInstallState, triggerInstallPrompt } from '../pwa/install.js';
+import { getInstallState, triggerInstallPrompt } from '../pwa/install';
 
 // ─── Dismissal helpers ────────────────────────────────────────────────────────
 

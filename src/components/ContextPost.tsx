@@ -1,10 +1,10 @@
 import React from 'react';
-import type { MockPost } from '../data/mockData.js';
-import { formatTime } from '../data/mockData.js';
-import TwemojiText from './TwemojiText.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
-import { useUiStore } from '../store/uiStore.js';
-import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
+import type { MockPost } from '../data/mockData';
+import { formatTime } from '../data/mockData';
+import TwemojiText from './TwemojiText';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { useUiStore } from '../store/uiStore';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
 
 export const ContextPost = ({
   post,

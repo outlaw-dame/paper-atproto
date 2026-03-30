@@ -2,7 +2,7 @@
 // Observable online/offline/degraded state.
 // Does NOT claim "online" from navigator.onLine alone — requires actual probe confirmation.
 
-import type { NetworkState } from '../types.js';
+import type { NetworkState } from '../types';
 
 export interface OfflineState {
   network: NetworkState;

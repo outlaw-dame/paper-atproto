@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { TranslationResult } from '../lib/i18n/types.js';
+import type { TranslationResult } from '../lib/i18n/types';
 import {
   DEFAULT_TRANSLATION_POLICY,
   type TranslationPolicy,
-} from '../lib/i18n/policy.js';
+} from '../lib/i18n/policy';
 
 type TranslationStoreState = {
   policy: TranslationPolicy;

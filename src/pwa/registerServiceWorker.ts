@@ -1,6 +1,6 @@
 // ─── Service Worker Registration ─────────────────────────────────────────────
 
-import type { ServiceWorkerErrorCode, ServiceWorkerRegistrationState } from './types.js';
+import type { ServiceWorkerErrorCode, ServiceWorkerRegistrationState } from './types';
 
 const BASE_URL = import.meta.env.BASE_URL || '/';
 const SW_FILENAME = 'sw.js';

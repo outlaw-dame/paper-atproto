@@ -1,6 +1,6 @@
-import type { AtUri } from '../intelligence/interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import type { ConversationNode, SessionGraph } from './sessionTypes.js';
+import type { AtUri } from '../intelligence/interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import type { ConversationNode, SessionGraph } from './sessionTypes';
 
 export function buildSessionGraph(root: ThreadNode): SessionGraph {
   const nodesByUri: Record<AtUri, ConversationNode> = {};

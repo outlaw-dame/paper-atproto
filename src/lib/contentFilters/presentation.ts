@@ -1,4 +1,4 @@
-import type { PostFilterMatch } from './types.js';
+import type { PostFilterMatch } from './types';
 
 export type WarnMatchReason = {
   phrase: string;

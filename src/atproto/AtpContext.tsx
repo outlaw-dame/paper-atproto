@@ -11,10 +11,10 @@
 import React, { createContext, useContext, useEffect, useCallback } from 'react';
 import { Agent } from '@atproto/api';
 import type { AppBskyActorDefs } from '@atproto/api';
-import { useSessionStore, saveRecentHandle, clearRecentHandles, type SessionData } from '../store/sessionStore.js';
-import { ATP_AUTH_EXPIRED_EVENT, atpCall } from '../lib/atproto/client.js';
-import { normalizeError } from '../lib/atproto/errors.js';
-import { withRetry } from '../lib/atproto/retry.js';
+import { useSessionStore, saveRecentHandle, clearRecentHandles, type SessionData } from '../store/sessionStore';
+import { ATP_AUTH_EXPIRED_EVENT, atpCall } from '../lib/atproto/client';
+import { normalizeError } from '../lib/atproto/errors';
+import { withRetry } from '../lib/atproto/retry';
 import {
   FOLLOWING_TIMELINE_SCOPE,
   createOAuthState,
@@ -27,12 +27,12 @@ import {
   isLikelyAuthIdentifier,
   sanitizeAuthIdentifier,
   withRecoveredOAuthClient,
-} from './oauthClient.js';
+} from './oauthClient';
 import {
   buildClearedOAuthCallbackUrl,
   getOAuthCallbackError,
   hasOAuthCallbackParams,
-} from './oauthCallback.js';
+} from './oauthCallback';
 
 const OAUTH_INIT_TIMEOUT_MS = 8_000;
 let hasWarnedMissingAtpProvider = false;

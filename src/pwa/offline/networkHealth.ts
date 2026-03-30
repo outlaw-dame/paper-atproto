@@ -1,8 +1,8 @@
 // ─── Network Health Probe ─────────────────────────────────────────────────────
 // Distinguishes "degraded" from binary online/offline via a real connectivity probe.
 
-import type { NetworkState } from '../types.js';
-import { applyNetworkHealthResult } from './offlineState.js';
+import type { NetworkState } from '../types';
+import { applyNetworkHealthResult } from './offlineState';
 
 export interface NetworkHealthResult {
   state: NetworkState;

@@ -2,13 +2,13 @@
 // Initializes capability detection, service worker registration, offline state,
 // and message wiring. This runs in the background and must never block app boot.
 
-import { useAppCapabilityStore } from '../store/appCapabilityStore.js';
-import { useOfflineStatusStore } from '../store/offlineStatusStore.js';
-import { detectPwaCapabilities } from './capabilities.js';
-import { startNetworkHealthPolling } from './offline/networkHealth.js';
-import { getOfflineState, subscribeOfflineState } from './offline/offlineState.js';
-import { onServiceWorkerUpdate, registerAppServiceWorker } from './registerServiceWorker.js';
-import { onServiceWorkerMessage } from './serviceWorkerMessages.js';
+import { useAppCapabilityStore } from '../store/appCapabilityStore';
+import { useOfflineStatusStore } from '../store/offlineStatusStore';
+import { detectPwaCapabilities } from './capabilities';
+import { startNetworkHealthPolling } from './offline/networkHealth';
+import { getOfflineState, subscribeOfflineState } from './offline/offlineState';
+import { onServiceWorkerUpdate, registerAppServiceWorker } from './registerServiceWorker';
+import { onServiceWorkerMessage } from './serviceWorkerMessages';
 
 export const NOTIFICATION_CLICK_EVENT = 'paper:notification-click';
 

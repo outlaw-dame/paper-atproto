@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import type { LiveGame } from '../sports/types.js';
+import type { LiveGame } from '../sports/types';
 
 interface LiveGameWidgetProps {
   game: LiveGame;

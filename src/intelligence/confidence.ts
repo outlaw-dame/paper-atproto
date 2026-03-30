@@ -8,8 +8,8 @@
 //
 // All functions are pure and synchronous.
 
-import type { ConfidenceState } from './llmContracts.js';
-import type { InterpolatorState, ContributionScores } from './interpolatorTypes.js';
+import type { ConfidenceState } from './llmContracts';
+import type { InterpolatorState, ContributionScores } from './interpolatorTypes';
 
 // ─── Interpretive confidence ──────────────────────────────────────────────
 

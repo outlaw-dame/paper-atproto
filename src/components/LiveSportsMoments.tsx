@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import LiveGameWidget from './LiveGameWidget.js';
-import type { LiveGame } from '../sports/types.js';
-import { sportsStore } from '../sports/sportsStore.js';
+import LiveGameWidget from './LiveGameWidget';
+import type { LiveGame } from '../sports/types';
+import { sportsStore } from '../sports/sportsStore';
 
 interface LiveSportsMomentsProps {
   maxGames?: number;

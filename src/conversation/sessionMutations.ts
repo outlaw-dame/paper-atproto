@@ -1,12 +1,12 @@
-import type { AtUri, ContributionScores } from '../intelligence/interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import { useConversationSessionStore } from './sessionStore.js';
+import type { AtUri, ContributionScores } from '../intelligence/interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import { useConversationSessionStore } from './sessionStore';
 import {
   annotateConversationQuality,
   assignDeferredReasons,
   defaultAnchorLinearPolicy,
   deriveThreadStateSignal,
-} from './sessionPolicies.js';
+} from './sessionPolicies';
 
 function recomputeSessionDerivedState(sessionId: string): void {
   const store = useConversationSessionStore.getState();

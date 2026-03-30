@@ -16,9 +16,9 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { getPushCapability } from '../pwa/push/pushCapability.js';
-import { ensurePushSubscription } from '../pwa/push/pushSubscription.js';
-import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore.js';
+import { getPushCapability } from '../pwa/push/pushCapability';
+import { ensurePushSubscription } from '../pwa/push/pushSubscription';
+import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore';
 
 const DISMISS_KEY = 'glimpse-notif-prompt-dismissed-v1';
 

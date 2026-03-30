@@ -16,12 +16,12 @@
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore.js';
-import { atpMutate } from '../lib/atproto/client.js';
-import ComposerGuidanceBanner from './ComposerGuidanceBanner.js';
-import MentalHealthSupportBanner from './MentalHealthSupportBanner.js';
-import { buildHostedThreadComposerContext } from '../intelligence/composer/contextBuilder.js';
-import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
+import { useSessionStore } from '../store/sessionStore';
+import { atpMutate } from '../lib/atproto/client';
+import ComposerGuidanceBanner from './ComposerGuidanceBanner';
+import MentalHealthSupportBanner from './MentalHealthSupportBanner';
+import { buildHostedThreadComposerContext } from '../intelligence/composer/contextBuilder';
+import { useComposerGuidance } from '../hooks/useComposerGuidance';
 import {
   promptHero as phTokens,
   discussion as disc,
@@ -31,7 +31,7 @@ import {
   space,
   transitions,
   slideUpVariants,
-} from '../design/index.js';
+} from '../design/index';
 
 interface Props {
   onClose: () => void;

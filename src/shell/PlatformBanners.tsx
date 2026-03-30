@@ -9,16 +9,16 @@
 import React, { Suspense } from 'react';
 
 const UpdateAvailableBanner = React.lazy(
-  () => import('../components/UpdateAvailableBanner.js'),
+  () => import('../components/UpdateAvailableBanner'),
 );
 const NotificationPermissionBanner = React.lazy(
-  () => import('../components/NotificationPermissionBanner.js'),
+  () => import('../components/NotificationPermissionBanner'),
 );
 const OfflineStatusPill = React.lazy(
-  () => import('../components/OfflineStatusPill.js'),
+  () => import('../components/OfflineStatusPill'),
 );
 const InstallPromptBanner = React.lazy(
-  () => import('../components/InstallPromptBanner.js'),
+  () => import('../components/InstallPromptBanner'),
 );
 
 /**

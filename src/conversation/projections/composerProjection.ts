@@ -1,5 +1,5 @@
-import type { AtUri } from '../../intelligence/interpolatorTypes.js';
-import type { ConversationSession } from '../sessionTypes.js';
+import type { AtUri } from '../../intelligence/interpolatorTypes';
+import type { ConversationSession } from '../sessionTypes';
 
 export type ComposerContext = {
   mode: 'post' | 'reply' | 'hosted_thread';

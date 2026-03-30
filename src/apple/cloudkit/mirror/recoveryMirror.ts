@@ -11,9 +11,9 @@
 //
 // Feature flag: VITE_ENABLE_DRAFT_RECOVERY_MIRROR=true must be set.
 
-import { getCloudKitClient } from '../client.js';
-import { draftRecoveryRecordName } from '../types.js';
-import type { DraftRecoveryRecord } from '../types.js';
+import { getCloudKitClient } from '../client';
+import { draftRecoveryRecordName } from '../types';
+import type { DraftRecoveryRecord } from '../types';
 
 const ENABLED = import.meta.env.VITE_ENABLE_DRAFT_RECOVERY_MIRROR === 'true';
 const ALGORITHM = 'AES-GCM';

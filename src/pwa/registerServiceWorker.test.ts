@@ -4,7 +4,7 @@ import {
   deriveServiceWorkerScope,
   hasSupportedServiceWorkerContentType,
   normalizeServiceWorkerBasePath,
-} from './registerServiceWorker.js';
+} from './registerServiceWorker';
 
 describe('registerServiceWorker helpers', () => {
   it('normalizes configured base paths into safe app scopes', () => {

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { FilterContext, KeywordFilterRule, FilterAction } from '../lib/contentFilters/types.js';
+import type { FilterContext, KeywordFilterRule, FilterAction } from '../lib/contentFilters/types';
 
 type NewFilterRule = {
   phrase: string;

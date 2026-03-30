@@ -3,7 +3,7 @@
 // Used for UI decisions and safe fetch wrappers.
 // Default is network-only unless a URL matches an explicit allowlist entry.
 
-import type { CacheStrategy } from './types.js';
+import type { CacheStrategy } from './types';
 
 const CACHEABLE_SAME_ORIGIN_PATTERNS: RegExp[] = [
   /\/paper-atproto\/assets\/[^/]+\.(js|css)$/,

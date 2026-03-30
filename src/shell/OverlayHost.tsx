@@ -3,13 +3,13 @@
 
 import React, { useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { useUiStore } from '../store/uiStore.js';
-import { markFeatureMounted, markFeatureOpen } from '../perf/prefetchTelemetry.js';
+import { useUiStore } from '../store/uiStore';
+import { markFeatureMounted, markFeatureOpen } from '../perf/prefetchTelemetry';
 
-const ComposeSheet = React.lazy(() => import('../components/ComposeSheet.js'));
-const StoryMode = React.lazy(() => import('../components/StoryMode.js'));
-const SearchStoryScreen = React.lazy(() => import('../components/SearchStoryScreen.js'));
-const PromptComposer = React.lazy(() => import('../components/PromptComposer.js'));
+const ComposeSheet = React.lazy(() => import('../components/ComposeSheet'));
+const StoryMode = React.lazy(() => import('../components/StoryMode'));
+const SearchStoryScreen = React.lazy(() => import('../components/SearchStoryScreen'));
+const PromptComposer = React.lazy(() => import('../components/PromptComposer'));
 
 function MountTracker({
   feature,

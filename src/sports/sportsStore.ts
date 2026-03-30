@@ -1,4 +1,4 @@
-import type { LiveGame, LiveEventUpdate } from './types.js';
+import type { LiveGame, LiveEventUpdate } from './types';
 
 type SportsApiProvider = 'espn' | 'nfl' | 'nba' | 'mock';
 type EspnLeague = 'nba' | 'nfl' | 'mlb' | 'nhl';

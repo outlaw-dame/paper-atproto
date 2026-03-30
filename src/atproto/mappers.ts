@@ -9,17 +9,17 @@ import {
   AppBskyActorDefs,
   AppBskyNotificationListNotifications,
 } from '@atproto/api';
-import type { MockPost, ChipType } from '../data/mockData.js';
-import { resolveFacets } from '../lib/resolver/atproto.js';
-import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia.js';
+import type { MockPost, ChipType } from '../data/mockData';
+import { resolveFacets } from '../lib/resolver/atproto';
+import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia';
 import {
   asTrimmedString,
   contentUnionToText,
   extractRecordDisplayText,
   hasDisplayableRecordContent,
-} from '../lib/atproto/recordContent.js';
+} from '../lib/atproto/recordContent';
 
-export { hasDisplayableRecordContent } from '../lib/atproto/recordContent.js';
+export { hasDisplayableRecordContent } from '../lib/atproto/recordContent';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 

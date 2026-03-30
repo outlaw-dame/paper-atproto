@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useMiniPlayer } from '../context/MiniPlayerContext.js';
-import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
+import { useMiniPlayer } from '../context/MiniPlayerContext';
+import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback';
 import {
   describeSourceKind,
   describeSupportLevel,
@@ -8,7 +8,7 @@ import {
   getLikelySourceSupport,
   getLikelyUnsupportedReason,
   getVideoPlaybackCapabilities,
-} from '../lib/mediaSupport.js';
+} from '../lib/mediaSupport';
 
 interface VideoPlayerProps {
   url: string;

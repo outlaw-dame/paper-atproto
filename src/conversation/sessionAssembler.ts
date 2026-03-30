@@ -1,41 +1,41 @@
-import { atpCall } from '../lib/atproto/client.js';
-import { isAtUri, resolveThread } from '../lib/resolver/atproto.js';
+import { atpCall } from '../lib/atproto/client';
+import { isAtUri, resolveThread } from '../lib/resolver/atproto';
 import {
   runVerifiedThreadPipeline,
   nodeToThreadPost,
-} from '../intelligence/index.js';
-import { THREAD_RETRY_DEFAULTS } from '../intelligence/retry.js';
-import { buildThreadStateForWriter } from '../intelligence/writerInput.js';
-import { callInterpolatorWriter } from '../intelligence/modelClient.js';
-import { translateWriterInput } from '../lib/i18n/threadTranslation.js';
-import type { VerificationProviders } from '../intelligence/verification/types.js';
-import type { VerificationCache } from '../intelligence/verification/cache.js';
-import { buildSessionGraph } from './sessionGraph.js';
-import { useConversationSessionStore } from './sessionStore.js';
-import { useContentFilterStore } from '../store/contentFilterStore.js';
+} from '../intelligence/index';
+import { THREAD_RETRY_DEFAULTS } from '../intelligence/retry';
+import { buildThreadStateForWriter } from '../intelligence/writerInput';
+import { callInterpolatorWriter } from '../intelligence/modelClient';
+import { translateWriterInput } from '../lib/i18n/threadTranslation';
+import type { VerificationProviders } from '../intelligence/verification/types';
+import type { VerificationCache } from '../intelligence/verification/cache';
+import { buildSessionGraph } from './sessionGraph';
+import { useConversationSessionStore } from './sessionStore';
+import { useContentFilterStore } from '../store/contentFilterStore';
 import {
   activeRulesForContext,
   getKeywordMatches,
   getSemanticMatches,
   searchableTextForPost,
-} from '../lib/contentFilters/match.js';
+} from '../lib/contentFilters/match';
 import {
   annotateConversationQuality,
   assignDeferredReasons,
   defaultAnchorLinearPolicy,
   deriveThreadStateSignal,
-} from './sessionPolicies.js';
+} from './sessionPolicies';
 import type {
   AtUri,
   ThreadPost,
-} from '../intelligence/interpolatorTypes.js';
-import type { MockPost } from '../data/mockData.js';
+} from '../intelligence/interpolatorTypes';
+import type { MockPost } from '../data/mockData';
 import type {
   ConversationNode,
   ConversationDirection,
   ConversationSession,
   SessionTranslationState,
-} from './sessionTypes.js';
+} from './sessionTypes';
 
 type ThreadAgent = {
   getPostThread: (input: { uri: string; depth: number }) => Promise<unknown>;

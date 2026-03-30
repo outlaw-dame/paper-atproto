@@ -1,6 +1,6 @@
-import { inferenceClient } from '../../workers/InferenceClient.js';
-import type { MockPost } from '../../data/mockData.js';
-import type { FilterContext, KeywordFilterRule, PostFilterMatch } from './types.js';
+import { inferenceClient } from '../../workers/InferenceClient';
+import type { MockPost } from '../../data/mockData';
+import type { FilterContext, KeywordFilterRule, PostFilterMatch } from './types';
 
 const EMBEDDING_CACHE_MAX = 1_000;
 const embeddingCache = new Map<string, number[]>();

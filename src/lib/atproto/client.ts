@@ -10,8 +10,8 @@
 //   import { atpCall } from '../lib/atproto/client.js';
 //   const feed = await atpCall(() => agent.getTimeline({ limit: 30 }), { signal });
 
-import { withRetry, type RetryOptions } from './retry.js';
-import { normalizeError, type AtpError } from './errors.js';
+import { withRetry, type RetryOptions } from './retry';
+import { normalizeError, type AtpError } from './errors';
 
 export type { AtpError };
 

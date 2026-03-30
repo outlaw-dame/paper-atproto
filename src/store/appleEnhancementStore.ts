@@ -4,7 +4,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { AppleEnhancementAvailability } from '../apple/types.js';
+import type { AppleEnhancementAvailability } from '../apple/types';
 
 type CloudKitSyncState = 'idle' | 'syncing' | 'error' | 'unavailable';
 

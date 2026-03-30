@@ -9,25 +9,25 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore.js';
-import { atpCall, atpMutate } from '../lib/atproto/client.js';
-import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
-import type { MockPost } from '../data/mockData.js';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall, atpMutate } from '../lib/atproto/client';
+import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import type { MockPost } from '../data/mockData';
 import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
-import type { StoryEntry } from '../App.js';
-import { useUiStore } from '../store/uiStore.js';
-import { useTranslationStore } from '../store/translationStore.js';
-import { useActivityStore } from '../store/activityStore.js';
-import { translationClient } from '../lib/i18n/client.js';
-import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
-import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import { feedService } from '../feeds.js';
-import { hybridSearch } from '../search.js';
-import { searchPodcastIndex } from '../lib/podcastIndexClient.js';
-import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import type { StoryEntry } from '../App';
+import { useUiStore } from '../store/uiStore';
+import { useTranslationStore } from '../store/translationStore';
+import { useActivityStore } from '../store/activityStore';
+import { translationClient } from '../lib/i18n/client';
+import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import { warnMatchReasons } from '../lib/contentFilters/presentation';
+import { feedService } from '../feeds';
+import { hybridSearch } from '../search';
+import { searchPodcastIndex } from '../lib/podcastIndexClient';
+import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -44,12 +44,12 @@ import {
   transitions,
   fadeVariants,
   slideUpVariants,
-} from '../design/index.js';
-import LiveSportsMoments from '../components/LiveSportsMoments.js';
-import { sportsStore } from '../sports/sportsStore.js';
-import { sportsFeedService } from '../services/sportsFeed.js';
-import { WriterEntitySheet, EntityChip } from '../components/EntitySheet.js';
-import type { WriterEntity } from '../intelligence/llmContracts.js';
+} from '../design/index';
+import LiveSportsMoments from '../components/LiveSportsMoments';
+import { sportsStore } from '../sports/sportsStore';
+import { sportsFeedService } from '../services/sportsFeed';
+import { WriterEntitySheet, EntityChip } from '../components/EntitySheet';
+import type { WriterEntity } from '../intelligence/llmContracts';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;

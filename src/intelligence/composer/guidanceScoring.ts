@@ -1,6 +1,6 @@
-import type { SentimentResult } from '../../lib/sentiment.js';
-import type { AbuseModelResult } from '../../lib/abuseModel.js';
-import type { ComposerMLSignals } from './classifierContracts.js';
+import type { SentimentResult } from '../../lib/sentiment';
+import type { AbuseModelResult } from '../../lib/abuseModel';
+import type { ComposerMLSignals } from './classifierContracts';
 import type {
   ComposerGuidanceLevel,
   ComposerGuidanceResult,
@@ -8,7 +8,7 @@ import type {
   ComposerGuidanceTool,
   ComposerGuidanceUiState,
   ComposerMode,
-} from './types.js';
+} from './types';
 
 const WARNING_NEGATIVE_THRESHOLD = 0.65;
 const CAUTION_NEGATIVE_THRESHOLD = 0.42;

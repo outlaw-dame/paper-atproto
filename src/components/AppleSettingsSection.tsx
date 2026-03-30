@@ -11,11 +11,11 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useAppleEnhancementStore } from '../store/appleEnhancementStore.js';
-import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore.js';
-import { getPushCapability } from '../pwa/push/pushCapability.js';
-import { ensurePushSubscription, disablePushSubscription } from '../pwa/push/pushSubscription.js';
-import { initializeCloudKit } from '../apple/cloudkit/auth.js';
+import { useAppleEnhancementStore } from '../store/appleEnhancementStore';
+import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore';
+import { getPushCapability } from '../pwa/push/pushCapability';
+import { ensurePushSubscription, disablePushSubscription } from '../pwa/push/pushSubscription';
+import { initializeCloudKit } from '../apple/cloudkit/auth';
 
 // ─── Toggle switch ────────────────────────────────────────────────────────────
 

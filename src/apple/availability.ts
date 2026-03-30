@@ -3,8 +3,8 @@
 // Returns false for uncertain or unavailable features.
 // Never throws — failure here must never degrade core UX.
 
-import type { AppleEnhancementAvailability } from './types.js';
-import { canLoadCloudKitScript, isCloudKitLoaded } from './cloudkit/loader.js';
+import type { AppleEnhancementAvailability } from './types';
+import { canLoadCloudKitScript, isCloudKitLoaded } from './cloudkit/loader';
 
 export function detectAppleEnhancementAvailability(): AppleEnhancementAvailability {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') {

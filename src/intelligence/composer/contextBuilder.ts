@@ -1,5 +1,5 @@
-import type { AnalyzeOptions } from '../../lib/sentiment.js';
-import type { ComposerContext } from './types.js';
+import type { AnalyzeOptions } from '../../lib/sentiment';
+import type { ComposerContext } from './types';
 
 interface BuildReplyComposerContextInput {
   draftText: string;

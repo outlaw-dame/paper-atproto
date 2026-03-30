@@ -5,8 +5,8 @@
 // Security: never persist raw subscription endpoint in plaintext beyond what
 // is operationally needed; hash for local deduplication only.
 
-import type { PushSubscriptionSyncResult } from './pushTypes.js';
-import { getPushCapability } from './pushCapability.js';
+import type { PushSubscriptionSyncResult } from './pushTypes';
+import { getPushCapability } from './pushCapability';
 
 // The VAPID public key must be configured via environment variable.
 const VAPID_PUBLIC_KEY =

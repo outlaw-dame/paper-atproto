@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getPriorityResources, type MentalHealthResource } from '../lib/mentalHealthResources.js';
+import { getPriorityResources, type MentalHealthResource } from '../lib/mentalHealthResources';
 
 interface Props {
   category?: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation';

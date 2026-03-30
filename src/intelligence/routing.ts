@@ -2,7 +2,7 @@
 // Multimodal score, summary mode routing, and inclusion threshold helpers.
 // All functions are pure and synchronous.
 
-import type { SummaryMode } from './llmContracts.js';
+import type { SummaryMode } from './llmContracts';
 
 // ─── Multimodal routing ───────────────────────────────────────────────────
 

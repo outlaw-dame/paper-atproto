@@ -1,4 +1,4 @@
-import type { ThreadNode } from '../lib/resolver/atproto.js';
+import type { ThreadNode } from '../lib/resolver/atproto';
 import type {
   AtUri,
   ContributionRole,
@@ -6,14 +6,14 @@ import type {
   ThreadInterpolatorState,
   ContributorImpact,
   EntityImpact,
-} from '../intelligence/interpolatorTypes.js';
-import type { VerificationOutcome } from '../intelligence/verification/index.js';
+} from '../intelligence/interpolatorTypes';
+import type { VerificationOutcome } from '../intelligence/verification/index';
 import type {
   ConfidenceState,
   SummaryMode,
   InterpolatorWriteResult,
   WriterEntity,
-} from '../intelligence/llmContracts.js';
+} from '../intelligence/llmContracts';
 
 export type ConversationSessionId = AtUri;
 

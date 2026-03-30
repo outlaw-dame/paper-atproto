@@ -10,7 +10,7 @@ import {
   AppBskyEmbedRecord,
   AppBskyEmbedRecordWithMedia,
 } from '@atproto/api';
-import type { MockPost, ChipType } from '../data/mockData.js';
+import type { MockPost, ChipType } from '../data/mockData';
 
 /**
  * A simplified, recursive function to map a `PostView` to a `MockPost`.

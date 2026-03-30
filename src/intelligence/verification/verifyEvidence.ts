@@ -7,8 +7,8 @@ import type {
   VerificationProviders,
   VerificationReason,
   VerificationRequest,
-} from './types.js';
-import { InMemoryVerificationCache, verificationCacheKey, type VerificationCache } from './cache.js';
+} from './types';
+import { InMemoryVerificationCache, verificationCacheKey, type VerificationCache } from './cache';
 import {
   buildReasons,
   clamp01,
@@ -17,13 +17,13 @@ import {
   sanitizeVerificationRequest,
   sourceTypeQuality,
   specificityScore,
-} from './utils.js';
+} from './utils';
 import {
   HeuristicClaimExtractorProvider,
   NoopFactCheckProvider,
   NoopGroundingProvider,
   NoopMediaVerificationProvider,
-} from './noopProviders.js';
+} from './noopProviders';
 
 function quoteFidelityScore(input: VerificationRequest): number {
   const lower = input.text.toLowerCase();

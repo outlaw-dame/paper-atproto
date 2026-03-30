@@ -1,4 +1,4 @@
-import type { MockPost } from '../../data/mockData.js';
+import type { MockPost } from '../../data/mockData';
 
 const CATEGORY_KEYWORDS = {
   sexual: ['porn', 'sexual', 'sex', 'adult'] as const,

@@ -7,8 +7,8 @@ import type {
   InlineTranslateResponse,
   LanguageDetectionResult,
   TranslationResult,
-} from './types.js';
-import { getConfiguredApiBaseUrl, resolveApiUrl } from '../apiBase.js';
+} from './types';
+import { getConfiguredApiBaseUrl, resolveApiUrl } from '../apiBase';
 
 export type TranslationHttpClientConfig = {
   baseUrl: string;

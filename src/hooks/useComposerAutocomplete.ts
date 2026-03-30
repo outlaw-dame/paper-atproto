@@ -13,7 +13,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { BskyAgent } from '@atproto/api';
-import { atpCall } from '../lib/atproto/client.js';
+import { atpCall } from '../lib/atproto/client';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 

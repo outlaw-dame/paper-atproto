@@ -1,10 +1,10 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Card } from 'konsta/react';
-import { Markdown } from './Markdown.js';
-import { Gif } from './Gif.js';
-import { LinkPreview } from './LinkPreview.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { Markdown } from './Markdown';
+import { Gif } from './Gif';
+import { LinkPreview } from './LinkPreview';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
 
 interface FeedItemProps {
   post: {

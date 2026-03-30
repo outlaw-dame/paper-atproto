@@ -5,8 +5,8 @@
 // Embeddings are generated via the inference worker (off main thread).
 // This module no longer imports from @xenova/transformers directly.
 
-import { paperDB } from './db.js';
-import { inferenceClient } from './workers/InferenceClient.js';
+import { paperDB } from './db';
+import { inferenceClient } from './workers/InferenceClient';
 
 export class HybridSearch {
   /**

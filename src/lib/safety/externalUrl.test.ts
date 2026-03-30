@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from './externalUrl.js';
+import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from './externalUrl';
 
 describe('externalUrl safety', () => {
   it('accepts http and https urls', () => {

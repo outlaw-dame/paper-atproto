@@ -3,9 +3,9 @@
 // Last-write-wins — acceptable for convenience-only state.
 // Thread URIs are hashed to keep record names bounded.
 
-import { getCloudKitClient } from '../client.js';
-import { readposRecordName } from '../types.js';
-import type { ReadingPositionRecord } from '../types.js';
+import { getCloudKitClient } from '../client';
+import { readposRecordName } from '../types';
+import type { ReadingPositionRecord } from '../types';
 
 export async function mirrorReadingPosition(
   userDid: string,

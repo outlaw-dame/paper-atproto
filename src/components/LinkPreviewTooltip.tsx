@@ -1,8 +1,8 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { fetchOGData, type OGMetadata } from '../og.js';
-import { checkUrlSafety, type UrlSafetyVerdict } from '../lib/safety/urlSafety.js';
-import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl.js';
+import { fetchOGData, type OGMetadata } from '../og';
+import { checkUrlSafety, type UrlSafetyVerdict } from '../lib/safety/urlSafety';
+import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl';
 
 /**
  * Wraps an inline link and shows a rich OG preview card on hover.

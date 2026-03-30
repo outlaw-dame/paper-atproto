@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MockPost } from '../../data/mockData.js';
-import { useContentFilterStore } from '../../store/contentFilterStore.js';
-import { useContentFilterMetricsStore } from '../../store/contentFilterMetricsStore.js';
-import type { FilterContext, PostFilterMatch } from './types.js';
-import { activeRulesForContext, getKeywordMatches, getSemanticMatches, searchableTextForPost } from './match.js';
+import type { MockPost } from '../../data/mockData';
+import { useContentFilterStore } from '../../store/contentFilterStore';
+import { useContentFilterMetricsStore } from '../../store/contentFilterMetricsStore';
+import type { FilterContext, PostFilterMatch } from './types';
+import { activeRulesForContext, getKeywordMatches, getSemanticMatches, searchableTextForPost } from './match';
 
 type ResultByPostId = Record<string, PostFilterMatch[]>;
 

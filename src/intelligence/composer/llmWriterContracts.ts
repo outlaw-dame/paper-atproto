@@ -2,7 +2,7 @@ import type {
   ComposerGuidanceScores,
   ComposerGuidanceUiState,
   ComposerMode,
-} from './types.js';
+} from './types';
 
 export interface ComposerGuidanceWriteRequest {
   mode: ComposerMode;

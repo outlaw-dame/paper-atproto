@@ -13,8 +13,8 @@
 // Both Bluesky API responses are short-lived cached in memory.
 
 import type { BskyAgent } from '@atproto/api';
-import { atpCall } from '../atproto/client.js';
-import { inferenceClient } from '../../workers/InferenceClient.js';
+import { atpCall } from '../atproto/client';
+import { inferenceClient } from '../../workers/InferenceClient';
 
 // ─── Cache ─────────────────────────────────────────────────────────────────
 interface CacheEntry<T> {

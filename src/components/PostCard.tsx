@@ -3,26 +3,26 @@ import InlineTranslation, { TranslateIcon } from './InlineTranslation';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { MockPost } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
-import { fetchOGData } from '../og.js';
+import { fetchOGData } from '../og';
 import VideoPlayer from './VideoPlayer';
 import TwemojiText from './TwemojiText';
-import { useTranslationStore } from '../store/translationStore.js';
-import { translationClient } from '../lib/i18n/client.js';
-import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
-import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
-import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge.js';
-import { sportsFeedService } from '../services/sportsFeed.js';
-import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
-import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
-import { useUiStore } from '../store/uiStore.js';
+import { useTranslationStore } from '../store/translationStore';
+import { translationClient } from '../lib/i18n/client';
+import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
+import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge';
+import { sportsFeedService } from '../services/sportsFeed';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
+import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { useUiStore } from '../store/uiStore';
 import {
   recordSensitiveMediaImpression,
   recordSensitiveMediaReveal,
   recordSensitiveMediaRehide,
-} from '../perf/sensitiveMediaTelemetry.js';
-import { openExternalUrl } from '../lib/safety/externalUrl.js';
-import type { TimelineConversationHint } from '../conversation/projections/timelineProjection.js';
+} from '../perf/sensitiveMediaTelemetry';
+import { openExternalUrl } from '../lib/safety/externalUrl';
+import type { TimelineConversationHint } from '../conversation/projections/timelineProjection';
 
 interface PostCardProps {
   post: MockPost;

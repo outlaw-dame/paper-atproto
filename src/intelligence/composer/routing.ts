@@ -1,4 +1,4 @@
-import type { ComposerGuidanceResult, ComposerMode } from './types.js';
+import type { ComposerGuidanceResult, ComposerMode } from './types';
 
 const MODEL_TOOLS = new Set([
   'zero-shot-tone',

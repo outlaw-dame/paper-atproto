@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useAppCapabilityStore } from '../store/appCapabilityStore.js';
+import { useAppCapabilityStore } from '../store/appCapabilityStore';
 
 export default function UpdateAvailableBanner() {
   const swState = useAppCapabilityStore((s) => s.swState);
@@ -15,7 +15,7 @@ export default function UpdateAvailableBanner() {
 
   const handleUpdate = React.useCallback(async () => {
     try {
-      const { activatePendingUpdate } = await import('../pwa/registerServiceWorker.js');
+      const { activatePendingUpdate } = await import('../pwa/registerServiceWorker');
       activatePendingUpdate();
       // Brief pause to allow the SW to activate before reload
       await new Promise<void>((r) => setTimeout(r, 300));

@@ -2,10 +2,10 @@
 // Selects media items from a thread and builds MediaAnalysisRequests.
 // Also merges returned MediaAnalysisResult back into WriterMediaFindings.
 
-import type { MediaAnalysisRequest, WriterMediaFinding, MediaAnalysisResult } from './llmContracts.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import type { ContributionScores } from './interpolatorTypes.js';
-import { computeMultimodalScore, type MultimodalSignals } from './routing.js';
+import type { MediaAnalysisRequest, WriterMediaFinding, MediaAnalysisResult } from './llmContracts';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import type { ContributionScores } from './interpolatorTypes';
+import { computeMultimodalScore, type MultimodalSignals } from './routing';
 
 // ─── detectMediaSignals ───────────────────────────────────────────────────
 // Compute multimodal routing signals from the resolved thread.
@@ -125,4 +125,4 @@ export function mergeMediaResults(results: MediaAnalysisResult[]): WriterMediaFi
 }
 
 // ─── Re-export shouldRunMultimodal for convenience ────────────────────────
-export { computeMultimodalScore, shouldRunMultimodal } from './routing.js';
+export { computeMultimodalScore, shouldRunMultimodal } from './routing';

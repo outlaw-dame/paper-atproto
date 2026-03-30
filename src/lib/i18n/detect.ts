@@ -1,5 +1,5 @@
-import type { LanguageDetectionResult } from './types.js';
-import { normalizeLanguageTag } from './normalize.js';
+import type { LanguageDetectionResult } from './types';
+import { normalizeLanguageTag } from './normalize';
 
 const cjkRegex = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 const arabicRegex = /[\u0600-\u06ff]/;

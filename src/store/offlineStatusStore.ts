@@ -3,7 +3,7 @@
 // Driven by offlineState.ts subscriptions — not updated directly by components.
 
 import { create } from 'zustand';
-import type { NetworkState, CacheProvenance } from '../pwa/types.js';
+import type { NetworkState, CacheProvenance } from '../pwa/types';
 
 interface OfflineStatusState {
   network: NetworkState;

@@ -1,6 +1,6 @@
-import { callComposerGuidanceWriter } from '../modelClient.js';
-import type { ComposerGuidanceWriteRequest } from './llmWriterContracts.js';
-import type { ComposerContext, ComposerGuidanceResult } from './types.js';
+import { callComposerGuidanceWriter } from '../modelClient';
+import type { ComposerGuidanceWriteRequest } from './llmWriterContracts';
+import type { ComposerContext, ComposerGuidanceResult } from './types';
 
 function uniq(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { MockPost } from '../data/mockData.js';
+import type { MockPost } from '../data/mockData';
 
 /**
  * Feed Cache Store — Implements Ice Cubes-like feed position persistence.

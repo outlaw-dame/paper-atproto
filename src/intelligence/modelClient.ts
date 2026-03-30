@@ -10,12 +10,12 @@ import type {
   MediaAnalysisResult,
   ExploreSynopsisRequest,
   ExploreSynopsisResult,
-} from './llmContracts.js';
+} from './llmContracts';
 import type {
   ComposerGuidanceWriteRequest,
   ComposerGuidanceWriteResult,
-} from './composer/llmWriterContracts.js';
-import { getConfiguredApiBaseUrl, resolveApiUrl } from '../lib/apiBase.js';
+} from './composer/llmWriterContracts';
+import { getConfiguredApiBaseUrl, resolveApiUrl } from '../lib/apiBase';
 
 // ─── Config ───────────────────────────────────────────────────────────────
 const BASE_URL = getConfiguredApiBaseUrl(

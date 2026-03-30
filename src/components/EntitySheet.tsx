@@ -7,17 +7,17 @@
 
 import React, { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { EntityEntry, StoryEntry } from '../App.js';
-import type { WriterEntity } from '../intelligence/llmContracts.js';
-import type { MockPost } from '../data/mockData.js';
-import { MOCK_POSTS } from '../data/mockData.js';
+import type { EntityEntry, StoryEntry } from '../App';
+import type { WriterEntity } from '../intelligence/llmContracts';
+import type { MockPost } from '../data/mockData';
+import { MOCK_POSTS } from '../data/mockData';
 import {
   discovery as disc,
   accent,
   type as typeScale,
   radius,
   space,
-} from '../design/index.js';
+} from '../design/index';
 
 // ─── Shared ───────────────────────────────────────────────────────────────
 

@@ -10,9 +10,9 @@ import type {
   InterpolatorState,
   ContributionScore,
   EntityImpact,
-} from './interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import { computeContributorImpacts } from './scoreThread.js';
+} from './interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import { computeContributorImpacts } from './scoreThread';
 
 // ─── synthesiseSummary ────────────────────────────────────────────────────
 // Builds a single cohesive prose sentence that explains what the thread is
@@ -35,7 +35,7 @@ function topicPhrase(rootText: string): string {
 function synthesiseSummary(
   rootText: string,
   entityLandscape: EntityImpact[],
-  topContributors: ReturnType<typeof import('./scoreThread.js').computeContributorImpacts>,
+  topContributors: ReturnType<typeof import('./scoreThread').computeContributorImpacts>,
   clarificationsAdded: string[],
   newAnglesAdded: string[],
   sourceSupportPresent: boolean,

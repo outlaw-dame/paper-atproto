@@ -6,7 +6,7 @@
 // the store manages expiry and useTimedMuteWatcher auto-unmutes when expired.
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useSessionStore } from '../store/sessionStore.js';
+import { useSessionStore } from '../store/sessionStore';
 import {
   useGetBlocks,
   useGetMutes,
@@ -16,14 +16,14 @@ import {
   useUnblockActor,
   useUnmuteActor,
   useMuteActor,
-} from '../lib/atproto/queries.js';
+} from '../lib/atproto/queries';
 import {
   useModerationStore,
   formatMuteExpiry,
   MUTE_DURATIONS,
   type MuteDuration,
-} from '../store/moderationStore.js';
-import { atpCall } from '../lib/atproto/client.js';
+} from '../store/moderationStore';
+import { atpCall } from '../lib/atproto/client';
 
 // ─── Styles (inline — consistent with the rest of the settings sheet) ─────
 const styles = {

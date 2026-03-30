@@ -1,7 +1,7 @@
 import React from 'react';
-import { syncAppBadge, clearAppBadgeSafe } from '../pwa/badge/setBadge.js';
-import { useAppCapabilityStore } from '../store/appCapabilityStore.js';
-import { useUiStore } from '../store/uiStore.js';
+import { syncAppBadge, clearAppBadgeSafe } from '../pwa/badge/setBadge';
+import { useAppCapabilityStore } from '../store/appCapabilityStore';
+import { useUiStore } from '../store/uiStore';
 
 export default function BadgeSyncBridge() {
   const capabilities = useAppCapabilityStore((state) => state.capabilities);
