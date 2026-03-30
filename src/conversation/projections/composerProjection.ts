@@ -1,5 +1,12 @@
 import type { AtUri } from '../../intelligence/interpolatorTypes';
 import type { ConversationSession } from '../sessionTypes';
+import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
+import {
+  humanizeInterpretiveReason,
+} from '../interpretive/interpretiveExplanation';
+import {
+  deriveDisagreementType,
+} from '../interpretive/interpretiveScoring';
 
 export type ComposerContext = {
   mode: 'post' | 'reply' | 'hosted_thread';
@@ -25,6 +32,11 @@ export type ComposerContext = {
     threadSummary?: string;
     replyContextSummary?: string;
     conversationHeatSummary?: string;
+    epistemicSummary?: {
+      disagreementType: 'factual' | 'interpretive' | 'value-based';
+      missingContextHints: string[];
+      confidenceWarnings: string[];
+    };
   };
   threadState?: {
     dominantTone?: string;
@@ -58,9 +70,11 @@ export function projectComposerContext(params: {
     ? (parent.replies ?? []).map((reply) => reply.text).slice(0, 8)
     : [];
 
+  const interpolatorSurface = buildInterpolatorSurfaceProjection(session);
   const threadSummary =
-    session.interpretation.writerResult?.collapsedSummary
-    ?? session.interpretation.interpolator?.summaryText;
+    interpolatorSurface.writerSummary
+    ?? interpolatorSurface.summaryText;
+  const interpretiveExplanation = session.interpretation.interpretiveExplanation;
 
   const directParentSummary = parent
     ? summarizeParentForComposer(parent.text)
@@ -100,6 +114,23 @@ export function projectComposerContext(params: {
       ...(replyContextSummary ? { replyContextSummary } : {}),
       conversationHeatSummary:
         `Tone: ${session.interpretation.threadState?.dominantTone ?? 'forming'}, phase: ${session.interpretation.threadState?.conversationPhase ?? 'active'}, heat: ${Math.round((session.trajectory.heatLevel ?? 0) * 100)}%`,
+      ...(interpretiveExplanation
+        ? {
+            epistemicSummary: {
+              disagreementType: deriveDisagreementType(interpretiveExplanation),
+              missingContextHints: interpretiveExplanation.degradedBy
+                .filter((reason) => {
+                  return reason === 'missing_context'
+                    || reason === 'coverage_gap'
+                    || reason === 'narrow_perspective'
+                    || reason === 'shallow_thread';
+                })
+                .slice(0, 3)
+                .map(humanizeInterpretiveReason),
+              confidenceWarnings: buildComposerWarnings(interpretiveExplanation),
+            },
+          }
+        : {}),
     },
     threadState: {
       ...(session.interpretation.threadState?.dominantTone
@@ -152,4 +183,32 @@ function buildReplyContextSummary(
   if (total <= 2) return 'Only light nearby reply activity.';
   if (total <= 6) return 'There is moderate nearby reply activity.';
   return 'There is active nearby reply traffic, so clarity and tone matter more.';
+}
+
+function buildComposerWarnings(
+  explanation: NonNullable<ConversationSession['interpretation']['interpretiveExplanation']>,
+): string[] {
+  const warnings: string[] = [];
+
+  if (explanation.mode !== 'normal') {
+    warnings.push(
+      explanation.mode === 'descriptive_fallback'
+        ? 'Stay close to observable claims and avoid broad causal framing.'
+        : 'Keep the reply grounded in visible facts because thread understanding is still limited.',
+    );
+  }
+
+  warnings.push(
+    ...explanation.degradedBy
+      .filter((reason) => {
+        return reason === 'limited_evidence'
+          || reason === 'high_ambiguity'
+          || reason === 'unresolved_contradiction'
+          || reason === 'coverage_gap';
+      })
+      .slice(0, 2)
+      .map(humanizeInterpretiveReason),
+  );
+
+  return warnings;
 }

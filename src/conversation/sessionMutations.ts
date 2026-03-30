@@ -7,6 +7,7 @@ import {
   defaultAnchorLinearPolicy,
   deriveThreadStateSignal,
 } from './sessionPolicies';
+import { applyInterpretiveConfidence } from './interpretive/interpretiveScoring';
 
 function recomputeSessionDerivedState(sessionId: string): void {
   const store = useConversationSessionStore.getState();
@@ -14,6 +15,7 @@ function recomputeSessionDerivedState(sessionId: string): void {
   if (!session) return;
 
   let next = annotateConversationQuality(session);
+  next = applyInterpretiveConfidence(next);
   next = {
     ...next,
     interpretation: {

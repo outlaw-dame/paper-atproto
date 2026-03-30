@@ -73,6 +73,8 @@ import {
 import { useConversationActions } from '../conversation/sessionActions';
 import { projectComposerContext } from '../conversation/projections/composerProjection';
 import { projectModerationDecision } from '../conversation/projections/moderationProjection';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import type { ProfileCardData } from '../types/profileCard';
 
 interface Props {
   entry: StoryEntry;
@@ -310,6 +312,60 @@ function PromptHeroCard({
   const img = post.media?.[0]?.url ?? embedThumb;
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
+  const quotedThreadProfileCardData: ProfileCardData | null = quoteEmbed?.post
+    ? (() => {
+        const quotedPost = quoteEmbed.post;
+        const did = (quotedPost.author.did ?? '').trim();
+        const handle = (quotedPost.author.handle ?? '').trim();
+        if (!did || !handle) return null;
+
+        return {
+          variant: 'thread_scoped',
+          identity: {
+            did,
+            handle,
+            ...(quotedPost.author.displayName ? { displayName: quotedPost.author.displayName } : {}),
+            ...(quotedPost.author.avatar ? { avatar: quotedPost.author.avatar } : {}),
+          },
+          social: {
+            followersCount: 0,
+            mutualsCount: 0,
+            followingCount: 0,
+            isFollowing: false,
+            canFollow: true,
+            canBlock: true,
+          },
+          starterPacks: [],
+          activity: {
+            recentPosts: quotedPost.content.trim()
+              ? [{
+                  uri: quotedPost.id,
+                  text: quotedPost.content,
+                  createdAt: quotedPost.createdAt,
+                  likeCount: quotedPost.likeCount,
+                  replyCount: quotedPost.replyCount,
+                  hasMedia: Boolean(quotedPost.media?.length || quotedPost.embed?.type === 'video' || quotedPost.embed?.type === 'external'),
+                }]
+              : [],
+            popularPosts: [],
+          },
+          threadContext: {
+            threadUri: post.id,
+            compactPosts: quotedPost.content.trim()
+              ? [{
+                  uri: quotedPost.id,
+                  text: quotedPost.content,
+                  createdAt: quotedPost.createdAt,
+                  likeCount: quotedPost.likeCount,
+                  replyCount: quotedPost.replyCount,
+                  hasMedia: Boolean(quotedPost.media?.length || quotedPost.embed?.type === 'video' || quotedPost.embed?.type === 'external'),
+                }]
+              : [],
+            roleSummary: 'Quoted in thread context',
+          },
+        };
+      })()
+    : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
   const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
   return (
@@ -543,12 +599,16 @@ function PromptHeroCard({
                   ? <img src={quoteEmbed.post.author.avatar} alt={quoteEmbed.post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: phTokens.text, fontSize: 10, fontWeight: 700 }}>{((quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
               </div>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
-              </button>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                @{quoteEmbed.post.author.handle}
-              </button>
+              <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
+                </button>
+              </ProfileCardTrigger>
+              <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  @{quoteEmbed.post.author.handle}
+                </button>
+              </ProfileCardTrigger>
             </div>
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: phTokens.meta, opacity: 0.85, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               <RichText text={quoteEmbed.post.content} baseColor={phTokens.meta} onHashtag={handleHashtagClick} />
@@ -1198,7 +1258,7 @@ function InterpolatorCard({
 }
 
 // ─── ThreadControls ───────────────────────────────────────────────────────
-const THREAD_FILTERS: ThreadFilter[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Source-backed', 'Open Story'];
+const THREAD_FILTERS: ThreadFilterOption[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Source-backed', 'Open Story'];
 
 function ThreadControls({
   active,
@@ -1460,6 +1520,64 @@ function ContributionCard({
     : score?.role === 'useful_counterpoint' ? 'counterpoint'
     : null;
   const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : node.text;
+  // Contribution cards are thread context and must use thread_scoped data.
+  const threadProfileCardData = useMemo<ProfileCardData | null>(() => {
+    const did = (node.authorDid ?? '').trim();
+    const handle = (node.authorHandle ?? '').trim();
+    if (!did || !handle) return null;
+
+    const roleLabel = score?.role && score.role !== 'unknown'
+      ? score.role.replace(/_/g, ' ')
+      : undefined;
+
+    const compactPosts = [node, ...(node.replies ?? []).slice(0, 2)]
+      .filter((entry) => (entry.text ?? '').trim().length > 0)
+      .map((entry) => ({
+        uri: entry.uri,
+        text: entry.text,
+        createdAt: entry.createdAt,
+        likeCount: entry.likeCount,
+        replyCount: entry.replyCount,
+        hasMedia:
+          entry.embed?.kind === 'images'
+          || entry.embed?.kind === 'external'
+          || entry.embed?.kind === 'recordWithMedia',
+        ...(roleLabel && entry.uri === node.uri ? { roleBadge: roleLabel } : {}),
+      }));
+
+    return {
+      variant: 'thread_scoped',
+      identity: {
+        did,
+        handle,
+        ...(node.authorName ? { displayName: node.authorName } : {}),
+        ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
+      },
+      social: {
+        followersCount: 0,
+        mutualsCount: 0,
+        followingCount: 0,
+        isFollowing: !!isFollowed,
+        canFollow: true,
+        canBlock: true,
+      },
+      starterPacks: [],
+      activity: {
+        recentPosts: compactPosts.slice(0, 2),
+        popularPosts: [],
+      },
+      threadContext: {
+        threadUri: rootUri,
+        compactPosts: compactPosts.slice(0, 3),
+        ...(roleLabel ? { roleSummary: roleLabel } : {}),
+        ...(score?.sourceSupport && score.sourceSupport > 0.5
+          ? { notableAction: 'Introduced supporting evidence' }
+          : score?.clarificationValue && score.clarificationValue > 0.5
+            ? { notableAction: 'Added useful clarification' }
+            : {}),
+      },
+    };
+  }, [isFollowed, node, rootUri, score?.clarificationValue, score?.role, score?.sourceSupport]);
 
   const handleHashtagClick = (tag: string) => {
     const normalized = tag.replace(/^#/, '').trim();
@@ -1471,26 +1589,29 @@ function ContributionCard({
     <div style={cardStyle}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: contTokens.gap }}>
-        <div
-          role="button"
-          tabIndex={0}
-          className="interactive-link-surface"
-          onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
-          style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0, cursor: 'pointer' }}
-        >
-          {node.authorAvatar
-            ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
-          }
-        </div>
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
-          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
-        >
+        <ProfileCardTrigger data={threadProfileCardData} disabled={!threadProfileCardData}>
+          <div
+            role="button"
+            tabIndex={0}
+            className="interactive-link-surface"
+            onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
+            style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0, cursor: 'pointer' }}
+          >
+            {node.authorAvatar
+              ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
+            }
+          </div>
+        </ProfileCardTrigger>
+        <ProfileCardTrigger data={threadProfileCardData} disabled={!threadProfileCardData}>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
+            style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+          >
           {/* Only distinction between replies: followed accounts get fontWeight 800 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
             <p style={{
@@ -1516,8 +1637,9 @@ function ContributionCard({
               }}>OP</span>
             )}
           </div>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.authorDid || node.authorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, margin: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.authorHandle}</button>
-        </div>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.authorDid || node.authorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, margin: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.authorHandle}</button>
+          </div>
+        </ProfileCardTrigger>
         {score && score.role !== 'unknown' && <RolePill role={score.role} />}
         {score && score.usefulnessScore > 0.7 && (
           <div style={{
@@ -1611,6 +1733,50 @@ function ContributionCard({
           : null;
         if (!quoteEmbed?.quotedText) return null;
         const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDid;
+        const quotedThreadProfileCardData: ProfileCardData | null = (() => {
+          const did = (quoteEmbed.quotedAuthorDid ?? '').trim();
+          const handle = (quoteEmbed.quotedAuthorHandle ?? '').trim();
+          if (!did || !handle) return null;
+
+          return {
+            variant: 'thread_scoped',
+            identity: {
+              did,
+              handle,
+              ...(quoteEmbed.quotedAuthorDisplayName ? { displayName: quoteEmbed.quotedAuthorDisplayName } : {}),
+            },
+            social: {
+              followersCount: 0,
+              mutualsCount: 0,
+              followingCount: 0,
+              isFollowing: false,
+              canFollow: true,
+              canBlock: true,
+            },
+            starterPacks: [],
+            activity: {
+              recentPosts: quoteEmbed.quotedText.trim()
+                ? [{
+                    uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${did}`,
+                    text: quoteEmbed.quotedText,
+                    createdAt: node.createdAt,
+                  }]
+                : [],
+              popularPosts: [],
+            },
+            threadContext: {
+              threadUri: rootUri,
+              compactPosts: quoteEmbed.quotedText.trim()
+                ? [{
+                    uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${did}`,
+                    text: quoteEmbed.quotedText,
+                    createdAt: node.createdAt,
+                  }]
+                : [],
+              roleSummary: 'Quoted in thread context',
+            },
+          };
+        })();
         return (
           <div style={{
             marginBottom: contTokens.gap,
@@ -1638,13 +1804,17 @@ function ContributionCard({
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (profileTarget) void navigateToProfile(profileTarget); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: profileTarget ? 'pointer' : 'default' }}>
-                {quoteEmbed.quotedAuthorDisplayName || quoteEmbed.quotedAuthorHandle || 'Unknown'}
-              </button>
-              {quoteEmbed.quotedAuthorHandle && (
-                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); const handle = quoteEmbed.quotedAuthorHandle; if (handle) void navigateToProfile(handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                  @{quoteEmbed.quotedAuthorHandle}
+              <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (profileTarget) void navigateToProfile(profileTarget); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: profileTarget ? 'pointer' : 'default' }}>
+                  {quoteEmbed.quotedAuthorDisplayName || quoteEmbed.quotedAuthorHandle || 'Unknown'}
                 </button>
+              </ProfileCardTrigger>
+              {quoteEmbed.quotedAuthorHandle && (
+                <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                  <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); const handle = quoteEmbed.quotedAuthorHandle; if (handle) void navigateToProfile(handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                    @{quoteEmbed.quotedAuthorHandle}
+                  </button>
+                </ProfileCardTrigger>
               )}
             </div>
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -2424,26 +2594,28 @@ export default function StoryMode({ entry, onClose }: Props) {
             {rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
               <>
                 {/* InterpolatorCard */}
-                <InterpolatorCard
-                  rootUri={entry.id}
-                  summaryText={threadVm?.interpolator.summaryText ?? ''}
-                  writerSummary={threadVm?.interpolator.writerSummary}
-                  summaryMode={(threadVm?.interpolator.summaryMode ?? undefined) as SummaryMode | undefined}
-                  writerWhatChanged={interpolatedState?.writerResult?.whatChanged}
-                  writerContributorBlurbs={interpolatedState?.writerResult?.contributorBlurbs}
-                  safeEntities={interpolatedState?.writerEntities}
-                  clarifications={interpolatedState?.interpolator?.clarificationsAdded ?? []}
-                  newAngles={interpolatedState?.interpolator?.newAnglesAdded ?? []}
-                  heatLevel={threadVm?.interpolator.heatLevel ?? 0}
-                  repetitionLevel={threadVm?.interpolator.repetitionLevel ?? 0}
-                  sourceSupportPresent={threadVm?.interpolator.sourceSupportPresent ?? false}
-                  replyCount={threadVm?.hero.participantCount ?? replies.length}
-                  updatedAt={conversationSession?.interpretation.lastComputedAt ?? new Date().toISOString()}
-                  topContributors={threadVm?.interpolator.topContributors ?? []}
-                  entityLandscape={threadVm?.interpolator.entityLandscape ?? []}
-                  factualSignalPresent={threadVm?.interpolator.factualSignalPresent ?? false}
-                  onEntityTap={setActiveEntity}
-                />
+                {threadVm?.interpolator.shouldRender !== false && (
+                  <InterpolatorCard
+                    rootUri={entry.id}
+                    summaryText={threadVm?.interpolator.summaryText ?? ''}
+                    writerSummary={threadVm?.interpolator.writerSummary}
+                    summaryMode={(threadVm?.interpolator.summaryMode ?? undefined) as SummaryMode | undefined}
+                    writerWhatChanged={interpolatedState?.writerResult?.whatChanged}
+                    writerContributorBlurbs={interpolatedState?.writerResult?.contributorBlurbs}
+                    safeEntities={interpolatedState?.writerEntities}
+                    clarifications={interpolatedState?.interpolator?.clarificationsAdded ?? []}
+                    newAngles={interpolatedState?.interpolator?.newAnglesAdded ?? []}
+                    heatLevel={threadVm?.interpolator.heatLevel ?? 0}
+                    repetitionLevel={threadVm?.interpolator.repetitionLevel ?? 0}
+                    sourceSupportPresent={threadVm?.interpolator.sourceSupportPresent ?? false}
+                    replyCount={threadVm?.hero.participantCount ?? replies.length}
+                    updatedAt={conversationSession?.interpretation.lastComputedAt ?? new Date().toISOString()}
+                    topContributors={threadVm?.interpolator.topContributors ?? []}
+                    entityLandscape={threadVm?.interpolator.entityLandscape ?? []}
+                    factualSignalPresent={threadVm?.interpolator.factualSignalPresent ?? false}
+                    onEntityTap={setActiveEntity}
+                  />
+                )}
 
                 {/* ThreadControls */}
                 {(threadVm?.hero.participantCount ?? replies.length) > 0 && (

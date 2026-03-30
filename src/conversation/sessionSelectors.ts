@@ -10,6 +10,8 @@ import type { MockPost } from '../data/mockData';
 import { projectThreadView, type ThreadFilter } from './projections/threadProjection';
 import { projectComposerContext } from './projections/composerProjection';
 import type { ComposerContext } from './projections/composerProjection';
+import type { InterpretiveConfidenceExplanation } from './sessionTypes';
+import type { SummaryMode } from '../intelligence/llmContracts';
 
 export function useConversationSession(sessionId: string) {
   return useConversationSessionStore((state) => state.byId[sessionId] ?? null);
@@ -46,6 +48,7 @@ export function useConversationInterpolatedState(sessionId: string) {
         summaryMode: session.interpretation.summaryMode,
         confidence: session.interpretation.confidence,
         threadState: session.interpretation.threadState,
+        interpretiveExplanation: session.interpretation.interpretiveExplanation,
         rootVerification: session.evidence.rootVerification,
         scoresByUri: session.interpretation.scoresByUri,
         verificationByUri: session.evidence.verificationByUri,
@@ -118,7 +121,7 @@ function toFilterablePost(params: {
       ...(params.avatar ? { avatar: params.avatar } : {}),
     },
     content: params.text,
-    facets: params.facets,
+    ...(params.facets ? { facets: params.facets } : {}),
     createdAt: params.createdAt,
     likeCount: params.likeCount,
     replyCount: params.replyCount,
@@ -173,4 +176,21 @@ export function useThreadModerationProjection(sessionId: string): {
     }
     return { byUri };
   }, [matchesByUri]);
+}
+
+export function selectInterpretiveConfidence(sessionId: string): number | null {
+  return useConversationSessionStore.getState().byId[sessionId]
+    ?.interpretation.confidence?.interpretiveConfidence ?? null;
+}
+
+export function selectInterpretiveExplanation(
+  sessionId: string,
+): InterpretiveConfidenceExplanation | null {
+  return useConversationSessionStore.getState().byId[sessionId]
+    ?.interpretation.interpretiveExplanation ?? null;
+}
+
+export function selectSummaryMode(sessionId: string): SummaryMode | null {
+  return useConversationSessionStore.getState().byId[sessionId]
+    ?.interpretation.summaryMode ?? null;
 }

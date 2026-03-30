@@ -25,6 +25,7 @@ import {
   defaultAnchorLinearPolicy,
   deriveThreadStateSignal,
 } from './sessionPolicies';
+import { applyInterpretiveConfidence } from './interpretive/interpretiveScoring';
 import type {
   AtUri,
   ThreadPost,
@@ -255,6 +256,7 @@ export async function hydrateConversationSession(params: {
         summaryMode: pipeline.summaryMode,
         writerResult: null,
         threadState: null,
+        interpretiveExplanation: null,
         lastComputedAt: new Date().toISOString(),
       },
       evidence: {
@@ -286,6 +288,7 @@ export async function hydrateConversationSession(params: {
 
     nextSession = await applyModerationFlagsFromUserFilters(nextSession);
     nextSession = annotateConversationQuality(nextSession);
+    nextSession = applyInterpretiveConfidence(nextSession);
     nextSession = {
       ...nextSession,
       interpretation: {
@@ -340,7 +343,7 @@ export async function hydrateConversationSession(params: {
         pipeline.interpolator,
         pipeline.scores,
         rootNode.replies ?? [],
-        pipeline.confidence,
+        nextSession.interpretation.confidence ?? pipeline.confidence,
         Object.fromEntries(
           Object.entries(translationById).map(([uri, value]) => [
             uri,
@@ -351,6 +354,9 @@ export async function hydrateConversationSession(params: {
           ]),
         ),
         rootNode.authorHandle ?? undefined,
+        {
+          summaryMode: nextSession.interpretation.summaryMode ?? pipeline.summaryMode,
+        },
       );
 
       if (!isInterpolatorWriterUnavailable) {

@@ -42,6 +42,7 @@ function createEmptySession(
       confidence: null,
       summaryMode: null,
       threadState: null,
+      interpretiveExplanation: null,
     },
     evidence: {
       verificationByUri: {},

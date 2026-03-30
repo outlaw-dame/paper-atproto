@@ -75,11 +75,15 @@ export function buildThreadStateForWriter(
   translationById?: WriterTranslationMap,
   /** The actual handle of the root post author — used to correctly mark OP in contributor lists. */
   rootAuthorHandle?: string,
+  options?: {
+    summaryMode?: SummaryMode;
+  },
 ): ThreadStateForWriter {
-  const summaryMode: SummaryMode = chooseSummaryMode({
-    surfaceConfidence: confidence.surfaceConfidence,
-    interpretiveConfidence: confidence.interpretiveConfidence,
-  });
+  const summaryMode: SummaryMode = options?.summaryMode
+    ?? chooseSummaryMode({
+      surfaceConfidence: confidence.surfaceConfidence,
+      interpretiveConfidence: confidence.interpretiveConfidence,
+    });
 
   // ── Selected comments ────────────────────────────────────────────────────
   const rawComments: WriterComment[] = replies.map(reply => {

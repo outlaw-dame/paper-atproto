@@ -1,5 +1,6 @@
 import type { ConversationSession } from '../sessionTypes';
 import type { ProjectionPolicy } from '../sessionPolicies';
+import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
 
 export type ThreadFilter =
   | 'Top'
@@ -62,9 +63,20 @@ export interface ThreadProjection {
     } | null;
   };
   interpolator: {
+    shouldRender: boolean;
     summaryText: string;
     writerSummary?: string;
     summaryMode?: string | null;
+    confidence?: {
+      surfaceConfidence: number;
+      entityConfidence: number;
+      interpretiveConfidence: number;
+    } | null;
+    explanation?: {
+      interpretiveMode: string;
+      primarySupports: string[];
+      primaryLimits: string[];
+    };
     heatLevel: number;
     repetitionLevel: number;
     direction: string;
@@ -93,6 +105,7 @@ export function projectThreadView(
 ): ThreadProjection {
   const root = session.graph.nodesByUri[session.graph.rootUri];
   const rootAuthorDid = root?.authorDid;
+  const interpolatorSurface = buildInterpolatorSurfaceProjection(session);
 
   const allContributions: ThreadProjectionContribution[] = Object.values(session.graph.nodesByUri)
     .filter((node) => node.uri !== session.graph.rootUri)
@@ -171,12 +184,19 @@ export function projectThreadView(
         : null,
     },
     interpolator: {
-      summaryText: session.interpretation.interpolator?.summaryText ?? '',
-      ...(session.interpretation.writerResult?.collapsedSummary
-        ? { writerSummary: session.interpretation.writerResult.collapsedSummary }
+      shouldRender: interpolatorSurface.shouldRender,
+      summaryText: interpolatorSurface.summaryText,
+      ...(interpolatorSurface.writerSummary
+        ? { writerSummary: interpolatorSurface.writerSummary }
         : {}),
-      ...(session.interpretation.summaryMode !== null
-        ? { summaryMode: session.interpretation.summaryMode }
+      ...(interpolatorSurface.summaryMode !== undefined
+        ? { summaryMode: interpolatorSurface.summaryMode }
+        : {}),
+      ...(interpolatorSurface.confidence
+        ? { confidence: interpolatorSurface.confidence }
+        : {}),
+      ...(interpolatorSurface.explanation
+        ? { explanation: interpolatorSurface.explanation }
         : {}),
       heatLevel: session.trajectory.heatLevel,
       repetitionLevel: session.trajectory.repetitionLevel,

@@ -1,4 +1,5 @@
 import type { ConversationSession } from '../sessionTypes';
+import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
 
 export interface TimelineConversationHint {
   rootUri: string;
@@ -19,6 +20,7 @@ export function projectTimelineConversationHint(
 ): TimelineConversationHint | null {
   const node = session.graph.nodesByUri[postUri];
   if (!node) return null;
+  const interpolatorSurface = buildInterpolatorSurfaceProjection(session);
 
   return {
     rootUri: session.graph.rootUri,
@@ -30,12 +32,9 @@ export function projectTimelineConversationHint(
     sourceSupportPresent: session.interpretation.interpolator?.sourceSupportPresent ?? false,
     factualSignalPresent: session.interpretation.interpolator?.factualSignalPresent ?? false,
     hasThreadContext: !!session.interpretation.interpolator,
-    ...((session.interpretation.writerResult?.collapsedSummary
-      ?? session.interpretation.interpolator?.summaryText)
+    ...(interpolatorSurface.summaryText
       ? {
-          compactSummary:
-            session.interpretation.writerResult?.collapsedSummary
-            ?? session.interpretation.interpolator?.summaryText,
+          compactSummary: interpolatorSurface.writerSummary ?? interpolatorSurface.summaryText,
         }
       : {}),
   };

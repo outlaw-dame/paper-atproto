@@ -54,6 +54,44 @@ export interface ContributionSignal {
   isRepetitive: boolean;
   heatContribution: number;
   qualityScore: number;
+  interpretiveWeight?: number;
+  viewpointClusterId?: string;
+  claimDensity?: number;
+}
+
+export type InterpolatorConfidence = ConfidenceState;
+
+export interface InterpretiveConfidenceFactors {
+  semanticCoherence: number;
+  evidenceAdequacy: number;
+  contextCompleteness: number;
+  perspectiveBreadth: number;
+  ambiguityPenalty: number;
+  contradictionPenalty: number;
+  repetitionPenalty: number;
+  heatPenalty: number;
+  coverageGapPenalty: number;
+  freshnessPenalty: number;
+  sourceIntegritySupport: number;
+  userLabelSupport: number;
+  modelAgreement: number;
+}
+
+export interface InterpretiveConfidenceExplanation {
+  score: number;
+  mode: SummaryMode;
+  factors: InterpretiveConfidenceFactors;
+  rationale: string[];
+  boostedBy: string[];
+  degradedBy: string[];
+}
+
+export interface InterpretiveState {
+  semanticCoherence: 'high' | 'medium' | 'low';
+  contextCompleteness: 'high' | 'medium' | 'low';
+  perspectiveBreadth: 'broad' | 'moderate' | 'narrow';
+  ambiguity: 'low' | 'medium' | 'high';
+  coverageCompleteness: 'high' | 'medium' | 'low';
 }
 
 export interface ConversationNode extends ThreadNode {
@@ -88,11 +126,8 @@ export interface ThreadStateSignal {
   evidencePresence: boolean;
   topContributors: string[];
   conversationPhase: 'active' | 'resolving' | 'stalled' | 'escalating';
-  interpolatorConfidence: {
-    surfaceConfidence: number;
-    entityConfidence: number;
-    interpretiveConfidence: number;
-  };
+  interpolatorConfidence: InterpolatorConfidence;
+  interpretiveState?: InterpretiveState;
 }
 
 export interface SessionStructureState {
@@ -112,6 +147,7 @@ export interface SessionInterpretationState {
   confidence: ConfidenceState | null;
   summaryMode: SummaryMode | null;
   threadState: ThreadStateSignal | null;
+  interpretiveExplanation: InterpretiveConfidenceExplanation | null;
   lastComputedAt?: string;
 }
 

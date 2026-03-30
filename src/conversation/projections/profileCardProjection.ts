@@ -14,11 +14,14 @@ export interface ThreadScopedProfileProjection {
     contributionRole?: string;
     conversationalRole?: string;
     qualityScore?: number;
+    evidencePresent?: boolean;
+    interpretiveWeight?: number;
   }>;
   roleSummary: string[];
   notableAction?: string;
   clarificationCount: number;
   sourceContributionCount: number;
+  highConfidenceEvidenceCount: number;
 }
 
 export function projectThreadScopedProfileCard(
@@ -31,6 +34,10 @@ export function projectThreadScopedProfileCard(
   const first = posts[0];
   const clarificationCount = posts.filter((p) => p.contributionSignal?.role === 'clarification').length;
   const sourceContributionCount = posts.filter((p) => p.isSourceBringer).length;
+  const highConfidenceEvidenceCount = posts.filter((p) => {
+    return p.contributionSignal?.evidencePresent
+      && (p.contributionSignal?.qualityScore ?? 0) >= 0.68;
+  }).length;
 
   const roleSummary = Array.from(
     new Set(
@@ -52,10 +59,18 @@ export function projectThreadScopedProfileCard(
       ...(p.contributionSignal?.qualityScore !== undefined
         ? { qualityScore: p.contributionSignal.qualityScore }
         : {}),
+      ...(p.contributionSignal?.evidencePresent !== undefined
+        ? { evidencePresent: p.contributionSignal.evidencePresent }
+        : {}),
+      ...(p.contributionSignal?.interpretiveWeight !== undefined
+        ? { interpretiveWeight: p.contributionSignal.interpretiveWeight }
+        : {}),
     })),
     roleSummary,
-    ...(sourceContributionCount > 0
-      ? { notableAction: 'Introduced a source or evidence' }
+    ...(highConfidenceEvidenceCount > 0
+      ? { notableAction: 'Introduced high-confidence evidence' }
+      : sourceContributionCount > 0
+        ? { notableAction: 'Introduced a source or evidence' }
       : clarificationCount > 0
         ? {
             notableAction: `Added ${clarificationCount} clarification${clarificationCount > 1 ? 's' : ''}`,
@@ -63,5 +78,6 @@ export function projectThreadScopedProfileCard(
         : {}),
     clarificationCount,
     sourceContributionCount,
+    highConfidenceEvidenceCount,
   };
 }
