@@ -2,8 +2,10 @@ import type { SummaryMode } from '../../intelligence/llmContracts';
 import type {
   ConversationSession,
   InterpolatorConfidence,
+  MentalHealthCrisisCategory,
 } from '../sessionTypes';
 import { humanizeInterpretiveReason } from '../interpretive/interpretiveExplanation';
+import { useInterpolatorSettingsStore } from '../../store/interpolatorSettingsStore';
 
 export interface InterpolatorProjectionExplanation {
   interpretiveMode: SummaryMode;
@@ -18,11 +20,43 @@ export interface InterpolatorSurfaceProjection {
   summaryMode?: SummaryMode | null;
   confidence: InterpolatorConfidence | null;
   explanation?: InterpolatorProjectionExplanation;
+  hasMentalHealthCrisis: boolean;
+  mentalHealthCategory?: MentalHealthCrisisCategory;
 }
+
+type SessionReplyBehaviorCounts = {
+  sourcing: number;
+  clarification: number;
+  disagreement: number;
+  newInfo: number;
+  comparison: number;
+  escalation: number;
+  repetition: number;
+  question: number;
+  total: number;
+};
+
+const STALE_INTERPOLATOR_SUMMARY_RE =
+  /^(The thread (?:centres|centers) on|The discussion focuses on|The thread is focused on)\b/i;
 
 export function buildInterpolatorSurfaceProjection(
   session: ConversationSession,
 ): InterpolatorSurfaceProjection {
+  const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
+  const mhSignal = session.interpretation.mentalHealthSignal;
+  const hasMentalHealthCrisis = mhSignal?.detected ?? false;
+  const mentalHealthCategory = mhSignal?.category;
+
+  if (!interpolatorEnabled) {
+    return {
+      shouldRender: false,
+      summaryText: '',
+      confidence: session.interpretation.confidence,
+      hasMentalHealthCrisis,
+      ...(mentalHealthCategory ? { mentalHealthCategory } : {}),
+    };
+  }
+
   const writerSummary = session.interpretation.writerResult?.collapsedSummary;
   const summaryMode = session.interpretation.summaryMode;
   const localSummary = buildSafeInterpolatorSummary(session, summaryMode);
@@ -44,6 +78,8 @@ export function buildInterpolatorSurfaceProjection(
     ...(writerSummary ? { writerSummary } : {}),
     ...(summaryMode !== null ? { summaryMode } : {}),
     confidence: session.interpretation.confidence,
+    hasMentalHealthCrisis,
+    ...(mentalHealthCategory ? { mentalHealthCategory } : {}),
     ...(session.interpretation.interpretiveExplanation
       ? {
           explanation: {
@@ -68,8 +104,9 @@ function buildSafeInterpolatorSummary(
   const root = session.graph.nodesByUri[session.graph.rootUri];
 
   if (summaryMode === 'normal' || summaryMode == null) {
-    if (interpolator?.summaryText?.trim()) {
-      return interpolator.summaryText.trim();
+    const candidate = interpolator?.summaryText?.trim();
+    if (candidate && !STALE_INTERPOLATOR_SUMMARY_RE.test(candidate)) {
+      return candidate;
     }
   }
 
@@ -85,60 +122,139 @@ function buildSafeInterpolatorSummary(
   const evidenceCount = visibleReplies.filter(
     (node) => node.contributionSignal?.evidencePresent,
   ).length;
-  const topic = root?.text ? extractTopic(root.text) : 'the original post';
+  const topic = buildRootLead(root?.text);
+  const behaviorCounts = computeSessionReplyBehaviorCounts(visibleReplies);
+  const behaviorSummary = describeSessionReplyBehavior(behaviorCounts);
 
   if (replyCount === 0) {
-    return 'This discussion is just beginning.';
+    return 'The post is visible, but there are no replies yet.';
   }
 
   if (summaryMode === 'descriptive_fallback') {
-    const descriptors: string[] = [];
-    if (disagreementCount > 0) {
-      descriptors.push(`${disagreementCount} disagreement${disagreementCount > 1 ? 's' : ''}`);
-    }
-    if (clarificationCount > 0) {
-      descriptors.push(`${clarificationCount} clarification${clarificationCount > 1 ? 's' : ''}`);
-    }
-    if (evidenceCount > 0) {
-      descriptors.push(`${evidenceCount} source-backed repl${evidenceCount > 1 ? 'ies' : 'y'}`);
-    }
-
-    const activitySummary = descriptors.length > 0
-      ? descriptors.join(', ')
-      : `${replyCount} visible repl${replyCount > 1 ? 'ies' : 'y'}`;
-
-    return `The thread is focused on reactions to "${topic}" and includes ${activitySummary}.`;
+    return `${topic} ${behaviorSummary} ${replyCount >= 6
+      ? 'Visible replies are still too split for a stronger read.'
+      : 'There is not enough visible thread signal yet for a stronger read.'}`;
   }
 
-  return `This thread includes ${replyCount} visible repl${replyCount > 1 ? 'ies' : 'y'}, mostly ${dominantActivityLabel(visibleReplies)}, with ${evidenceCount > 0 ? `${evidenceCount} source-backed contribution${evidenceCount > 1 ? 's' : ''}` : 'limited source support'}.`;
+  if (summaryMode === 'minimal_fallback') {
+    return `${topic} ${behaviorSummary}`;
+  }
+
+  const concludingSentence = evidenceCount > 0
+    ? disagreementCount > 0
+      ? 'Some replies bring source support into the disagreement.'
+      : 'Some replies bring source support into the thread.'
+    : clarificationCount > 0 && disagreementCount > 0
+      ? 'The thread is splitting between clarification and dispute.'
+      : clarificationCount > 0
+        ? 'The thread is starting to settle around clarification.'
+        : disagreementCount > 0
+          ? 'The thread is still split on how to read the claim.'
+          : behaviorCounts.escalation > 0
+            ? 'Source support remains thin so far.'
+            : '';
+
+  return `${topic} ${behaviorSummary}${concludingSentence ? ` ${concludingSentence}` : ''}`.trim();
 }
 
-function dominantActivityLabel(
+function computeSessionReplyBehaviorCounts(
   replies: Array<ConversationSession['graph']['nodesByUri'][string]>,
-): string {
-  const counts = replies.reduce<Record<string, number>>((acc, reply) => {
-    const role = reply.contributionSignal?.role ?? 'response';
-    acc[role] = (acc[role] ?? 0) + 1;
-    return acc;
-  }, {});
+): SessionReplyBehaviorCounts {
+  const counts: SessionReplyBehaviorCounts = {
+    sourcing: 0,
+    clarification: 0,
+    disagreement: 0,
+    newInfo: 0,
+    comparison: 0,
+    escalation: 0,
+    repetition: 0,
+    question: 0,
+    total: replies.length,
+  };
 
-  const dominantRole = Object.entries(counts)
-    .sort((left, right) => right[1] - left[1])[0]?.[0];
+  for (const reply of replies) {
+    const role = reply.contributionSignal?.role ?? 'unknown';
+    const text = reply.text.toLowerCase();
 
-  switch (dominantRole) {
-    case 'clarification':
-      return 'clarification';
-    case 'disagreement':
-      return 'disagreement';
-    case 'evidence':
-      return 'evidence-sharing';
-    case 'repetition':
-      return 'repetition';
-    case 'escalation':
-      return 'heated replies';
-    default:
-      return 'visible reply activity';
+    if (
+      role === 'evidence'
+      || reply.contributionSignal?.evidencePresent
+      || /\b(source|sourcing|link|memo|document|report|paper|article|citation|cited|evidence)\b/.test(text)
+    ) {
+      counts.sourcing += 1;
+    }
+    if (role === 'clarification' || /\b(clarif|explain|timeline|specifics)\b/.test(text)) {
+      counts.clarification += 1;
+    }
+    if (role === 'disagreement' || /\b(disagree|doubt|push back|skeptic|contest)\b/.test(text)) {
+      counts.disagreement += 1;
+    }
+    if (
+      role === 'new_information'
+      || role === 'context_setter'
+      || /\b(new|another|additional|context)\b/.test(text)
+    ) {
+      counts.newInfo += 1;
+    }
+    if (/\b(compare|comparison|similar|earlier|prior|before|pattern)\b/.test(text)) {
+      counts.comparison += 1;
+    }
+    if (role === 'escalation') {
+      counts.escalation += 1;
+    }
+    if (role === 'repetition' || /\b(same point|again|repeating)\b/.test(text)) {
+      counts.repetition += 1;
+    }
+    if (role === 'question' || /\?/.test(text) || /\b(ask|asks|asking|whether)\b/.test(text)) {
+      counts.question += 1;
+    }
   }
+
+  return counts;
+}
+
+function joinBehaviorPhrases(phrases: string[]): string {
+  if (phrases.length === 0) return 'stay brief and hard to characterize';
+  if (phrases.length === 1) return phrases[0]!;
+  if (phrases.length === 2) return `${phrases[0]!} and ${phrases[1]!}`;
+  return `${phrases.slice(0, -1).join(', ')}, and ${phrases[phrases.length - 1]!}`;
+}
+
+function describeSessionReplyBehavior(counts: SessionReplyBehaviorCounts): string {
+  if (counts.total === 0) {
+    return 'There are no visible replies yet.';
+  }
+
+  const phrases: string[] = [];
+
+  if (counts.sourcing > 0) phrases.push('ask for sourcing');
+  if (counts.clarification > 0) phrases.push('add clarification');
+  if (counts.disagreement > 0) phrases.push('push back on the claim');
+  if (counts.comparison > 0) phrases.push('compare it to earlier incidents');
+  if (counts.newInfo > 0) phrases.push('add context');
+
+  if (phrases.length === 0 && counts.question > 0) phrases.push('press for specifics');
+  if (phrases.length === 0 && counts.repetition > 0) phrases.push('repeat the same point');
+  if (phrases.length === 0 && counts.escalation > 0) phrases.push('turn heated quickly');
+
+  const subject = counts.total >= 8
+    ? `Across ${counts.total} visible replies, the thread mostly`
+    : counts.total === 1
+      ? 'The visible reply mostly'
+      : 'Visible replies mostly';
+
+  return `${subject} ${joinBehaviorPhrases(phrases.slice(0, 3))}.`;
+}
+
+function ensureSentence(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function buildRootLead(text?: string): string {
+  if (!text) return 'The post is visible.';
+  return ensureSentence(extractTopic(text));
 }
 
 function extractTopic(text: string): string {

@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getPriorityResources, type MentalHealthResource } from '../lib/mentalHealthResources';
+import {
+  getLocalizedCrisisResources,
+  type MentalHealthResource,
+} from '../lib/mentalHealthResources';
 
 interface Props {
   category?: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation';
@@ -9,7 +12,8 @@ interface Props {
 
 export default function MentalHealthSupportBanner({ category, onDismiss }: Props) {
   const [expandedResourceId, setExpandedResourceId] = useState<string | null>(null);
-  const resources = getPriorityResources();
+  const localizedResources = getLocalizedCrisisResources();
+  const resources = localizedResources.resources;
 
   const categoryMessages: Record<
     'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation',
@@ -84,12 +88,31 @@ export default function MentalHealthSupportBanner({ category, onDismiss }: Props
 
       {/* Resources Section */}
       <div style={{ marginTop: '12px' }}>
+        <div
+          style={{
+            marginBottom: '10px',
+            padding: '8px 10px',
+            borderRadius: '6px',
+            backgroundColor: 'var(--bg-warning-subtle, rgba(255, 184, 0, 0.12))',
+            color: 'var(--text-primary)',
+            fontSize: '12px',
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+            Urgent support for your region ({localizedResources.regionLabel})
+          </div>
+          <div>{localizedResources.urgentIntro}</div>
+          <div style={{ marginTop: '4px', color: 'var(--text-secondary)' }}>
+            Emergency number: {localizedResources.emergencyNumber}
+          </div>
+        </div>
+
         <div style={{ fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>
           Support Resources:
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {resources.slice(0, 3).map((resource, idx) => (
+          {resources.map((resource, idx) => (
             <div key={`resource-${idx}`}>
               <button
                 onClick={() =>
@@ -148,7 +171,7 @@ export default function MentalHealthSupportBanner({ category, onDismiss }: Props
                   >
                     <p style={{ margin: '8px 0 4px 0' }}>{resource.description}</p>
                     <p style={{ margin: '4px 0' }}>
-                      <strong>Available:</strong> 24/7
+                      <strong>Available:</strong> {resource.available24h ? '24/7' : 'Hours vary'}
                     </p>
                     <p style={{ margin: '4px 0' }}>
                       <strong>Regions:</strong> {resource.regions.join(', ')}
@@ -181,18 +204,26 @@ export default function MentalHealthSupportBanner({ category, onDismiss }: Props
 
         {/* Additional Resources Link */}
         <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
-          <a
-            href="https://www.befrienders.org/members/"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              fontSize: '12px',
-              color: 'var(--blue)',
-              textDecoration: 'none',
-            }}
-          >
-            Find more resources by country/region →
-          </a>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            Global crisis directories:
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {localizedResources.globalDirectories.map((directory) => (
+              <a
+                key={directory.name}
+                href={directory.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: '12px',
+                  color: 'var(--blue)',
+                  textDecoration: 'none',
+                }}
+              >
+                {directory.name} →
+              </a>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -207,7 +238,7 @@ export default function MentalHealthSupportBanner({ category, onDismiss }: Props
           color: 'var(--text-secondary)',
         }}
       >
-        Reaching out is a sign of strength, not weakness. Help is available and people care about you.
+        You do not need perfect words to ask for help. Saying "I am not okay and I do not know what to do" is enough.
       </div>
     </motion.div>
   );

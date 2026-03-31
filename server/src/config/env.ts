@@ -16,7 +16,16 @@ const EnvSchema = z.object({
   GOOGLE_SAFE_BROWSING_API_KEY: z.string().min(1).optional(),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_GROUNDING_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_DEEP_INTERPOLATOR_MODEL: z.string().default('gemini-2.5-flash'),
   GOOGLE_CLOUD_PROJECT: z.string().optional(),
+  PREMIUM_AI_ENABLED: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
+  PREMIUM_AI_DEFAULT_TIER: z.enum(['free', 'plus', 'pro']).default('free'),
+  PREMIUM_AI_ALLOWLIST_DIDS: z.string().optional().default(''),
+  PREMIUM_AI_TIMEOUT_MS: z.coerce.number().int().positive().default(25_000),
+  PREMIUM_AI_RETRY_ATTEMPTS: z.coerce.number().int().positive().default(2),
   VERIFY_API_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z
@@ -51,6 +60,20 @@ const EnvSchema = z.object({
   PODCASTINDEX_BASE_URL: z.string().url().default('https://api.podcastindex.org'),
   PODCASTINDEX_USER_AGENT: z.string().default('paper-atproto/1.0 (+https://github.com/damonoutlaw/paper-atproto)'),
   PORT: z.coerce.number().int().positive().default(3011),
+
+  // ── HTTP Compression ─────────────────────────────────────────────────────
+  COMPRESSION_ENABLED: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z
+      .string()
+      .optional()
+      .transform((v) => v !== 'false')
+      .default('true'),
+  ),
+  COMPRESSION_MIN_BYTES: z.coerce.number().int().min(0).default(1024),
+  COMPRESSION_MAX_BYTES: z.coerce.number().int().positive().default(1_500_000),
+  COMPRESSION_GZIP_LEVEL: z.coerce.number().int().min(1).max(9).default(6),
+  COMPRESSION_ZSTD_LEVEL: z.coerce.number().int().min(1).max(22).default(8),
 
   // ── Web Push ──────────────────────────────────────────────────────────────
   // VAPID keys are required when actually sending push notifications.

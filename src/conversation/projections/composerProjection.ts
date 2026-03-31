@@ -7,6 +7,7 @@ import {
 import {
   deriveDisagreementType,
 } from '../interpretive/interpretiveScoring';
+import type { DeepInterpolatorResult } from '../../intelligence/premiumContracts';
 
 export type ComposerContext = {
   mode: 'post' | 'reply' | 'hosted_thread';
@@ -26,6 +27,14 @@ export type ComposerContext = {
     selectedCommentTexts: string[];
     totalReplyCount?: number;
     totalCommentCount?: number;
+    totalThreadCount?: number;
+  };
+  hostedThread?: {
+    prompt: string;
+    description?: string;
+    source?: string;
+    topics: string[];
+    audience?: string;
   };
   summaries?: {
     directParentSummary?: string;
@@ -36,6 +45,13 @@ export type ComposerContext = {
       disagreementType: 'factual' | 'interpretive' | 'value-based';
       missingContextHints: string[];
       confidenceWarnings: string[];
+    };
+    premiumContext?: {
+      deepSummary?: string;
+      groundedContext?: string;
+      perspectiveGaps: string[];
+      followUpQuestions: string[];
+      confidence: number;
     };
   };
   threadState?: {
@@ -107,6 +123,7 @@ export function projectComposerContext(params: {
       selectedCommentTexts,
       ...(root ? { totalReplyCount: root.replyCount } : {}),
       totalCommentCount: Math.max(0, Object.keys(session.graph.nodesByUri).length - 1),
+      totalThreadCount: Math.max(1, Object.keys(session.graph.nodesByUri).length),
     },
     summaries: {
       ...(directParentSummary ? { directParentSummary } : {}),
@@ -131,6 +148,13 @@ export function projectComposerContext(params: {
             },
           }
         : {}),
+      ...(session.interpretation.premium.deepInterpolator
+        ? {
+            premiumContext: projectPremiumComposerContext(
+              session.interpretation.premium.deepInterpolator,
+            ),
+          }
+        : {}),
     },
     threadState: {
       ...(session.interpretation.threadState?.dominantTone
@@ -144,6 +168,55 @@ export function projectComposerContext(params: {
       sourceSupportPresent: session.interpretation.interpolator?.sourceSupportPresent ?? false,
       factualSignalPresent: session.interpretation.interpolator?.factualSignalPresent ?? false,
     },
+  };
+}
+
+export function projectHostedThreadComposerContext(params: {
+  draftText: string;
+  prompt: string;
+  description?: string;
+  source?: string;
+  topics?: string[];
+  audience?: string;
+}): ComposerContext {
+  const prompt = params.prompt.trim();
+  const description = params.description?.trim();
+  const topics = Array.from(
+    new Set(
+      (params.topics ?? [])
+        .map((topic) => topic.trim())
+        .filter((topic) => topic.length > 0),
+    ),
+  ).slice(0, 12);
+
+  return {
+    mode: 'hosted_thread',
+    draftText: params.draftText,
+    hostedThread: {
+      prompt: params.prompt,
+      ...(params.description ? { description: params.description } : {}),
+      ...(params.source ? { source: params.source } : {}),
+      topics,
+      ...(params.audience ? { audience: params.audience } : {}),
+    },
+    summaries: {
+      ...(prompt ? { threadSummary: prompt } : {}),
+      ...(description
+        ? { replyContextSummary: description.length <= 180 ? description : `${description.slice(0, 177)}...` }
+        : {}),
+    },
+  };
+}
+
+function projectPremiumComposerContext(
+  result: DeepInterpolatorResult,
+): NonNullable<NonNullable<ComposerContext['summaries']>['premiumContext']> {
+  return {
+    ...(result.summary ? { deepSummary: result.summary } : {}),
+    ...(result.groundedContext ? { groundedContext: result.groundedContext } : {}),
+    perspectiveGaps: result.perspectiveGaps.slice(0, 3),
+    followUpQuestions: result.followUpQuestions.slice(0, 3),
+    confidence: result.confidence,
   };
 }
 

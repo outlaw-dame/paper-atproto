@@ -19,7 +19,7 @@ import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 import { isAtUri } from '../lib/resolver/atproto';
 import { createVerificationProviders } from '../intelligence/verification/providerFactory';
 import { InMemoryVerificationCache } from '../intelligence/verification/cache';
-import { hydrateConversationSession } from '../conversation/sessionAssembler';
+import { hydrateConversationSessionWithRetry } from '../conversation/sessionHydration';
 import { useConversationSessionStore } from '../conversation/sessionStore';
 import { projectTimelineConversationHint } from '../conversation/projections/timelineProjection';
 import type { MockPost } from '../data/mockData';
@@ -131,36 +131,26 @@ export default function HomeTab({ onOpenStory }: Props) {
         .filter((uri): uri is string => !!uri && isAtUri(uri)),
     )).slice(0, 8);
 
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    const backoffMs = (attempt: number) => {
-      const base = Math.min(4_000, 350 * (2 ** attempt));
-      return Math.floor(base * (0.75 + Math.random() * 0.5));
-    };
-
     const hydrateWithRetry = async (rootUri: string) => {
       if (hydratedSessionRootsRef.current.has(rootUri)) return;
       if (hydrationInFlightRef.current.has(rootUri)) return;
       hydrationInFlightRef.current.add(rootUri);
 
       try {
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          try {
-            await hydrateConversationSession({
-              sessionId: rootUri,
-              rootUri,
-              agent: hydrationAgent,
-              translationPolicy,
-              providers: conversationProvidersRef.current,
-              cache: conversationCacheRef.current,
-              signal: controller.signal,
-            });
-            hydratedSessionRootsRef.current.add(rootUri);
-            return;
-          } catch (error) {
-            if (error instanceof Error && error.name === 'AbortError') return;
-            if (attempt >= 2) return;
-            await sleep(backoffMs(attempt));
-          }
+        try {
+          await hydrateConversationSessionWithRetry({
+            sessionId: rootUri,
+            rootUri,
+            mode: 'thread',
+            agent: hydrationAgent,
+            translationPolicy,
+            providers: conversationProvidersRef.current,
+            cache: conversationCacheRef.current,
+            signal: controller.signal,
+          });
+          hydratedSessionRootsRef.current.add(rootUri);
+        } catch (error) {
+          if (error instanceof Error && error.name === 'AbortError') return;
         }
       } finally {
         hydrationInFlightRef.current.delete(rootUri);
@@ -715,6 +705,10 @@ export default function HomeTab({ onOpenStory }: Props) {
                 // A reply-in-thread gets a subtle tinted background so it reads as
                 // a distinct unit from adjacent standalone posts
                 const isReply = !!(post.threadRoot ?? post.replyTo);
+                const timelineHint = timelineHintByPostId[post.id];
+                const replyingToHandle = !isReply
+                  ? (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)
+                  : undefined;
                 return (
                 <div key={post.id} data-post-index={i}>
                   {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
@@ -730,9 +724,9 @@ export default function HomeTab({ onOpenStory }: Props) {
                     onMore={handleMore}
                     onReply={openComposeReply}
                     index={i}
-                    timelineHint={timelineHintByPostId[post.id] ?? undefined}
+                    {...(timelineHint ? { timelineHint } : {})}
                     hasContextAbove={isReply}
-                    replyingTo={isReply ? undefined : (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)}
+                    {...(replyingToHandle ? { replyingTo: replyingToHandle } : {})}
                   />
                 </div>
                 );

@@ -6,6 +6,7 @@ import { formatTime, formatCount } from '../data/mockData';
 import { fetchOGData } from '../og';
 import VideoPlayer from './VideoPlayer';
 import TwemojiText from './TwemojiText';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
 import { useTranslationStore } from '../store/translationStore';
 import { translationClient } from '../lib/i18n/client';
 import { heuristicDetectLanguage } from '../lib/i18n/detect';
@@ -23,6 +24,9 @@ import {
 } from '../perf/sensitiveMediaTelemetry';
 import { openExternalUrl } from '../lib/safety/externalUrl';
 import type { TimelineConversationHint } from '../conversation/projections/timelineProjection';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import { buildStandardProfileCardData } from '../lib/profileCardData';
+import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 
 interface PostCardProps {
   post: MockPost;
@@ -122,12 +126,25 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [carouselItems]);
   const detectedPostLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
   const sensitiveImpressionLoggedRef = useRef(false);
+  const externalEmbedYouTubeRef = useMemo(
+    () => (post.embed?.type === 'external' ? parseYouTubeUrl(post.embed.url) : null),
+    [post.embed],
+  );
+  const inlineTextYouTubeRef = useMemo(() => {
+    if (post.embed || mediaItems.length > 0) return null;
+    return extractFirstYouTubeReference({
+      explicitUrls: (post.facets ?? [])
+        .filter((facet) => facet.kind === 'link')
+        .map((facet) => facet.uri),
+      text: post.content,
+    });
+  }, [mediaItems.length, post.content, post.embed, post.facets]);
 
   // Lazy-fetch author metadata for external link cards.
   // ATProto's external embed spec doesn't carry author/fediverse fields, so we
   // fetch them from the article page's meta tags (cached in og.ts).
   const [fetchedAuthor, setFetchedAuthor] = useState<{ name?: string; handle?: string; profileUrl?: string } | null>(null);
-  const externalEmbedUrl = post.embed?.type === 'external' ? post.embed.url : null;
+  const externalEmbedUrl = post.embed?.type === 'external' && !externalEmbedYouTubeRef ? post.embed.url : null;
   useEffect(() => {
     if (!externalEmbedUrl) return;
     // Skip if the API already gave us author info
@@ -147,6 +164,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [externalEmbedUrl]);
 
   const storyTitle = post.content.slice(0, 80);
+  const standardProfileCardData = buildStandardProfileCardData(post);
 
   const openActorProfile = (actor: string) => {
     if (!actor) return;
@@ -360,49 +378,59 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            type="button"
-            onClick={handleProfileClick}
-            style={{
-              width: 40, height: 40, borderRadius: '50%',
-              background: 'var(--fill-2)', overflow: 'hidden',
-              flexShrink: 0, cursor: 'pointer', border: 'none', padding: 0,
-            }}
+          <ProfileCardTrigger
+            data={standardProfileCardData}
+            disabled={!standardProfileCardData}
           >
-            {post.author.avatar ? (
-              <img src={post.author.avatar} alt={post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            ) : (
-              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontWeight: 700 }}>
-                {post.author.handle[0]}
-              </div>
-            )}
-          </button>
-          <div
-            onClick={handleProfileClick}
-            role="button"
-            tabIndex={0}
-            className="interactive-link-surface"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                e.stopPropagation();
-                openActorProfile(post.author.did || post.author.handle);
-              }
-            }}
-            style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer', minWidth: 0 }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-ui-title-sm-track)', color: 'var(--label-1)' }}>{translatedDisplayName || post.author.displayName || post.author.handle}</span>
-              {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
-              {post.article && (
-                <span style={{ background: 'var(--fill-3)', color: 'var(--label-2)', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5, border: '1px solid var(--stroke-dim)' }}>
-                  Article
-                </span>
+            <button
+              type="button"
+              onClick={handleProfileClick}
+              style={{
+                width: 40, height: 40, borderRadius: '50%',
+                background: 'var(--fill-2)', overflow: 'hidden',
+                flexShrink: 0, cursor: 'pointer', border: 'none', padding: 0,
+              }}
+            >
+              {post.author.avatar ? (
+                <img src={post.author.avatar} alt={post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontWeight: 700 }}>
+                  {post.author.handle[0]}
+                </div>
               )}
-              <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
+            </button>
+          </ProfileCardTrigger>
+          <ProfileCardTrigger
+            data={standardProfileCardData}
+            disabled={!standardProfileCardData}
+          >
+            <div
+              onClick={handleProfileClick}
+              role="button"
+              tabIndex={0}
+              className="interactive-link-surface"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openActorProfile(post.author.did || post.author.handle);
+                }
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer', minWidth: 0 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-ui-title-sm-track)', color: 'var(--label-1)' }}>{translatedDisplayName || post.author.displayName || post.author.handle}</span>
+                {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
+                {post.article && (
+                  <span style={{ background: 'var(--fill-3)', color: 'var(--label-2)', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5, border: '1px solid var(--stroke-dim)' }}>
+                    Article
+                  </span>
+                )}
+                <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
+              </div>
+              <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
             </div>
-            <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
-          </div>
+          </ProfileCardTrigger>
         </div>
       </div>
 
@@ -474,7 +502,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             }}>
               <TwemojiText
                 text={displayText}
-                facets={displayText === post.content ? post.facets : undefined}
+                {...(displayText === post.content && post.facets ? { facets: post.facets } : {})}
                 onMention={handleMentionClick}
                 onHashtag={handleHashtagClick}
               />
@@ -983,9 +1011,31 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
       </AnimatePresence>
 
+      {inlineTextYouTubeRef && (
+        <div style={{ marginTop: 8 }}>
+          <YouTubeEmbedCard
+            url={inlineTextYouTubeRef.normalizedUrl}
+            domain={inlineTextYouTubeRef.domain}
+          />
+        </div>
+      )}
+
       {/* 3. External Link */}
       {post.embed?.type === 'external' && (() => {
         const externalUrl = post.embed.url;
+        if (externalEmbedYouTubeRef) {
+          return (
+            <div style={{ marginTop: 8 }}>
+              <YouTubeEmbedCard
+                url={externalUrl}
+                title={post.embed.title}
+                description={post.embed.description}
+                thumb={post.embed.thumb}
+                domain={post.embed.domain}
+              />
+            </div>
+          );
+        }
         return (
         <div
           role="link"
@@ -1082,7 +1132,9 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       {post.embed?.type === 'quote' && (() => {
         const quotedPost = post.embed.post;
         const quotedActor = quotedPost.author.did || quotedPost.author.handle;
+        const quotedStandardProfileCardData = buildStandardProfileCardData(quotedPost);
         const quotedExternalEmbed = quotedPost.embed?.type === 'external' ? quotedPost.embed : null;
+        const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
         const quotedVideoEmbed = quotedPost.embed?.type === 'video' ? quotedPost.embed : null;
         const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quotedPost.sensitiveMedia?.isSensitive);
         return (
@@ -1113,13 +1165,19 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
-              {quotedPost.author.avatar
-                ? <img src={quotedPost.author.avatar} alt={quotedPost.author.handle} style={{ width: '100%', height: '100%' }} />
-                : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontSize: 10, fontWeight: 700 }}>{((quotedPost.author.displayName || quotedPost.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
-            </div>
-            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
-            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
+                {quotedPost.author.avatar
+                  ? <img src={quotedPost.author.avatar} alt={quotedPost.author.handle} style={{ width: '100%', height: '100%' }} />
+                  : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontSize: 10, fontWeight: 700 }}>{((quotedPost.author.displayName || quotedPost.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
+              </div>
+            </ProfileCardTrigger>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
+            </ProfileCardTrigger>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
+            </ProfileCardTrigger>
           </div>
           <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
             <TwemojiText text={quotedPost.content} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
@@ -1177,26 +1235,37 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               borderTop: '0.5px solid var(--quote-preview-border)',
               paddingTop: 8,
             }}>
-              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
-                {quotedExternalEmbed.thumb && (
-                  <div style={{ marginBottom: 0, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
-                    <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                )}
-                <div style={{ padding: '9px 10px 10px' }}>
-                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 3 }}>
-                    {quotedExternalEmbed.domain}
-                  </div>
-                  <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: quotedExternalEmbed.description ? 4 : 0 }}>
-                    {quotedExternalEmbed.title}
-                  </div>
-                  {quotedExternalEmbed.description && (
-                    <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)' }}>
-                      {quotedExternalEmbed.description}
+              {quotedExternalYouTubeRef ? (
+                <YouTubeEmbedCard
+                  url={quotedExternalEmbed.url}
+                  title={quotedExternalEmbed.title}
+                  description={quotedExternalEmbed.description}
+                  thumb={quotedExternalEmbed.thumb}
+                  domain={quotedExternalEmbed.domain}
+                  compact
+                />
+              ) : (
+                <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                  {quotedExternalEmbed.thumb && (
+                    <div style={{ marginBottom: 0, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                      <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                   )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 3 }}>
+                      {quotedExternalEmbed.domain}
+                    </div>
+                    <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: quotedExternalEmbed.description ? 4 : 0 }}>
+                      {quotedExternalEmbed.title}
+                    </div>
+                    {quotedExternalEmbed.description && (
+                      <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)' }}>
+                        {quotedExternalEmbed.description}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
           {quotedVideoEmbed && (
@@ -1228,23 +1297,34 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               paddingTop: 8,
               borderTop: '0.5px solid var(--quote-preview-border)',
             }}>
-              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
-                {post.embed.externalLink.thumb && (
-                  <div style={{ overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
-                    <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                )}
-                <div style={{ padding: '9px 10px 10px' }}>
-                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
-                    {post.embed.externalLink.domain}
-                  </div>
-                  {post.embed.externalLink.title && (
-                    <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
-                      {post.embed.externalLink.title}
+              {parseYouTubeUrl(post.embed.externalLink.url) ? (
+                <YouTubeEmbedCard
+                  url={post.embed.externalLink.url}
+                  title={post.embed.externalLink.title}
+                  description={post.embed.externalLink.description}
+                  thumb={post.embed.externalLink.thumb}
+                  domain={post.embed.externalLink.domain}
+                  compact
+                />
+              ) : (
+                <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                  {post.embed.externalLink.thumb && (
+                    <div style={{ overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                      <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                   )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
+                      {post.embed.externalLink.domain}
+                    </div>
+                    {post.embed.externalLink.title && (
+                      <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
+                        {post.embed.externalLink.title}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>

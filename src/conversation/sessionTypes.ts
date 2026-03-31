@@ -14,8 +14,13 @@ import type {
   InterpolatorWriteResult,
   WriterEntity,
 } from '../intelligence/llmContracts';
+import type {
+  DeepInterpolatorResult,
+  PremiumAiEntitlements,
+} from '../intelligence/premiumContracts';
 
 export type ConversationSessionId = AtUri;
+export type ConversationSessionMode = 'thread' | 'story' | 'profile_slice';
 
 export type DeferredReason =
   | 'outside_focused_branch'
@@ -140,6 +145,13 @@ export interface SessionStructureState {
   unresolvedChildCountsByUri: Record<AtUri, number>;
 }
 
+export type MentalHealthCrisisCategory =
+  | 'self-harm'
+  | 'suicidal'
+  | 'severe-depression'
+  | 'hopelessness'
+  | 'isolation';
+
 export interface SessionInterpretationState {
   interpolator: ThreadInterpolatorState | null;
   scoresByUri: Record<AtUri, ContributionScores>;
@@ -149,6 +161,16 @@ export interface SessionInterpretationState {
   threadState: ThreadStateSignal | null;
   interpretiveExplanation: InterpretiveConfidenceExplanation | null;
   lastComputedAt?: string;
+  mentalHealthSignal?: {
+    detected: boolean;
+    category?: MentalHealthCrisisCategory;
+  };
+  premium: {
+    status: 'idle' | 'loading' | 'ready' | 'error' | 'not_entitled';
+    entitlements?: PremiumAiEntitlements;
+    deepInterpolator?: DeepInterpolatorResult;
+    lastError?: string;
+  };
 }
 
 export interface SessionEvidenceState {
@@ -195,6 +217,7 @@ export interface SessionTrajectoryState {
 
 export interface ConversationSession {
   id: ConversationSessionId;
+  mode: ConversationSessionMode;
   graph: SessionGraph;
   structure: SessionStructureState;
   interpretation: SessionInterpretationState;

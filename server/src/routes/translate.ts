@@ -7,6 +7,7 @@ import {
   translationCacheKey,
 } from '../services/translation/cache.js';
 import { translateWithRouter } from '../services/translation/runtime.js';
+import { AppError } from '../lib/errors.js';
 import type {
   BatchTranslateRequest,
   DetectLanguageRequest,
@@ -63,6 +64,28 @@ async function performInlineTranslation(req: InlineTranslateRequest) {
   return result;
 }
 
+async function performInlineTranslationWithFallback(req: InlineTranslateRequest) {
+  const detectedSourceLang = req.sourceLang ?? detectLanguage(req.sourceText).language;
+  try {
+    return await performInlineTranslation({
+      ...req,
+      sourceLang: detectedSourceLang,
+    });
+  } catch {
+    // Graceful fallback: keep original text to avoid breaking timeline/thread rendering.
+    return {
+      id: req.id,
+      translatedText: req.sourceText,
+      sourceLang: detectedSourceLang,
+      targetLang: req.targetLang,
+      provider: 'm2m100' as const,
+      cached: false,
+      modelVersion: 'fallback:identity',
+      qualityTier: 'default' as const,
+    };
+  }
+}
+
 export const translateRouter = new Hono();
 
 translateRouter.post('/inline', async (c) => {
@@ -72,7 +95,7 @@ translateRouter.post('/inline', async (c) => {
     return c.json({ ok: false, error: 'Invalid inline translation request', issues: parsed.error.issues }, 400);
   }
 
-  const result = await performInlineTranslation({
+  const result = await performInlineTranslationWithFallback({
     id: parsed.data.id,
     sourceText: parsed.data.sourceText,
     targetLang: parsed.data.targetLang,
@@ -99,7 +122,7 @@ translateRouter.post('/batch', async (c) => {
         mode: input.mode as TranslationMode,
         ...(item.sourceLang ? { sourceLang: item.sourceLang } : {}),
       };
-      return performInlineTranslation(req);
+      return performInlineTranslationWithFallback(req);
     }),
   );
 
@@ -116,4 +139,13 @@ translateRouter.post('/detect', async (c) => {
   const req = parsed.data as DetectLanguageRequest;
   const result = detectLanguage(req.text);
   return c.json({ ok: true, result });
+});
+
+translateRouter.onError((error, c) => {
+  if (error instanceof AppError) {
+    return c.json({ ok: false, error: error.message }, error.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | 504);
+  }
+
+  // Route-level fail-safe to keep translation paths resilient.
+  return c.json({ ok: false, error: 'Translation route failed' }, 500);
 });

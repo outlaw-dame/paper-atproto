@@ -280,7 +280,7 @@ function analyzeParent(parentText: string): { heatSignals: string[]; isContentio
 }
 
 /** Detects mental health crisis language in text. */
-function detectMentalHealthCrisis(
+export function detectMentalHealthCrisis(
   text: string,
 ): { hasCrisis: boolean; category?: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation' } {
   for (const { re, category } of MENTAL_HEALTH_CRISIS_PATTERNS) {

@@ -73,6 +73,7 @@ export interface ThreadStateForWriter {
   threadId: string;
   summaryMode: SummaryMode;
   confidence: ConfidenceState;
+  visibleReplyCount?: number | undefined;
   rootPost: WriterRootPost;
   selectedComments: WriterComment[];
   topContributors: WriterContributor[];

@@ -56,6 +56,7 @@ const ThreadStateSchema = z.object({
   threadId: z.string().max(300),
   summaryMode: z.enum(['normal', 'descriptive_fallback', 'minimal_fallback']),
   confidence: ConfidenceSchema,
+  visibleReplyCount: z.number().int().min(0).max(5000).optional(),
   rootPost: z.object({
     uri: z.string(),
     handle: z.string().max(100),
@@ -298,4 +299,45 @@ llmRouter.post('/write/composer-guidance', async (c) => {
     console.error('[llm/write/composer-guidance]', message);
     return c.json({ error: 'Composer guidance writer failed' }, 503);
   }
+});
+
+llmRouter.onError((error, c) => {
+  const path = c.req.path;
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (path.endsWith('/write/interpolator')) {
+    console.error('[llm/onError/interpolator]', message);
+    return c.json({
+      collapsedSummary: '',
+      whatChanged: [],
+      contributorBlurbs: [],
+      abstained: true,
+      mode: 'minimal_fallback',
+    });
+  }
+
+  if (path.endsWith('/analyze/media')) {
+    console.error('[llm/onError/analyze-media]', message);
+    return c.json({
+      mediaCentrality: 0,
+      mediaType: 'unknown',
+      mediaSummary: '',
+      candidateEntities: [],
+      confidence: 0,
+      cautionFlags: [],
+    });
+  }
+
+  if (path.endsWith('/write/search-story')) {
+    console.error('[llm/onError/search-story]', message);
+    return c.json({ synopsis: '', abstained: true });
+  }
+
+  if (path.endsWith('/write/composer-guidance')) {
+    console.error('[llm/onError/composer-guidance]', message);
+    return c.json({ error: 'Composer guidance writer failed' }, 503);
+  }
+
+  console.error('[llm/onError/unhandled]', message);
+  return c.json({ error: 'LLM route failed' }, 500);
 });

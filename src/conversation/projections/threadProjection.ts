@@ -1,6 +1,7 @@
 import type { ConversationSession } from '../sessionTypes';
 import type { ProjectionPolicy } from '../sessionPolicies';
 import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
+import type { PremiumThreadProjection } from '../../intelligence/premiumContracts';
 
 export type ThreadFilter =
   | 'Top'
@@ -86,6 +87,9 @@ export interface ThreadProjection {
     topContributors: any[];
     entityLandscape: any[];
     writerEntities: any[];
+    hasMentalHealthCrisis: boolean;
+    mentalHealthCategory?: string;
+    premium: PremiumThreadProjection;
   };
   filters: {
     active: ThreadFilter;
@@ -207,6 +211,24 @@ export function projectThreadView(
       topContributors: session.contributors.contributors,
       entityLandscape: session.entities.entityLandscape,
       writerEntities: session.entities.writerEntities,
+      hasMentalHealthCrisis: interpolatorSurface.hasMentalHealthCrisis,
+      ...(interpolatorSurface.mentalHealthCategory
+        ? { mentalHealthCategory: interpolatorSurface.mentalHealthCategory }
+        : {}),
+      premium: {
+        status: session.interpretation.premium.status,
+        isEntitled: (session.interpretation.premium.entitlements?.capabilities ?? [])
+          .includes('deep_interpolator'),
+        ...(session.interpretation.premium.entitlements
+          ? { entitlements: session.interpretation.premium.entitlements }
+          : {}),
+        ...(session.interpretation.premium.deepInterpolator
+          ? { deepInterpolator: session.interpretation.premium.deepInterpolator }
+          : {}),
+        ...(session.interpretation.premium.lastError
+          ? { lastError: session.interpretation.premium.lastError }
+          : {}),
+      },
     },
     filters: {
       active: activeFilter,

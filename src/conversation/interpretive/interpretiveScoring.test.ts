@@ -18,6 +18,7 @@ import {
 import { projectComposerContext } from '../projections/composerProjection';
 import { projectThreadView } from '../projections/threadProjection';
 import { applyInterpretiveConfidence } from './interpretiveScoring';
+import { useInterpolatorSettingsStore } from '../../store/interpolatorSettingsStore';
 
 const ROOT_URI = 'at://did:plc:root/app.bsky.feed.post/root';
 
@@ -236,6 +237,42 @@ describe('interpretive scoring', () => {
 });
 
 describe('interpretive projections', () => {
+  it('hides interpolator surfaces when the feature is disabled', () => {
+    const settings = useInterpolatorSettingsStore.getState();
+    settings.setEnabled(false);
+
+    try {
+      const session = finalizeSession(createFixtureSession({
+        replies: [],
+        rootText: 'A short root post for projection gating.',
+        interpolator: createInterpolator({
+          summaryText: 'The thread is focused on reactions to the post.',
+          heatLevel: 0.2,
+          repetitionLevel: 0.1,
+        }),
+        confidence: {
+          surfaceConfidence: 0.6,
+          entityConfidence: 0.3,
+          interpretiveConfidence: 0.3,
+        },
+        heatLevel: 0.2,
+        repetitionLevel: 0.1,
+      }));
+      const projection = projectThreadView(session, {
+        threadView: 'anchor_linear',
+        maxInlineChildrenPerBranch: 3,
+        deferLowPriorityBranches: true,
+        showModerationWarningsInline: true,
+      });
+
+      expect(projection.interpolator.shouldRender).toBe(false);
+      expect(projection.interpolator.summaryText).toBe('');
+      expect(projection.interpolator.writerSummary).toBeUndefined();
+    } finally {
+      settings.setEnabled(true);
+    }
+  });
+
   it('keeps low-confidence thread summaries descriptive and hides weak interpolator cards', () => {
     const session = finalizeSession(createFixtureSession({
       replies: [
@@ -286,7 +323,9 @@ describe('interpretive projections', () => {
 
     expect(projection.interpolator.shouldRender).toBe(false);
     expect(projection.interpolator.summaryMode).toBe('minimal_fallback');
-    expect(projection.interpolator.summaryText).toContain('This thread includes 2 visible replies');
+    expect(projection.interpolator.summaryText).toContain('This screenshot is making people upset.');
+    expect(projection.interpolator.summaryText).toContain('press for specifics');
+    expect(projection.interpolator.summaryText).not.toMatch(/replies are active|people are reacting/i);
   });
 
   it('adds epistemic guidance to composer projections', () => {
@@ -402,6 +441,84 @@ describe('interpretive projections', () => {
     expect(context.summaries?.epistemicSummary?.disagreementType).toBe('interpretive');
     expect((context.summaries?.epistemicSummary?.confidenceWarnings.length ?? 0)).toBeGreaterThan(0);
   });
+
+  it('projects premium deep interpolator context into thread and composer views', () => {
+    const baseSession = finalizeSession(createFixtureSession({
+      replies: [
+        {
+          uri: 'at://did:plc:one/app.bsky.feed.post/1',
+          authorDid: 'did:plc:one',
+          authorHandle: 'alex.test',
+          text: 'The city budget memo delays the transit cut to next quarter.',
+          score: createScore({
+            role: 'source_bringer',
+            usefulnessScore: 0.84,
+            finalInfluenceScore: 0.88,
+            sourceSupport: 0.88,
+            factualContributionScore: 0.9,
+            factualConfidence: 0.88,
+          }),
+        },
+      ],
+      interpolator: createInterpolator({
+        summaryText: 'The city budget memo says the transit cut moves to next quarter. Replies add sourcing and timeline clarification.',
+        sourceSupportPresent: true,
+        factualSignalPresent: true,
+        heatLevel: 0.12,
+        repetitionLevel: 0.08,
+      }),
+      confidence: {
+        surfaceConfidence: 0.82,
+        entityConfidence: 0.72,
+        interpretiveConfidence: 0.76,
+      },
+      heatLevel: 0.12,
+      repetitionLevel: 0.08,
+      rootText: 'The city budget memo says the transit cut moves to next quarter.',
+    }));
+
+    const session: ConversationSession = {
+      ...baseSession,
+      interpretation: {
+        ...baseSession.interpretation,
+        premium: {
+          status: 'ready',
+          entitlements: {
+            tier: 'pro',
+            capabilities: ['deep_interpolator'],
+            providerAvailable: true,
+            provider: 'gemini',
+          },
+          deepInterpolator: {
+            summary: 'The deeper dispute is less about the memo text than about whether administrative timing changes rider impact immediately.',
+            groundedContext: 'Replies distinguish between the accounting timeline and the service-planning timeline.',
+            perspectiveGaps: ['No reply directly addresses how riders experience the change before next quarter.'],
+            followUpQuestions: ['What changes take effect for riders before the accounting shift lands?'],
+            confidence: 0.74,
+            provider: 'gemini',
+            updatedAt: '2026-03-30T12:12:00.000Z',
+            sourceComputedAt: '2026-03-30T12:10:00.000Z',
+          },
+        },
+      },
+    };
+
+    const threadProjection = projectThreadView(session, {
+      threadView: 'anchor_linear',
+      maxInlineChildrenPerBranch: 3,
+      deferLowPriorityBranches: true,
+      showModerationWarningsInline: true,
+    });
+    const composerContext = projectComposerContext({
+      session,
+      draftText: 'I want to respond with the rider-impact angle.',
+    });
+
+    expect(threadProjection.interpolator.premium.status).toBe('ready');
+    expect(threadProjection.interpolator.premium.deepInterpolator?.provider).toBe('gemini');
+    expect(composerContext.summaries?.premiumContext?.groundedContext).toContain('service-planning timeline');
+    expect(composerContext.summaries?.premiumContext?.perspectiveGaps[0]).toContain('riders');
+  });
 });
 
 function finalizeSession(session: ConversationSession): ConversationSession {
@@ -481,6 +598,7 @@ function createFixtureSession(params: {
 
   return {
     id: ROOT_URI,
+    mode: 'thread',
     graph: {
       rootUri: ROOT_URI,
       nodesByUri,
@@ -512,6 +630,9 @@ function createFixtureSession(params: {
       threadState: null,
       interpretiveExplanation: null,
       lastComputedAt: '2026-03-30T12:10:00.000Z',
+      premium: {
+        status: 'idle',
+      },
     },
     evidence: {
       verificationByUri: Object.fromEntries(

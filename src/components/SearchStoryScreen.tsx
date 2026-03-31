@@ -11,16 +11,15 @@
 //     3. RelatedConversationCard — top reply threads
 //   BottomQueryDock (refine query)
 
-import React, { useState, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
 import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
 import { atpCall } from '../lib/atproto/client';
-import { mapFeedViewPost, mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import { mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
-import { summarizeStoryEntities } from '../intelligence/entityLinking';
 import { useTranslationStore } from '../store/translationStore';
 import { translationClient } from '../lib/i18n/client';
 import { heuristicDetectLanguage } from '../lib/i18n/detect';
@@ -29,6 +28,12 @@ import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
 import type { PostFilterMatch } from '../lib/contentFilters/types';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import {
+  projectStoryView,
+  type StoryProjectedPost,
+  type StoryProjection,
+} from '../conversation/projections/storyProjection';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
@@ -111,13 +116,19 @@ function RichText({ text, color }: { text: string; color: string }) {
 }
 
 // ─── OverviewCard ─────────────────────────────────────────────────────────
-function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; query: string; getTranslatedText: (post: MockPost) => string }) {
+function OverviewCard({
+  overview,
+  resultCount,
+}: {
+  overview: StoryProjectedPost | null;
+  resultCount: number;
+}) {
   const navigateToProfile = useProfileNavigation();
-  const top = posts[0];
-  if (!top) return null;
-  const topText = getTranslatedText(top);
-  const img = top.images?.[0] ?? top.embed?.thumbnail;
-  const domain = top.embed?.url ? (() => { try { return new URL(top.embed!.url!).hostname.replace(/^www\./, ''); } catch { return ''; } })() : '';
+  if (!overview) return null;
+  const { post: top, profileCardData: standardProfileCardData, text: topText } = overview;
+  const mediaEmbed = top.embed?.type === 'external' || top.embed?.type === 'video' ? top.embed : null;
+  const img = overview.imageUrl;
+  const domain = overview.domain ?? '';
 
   return (
     <div style={{
@@ -163,9 +174,9 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
         {/* Stats row */}
         <div style={{ display: 'flex', gap: 16, marginBottom: 14 }}>
           {[
-            { icon: '💬', val: top.replies, label: 'replies' },
-            { icon: '🔁', val: top.reposts, label: 'reposts' },
-            { icon: '❤️', val: top.likes, label: 'likes' },
+            { icon: '💬', val: top.replyCount, label: 'replies' },
+            { icon: '🔁', val: top.repostCount, label: 'reposts' },
+            { icon: '❤️', val: top.likeCount, label: 'likes' },
           ].map(s => (
             <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <span style={{ fontSize: 13 }}>{s.icon}</span>
@@ -173,7 +184,7 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
             </div>
           ))}
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{posts.length} results</span>
+          <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{resultCount} results</span>
         </div>
 
         {/* Source strip */}
@@ -195,9 +206,11 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
                 {domain}
               </span>
             ) : (
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                @{top.author.handle}
-              </button>
+              <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  @{top.author.handle}
+                </button>
+              </ProfileCardTrigger>
             )}
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
@@ -211,11 +224,10 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
 }
 
 // ─── BestSourceCard ───────────────────────────────────────────────────────
-function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTranslatedText: (post: MockPost) => string }) {
+function BestSourceCard({ source }: { source: StoryProjectedPost | null }) {
   const navigateToProfile = useProfileNavigation();
-  const top = posts[0];
-  if (!top) return null;
-  const topText = getTranslatedText(top);
+  if (!source) return null;
+  const { post: top, profileCardData: standardProfileCardData, text: topText } = source;
   return (
     <div style={{
       borderRadius: ocTokens.radius,
@@ -231,16 +243,20 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
 
       {/* Author */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
-          {top.author.avatar
-            ? <img src={top.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent.indigo600, color: '#fff', fontSize: 16, fontWeight: 700 }}>{top.author.displayName[0]}</div>
-          }
-        </div>
-        <div>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>{top.author.displayName}</button>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{top.author.handle}</button>
-        </div>
+        <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+          <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
+            {top.author.avatar
+              ? <img src={top.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent.indigo600, color: '#fff', fontSize: 16, fontWeight: 700 }}>{top.author.displayName[0]}</div>
+            }
+          </div>
+        </ProfileCardTrigger>
+        <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+          <div>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>{top.author.displayName}</button>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{top.author.handle}</button>
+          </div>
+        </ProfileCardTrigger>
       </div>
 
       {/* Full text */}
@@ -282,15 +298,10 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
 }
 
 // ─── RelatedEntitiesCard ──────────────────────────────────────────────────
-function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
+function RelatedEntitiesCard({ entities }: { entities: StoryProjection['relatedEntities'] }) {
   const navigateToProfile = useProfileNavigation();
-  const entities = summarizeStoryEntities(posts.map(p => p.content));
-  const topicEntities = entities
-    .filter(entity => entity.entityKind === 'concept' || entity.entityKind === 'claim')
-    .slice(0, 12);
-  const actorEntities = entities
-    .filter(entity => entity.entityKind === 'person' || entity.entityKind === 'org')
-    .slice(0, 8);
+  const topicEntities = entities.topics;
+  const actorEntities = entities.actors;
 
   return (
     <div style={{
@@ -351,7 +362,13 @@ function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
 }
 
 // ─── RelatedConversationCard ──────────────────────────────────────────────
-function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { posts: MockPost[]; onOpenStory: (e: StoryEntry) => void; getTranslatedText: (post: MockPost) => string }) {
+function RelatedConversationCard({
+  conversations,
+  onOpenStory,
+}: {
+  conversations: StoryProjectedPost[];
+  onOpenStory: (e: StoryEntry) => void;
+}) {
   const navigateToProfile = useProfileNavigation();
   return (
     <div style={{
@@ -366,7 +383,7 @@ function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { po
       }}>Related Conversations</p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {posts.slice(1, 6).map(post => (
+        {conversations.map(({ post, profileCardData: standardProfileCardData, text }) => (
           <motion.div
             key={post.id}
             whileTap={{ scale: 0.985 }}
@@ -380,13 +397,17 @@ function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { po
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
-                {post.author.avatar
-                  ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
-                }
-              </div>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
+              <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+                <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
+                  {post.author.avatar
+                    ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+                  }
+                </div>
+              </ProfileCardTrigger>
+              <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
+              </ProfileCardTrigger>
               <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{post.timestamp}</span>
             </div>
             <p style={{
@@ -394,7 +415,7 @@ function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { po
               color: disc.textSecondary,
               display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
             }}>
-              <RichText text={getTranslatedText(post)} color={disc.textSecondary} />
+              <RichText text={text} color={disc.textSecondary} />
             </p>
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
               <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
@@ -593,6 +614,15 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     return translationById[post.id]?.translatedText ?? post.content;
   }, [translationById]);
 
+  const storyProjection = useMemo(
+    () => projectStoryView({
+      query: refinedQuery,
+      posts: visiblePosts,
+      getTranslatedText,
+    }),
+    [getTranslatedText, refinedQuery, visiblePosts],
+  );
+
   useEffect(() => {
     if (!translationPolicy.autoTranslateExplore) return;
     if (posts.length === 0) return;
@@ -641,10 +671,18 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
   }, { axis: 'x', swipe: { velocity: 0.3 } });
 
   const cards = [
-    <OverviewCard key="overview" posts={visiblePosts} query={refinedQuery} getTranslatedText={getTranslatedText} />,
-    <BestSourceCard key="source" posts={visiblePosts} getTranslatedText={getTranslatedText} />,
-    <RelatedEntitiesCard key="entities" posts={visiblePosts} />,
-    <RelatedConversationCard key="conversation" posts={visiblePosts} onOpenStory={onOpenStory} getTranslatedText={getTranslatedText} />,
+    <OverviewCard
+      key="overview"
+      overview={storyProjection.overview}
+      resultCount={storyProjection.resultCount}
+    />,
+    <BestSourceCard key="source" source={storyProjection.bestSource} />,
+    <RelatedEntitiesCard key="entities" entities={storyProjection.relatedEntities} />,
+    <RelatedConversationCard
+      key="conversation"
+      conversations={storyProjection.relatedConversations}
+      onOpenStory={onOpenStory}
+    />,
   ];
 
   const activeCard = cards[cardIdx];

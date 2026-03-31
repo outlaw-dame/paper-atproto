@@ -2,9 +2,13 @@ import React from 'react';
 import type { MockPost } from '../data/mockData';
 import { formatTime } from '../data/mockData';
 import TwemojiText from './TwemojiText';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useUiStore } from '../store/uiStore';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import { buildStandardProfileCardData } from '../lib/profileCardData';
+import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 
 export const ContextPost = ({
   post,
@@ -26,7 +30,18 @@ export const ContextPost = ({
   const externalEmbed = post.embed?.type === 'external' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
+  const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
   const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
+  const externalEmbedYouTubeRef = externalEmbed ? parseYouTubeUrl(externalEmbed.url) : null;
+  const externalLinkYouTubeRef = quoteEmbed?.externalLink ? parseYouTubeUrl(quoteEmbed.externalLink.url) : null;
+  const inlineTextYouTubeRef = !post.embed && !(post.media?.length)
+    ? extractFirstYouTubeReference({
+        explicitUrls: (post.facets ?? [])
+          .filter((facet) => facet.kind === 'link')
+          .map((facet) => facet.uri),
+        text: post.content,
+      })
+    : null;
   const secondaryLabel = quoteEmbed
     ? 'Quote post'
     : post.article
@@ -36,6 +51,11 @@ export const ContextPost = ({
         : videoEmbed
           ? `Video · ${videoEmbed.domain}`
           : null;
+
+  const standardProfileCardData = buildStandardProfileCardData(post);
+  const quotedStandardProfileCardData = quoteEmbed?.post
+    ? buildStandardProfileCardData(quoteEmbed.post)
+    : null;
 
   const handleHashtagClick = (tag: string) => {
     const normalized = tag.replace(/^#/, '').trim();
@@ -71,35 +91,37 @@ export const ContextPost = ({
       marginRight: 10,
     }}>
       {/* Avatar */}
-      <div style={{
-        width: 36,
-        height: 36,
-        borderRadius: '50%',
-        background: 'var(--fill-2)',
-        overflow: 'hidden',
-        flexShrink: 0,
-      }}>
-        {post.author.avatar ? (
-          <img
-            src={post.author.avatar}
-            alt={post.author.handle}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
-        ) : (
-          <div style={{
-            width: '100%',
-            height: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--label-2)',
-            fontWeight: 700,
-            fontSize: 'var(--type-label-md-size)',
-          }}>
-            {authorInitial}
-          </div>
-        )}
-      </div>
+      <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+        <div style={{
+          width: 36,
+          height: 36,
+          borderRadius: '50%',
+          background: 'var(--fill-2)',
+          overflow: 'hidden',
+          flexShrink: 0,
+        }}>
+          {post.author.avatar ? (
+            <img
+              src={post.author.avatar}
+              alt={post.author.handle}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+          ) : (
+            <div style={{
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--label-2)',
+              fontWeight: 700,
+              fontSize: 'var(--type-label-md-size)',
+            }}>
+              {authorInitial}
+            </div>
+          )}
+        </div>
+      </ProfileCardTrigger>
       {/* Thread connector line — runs from below avatar down to PostCard */}
       <div style={{
         width: 2,
@@ -190,36 +212,38 @@ export const ContextPost = ({
           )}
         </div>
 
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          marginBottom: 6,
-        }}>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(authorActor); }} style={{
-            fontSize: 'var(--type-label-md-size)',
-            lineHeight: 'var(--type-label-md-line)',
-            letterSpacing: 'var(--type-label-md-track)',
-            fontWeight: 700,
-            color: 'var(--label-1)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            background: 'none', border: 'none', padding: 0, cursor: 'pointer'
+        <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginBottom: 6,
           }}>
-            {post.author.displayName || post.author.handle}
-          </button>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(authorActor); }} style={{
-            fontSize: 'var(--type-meta-md-size)',
-            lineHeight: 'var(--type-meta-md-line)',
-            letterSpacing: 'var(--type-meta-md-track)',
-            color: 'var(--label-3)',
-            flexShrink: 0,
-            background: 'none', border: 'none', padding: 0, cursor: 'pointer'
-          }}>
-            @{post.author.handle}
-          </button>
-        </div>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(authorActor); }} style={{
+              fontSize: 'var(--type-label-md-size)',
+              lineHeight: 'var(--type-label-md-line)',
+              letterSpacing: 'var(--type-label-md-track)',
+              fontWeight: 700,
+              color: 'var(--label-1)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer'
+            }}>
+              {post.author.displayName || post.author.handle}
+            </button>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(authorActor); }} style={{
+              fontSize: 'var(--type-meta-md-size)',
+              lineHeight: 'var(--type-meta-md-line)',
+              letterSpacing: 'var(--type-meta-md-track)',
+              color: 'var(--label-3)',
+              flexShrink: 0,
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer'
+            }}>
+              @{post.author.handle}
+            </button>
+          </div>
+        </ProfileCardTrigger>
 
         {post.content.trim().length > 0 && (
           <p
@@ -235,6 +259,16 @@ export const ContextPost = ({
           >
             <TwemojiText text={post.content} onMention={(handle) => { void navigateToProfile(handle); }} onHashtag={handleHashtagClick} />
           </p>
+        )}
+
+        {inlineTextYouTubeRef && (
+          <div style={{ marginTop: post.content.trim().length > 0 ? 10 : 0 }}>
+            <YouTubeEmbedCard
+              url={inlineTextYouTubeRef.normalizedUrl}
+              domain={inlineTextYouTubeRef.domain}
+              compact
+            />
+          </div>
         )}
 
         {quoteEmbed && (
@@ -261,29 +295,33 @@ export const ContextPost = ({
                 </svg>
                 Quoted post
               </span>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{
-                fontSize: 'var(--type-label-md-size)',
-                lineHeight: 'var(--type-label-md-line)',
-                fontWeight: 700,
-                color: 'var(--label-1)',
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                cursor: 'pointer',
-              }}>
-                {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
-              </button>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{
-                fontSize: 'var(--type-meta-md-size)',
-                lineHeight: 'var(--type-meta-md-line)',
-                color: 'var(--label-3)',
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                cursor: 'pointer',
-              }}>
-                @{quoteEmbed.post.author.handle}
-              </button>
+              <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{
+                  fontSize: 'var(--type-label-md-size)',
+                  lineHeight: 'var(--type-label-md-line)',
+                  fontWeight: 700,
+                  color: 'var(--label-1)',
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                }}>
+                  {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
+                </button>
+              </ProfileCardTrigger>
+              <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{
+                  fontSize: 'var(--type-meta-md-size)',
+                  lineHeight: 'var(--type-meta-md-line)',
+                  color: 'var(--label-3)',
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                }}>
+                  @{quoteEmbed.post.author.handle}
+                </button>
+              </ProfileCardTrigger>
             </div>
             {quoteEmbed.post.content.trim().length > 0 && (
               <p className="clamp-2" style={{
@@ -349,67 +387,78 @@ export const ContextPost = ({
                 borderTop: '0.5px solid var(--quote-preview-border)',
                 paddingTop: 8,
               }}>
-                <a
-                  href={quotedExternalEmbed.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    display: 'block',
-                    textDecoration: 'none',
-                    color: 'inherit',
-                  }}
-                >
-                <div style={{
-                  border: '1px solid var(--quote-preview-border)',
-                  borderRadius: 12,
-                  background: 'var(--quote-preview-surface)',
-                  overflow: 'hidden',
-                }}>
-                  {quotedExternalEmbed.thumb && (
-                    <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
-                      <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    </div>
-                  )}
-                  <div style={{ padding: '9px 10px 10px' }}>
-                    <div style={{
-                      fontSize: 'var(--type-meta-sm-size)',
-                      lineHeight: 'var(--type-meta-sm-line)',
-                      color: 'var(--label-3)',
-                      fontWeight: 700,
-                      marginBottom: 4,
-                    }}>
-                      Linked preview
-                    </div>
-                    <div style={{
-                      fontSize: 'var(--type-label-md-size)',
-                      lineHeight: 'var(--type-label-md-line)',
-                      color: 'var(--label-1)',
-                      fontWeight: 700,
-                      marginBottom: 2,
-                    }}>
-                      {quotedExternalEmbed.title}
-                    </div>
-                    <div style={{
-                      fontSize: 'var(--type-meta-md-size)',
-                      lineHeight: 'var(--type-meta-md-line)',
-                      color: 'var(--label-3)',
-                    }}>
-                      {quotedExternalEmbed.domain}
-                    </div>
-                    {quotedExternalEmbed.description && (
-                      <p className="clamp-2" style={{
-                        margin: '6px 0 0',
+                {quotedExternalYouTubeRef ? (
+                  <YouTubeEmbedCard
+                    url={quotedExternalEmbed.url}
+                    title={quotedExternalEmbed.title}
+                    description={quotedExternalEmbed.description}
+                    thumb={quotedExternalEmbed.thumb}
+                    domain={quotedExternalEmbed.domain}
+                    compact
+                  />
+                ) : (
+                  <a
+                    href={quotedExternalEmbed.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: 'block',
+                      textDecoration: 'none',
+                      color: 'inherit',
+                    }}
+                  >
+                  <div style={{
+                    border: '1px solid var(--quote-preview-border)',
+                    borderRadius: 12,
+                    background: 'var(--quote-preview-surface)',
+                    overflow: 'hidden',
+                  }}>
+                    {quotedExternalEmbed.thumb && (
+                      <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                        <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      </div>
+                    )}
+                    <div style={{ padding: '9px 10px 10px' }}>
+                      <div style={{
+                        fontSize: 'var(--type-meta-sm-size)',
+                        lineHeight: 'var(--type-meta-sm-line)',
+                        color: 'var(--label-3)',
+                        fontWeight: 700,
+                        marginBottom: 4,
+                      }}>
+                        Linked preview
+                      </div>
+                      <div style={{
+                        fontSize: 'var(--type-label-md-size)',
+                        lineHeight: 'var(--type-label-md-line)',
+                        color: 'var(--label-1)',
+                        fontWeight: 700,
+                        marginBottom: 2,
+                      }}>
+                        {quotedExternalEmbed.title}
+                      </div>
+                      <div style={{
                         fontSize: 'var(--type-meta-md-size)',
                         lineHeight: 'var(--type-meta-md-line)',
-                        color: 'var(--label-2)',
+                        color: 'var(--label-3)',
                       }}>
-                        {quotedExternalEmbed.description}
-                      </p>
-                    )}
+                        {quotedExternalEmbed.domain}
+                      </div>
+                      {quotedExternalEmbed.description && (
+                        <p className="clamp-2" style={{
+                          margin: '6px 0 0',
+                          fontSize: 'var(--type-meta-md-size)',
+                          lineHeight: 'var(--type-meta-md-line)',
+                          color: 'var(--label-2)',
+                        }}>
+                          {quotedExternalEmbed.description}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-                </a>
+                  </a>
+                )}
               </div>
             )}
             {quotedVideoEmbed && (
@@ -477,134 +526,158 @@ export const ContextPost = ({
                 paddingTop: 8,
                 borderTop: '0.5px solid var(--quote-preview-border)',
               }}>
-                <a
-                  href={quoteEmbed.externalLink.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    display: 'block',
-                    textDecoration: 'none',
-                    color: 'inherit',
-                  }}
-                >
-                <div style={{
-                  border: '1px solid var(--quote-preview-border)',
-                  borderRadius: 12,
-                  background: 'var(--quote-preview-surface)',
-                  overflow: 'hidden',
-                }}>
-                  {quoteEmbed.externalLink.thumb && (
-                    <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
-                      <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    </div>
-                  )}
-                  <div style={{ padding: '9px 10px 10px' }}>
-                    <div style={{
-                      fontSize: 'var(--type-meta-sm-size)',
-                      lineHeight: 'var(--type-meta-sm-line)',
-                      color: 'var(--label-3)',
-                      fontWeight: 700,
-                      marginBottom: 4,
-                    }}>
-                      Shared link
-                    </div>
-                    <div style={{
-                      fontSize: 'var(--type-label-md-size)',
-                      lineHeight: 'var(--type-label-md-line)',
-                      color: 'var(--label-1)',
-                      fontWeight: 700,
-                      marginBottom: 2,
-                    }}>
-                      {quoteEmbed.externalLink.title || quoteEmbed.externalLink.domain}
-                    </div>
-                    <div style={{
-                      fontSize: 'var(--type-meta-md-size)',
-                      lineHeight: 'var(--type-meta-md-line)',
-                      color: 'var(--label-3)',
-                    }}>
-                      {quoteEmbed.externalLink.domain}
-                    </div>
-                    {quoteEmbed.externalLink.description && (
-                      <p className="clamp-2" style={{
-                        margin: '6px 0 0',
+                {externalLinkYouTubeRef ? (
+                  <YouTubeEmbedCard
+                    url={quoteEmbed.externalLink.url}
+                    title={quoteEmbed.externalLink.title}
+                    description={quoteEmbed.externalLink.description}
+                    thumb={quoteEmbed.externalLink.thumb}
+                    domain={quoteEmbed.externalLink.domain}
+                    compact
+                  />
+                ) : (
+                  <a
+                    href={quoteEmbed.externalLink.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: 'block',
+                      textDecoration: 'none',
+                      color: 'inherit',
+                    }}
+                  >
+                  <div style={{
+                    border: '1px solid var(--quote-preview-border)',
+                    borderRadius: 12,
+                    background: 'var(--quote-preview-surface)',
+                    overflow: 'hidden',
+                  }}>
+                    {quoteEmbed.externalLink.thumb && (
+                      <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                        <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      </div>
+                    )}
+                    <div style={{ padding: '9px 10px 10px' }}>
+                      <div style={{
+                        fontSize: 'var(--type-meta-sm-size)',
+                        lineHeight: 'var(--type-meta-sm-line)',
+                        color: 'var(--label-3)',
+                        fontWeight: 700,
+                        marginBottom: 4,
+                      }}>
+                        Shared link
+                      </div>
+                      <div style={{
+                        fontSize: 'var(--type-label-md-size)',
+                        lineHeight: 'var(--type-label-md-line)',
+                        color: 'var(--label-1)',
+                        fontWeight: 700,
+                        marginBottom: 2,
+                      }}>
+                        {quoteEmbed.externalLink.title || quoteEmbed.externalLink.domain}
+                      </div>
+                      <div style={{
                         fontSize: 'var(--type-meta-md-size)',
                         lineHeight: 'var(--type-meta-md-line)',
-                        color: 'var(--label-2)',
+                        color: 'var(--label-3)',
                       }}>
-                        {quoteEmbed.externalLink.description}
-                      </p>
-                    )}
+                        {quoteEmbed.externalLink.domain}
+                      </div>
+                      {quoteEmbed.externalLink.description && (
+                        <p className="clamp-2" style={{
+                          margin: '6px 0 0',
+                          fontSize: 'var(--type-meta-md-size)',
+                          lineHeight: 'var(--type-meta-md-line)',
+                          color: 'var(--label-2)',
+                        }}>
+                          {quoteEmbed.externalLink.description}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-                </a>
+                  </a>
+                )}
               </div>
             )}
           </div>
         )}
 
         {externalEmbed && (
-          <a
-            href={externalEmbed.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              display: 'block',
-              marginTop: post.content.trim().length > 0 ? 10 : 0,
-              border: '1px solid var(--quote-preview-border)',
-              borderRadius: 12,
-              background: 'var(--quote-preview-surface)',
-              overflow: 'hidden',
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-          >
-            {externalEmbed.thumb && (
-              <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
-                <img src={externalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              </div>
-            )}
-            <div style={{
-              padding: '10px 12px',
-            }}>
+          externalEmbedYouTubeRef ? (
+            <div style={{ marginTop: post.content.trim().length > 0 ? 10 : 0 }}>
+              <YouTubeEmbedCard
+                url={externalEmbed.url}
+                title={externalEmbed.title}
+                description={externalEmbed.description}
+                thumb={externalEmbed.thumb}
+                domain={externalEmbed.domain}
+                compact
+              />
+            </div>
+          ) : (
+            <a
+              href={externalEmbed.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: 'block',
+                marginTop: post.content.trim().length > 0 ? 10 : 0,
+                border: '1px solid var(--quote-preview-border)',
+                borderRadius: 12,
+                background: 'var(--quote-preview-surface)',
+                overflow: 'hidden',
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
+            >
+              {externalEmbed.thumb && (
+                <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+                  <img src={externalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              )}
               <div style={{
-                fontSize: 'var(--type-meta-sm-size)',
-                lineHeight: 'var(--type-meta-sm-line)',
-                color: 'var(--label-3)',
-                fontWeight: 700,
-                marginBottom: 4,
+                padding: '10px 12px',
               }}>
-                Shared link
-              </div>
-              <div style={{
-                fontSize: 'var(--type-label-md-size)',
-                lineHeight: 'var(--type-label-md-line)',
-                color: 'var(--label-1)',
-                fontWeight: 700,
-                marginBottom: 2,
-              }}>
-                {externalEmbed.title || externalEmbed.domain}
-              </div>
-              <div style={{
-                fontSize: 'var(--type-meta-md-size)',
-                lineHeight: 'var(--type-meta-md-line)',
-                color: 'var(--label-3)',
-              }}>
-                {externalEmbed.domain}
-              </div>
-              {externalEmbed.description && (
-                <p className="clamp-2" style={{
-                  margin: '6px 0 0',
+                <div style={{
+                  fontSize: 'var(--type-meta-sm-size)',
+                  lineHeight: 'var(--type-meta-sm-line)',
+                  color: 'var(--label-3)',
+                  fontWeight: 700,
+                  marginBottom: 4,
+                }}>
+                  Shared link
+                </div>
+                <div style={{
+                  fontSize: 'var(--type-label-md-size)',
+                  lineHeight: 'var(--type-label-md-line)',
+                  color: 'var(--label-1)',
+                  fontWeight: 700,
+                  marginBottom: 2,
+                }}>
+                  {externalEmbed.title || externalEmbed.domain}
+                </div>
+                <div style={{
                   fontSize: 'var(--type-meta-md-size)',
                   lineHeight: 'var(--type-meta-md-line)',
-                  color: 'var(--label-2)',
+                  color: 'var(--label-3)',
                 }}>
-                  {externalEmbed.description}
-                </p>
-              )}
-            </div>
-          </a>
+                  {externalEmbed.domain}
+                </div>
+                {externalEmbed.description && (
+                  <p className="clamp-2" style={{
+                    margin: '6px 0 0',
+                    fontSize: 'var(--type-meta-md-size)',
+                    lineHeight: 'var(--type-meta-md-line)',
+                    color: 'var(--label-2)',
+                  }}>
+                    {externalEmbed.description}
+                  </p>
+                )}
+              </div>
+            </a>
+          )
         )}
       </div>
     </div>

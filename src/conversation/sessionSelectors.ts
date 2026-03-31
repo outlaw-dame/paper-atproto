@@ -12,6 +12,8 @@ import { projectComposerContext } from './projections/composerProjection';
 import type { ComposerContext } from './projections/composerProjection';
 import type { InterpretiveConfidenceExplanation } from './sessionTypes';
 import type { SummaryMode } from '../intelligence/llmContracts';
+import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore';
+import type { DeepInterpolatorResult, PremiumAiEntitlements } from '../intelligence/premiumContracts';
 
 export function useConversationSession(sessionId: string) {
   return useConversationSessionStore((state) => state.byId[sessionId] ?? null);
@@ -22,11 +24,12 @@ export function useThreadProjection(
   activeFilter: ThreadFilter = 'Top',
 ) {
   const session = useConversationSession(sessionId);
+  const interpolatorEnabled = useInterpolatorSettingsStore((state) => state.enabled);
 
   return useMemo(() => {
     if (!session) return null;
     return projectThreadView(session, defaultAnchorLinearPolicy, activeFilter);
-  }, [session, activeFilter]);
+  }, [session, activeFilter, interpolatorEnabled]);
 }
 
 export function useConversationMeta(sessionId: string) {
@@ -49,6 +52,7 @@ export function useConversationInterpolatedState(sessionId: string) {
         confidence: session.interpretation.confidence,
         threadState: session.interpretation.threadState,
         interpretiveExplanation: session.interpretation.interpretiveExplanation,
+        premium: session.interpretation.premium,
         rootVerification: session.evidence.rootVerification,
         scoresByUri: session.interpretation.scoresByUri,
         verificationByUri: session.evidence.verificationByUri,
@@ -71,6 +75,7 @@ export function useComposerProjection(params: {
 }): ComposerContext | null {
   const { sessionId, replyToUri, draftText } = params;
   const session = useConversationSession(sessionId);
+  const interpolatorEnabled = useInterpolatorSettingsStore((state) => state.enabled);
 
   return useMemo(() => {
     if (!session) return null;
@@ -79,7 +84,7 @@ export function useComposerProjection(params: {
       ...(replyToUri ? { replyToUri } : {}),
       draftText,
     });
-  }, [session, replyToUri, draftText]);
+  }, [session, replyToUri, draftText, interpolatorEnabled]);
 }
 
 export function useComposerContextProjection(
@@ -88,6 +93,7 @@ export function useComposerContextProjection(
   draftText = '',
 ): ComposerContext | null {
   const session = useConversationSession(sessionId);
+  const interpolatorEnabled = useInterpolatorSettingsStore((state) => state.enabled);
 
   return useMemo(() => {
     if (!session) return null;
@@ -96,7 +102,7 @@ export function useComposerContextProjection(
       ...(replyToUri ? { replyToUri } : {}),
       draftText,
     });
-  }, [session, replyToUri, draftText]);
+  }, [session, replyToUri, draftText, interpolatorEnabled]);
 }
 
 function toFilterablePost(params: {
@@ -193,4 +199,18 @@ export function selectInterpretiveExplanation(
 export function selectSummaryMode(sessionId: string): SummaryMode | null {
   return useConversationSessionStore.getState().byId[sessionId]
     ?.interpretation.summaryMode ?? null;
+}
+
+export function selectPremiumDeepInterpolator(
+  sessionId: string,
+): DeepInterpolatorResult | null {
+  return useConversationSessionStore.getState().byId[sessionId]
+    ?.interpretation.premium.deepInterpolator ?? null;
+}
+
+export function selectPremiumEntitlements(
+  sessionId: string,
+): PremiumAiEntitlements | null {
+  return useConversationSessionStore.getState().byId[sessionId]
+    ?.interpretation.premium.entitlements ?? null;
 }

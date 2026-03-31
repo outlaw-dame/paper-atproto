@@ -63,6 +63,22 @@ function mapRoleToStance(role: ContributionRole): string {
   return map[role] ?? 'contributing to the discussion';
 }
 
+function normalizeSignalExcerpt(value: string, maxLen = 88): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen)
+    .trim();
+}
+
+function pushSignal(target: string[], prefix: string, rawText: string): void {
+  const excerpt = normalizeSignalExcerpt(rawText);
+  if (!excerpt) return;
+  const signal = `${prefix}: ${excerpt}`;
+  if (target.some((existing) => existing.toLowerCase() === signal.toLowerCase())) return;
+  target.push(signal);
+}
+
 // ─── buildThreadStateForWriter ────────────────────────────────────────────
 
 export function buildThreadStateForWriter(
@@ -150,10 +166,51 @@ export function buildThreadStateForWriter(
   }
 
   // ── What-changed signals ──────────────────────────────────────────────────
-  const whatChangedSignals: string[] = [
-    ...state.clarificationsAdded.slice(0, 3).map(c => `clarification: ${c.slice(0, 80)}`),
-    ...state.newAnglesAdded.slice(0, 3).map(a => `new angle: ${a.slice(0, 80)}`),
-  ];
+  const whatChangedSignals: string[] = [];
+
+  state.clarificationsAdded.slice(0, 2).forEach((clarification) => {
+    pushSignal(whatChangedSignals, 'clarification', clarification);
+  });
+  state.newAnglesAdded.slice(0, 2).forEach((angle) => {
+    pushSignal(whatChangedSignals, 'new angle', angle);
+  });
+
+  rawComments
+    .filter((comment) => {
+      const score = scores[comment.uri];
+      if (!score) return false;
+      return score.role === 'source_bringer'
+        || score.role === 'rule_source'
+        || score.sourceSupport >= 0.55
+        || score.evidenceSignals.some((signal) => signal.kind === 'citation');
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .slice(0, 2)
+    .forEach((comment) => {
+      pushSignal(whatChangedSignals, 'source cited', comment.text);
+    });
+
+  rawComments
+    .filter((comment) => {
+      const score = scores[comment.uri];
+      return score?.role === 'useful_counterpoint';
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .slice(0, 2)
+    .forEach((comment) => {
+      pushSignal(whatChangedSignals, 'counterpoint', comment.text);
+    });
+
+  rawComments
+    .filter((comment) => {
+      const score = scores[comment.uri];
+      return score?.role === 'new_information';
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .slice(0, 1)
+    .forEach((comment) => {
+      pushSignal(whatChangedSignals, 'new info', comment.text);
+    });
 
   // ── Root post ─────────────────────────────────────────────────────────────
   const rootPost = {
@@ -167,6 +224,7 @@ export function buildThreadStateForWriter(
     threadId,
     summaryMode,
     confidence,
+    visibleReplyCount: replies.length,
     rootPost,
     selectedComments,
     topContributors,

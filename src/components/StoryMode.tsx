@@ -33,8 +33,10 @@ import {
 import { createVerificationProviders } from '../intelligence/verification/providerFactory';
 import { InMemoryVerificationCache } from '../intelligence/verification/cache';
 import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts';
+import type { PremiumThreadProjection } from '../intelligence/premiumContracts';
 import { WriterEntitySheet, EntityChip } from './EntitySheet';
 import VideoPlayer from './VideoPlayer';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
 import { useTranslationStore } from '../store/translationStore';
 import { useUiStore } from '../store/uiStore';
 import { translationClient } from '../lib/i18n/client';
@@ -61,7 +63,7 @@ import {
   slideUpVariants,
 } from '../design/index';
 import { openExternalUrl } from '../lib/safety/externalUrl';
-import { hydrateConversationSession } from '../conversation/sessionAssembler';
+import { useConversationHydration } from '../conversation/sessionHydration';
 import type { ThreadFilter } from '../conversation/projections/threadProjection';
 import {
   useConversationSession,
@@ -73,8 +75,14 @@ import {
 import { useConversationActions } from '../conversation/sessionActions';
 import { projectComposerContext } from '../conversation/projections/composerProjection';
 import { projectModerationDecision } from '../conversation/projections/moderationProjection';
+import {
+  buildThreadScopedProfileCardData,
+  projectThreadScopedProfileCardData,
+} from '../conversation/projections/profileCardProjection';
+import type { ConversationSession } from '../conversation/sessionTypes';
 import ProfileCardTrigger from './ProfileCardTrigger';
 import type { ProfileCardData } from '../types/profileCard';
+import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 
 interface Props {
   entry: StoryEntry;
@@ -312,61 +320,44 @@ function PromptHeroCard({
   const img = post.media?.[0]?.url ?? embedThumb;
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
+  const externalEmbedYouTubeRef = post.embed?.type === 'external' ? parseYouTubeUrl(post.embed.url) : null;
+  const inlineTextYouTubeRef = !post.embed && !(post.media?.length)
+    ? extractFirstYouTubeReference({
+        explicitUrls: (post.facets ?? [])
+          .filter((facet) => facet.kind === 'link')
+          .map((facet) => facet.uri),
+        text: post.content,
+      })
+    : null;
   const quotedThreadProfileCardData: ProfileCardData | null = quoteEmbed?.post
     ? (() => {
         const quotedPost = quoteEmbed.post;
-        const did = (quotedPost.author.did ?? '').trim();
-        const handle = (quotedPost.author.handle ?? '').trim();
-        if (!did || !handle) return null;
-
-        return {
-          variant: 'thread_scoped',
-          identity: {
-            did,
-            handle,
-            ...(quotedPost.author.displayName ? { displayName: quotedPost.author.displayName } : {}),
-            ...(quotedPost.author.avatar ? { avatar: quotedPost.author.avatar } : {}),
-          },
-          social: {
-            followersCount: 0,
-            mutualsCount: 0,
-            followingCount: 0,
-            isFollowing: false,
-            canFollow: true,
-            canBlock: true,
-          },
-          starterPacks: [],
-          activity: {
-            recentPosts: quotedPost.content.trim()
-              ? [{
-                  uri: quotedPost.id,
-                  text: quotedPost.content,
-                  createdAt: quotedPost.createdAt,
-                  likeCount: quotedPost.likeCount,
-                  replyCount: quotedPost.replyCount,
-                  hasMedia: Boolean(quotedPost.media?.length || quotedPost.embed?.type === 'video' || quotedPost.embed?.type === 'external'),
-                }]
-              : [],
-            popularPosts: [],
-          },
-          threadContext: {
-            threadUri: post.id,
-            compactPosts: quotedPost.content.trim()
-              ? [{
-                  uri: quotedPost.id,
-                  text: quotedPost.content,
-                  createdAt: quotedPost.createdAt,
-                  likeCount: quotedPost.likeCount,
-                  replyCount: quotedPost.replyCount,
-                  hasMedia: Boolean(quotedPost.media?.length || quotedPost.embed?.type === 'video' || quotedPost.embed?.type === 'external'),
-                }]
-              : [],
-            roleSummary: 'Quoted in thread context',
-          },
-        };
+        return buildThreadScopedProfileCardData({
+          did: quotedPost.author.did ?? '',
+          handle: quotedPost.author.handle ?? '',
+          ...(quotedPost.author.displayName ? { displayName: quotedPost.author.displayName } : {}),
+          ...(quotedPost.author.avatar ? { avatar: quotedPost.author.avatar } : {}),
+          threadUri: post.id,
+          compactPosts: quotedPost.content.trim()
+            ? [{
+                uri: quotedPost.id,
+                text: quotedPost.content,
+                createdAt: quotedPost.createdAt,
+                likeCount: quotedPost.likeCount,
+                replyCount: quotedPost.replyCount,
+                hasMedia: Boolean(
+                  quotedPost.media?.length
+                  || quotedPost.embed?.type === 'video'
+                  || quotedPost.embed?.type === 'external',
+                ),
+              }]
+            : [],
+          roleSummary: 'Quoted in thread context',
+        });
       })()
     : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
+  const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
   const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
   return (
     <div style={{
@@ -510,9 +501,31 @@ function PromptHeroCard({
           </div>
         )}
 
+        {inlineTextYouTubeRef && (
+          <div style={{ marginBottom: 16 }}>
+            <YouTubeEmbedCard
+              url={inlineTextYouTubeRef.normalizedUrl}
+              domain={inlineTextYouTubeRef.domain}
+            />
+          </div>
+        )}
+
         {/* External link card */}
         {post.embed?.type === 'external' && (() => {
           const ext = post.embed;
+          if (externalEmbedYouTubeRef) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <YouTubeEmbedCard
+                  url={ext.url}
+                  title={ext.title}
+                  description={ext.description}
+                  thumb={ext.thumb}
+                  domain={ext.domain}
+                />
+              </div>
+            );
+          }
           return (
             <div
               role="link"
@@ -614,44 +627,57 @@ function PromptHeroCard({
               <RichText text={quoteEmbed.post.content} baseColor={phTokens.meta} onHashtag={handleHashtagClick} />
             </p>
             {quotedExternalEmbed && (
-              <a
-                href={quotedExternalEmbed.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                style={{
-                  display: 'block',
-                  marginTop: 10,
-                  background: 'var(--quote-preview-surface)',
-                  borderRadius: radius[12],
-                  border: '1px solid var(--quote-preview-border)',
-                  textDecoration: 'none',
-                  overflow: 'hidden',
-                }}
-              >
-                {quotedExternalEmbed.thumb && (
-                  <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: 112, objectFit: 'cover' }} />
-                )}
-                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quotedExternalEmbed.title}</p>
-                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quotedExternalEmbed.domain}</p>
-                  {quotedExternalEmbed.description && (
-                    <p style={{
-                      margin: '6px 0 0',
-                      fontSize: typeScale.metaSm[0],
-                      lineHeight: '18px',
-                      color: phTokens.meta,
-                      opacity: 0.82,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }}>
-                      {quotedExternalEmbed.description}
-                    </p>
-                  )}
+              quotedExternalYouTubeRef ? (
+                <div style={{ marginTop: 10 }}>
+                  <YouTubeEmbedCard
+                    url={quotedExternalEmbed.url}
+                    title={quotedExternalEmbed.title}
+                    description={quotedExternalEmbed.description}
+                    thumb={quotedExternalEmbed.thumb}
+                    domain={quotedExternalEmbed.domain}
+                    compact
+                  />
                 </div>
-              </a>
+              ) : (
+                <a
+                  href={quotedExternalEmbed.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    marginTop: 10,
+                    background: 'var(--quote-preview-surface)',
+                    borderRadius: radius[12],
+                    border: '1px solid var(--quote-preview-border)',
+                    textDecoration: 'none',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {quotedExternalEmbed.thumb && (
+                    <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: 112, objectFit: 'cover' }} />
+                  )}
+                  <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                    <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quotedExternalEmbed.title}</p>
+                    <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quotedExternalEmbed.domain}</p>
+                    {quotedExternalEmbed.description && (
+                      <p style={{
+                        margin: '6px 0 0',
+                        fontSize: typeScale.metaSm[0],
+                        lineHeight: '18px',
+                        color: phTokens.meta,
+                        opacity: 0.82,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}>
+                        {quotedExternalEmbed.description}
+                      </p>
+                    )}
+                  </div>
+                </a>
+              )
             )}
             {quotedVideoEmbed && (
               <div style={{
@@ -675,69 +701,95 @@ function PromptHeroCard({
 
         {/* External link preview (standalone or from recordWithMedia) */}
         {quoteEmbed?.externalLink && (
-          <a
-            href={quoteEmbed.externalLink.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
-            style={{
-              display: 'block', marginBottom: 16,
-              background: 'var(--quote-preview-surface)',
-              borderRadius: radius[12],
-              border: '1px solid var(--quote-preview-border)',
-              textDecoration: 'none', overflow: 'hidden',
-            }}
-          >
-            {quoteEmbed.externalLink.thumb && (
-              <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
-            )}
-            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-              {quoteEmbed.externalLink.title && (
-                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quoteEmbed.externalLink.title}</p>
-              )}
-              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quoteEmbed.externalLink.domain}</p>
-              {quoteEmbed.externalLink.description && (
-                <p style={{
-                  margin: '6px 0 0',
-                  fontSize: typeScale.metaSm[0],
-                  lineHeight: '18px',
-                  color: phTokens.meta,
-                  opacity: 0.82,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                }}>
-                  {quoteEmbed.externalLink.description}
-                </p>
-              )}
+          parseYouTubeUrl(quoteEmbed.externalLink.url) ? (
+            <div style={{ marginBottom: 16 }}>
+              <YouTubeEmbedCard
+                url={quoteEmbed.externalLink.url}
+                title={quoteEmbed.externalLink.title}
+                description={quoteEmbed.externalLink.description}
+                thumb={quoteEmbed.externalLink.thumb}
+                domain={quoteEmbed.externalLink.domain}
+                compact
+              />
             </div>
-          </a>
+          ) : (
+            <a
+              href={quoteEmbed.externalLink.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              style={{
+                display: 'block', marginBottom: 16,
+                background: 'var(--quote-preview-surface)',
+                borderRadius: radius[12],
+                border: '1px solid var(--quote-preview-border)',
+                textDecoration: 'none', overflow: 'hidden',
+              }}
+            >
+              {quoteEmbed.externalLink.thumb && (
+                <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
+              )}
+              <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                {quoteEmbed.externalLink.title && (
+                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quoteEmbed.externalLink.title}</p>
+                )}
+                <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quoteEmbed.externalLink.domain}</p>
+                {quoteEmbed.externalLink.description && (
+                  <p style={{
+                    margin: '6px 0 0',
+                    fontSize: typeScale.metaSm[0],
+                    lineHeight: '18px',
+                    color: phTokens.meta,
+                    opacity: 0.82,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }}>
+                    {quoteEmbed.externalLink.description}
+                  </p>
+                )}
+              </div>
+            </a>
+          )
         )}
         {post.embed?.type === 'external' && (
-          <a
-            href={post.embed.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
-            style={{
-              display: 'block', marginBottom: 16,
-              background: 'rgba(255,255,255,0.06)',
-              borderRadius: radius[12],
-              border: `0.5px solid ${phTokens.line}`,
-              textDecoration: 'none', overflow: 'hidden',
-            }}
-          >
-            {post.embed.thumb && (
-              <img src={post.embed.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
-            )}
-            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-              {post.embed.title && (
-                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.title}</p>
-              )}
-              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.domain}</p>
+          externalEmbedYouTubeRef ? (
+            <div style={{ marginBottom: 16 }}>
+              <YouTubeEmbedCard
+                url={post.embed.url}
+                title={post.embed.title}
+                description={post.embed.description}
+                thumb={post.embed.thumb}
+                domain={post.embed.domain}
+                compact
+              />
             </div>
-          </a>
+          ) : (
+            <a
+              href={post.embed.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              style={{
+                display: 'block', marginBottom: 16,
+                background: 'rgba(255,255,255,0.06)',
+                borderRadius: radius[12],
+                border: `0.5px solid ${phTokens.line}`,
+                textDecoration: 'none', overflow: 'hidden',
+              }}
+            >
+              {post.embed.thumb && (
+                <img src={post.embed.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
+              )}
+              <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                {post.embed.title && (
+                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.title}</p>
+                )}
+                <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.domain}</p>
+              </div>
+            </a>
+          )
         )}
 
         {/* Factual chips from root verification */}
@@ -860,41 +912,319 @@ function PromptHeroCard({
 }
 
 // ─── renderSummaryText ────────────────────────────────────────────────────
-// Splits summaryText on @mentions and #hashtags, returning a React node array
-// with linkified, slightly-bold handles and linkified tags.
-function renderSummaryText(text: string): React.ReactNode[] {
-  const parts = text.split(/(@[\w.:-]+|#[\w]+)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('@')) {
-      const handle = part.slice(1);
-      return (
+// Splits summary text into plain text, @mentions, #hashtags, and URL-ish
+// references so summary copy can stay readable while still surfacing sources.
+const SUMMARY_TOKEN_RE =
+  /(@[\w.:-]+|#[\w]+|https?:\/\/[^\s<>"')]+|(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s<>"')]+)?)/gi;
+
+const GENERIC_ENTITY_LABELS = new Set([
+  'thread',
+  'discussion',
+  'post',
+  'reply',
+  'replies',
+  'comment',
+  'comments',
+  'story',
+  'article',
+  'report',
+  'reporting',
+  'source',
+  'sources',
+  'context',
+  'timeline',
+  'claim',
+  'claims',
+]);
+
+type SummaryRenderOptions = {
+  summaryEntities?: SummaryEntityCandidate[];
+  onEntityTap?: (entity: WriterEntity) => void;
+};
+
+type SummaryEntityCandidate = {
+  entity: WriterEntity;
+  label: string;
+  normalizedLabel: string;
+};
+
+function splitSummaryTokenSuffix(token: string): { core: string; suffix: string } {
+  const match = token.match(/^(.*?)([),.;!?…]+)?$/);
+  if (!match) return { core: token, suffix: '' };
+  return {
+    core: match[1] || token,
+    suffix: match[2] || '',
+  };
+}
+
+function buildSummaryHref(token: string): string | null {
+  const candidate = /^https?:\/\//i.test(token) ? token : `https://${token}`;
+  try {
+    return new URL(candidate).toString();
+  } catch {
+    return null;
+  }
+}
+
+function formatRelativeTimestamp(timestamp?: string): string {
+  if (!timestamp) return '';
+  try {
+    const diff = Date.now() - new Date(timestamp).getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    return `${Math.floor(minutes / 60)}h ago`;
+  } catch {
+    return '';
+  }
+}
+
+function mapEntityImpactToWriterEntity(entity: EntityImpact): WriterEntity | null {
+  const label = (entity.canonicalLabel ?? entity.entityText ?? '').trim();
+  if (!label) return null;
+
+  const type: WriterEntity['type'] = entity.entityKind === 'person'
+    ? 'person'
+    : entity.entityKind === 'org'
+      ? 'organization'
+      : entity.entityKind === 'claim'
+        ? 'rule'
+        : 'topic';
+
+  return {
+    id: entity.canonicalEntityId ?? label.toLowerCase().replace(/\s+/g, '-'),
+    label,
+    type,
+    confidence: Math.max(0, Math.min(1, entity.matchConfidence ?? Math.min(1, entity.mentionCount / 4))),
+    impact: Math.max(0, Math.min(1, entity.mentionCount / 5)),
+  };
+}
+
+function shouldLinkSummaryEntity(entity: WriterEntity): boolean {
+  const label = entity.label.trim();
+  if (!label || /^[@#]/.test(label)) return false;
+  if (/^\d+$/.test(label)) return false;
+  if (GENERIC_ENTITY_LABELS.has(label.toLowerCase())) return false;
+
+  const words = label.split(/\s+/).filter(Boolean);
+  const isAcronym = /^[A-Z0-9]{2,6}$/.test(label);
+  if (words.length === 1) {
+    if (!isAcronym && label.length < 4) return false;
+    if (entity.type === 'topic' && !isAcronym && label.length < 6) return false;
+  }
+
+  return entity.confidence >= 0.52 || entity.impact >= 0.28 || words.length > 1;
+}
+
+function collectSummaryEntityCandidates(
+  safeEntities?: WriterEntity[],
+  entityLandscape?: EntityImpact[],
+): SummaryEntityCandidate[] {
+  const deduped = new Map<string, SummaryEntityCandidate>();
+  const addCandidate = (entity: WriterEntity | null | undefined) => {
+    if (!entity || !shouldLinkSummaryEntity(entity)) return;
+    const normalizedLabel = entity.label.trim().toLowerCase();
+    if (!normalizedLabel) return;
+    const existing = deduped.get(normalizedLabel);
+    if (!existing || entity.confidence > existing.entity.confidence || entity.impact > existing.entity.impact) {
+      deduped.set(normalizedLabel, {
+        entity,
+        label: entity.label.trim(),
+        normalizedLabel,
+      });
+    }
+  };
+
+  safeEntities?.forEach((entity) => addCandidate(entity));
+  entityLandscape?.forEach((entity) => addCandidate(mapEntityImpactToWriterEntity(entity)));
+
+  return [...deduped.values()].sort((a, b) => (
+    b.label.length - a.label.length || b.entity.confidence - a.entity.confidence || b.entity.impact - a.entity.impact
+  ));
+}
+
+function isEntityBoundaryChar(value: string | undefined): boolean {
+  return !value || !/[A-Za-z0-9_@#]/.test(value);
+}
+
+function findEntityMatch(
+  text: string,
+  startIndex: number,
+  candidates: SummaryEntityCandidate[],
+): { index: number; candidate: SummaryEntityCandidate } | null {
+  if (candidates.length === 0) return null;
+
+  const lowerText = text.toLowerCase();
+  let best: { index: number; candidate: SummaryEntityCandidate } | null = null;
+
+  for (const candidate of candidates) {
+    let searchFrom = startIndex;
+    while (searchFrom < text.length) {
+      const index = lowerText.indexOf(candidate.normalizedLabel, searchFrom);
+      if (index < 0) break;
+
+      const before = index > 0 ? text[index - 1] : undefined;
+      const afterIndex = index + candidate.label.length;
+      const after = afterIndex < text.length ? text[afterIndex] : undefined;
+      if (isEntityBoundaryChar(before) && isEntityBoundaryChar(after)) {
+        if (!best || index < best.index || (index === best.index && candidate.label.length > best.candidate.label.length)) {
+          best = { index, candidate };
+        }
+        break;
+      }
+
+      searchFrom = index + candidate.label.length;
+    }
+  }
+
+  return best;
+}
+
+function renderPlainSummarySegment(
+  text: string,
+  keyPrefix: string,
+  options: SummaryRenderOptions,
+): React.ReactNode[] {
+  const { summaryEntities = [], onEntityTap } = options;
+  const candidates = summaryEntities;
+  if (text.length === 0 || candidates.length === 0 || !onEntityTap) return text ? [text] : [];
+
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  let partIndex = 0;
+
+  while (cursor < text.length) {
+    const match = findEntityMatch(text, cursor, candidates);
+    if (!match) {
+      nodes.push(text.slice(cursor));
+      break;
+    }
+
+    if (match.index > cursor) {
+      nodes.push(text.slice(cursor, match.index));
+    }
+
+    const label = text.slice(match.index, match.index + match.candidate.label.length);
+    nodes.push(
+      <button
+        key={`${keyPrefix}-entity-${partIndex}`}
+        type="button"
+        className="interactive-link-button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onEntityTap(match.candidate.entity);
+        }}
+        style={{
+          color: accent.blue500,
+          font: 'inherit',
+          fontWeight: 600,
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          padding: 0,
+        }}
+      >
+        {label}
+      </button>,
+    );
+
+    cursor = match.index + match.candidate.label.length;
+    partIndex += 1;
+  }
+
+  return nodes;
+}
+
+function renderSummaryText(text: string, options: SummaryRenderOptions = {}): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+
+  for (const match of text.matchAll(SUMMARY_TOKEN_RE)) {
+    const index = match.index ?? 0;
+    const token = match[0];
+    if (!token) continue;
+
+    if (index > cursor) {
+      nodes.push(...renderPlainSummarySegment(
+        text.slice(cursor, index),
+        `plain-${cursor}`,
+        options,
+      ));
+    }
+
+    const { core, suffix } = splitSummaryTokenSuffix(token);
+
+    if (core.startsWith('@')) {
+      const handle = core.slice(1);
+      nodes.push(
         <a
-          key={i}
+          key={`mention-${index}`}
           href={`https://bsky.app/profile/${handle}`}
           target="_blank"
           rel="noopener noreferrer"
-          style={{ fontWeight: 600, color: 'inherit', textDecoration: 'none' }}
+          style={{ fontWeight: 600, color: accent.blue500, textDecoration: 'none' }}
+          onClick={(e) => e.stopPropagation()}
         >
-          {part}
-        </a>
+          {core}
+        </a>,
       );
-    }
-    if (part.startsWith('#')) {
-      const tag = part.slice(1);
-      return (
+    } else if (core.startsWith('#')) {
+      const tag = core.slice(1);
+      nodes.push(
         <a
-          key={i}
+          key={`tag-${index}`}
           href={`https://bsky.app/search?q=%23${tag}`}
           target="_blank"
           rel="noopener noreferrer"
-          style={{ color: 'inherit', textDecoration: 'none' }}
+          style={{ color: accent.blue500, textDecoration: 'none', fontWeight: 600 }}
+          onClick={(e) => e.stopPropagation()}
         >
-          {part}
-        </a>
+          {core}
+        </a>,
       );
+    } else {
+      const href = buildSummaryHref(core);
+      if (href) {
+        const label = (() => {
+          try {
+            return new URL(href).hostname.replace(/^www\./, '');
+          } catch {
+            return core;
+          }
+        })();
+        nodes.push(
+          <a
+            key={`url-${index}`}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: accent.blue500, textDecoration: 'none', fontWeight: 600 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {label}
+          </a>,
+        );
+      } else {
+        nodes.push(core);
+      }
     }
-    return part;
-  });
+
+    if (suffix) {
+      nodes.push(suffix);
+    }
+
+    cursor = index + token.length;
+  }
+
+  if (cursor < text.length) {
+    nodes.push(...renderPlainSummarySegment(
+      text.slice(cursor),
+      `plain-tail-${cursor}`,
+      options,
+    ));
+  }
+
+  return nodes.length > 0 ? nodes : [text];
 }
 
 // ─── InterpolatorCard ─────────────────────────────────────────────────────
@@ -907,6 +1237,7 @@ function InterpolatorCard({
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
   topContributors, entityLandscape, factualSignalPresent,
+  premium,
   onEntityTap,
 }: {
   rootUri: string;
@@ -931,6 +1262,7 @@ function InterpolatorCard({
   topContributors: ContributorImpact[];
   entityLandscape: EntityImpact[];
   factualSignalPresent: boolean;
+  premium: PremiumThreadProjection;
   onEntityTap?: (entity: WriterEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -939,19 +1271,34 @@ function InterpolatorCard({
   // Only show "emerging" when there is genuinely nothing to display —
   // the model can write a summary for even a 1-reply thread.
   const state: InterpolatorState = displaySummary === '' ? 'emerging' : 'collapsed';
-
-  const updatedAgo = (() => {
-    try {
-      const diff = Date.now() - new Date(updatedAt).getTime();
-      const m = Math.floor(diff / 60000);
-      if (m < 1) return 'just now';
-      if (m < 60) return `${m}m ago`;
-      return `${Math.floor(m / 60)}h ago`;
-    } catch { return ''; }
-  })();
+  const updatedAgo = formatRelativeTimestamp(updatedAt);
 
   const bg = intTokens.discussion.bg;
   const bg2 = intTokens.discussion.bg2;
+  const premiumReady = premium.status === 'ready' && !!premium.deepInterpolator;
+  const premiumLoading = premium.isEntitled && premium.status === 'loading';
+  const premiumError = premium.isEntitled && premium.status === 'error';
+  const deepSummary = premium.deepInterpolator?.summary?.trim() ?? '';
+  const groundedContext = premium.deepInterpolator?.groundedContext?.trim() ?? '';
+  const perspectiveGaps = premium.deepInterpolator?.perspectiveGaps ?? [];
+  const followUpQuestions = premium.deepInterpolator?.followUpQuestions ?? [];
+  const premiumSafetyFlagged = premium.deepInterpolator?.safety?.flagged === true;
+  const premiumUpdatedAgo = formatRelativeTimestamp(premium.deepInterpolator?.updatedAt);
+  const premiumSourceAgo = formatRelativeTimestamp(premium.deepInterpolator?.sourceComputedAt);
+  const premiumConfidence = premium.deepInterpolator
+    ? Math.round(Math.max(0, Math.min(1, premium.deepInterpolator.confidence)) * 100)
+    : null;
+  const summaryEntities = useMemo(
+    () => collectSummaryEntityCandidates(safeEntities, entityLandscape),
+    [safeEntities, entityLandscape],
+  );
+  const summaryRenderOptions = useMemo<SummaryRenderOptions>(
+    () => ({
+      summaryEntities,
+      ...(onEntityTap ? { onEntityTap } : {}),
+    }),
+    [summaryEntities, onEntityTap],
+  );
 
   return (
     <motion.div
@@ -1020,16 +1367,16 @@ function InterpolatorCard({
       }}>
         {state === 'emerging'
           ? replyCount === 0
-            ? 'This discussion is just beginning. Be the first to contribute.'
-            : `This discussion is forming around ${replyCount} early response${replyCount > 1 ? 's' : ''}. Early voices are shaping the conversation.`
-          : displaySummary ? renderSummaryText(displaySummary) : 'Analyzing conversation…'
+            ? 'There are no replies yet. Be the first to contribute.'
+            : `This post has ${replyCount} early response${replyCount > 1 ? 's' : ''}, but there is not enough visible reply text yet to characterize how the thread is breaking.`
+          : displaySummary ? renderSummaryText(displaySummary, summaryRenderOptions) : 'Analyzing conversation…'
         }
       </p>
 
       {/* Fallback mode badge */}
       {writerSummary && summaryMode && summaryMode !== 'normal' && (
         <p style={{ fontSize: 11, color: intTokens.text.secondary, opacity: 0.5, margin: '-10px 0 10px', fontStyle: 'italic' }}>
-          {summaryMode === 'descriptive_fallback' ? 'Descriptive analysis' : 'Summary'}
+          {summaryMode === 'descriptive_fallback' ? 'Observable thread summary' : 'Early thread summary'}
         </p>
       )}
 
@@ -1071,6 +1418,24 @@ function InterpolatorCard({
             fontSize: typeScale.metaLg[0], fontWeight: 600,
           }}>evidence verified</span>
         )}
+        {premiumReady && (
+          <span style={{
+            padding: '4px 10px', borderRadius: radius.full,
+            background: 'rgba(124, 178, 255, 0.14)',
+            border: '0.5px solid rgba(124, 178, 255, 0.30)',
+            color: '#A7C9FF',
+            fontSize: typeScale.metaLg[0], fontWeight: 600,
+          }}>deep pass ready</span>
+        )}
+        {premiumLoading && (
+          <span style={{
+            padding: '4px 10px', borderRadius: radius.full,
+            background: 'rgba(255,255,255,0.08)',
+            border: '0.5px solid rgba(255,255,255,0.14)',
+            color: intTokens.text.secondary,
+            fontSize: typeScale.metaLg[0], fontWeight: 600,
+          }}>deep pass loading</span>
+        )}
       </div>
 
       {/* Expanded content */}
@@ -1083,6 +1448,184 @@ function InterpolatorCard({
             transition={transitions.interpolatorToggle}
             style={{ overflow: 'hidden' }}
           >
+            {(premiumReady || premiumLoading || premiumError) && (
+              <div
+                style={{
+                  marginBottom: 16,
+                  padding: '12px 12px 10px',
+                  borderRadius: 14,
+                  background: 'rgba(12, 24, 43, 0.28)',
+                  border: '0.5px solid rgba(135, 177, 255, 0.18)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: premiumReady ? 10 : 0 }}>
+                  <div>
+                    <p style={{
+                      fontSize: typeScale.metaLg[0],
+                      fontWeight: 700,
+                      color: '#CFE1FF',
+                      marginBottom: 2,
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                    }}>Deep Interpolator</p>
+                    <p style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: 'rgba(226, 235, 255, 0.72)',
+                    }}>
+                      {premiumReady
+                        ? `Gemini deep pass built from the base Interpolator${premiumSourceAgo ? ` ${premiumSourceAgo}` : ''}.`
+                        : premiumLoading
+                          ? 'Gemini is preparing a deeper pass from the current base Interpolator state.'
+                          : 'Gemini is temporarily unavailable for the deep pass.'}
+                    </p>
+                  </div>
+                  {premiumReady && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <span style={{
+                        padding: '3px 8px',
+                        borderRadius: radius.full,
+                        background: 'rgba(135, 177, 255, 0.14)',
+                        border: '0.5px solid rgba(135, 177, 255, 0.25)',
+                        color: '#D6E5FF',
+                        fontSize: typeScale.metaSm[0],
+                        fontWeight: 700,
+                      }}>Base + Gemini</span>
+                      {premiumConfidence !== null && (
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: radius.full,
+                          background: 'rgba(255,255,255,0.07)',
+                          border: '0.5px solid rgba(255,255,255,0.12)',
+                          color: intTokens.text.secondary,
+                          fontSize: typeScale.metaSm[0],
+                          fontWeight: 600,
+                        }}>{premiumConfidence}% confidence</span>
+                      )}
+                      {premiumUpdatedAgo && (
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: radius.full,
+                          background: 'rgba(255,255,255,0.07)',
+                          border: '0.5px solid rgba(255,255,255,0.12)',
+                          color: intTokens.text.secondary,
+                          fontSize: typeScale.metaSm[0],
+                          fontWeight: 600,
+                        }}>deep {premiumUpdatedAgo}</span>
+                      )}
+                      {premiumSafetyFlagged && (
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: radius.full,
+                          background: 'rgba(255, 206, 122, 0.12)',
+                          border: '0.5px solid rgba(255, 206, 122, 0.25)',
+                          color: '#FFD38A',
+                          fontSize: typeScale.metaSm[0],
+                          fontWeight: 600,
+                        }}>safety-normalized</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {premiumLoading && (
+                  <p style={{
+                    fontSize: typeScale.bodySm[0],
+                    color: intTokens.text.secondary,
+                    lineHeight: '1.45',
+                  }}>
+                    The base Interpolator is already live. The premium pass is building extra context, perspective gaps, and follow-up questions.
+                  </p>
+                )}
+
+                {premiumError && !premiumReady && (
+                  <p style={{
+                    fontSize: typeScale.bodySm[0],
+                    color: intTokens.text.secondary,
+                    lineHeight: '1.45',
+                  }}>
+                    The standard Interpolator is still active, but the deeper premium pass did not complete on this refresh.
+                  </p>
+                )}
+
+                {premiumReady && (
+                  <>
+                    {deepSummary && (
+                      <p style={{
+                        fontSize: typeScale.bodySm[0],
+                        color: '#F5F8FF',
+                        lineHeight: '1.55',
+                        marginBottom: groundedContext || perspectiveGaps.length > 0 || followUpQuestions.length > 0 ? 12 : 0,
+                      }}>
+                        {renderSummaryText(deepSummary, summaryRenderOptions)}
+                      </p>
+                    )}
+
+                    {groundedContext && (
+                      <div style={{ marginBottom: perspectiveGaps.length > 0 || followUpQuestions.length > 0 ? 12 : 0 }}>
+                        <p style={{
+                          fontSize: typeScale.metaLg[0],
+                          fontWeight: 700,
+                          color: intTokens.text.meta,
+                          marginBottom: 6,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>Grounded context</p>
+                        <p style={{
+                          fontSize: typeScale.bodySm[0],
+                          color: intTokens.text.secondary,
+                          lineHeight: '1.5',
+                        }}>
+                          {renderSummaryText(groundedContext, summaryRenderOptions)}
+                        </p>
+                      </div>
+                    )}
+
+                    {perspectiveGaps.length > 0 && (
+                      <div style={{ marginBottom: followUpQuestions.length > 0 ? 12 : 0 }}>
+                        <p style={{
+                          fontSize: typeScale.metaLg[0],
+                          fontWeight: 700,
+                          color: intTokens.text.meta,
+                          marginBottom: 6,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>Context to watch</p>
+                        {perspectiveGaps.slice(0, 3).map((gap, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                            <span style={{ color: '#A7C9FF', fontSize: 13, flexShrink: 0 }}>•</span>
+                            <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                              {renderSummaryText(gap, summaryRenderOptions)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {followUpQuestions.length > 0 && (
+                      <div>
+                        <p style={{
+                          fontSize: typeScale.metaLg[0],
+                          fontWeight: 700,
+                          color: intTokens.text.meta,
+                          marginBottom: 6,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>Questions worth tracking</p>
+                        {followUpQuestions.slice(0, 3).map((question, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                            <span style={{ color: '#63DCB4', fontSize: 13, flexShrink: 0 }}>?</span>
+                            <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                              {renderSummaryText(question, summaryRenderOptions)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {/* What changed — prefer model output, fall back to heuristic */}
             {((writerWhatChanged && writerWhatChanged.length > 0) || clarifications.length > 0 || newAngles.length > 0) && (
               <div style={{ marginBottom: 14 }}>
@@ -1093,7 +1636,9 @@ function InterpolatorCard({
                     return (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                         <span style={{ color: isNewAngle ? intel.accentLime : intel.accentCyan, fontSize: 13, flexShrink: 0 }}>{isNewAngle ? '↗' : '•'}</span>
-                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{signal}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                          {renderSummaryText(signal, summaryRenderOptions)}
+                        </span>
                       </div>
                     );
                   })
@@ -1102,13 +1647,17 @@ function InterpolatorCard({
                     {clarifications.slice(0, 2).map((c, i) => (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                         <span style={{ color: intel.accentCyan, fontSize: 13, flexShrink: 0 }}>•</span>
-                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{c}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                          {renderSummaryText(c, summaryRenderOptions)}
+                        </span>
                       </div>
                     ))}
                     {newAngles.slice(0, 2).map((a, i) => (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                         <span style={{ color: intel.accentLime, fontSize: 13, flexShrink: 0 }}>↗</span>
-                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{a}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                          {renderSummaryText(a, summaryRenderOptions)}
+                        </span>
                       </div>
                     ))}
                   </>
@@ -1221,7 +1770,9 @@ function InterpolatorCard({
                           )}
                         </div>
                         {blurb && (
-                          <p style={{ fontSize: typeScale.metaLg[0], color: intTokens.text.meta, margin: '2px 0 0', lineHeight: '1.4' }}>{blurb}</p>
+                          <p style={{ fontSize: typeScale.metaLg[0], color: intTokens.text.meta, margin: '2px 0 0', lineHeight: '1.4' }}>
+                            {renderSummaryText(blurb, summaryRenderOptions)}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -1413,12 +1964,13 @@ function BranchSummaryPill({
 }
 
 function ContributionCard({
-  node, score, rootUri, featured, nested, isOp,
+  node, score, rootUri, session, featured, nested, isOp,
   onFeedback, onQuoteComment, isFollowed, onReplyComment,
 }: {
   node: ThreadNode;
   score?: ContributionScores;
   rootUri: string;
+  session?: ConversationSession | null;
   featured?: boolean;
   nested?: boolean;
   /** True if the reply author is also the root post author */
@@ -1520,64 +2072,50 @@ function ContributionCard({
     : score?.role === 'useful_counterpoint' ? 'counterpoint'
     : null;
   const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : node.text;
-  // Contribution cards are thread context and must use thread_scoped data.
   const threadProfileCardData = useMemo<ProfileCardData | null>(() => {
-    const did = (node.authorDid ?? '').trim();
-    const handle = (node.authorHandle ?? '').trim();
-    if (!did || !handle) return null;
+    if (session) {
+      const projected = projectThreadScopedProfileCardData({
+        session,
+        did: node.authorDid,
+        focusUri: node.uri,
+        ...(typeof isFollowed === 'boolean' ? { isFollowing: isFollowed } : {}),
+      });
+      if (projected) return projected;
+    }
 
     const roleLabel = score?.role && score.role !== 'unknown'
       ? score.role.replace(/_/g, ' ')
       : undefined;
 
-    const compactPosts = [node, ...(node.replies ?? []).slice(0, 2)]
-      .filter((entry) => (entry.text ?? '').trim().length > 0)
-      .map((entry) => ({
-        uri: entry.uri,
-        text: entry.text,
-        createdAt: entry.createdAt,
-        likeCount: entry.likeCount,
-        replyCount: entry.replyCount,
-        hasMedia:
-          entry.embed?.kind === 'images'
-          || entry.embed?.kind === 'external'
-          || entry.embed?.kind === 'recordWithMedia',
-        ...(roleLabel && entry.uri === node.uri ? { roleBadge: roleLabel } : {}),
-      }));
-
-    return {
-      variant: 'thread_scoped',
-      identity: {
-        did,
-        handle,
-        ...(node.authorName ? { displayName: node.authorName } : {}),
-        ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
-      },
-      social: {
-        followersCount: 0,
-        mutualsCount: 0,
-        followingCount: 0,
-        isFollowing: !!isFollowed,
-        canFollow: true,
-        canBlock: true,
-      },
-      starterPacks: [],
-      activity: {
-        recentPosts: compactPosts.slice(0, 2),
-        popularPosts: [],
-      },
-      threadContext: {
-        threadUri: rootUri,
-        compactPosts: compactPosts.slice(0, 3),
-        ...(roleLabel ? { roleSummary: roleLabel } : {}),
-        ...(score?.sourceSupport && score.sourceSupport > 0.5
-          ? { notableAction: 'Introduced supporting evidence' }
-          : score?.clarificationValue && score.clarificationValue > 0.5
-            ? { notableAction: 'Added useful clarification' }
-            : {}),
-      },
-    };
-  }, [isFollowed, node, rootUri, score?.clarificationValue, score?.role, score?.sourceSupport]);
+    return buildThreadScopedProfileCardData({
+      did: node.authorDid,
+      handle: node.authorHandle,
+      ...(node.authorName ? { displayName: node.authorName } : {}),
+      ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
+      threadUri: rootUri,
+      compactPosts: [node, ...(node.replies ?? []).slice(0, 2)]
+        .filter((entry) => (entry.text ?? '').trim().length > 0)
+        .map((entry) => ({
+          uri: entry.uri,
+          text: entry.text,
+          createdAt: entry.createdAt,
+          likeCount: entry.likeCount,
+          replyCount: entry.replyCount,
+          hasMedia:
+            entry.embed?.kind === 'images'
+            || entry.embed?.kind === 'external'
+            || entry.embed?.kind === 'recordWithMedia',
+          ...(roleLabel && entry.uri === node.uri ? { roleBadge: roleLabel } : {}),
+        })),
+      ...(roleLabel ? { roleSummary: roleLabel } : {}),
+      ...(score?.sourceSupport && score.sourceSupport > 0.5
+        ? { notableAction: 'Introduced supporting evidence' }
+        : score?.clarificationValue && score.clarificationValue > 0.5
+          ? { notableAction: 'Added useful clarification' }
+          : {}),
+      ...(typeof isFollowed === 'boolean' ? { isFollowing: isFollowed } : {}),
+    });
+  }, [isFollowed, node, rootUri, score?.clarificationValue, score?.role, score?.sourceSupport, session]);
 
   const handleHashtagClick = (tag: string) => {
     const normalized = tag.replace(/^#/, '').trim();
@@ -1734,48 +2272,24 @@ function ContributionCard({
         if (!quoteEmbed?.quotedText) return null;
         const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDid;
         const quotedThreadProfileCardData: ProfileCardData | null = (() => {
-          const did = (quoteEmbed.quotedAuthorDid ?? '').trim();
-          const handle = (quoteEmbed.quotedAuthorHandle ?? '').trim();
-          if (!did || !handle) return null;
-
-          return {
-            variant: 'thread_scoped',
-            identity: {
-              did,
-              handle,
-              ...(quoteEmbed.quotedAuthorDisplayName ? { displayName: quoteEmbed.quotedAuthorDisplayName } : {}),
-            },
-            social: {
-              followersCount: 0,
-              mutualsCount: 0,
-              followingCount: 0,
-              isFollowing: false,
-              canFollow: true,
-              canBlock: true,
-            },
-            starterPacks: [],
-            activity: {
-              recentPosts: quoteEmbed.quotedText.trim()
-                ? [{
-                    uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${did}`,
-                    text: quoteEmbed.quotedText,
-                    createdAt: node.createdAt,
-                  }]
-                : [],
-              popularPosts: [],
-            },
-            threadContext: {
-              threadUri: rootUri,
-              compactPosts: quoteEmbed.quotedText.trim()
-                ? [{
-                    uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${did}`,
-                    text: quoteEmbed.quotedText,
-                    createdAt: node.createdAt,
-                  }]
-                : [],
-              roleSummary: 'Quoted in thread context',
-            },
-          };
+          return buildThreadScopedProfileCardData({
+            did: quoteEmbed.quotedAuthorDid ?? '',
+            handle: quoteEmbed.quotedAuthorHandle ?? '',
+            ...(quoteEmbed.quotedAuthorDisplayName
+              ? { displayName: quoteEmbed.quotedAuthorDisplayName }
+              : {}),
+            threadUri: rootUri,
+            compactPosts: quoteEmbed.quotedText.trim()
+              ? [{
+                  uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${quoteEmbed.quotedAuthorDid ?? 'unknown'}`,
+                  text: quoteEmbed.quotedText,
+                  createdAt: node.createdAt,
+                  hasMedia: Boolean(quoteEmbed.quotedExternal),
+                  ...(quoteEmbed.quotedExternal ? { mediaType: 'external' as const } : {}),
+                }]
+              : [],
+            roleSummary: 'Quoted in thread context',
+          });
         })();
         return (
           <div style={{
@@ -1821,50 +2335,63 @@ function ContributionCard({
               <RichText text={quoteEmbed.quotedText} baseColor={disc.textSecondary} onHashtag={handleHashtagClick} />
             </p>
             {quoteEmbed.quotedExternal && (
-              <a
-                href={quoteEmbed.quotedExternal.uri}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                style={{
-                  display: 'block',
-                  marginTop: 10,
-                  background: 'var(--quote-preview-surface)',
-                  borderRadius: radius[12],
-                  border: '1px solid var(--quote-preview-border)',
-                  textDecoration: 'none',
-                  overflow: 'hidden',
-                }}
-              >
-                {quoteEmbed.quotedExternal.thumb && (
-                  <img src={quoteEmbed.quotedExternal.thumb} alt="" style={{ width: '100%', height: 96, objectFit: 'cover' }} />
-                )}
-                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-                  {quoteEmbed.quotedExternal.title && (
-                    <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>
-                      {quoteEmbed.quotedExternal.title}
-                    </p>
-                  )}
-                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
-                    {quoteEmbed.quotedExternal.domain}
-                  </p>
-                  {quoteEmbed.quotedExternal.description && (
-                    <p style={{
-                      margin: '6px 0 0',
-                      fontSize: typeScale.metaSm[0],
-                      lineHeight: '18px',
-                      color: disc.textTertiary,
-                      opacity: 0.88,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }}>
-                      {quoteEmbed.quotedExternal.description}
-                    </p>
-                  )}
+              parseYouTubeUrl(quoteEmbed.quotedExternal.uri) ? (
+                <div style={{ marginTop: 10 }}>
+                  <YouTubeEmbedCard
+                    url={quoteEmbed.quotedExternal.uri}
+                    title={quoteEmbed.quotedExternal.title}
+                    description={quoteEmbed.quotedExternal.description}
+                    thumb={quoteEmbed.quotedExternal.thumb}
+                    domain={quoteEmbed.quotedExternal.domain}
+                    compact
+                  />
                 </div>
-              </a>
+              ) : (
+                <a
+                  href={quoteEmbed.quotedExternal.uri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    marginTop: 10,
+                    background: 'var(--quote-preview-surface)',
+                    borderRadius: radius[12],
+                    border: '1px solid var(--quote-preview-border)',
+                    textDecoration: 'none',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {quoteEmbed.quotedExternal.thumb && (
+                    <img src={quoteEmbed.quotedExternal.thumb} alt="" style={{ width: '100%', height: 96, objectFit: 'cover' }} />
+                  )}
+                  <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                    {quoteEmbed.quotedExternal.title && (
+                      <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>
+                        {quoteEmbed.quotedExternal.title}
+                      </p>
+                    )}
+                    <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+                      {quoteEmbed.quotedExternal.domain}
+                    </p>
+                    {quoteEmbed.quotedExternal.description && (
+                      <p style={{
+                        margin: '6px 0 0',
+                        fontSize: typeScale.metaSm[0],
+                        lineHeight: '18px',
+                        color: disc.textTertiary,
+                        opacity: 0.88,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}>
+                        {quoteEmbed.quotedExternal.description}
+                      </p>
+                    )}
+                  </div>
+                </a>
+              )
             )}
           </div>
         );
@@ -1872,28 +2399,41 @@ function ContributionCard({
 
       {/* Link preview card from recordWithMedia external media */}
       {node.embed?.kind === 'recordWithMedia' && node.embed.mediaExternal && (
-        <a
-          href={node.embed.mediaExternal.uri}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          style={{
-            display: 'block', marginBottom: contTokens.gap,
-            background: disc.surfaceCard2, borderRadius: radius[12],
-            textDecoration: 'none', overflow: 'hidden',
-            border: `0.5px solid ${disc.lineSubtle}`,
-          }}
-        >
-          {node.embed.mediaExternal.thumb && (
-            <img src={node.embed.mediaExternal.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover' }} />
-          )}
-          <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-            {node.embed.mediaExternal.title && (
-              <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>{node.embed.mediaExternal.title}</p>
-            )}
-            <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{node.embed.mediaExternal.domain}</p>
+        parseYouTubeUrl(node.embed.mediaExternal.uri) ? (
+          <div style={{ marginBottom: contTokens.gap }}>
+            <YouTubeEmbedCard
+              url={node.embed.mediaExternal.uri}
+              title={node.embed.mediaExternal.title}
+              description={node.embed.mediaExternal.description}
+              thumb={node.embed.mediaExternal.thumb}
+              domain={node.embed.mediaExternal.domain}
+              compact
+            />
           </div>
-        </a>
+        ) : (
+          <a
+            href={node.embed.mediaExternal.uri}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginBottom: contTokens.gap,
+              background: disc.surfaceCard2, borderRadius: radius[12],
+              textDecoration: 'none', overflow: 'hidden',
+              border: `0.5px solid ${disc.lineSubtle}`,
+            }}
+          >
+            {node.embed.mediaExternal.thumb && (
+              <img src={node.embed.mediaExternal.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover' }} />
+            )}
+            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+              {node.embed.mediaExternal.title && (
+                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>{node.embed.mediaExternal.title}</p>
+              )}
+              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{node.embed.mediaExternal.domain}</p>
+            </div>
+          </a>
+        )
       )}
 
       {/* Signal chips */}
@@ -1914,6 +2454,7 @@ function ContributionCard({
               key={child.uri}
               node={child}
               rootUri={rootUri}
+              {...(session !== undefined ? { session } : {})}
               nested
               onFeedback={onFeedback}
             />
@@ -2407,45 +2948,25 @@ export default function StoryMode({ entry, onClose }: Props) {
 
   // Hydration and polling are delegated to the shared ConversationSession subsystem.
   const providersRef = React.useRef(createVerificationProviders());
-
-  useEffect(() => {
-    if (!session || !agent) return;
-
-    const controller = new AbortController();
-
-    void hydrateConversationSession({
-      sessionId: entry.id,
-      rootUri: entry.id,
-      agent,
-      translationPolicy,
-      providers: providersRef.current,
-      cache: verificationCache.current,
-      signal: controller.signal,
-    }).catch((err) => {
-      if (err instanceof Error && err.name === 'AbortError') return;
-      console.warn('[StoryMode] hydrateConversationSession failed:', err);
-    });
-
-    const pollInterval = window.setInterval(() => {
-      void hydrateConversationSession({
-        sessionId: entry.id,
-        rootUri: entry.id,
-        agent,
-        translationPolicy,
-        providers: providersRef.current,
-        cache: verificationCache.current,
-        signal: controller.signal,
-      }).catch((err) => {
-        if (err instanceof Error && err.name === 'AbortError') return;
-        console.warn('[StoryMode] background hydrate failed:', err);
-      });
-    }, 60_000);
-
-    return () => {
-      window.clearInterval(pollInterval);
-      controller.abort();
-    };
-  }, [entry.id, session, agent, translationPolicy.localOnlyMode, translationPolicy.userLanguage]);
+  useConversationHydration({
+    enabled: !!session && !!agent,
+    sessionId: entry.id,
+    rootUri: entry.id,
+    mode: 'story',
+    agent: agent!,
+    translationPolicy,
+    providers: providersRef.current,
+    cache: verificationCache.current,
+    pollIntervalMs: 60_000,
+    onError: (error, phase) => {
+      console.warn(
+        phase === 'initial'
+          ? '[StoryMode] hydrateConversationSession failed:'
+          : '[StoryMode] background hydrate failed:',
+        error,
+      );
+    },
+  });
 
   const handleFeedback = useCallback((replyUri: string, fb: ContributionScores['userFeedback']) => {
     actions.onUserFeedback(replyUri, fb);
@@ -2613,6 +3134,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                     topContributors={threadVm?.interpolator.topContributors ?? []}
                     entityLandscape={threadVm?.interpolator.entityLandscape ?? []}
                     factualSignalPresent={threadVm?.interpolator.factualSignalPresent ?? false}
+                    premium={threadVm?.interpolator.premium ?? { status: 'idle', isEntitled: false }}
                     onEntityTap={setActiveEntity}
                   />
                 )}
@@ -2643,6 +3165,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                       node={featuredNode}
                       {...(featuredScore !== undefined ? { score: featuredScore } : {})}
                       rootUri={entry.id}
+                      session={conversationSession}
                       featured
                       isOp={featured.isOp}
                       {...(followedDids.has(featured.authorDid ?? '') ? { isFollowed: true } : {})}
@@ -2701,6 +3224,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                           node={node}
                           {...(nodeScore !== undefined ? { score: nodeScore } : {})}
                           rootUri={entry.id}
+                          session={conversationSession}
                           isOp={contribution.isOp}
                           {...(followedDids.has(contribution.authorDid ?? '') ? { isFollowed: true } : {})}
                           onFeedback={handleFeedback}
