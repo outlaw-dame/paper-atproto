@@ -8,7 +8,7 @@ import { useUiStore } from '../store/uiStore';
 import { atpCall } from '../lib/atproto/client';
 import { fetchOGData, type OGMetadata } from '../og';
 import { checkUrlSafety } from '../lib/safety/urlSafety';
-import { GifPicker, type TenorGif } from './GifPicker';
+import { GifPicker, type KlipyGif } from './GifPicker';
 import {
   getHashtagInsights,
   fetchTrendingTopics,
@@ -18,15 +18,19 @@ import {
 import TwemojiText from './TwemojiText';
 import ComposerGuidanceBanner from './ComposerGuidanceBanner';
 import MentalHealthSupportBanner from './MentalHealthSupportBanner';
-import {
-  buildPostComposerContext,
-  buildReplyComposerContext,
-} from '../intelligence/composer/contextBuilder';
 import { useComposerGuidance } from '../hooks/useComposerGuidance';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useComposerAutocomplete } from '../hooks/useComposerAutocomplete';
 import ComposerAutocompleteDropdown from './ComposerAutocompleteDropdown';
 import { useComposerProjection } from '../conversation/sessionSelectors';
+import { projectComposeSheetComposerContext } from '../conversation/projections/composerProjection';
+import { useConversationActions } from '../conversation/sessionActions';
+import type { ThreadNode, ResolvedEmbed, ResolvedFacet } from '../lib/resolver/atproto';
+import { resolveEmbed, resolveFacets, resolveLabels } from '../lib/resolver/atproto';
+import { extractRecordDisplayText } from '../lib/atproto/recordContent';
+import { mediaTranscriptionClient } from '../lib/media/transcriptionClient';
+import { getCaptionButtonState } from '../lib/media/captionButtonState';
+import { useMediaSettingsStore } from '../store/mediaSettingsStore';
 
 interface Props {
   onClose: () => void;
@@ -37,7 +41,17 @@ const MAX = 300;
 type AudienceOption = 'Everyone' | 'Following' | 'Mentioned';
 const AUDIENCE_OPTIONS: AudienceOption[] = ['Everyone', 'Following', 'Mentioned'];
 
-type ActiveTool = 'image' | 'gif' | 'link' | null;
+type ActiveTool = 'image' | 'gif' | 'link' | 'audio' | null;
+
+interface ComposeAudioItem {
+  id: string;
+  file: File;
+  previewUrl: string;  // blob:// URL for local preview
+  title: string;       // track title (from filename, editable)
+  artist: string;      // artist (editable)
+  duration: number;    // seconds
+  mimeType: string;    // e.g. "audio/mpeg"
+}
 
 interface ComposeMediaItem {
   id: string;
@@ -52,8 +66,9 @@ interface ComposeMediaItem {
   captions?: Array<{
     lang: string; // ISO 639-1 code (e.g., 'en', 'pt', 'es')
     label: string; // human-readable label
-    content: string; // caption content
+    content: string; // WebVTT caption content
   }>;
+  generatedTranscriptText?: string;
   videoDuration?: number; // in seconds, if video
 }
 
@@ -63,6 +78,7 @@ const VIDEO_UPLOAD_FALLBACK_MIME = 'video/mp4';
 const VIDEO_POLL_MAX_ATTEMPTS = 12;
 const VIDEO_POLL_BASE_DELAY_MS = 900;
 const VIDEO_POLL_CAP_DELAY_MS = 8_000;
+const VIDEO_CAPTION_MAX_BYTES = 20_000;
 const ALT_REQUIREMENT_KEY = 'paper.compose.requireAltText';
 const RECENT_HASHTAGS_KEY = 'paper.compose.recentHashtags';
 const FAVORITE_HASHTAGS_KEY = 'paper.compose.favoriteHashtags';
@@ -186,6 +202,29 @@ function isLikelyVideoFile(file: File): boolean {
   return /\.(mp4|m4v|mov|webm|mkv|avi|3gp|mpeg|mpg)$/i.test(file.name || '');
 }
 
+function isLikelyAudioFile(file: File): boolean {
+  const mime = file.type.toLowerCase();
+  if (mime.startsWith('audio/')) return true;
+  return /\.(mp3|ogg|wav|flac|aac|m4a|opus)$/i.test(file.name || '');
+}
+
+async function loadAudioDuration(file: File): Promise<number> {
+  const url = URL.createObjectURL(file);
+  try {
+    return await new Promise<number>((resolve) => {
+      const audio = document.createElement('audio');
+      audio.preload = 'metadata';
+      audio.onloadedmetadata = () => {
+        resolve(Number.isFinite(audio.duration) ? audio.duration : 0);
+      };
+      audio.onerror = () => resolve(0);
+      audio.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function resolveVideoUploadMime(file: File): string {
   const mime = file.type.trim().toLowerCase();
   if (mime.startsWith('video/')) return mime;
@@ -221,6 +260,100 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function createOptimisticReplyUri(authorDid: string): string {
+  const safeDid = authorDid.trim() || 'did:plc:local';
+  const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `at://${safeDid}/app.bsky.feed.post/optimistic-${suffix}`;
+}
+
+function toOptimisticExternalEmbed(preview: ComposeLinkPreview | null): ResolvedEmbed | null {
+  if (!preview || preview.safetyStatus === 'unsafe') {
+    return null;
+  }
+
+  try {
+    const url = new URL(preview.url);
+    return {
+      kind: 'external',
+      external: {
+        uri: preview.url,
+        domain: url.hostname.replace(/^www\./, ''),
+        ...(preview.title ? { title: preview.title } : {}),
+        ...(preview.description ? { description: preview.description } : {}),
+        ...(preview.image ? { thumb: preview.image } : {}),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildOptimisticReplyNode(params: {
+  uri: string;
+  cid?: string;
+  authorDid: string;
+  authorHandle: string;
+  authorName?: string;
+  authorAvatar?: string;
+  text: string;
+  facets: ResolvedFacet[];
+  embed: ResolvedEmbed | null;
+  parentUri: string;
+  parentAuthorHandle?: string;
+  createdAt: string;
+}): ThreadNode {
+  return {
+    uri: params.uri,
+    cid: params.cid ?? '',
+    authorDid: params.authorDid,
+    authorHandle: params.authorHandle,
+    ...(params.authorName ? { authorName: params.authorName } : {}),
+    ...(params.authorAvatar ? { authorAvatar: params.authorAvatar } : {}),
+    text: params.text,
+    createdAt: params.createdAt,
+    likeCount: 0,
+    replyCount: 0,
+    repostCount: 0,
+    facets: params.facets,
+    embed: params.embed,
+    labels: [],
+    depth: 0,
+    replies: [],
+    parentUri: params.parentUri,
+    ...(params.parentAuthorHandle ? { parentAuthorHandle: params.parentAuthorHandle } : {}),
+  };
+}
+
+function buildThreadNodeFromPostView(params: {
+  postView: any;
+  parentUri: string;
+  parentAuthorHandle?: string;
+}): ThreadNode {
+  const { postView, parentUri, parentAuthorHandle } = params;
+  const record = postView?.record as any;
+
+  return {
+    uri: postView?.uri ?? '',
+    cid: postView?.cid ?? '',
+    authorDid: postView?.author?.did ?? '',
+    authorHandle: postView?.author?.handle ?? '',
+    ...(postView?.author?.displayName ? { authorName: postView.author.displayName } : {}),
+    ...(postView?.author?.avatar ? { authorAvatar: postView.author.avatar } : {}),
+    text: extractRecordDisplayText(record),
+    createdAt: record?.createdAt ?? postView?.indexedAt ?? new Date().toISOString(),
+    likeCount: postView?.likeCount ?? 0,
+    replyCount: postView?.replyCount ?? 0,
+    repostCount: postView?.repostCount ?? 0,
+    facets: resolveFacets(record?.facets as any),
+    embed: resolveEmbed(postView?.embed),
+    labels: resolveLabels(postView?.labels as any),
+    depth: 0,
+    replies: [],
+    parentUri,
+    ...(parentAuthorHandle ? { parentAuthorHandle } : {}),
+  };
 }
 
 function toUserFacingPostError(err: unknown): string {
@@ -443,6 +576,16 @@ function removeCaptionFromVideo(
     ...mediaItem,
     captions: mediaItem.captions.filter((_, i) => i !== index),
   };
+}
+
+function languageLabelFromCode(lang: string): string {
+  const normalized = lang.trim();
+  if (!normalized) return 'Captions';
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' }).of(normalized) || normalized.toUpperCase();
+  } catch {
+    return normalized.toUpperCase();
+  }
 }
 
 // ─── Character ring ────────────────────────────────────────────────────────
@@ -1045,12 +1188,13 @@ function HashtagBrowser({
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ComposeSheet({ onClose }: Props) {
   const { agent, profile } = useAtp();
+  const { preferredCaptionLanguage } = useMediaSettingsStore();
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((s) => s.openExploreSearch);
   const replyTarget = useUiStore(s => s.replyTarget);
-  const replyParentText = replyTarget?.content?.trim() || undefined;
   const [text, setText] = useState('');
   const replySessionId = replyTarget?.threadRoot?.id ?? replyTarget?.id ?? '';
+  const conversationActions = useConversationActions(replySessionId);
   const projectedComposerContext = useComposerProjection({
     sessionId: replySessionId,
     ...(replyTarget?.id ? { replyToUri: replyTarget.id } : {}),
@@ -1073,6 +1217,8 @@ export default function ComposeSheet({ onClose }: Props) {
   const [isGeneratingBulkAlt, setIsGeneratingBulkAlt] = useState(false);
   const [bulkAltProgress, setBulkAltProgress] = useState<{ done: number; total: number } | null>(null);
   const [bulkAltError, setBulkAltError] = useState<string | null>(null);
+  const [isGeneratingVideoCaptions, setIsGeneratingVideoCaptions] = useState(false);
+  const [videoCaptionError, setVideoCaptionError] = useState<string | null>(null);
   const [showMissingAltConfirm, setShowMissingAltConfirm] = useState(false);
   const [showLowQualityAltConfirm, setShowLowQualityAltConfirm] = useState(false);
   const [altMetrics, setAltMetrics] = useState(() => getAltTextMetricsSnapshot());
@@ -1087,6 +1233,7 @@ export default function ComposeSheet({ onClose }: Props) {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showHashtagBrowser, setShowHashtagBrowser] = useState(false);
+  const [selectedAudio, setSelectedAudio] = useState<ComposeAudioItem | null>(null);
   const [activeCarouselIdx, setActiveCarouselIdx] = useState(0);
   const [hashtagInsights, setHashtagInsights] = useState<HashtagInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
@@ -1112,12 +1259,13 @@ export default function ComposeSheet({ onClose }: Props) {
   const altTaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const mediaCarouselRef = useRef<HTMLDivElement>(null);
   const mp4ConversionHelp = useMemo(() => getMp4ConversionHelpLink(), []);
   const linkPreviewRequestIdRef = useRef(0);
   const mentalHealthGuidanceDraftRef = useRef<string | null>(null);
   const remaining = MAX - text.length;
-  const hasDraftContent = text.trim().length > 0 || mediaItems.length > 0;
+  const hasDraftContent = text.trim().length > 0 || mediaItems.length > 0 || selectedAudio !== null;
   const canPost = hasDraftContent && remaining >= 0 && !posting;
 
   const handleHashtagClick = useCallback((tag: string) => {
@@ -1139,6 +1287,10 @@ export default function ComposeSheet({ onClose }: Props) {
     () => mediaItems.find((item) => item.id === editingAltId) ?? null,
     [mediaItems, editingAltId]
   );
+  const attachedVideoItem = useMemo(
+    () => mediaItems.find((item) => item.mediaType === 'video') ?? null,
+    [mediaItems]
+  );
   const altQualityHint = useMemo(() => describeAltQuality(altDraft), [altDraft]);
   const altLintIssues = useMemo(() => lintAltText(altDraft), [altDraft]);
   const lowQualityAltCount = useMemo(
@@ -1156,61 +1308,18 @@ export default function ComposeSheet({ onClose }: Props) {
   useEffect(() => {
     return () => {
       for (const item of mediaItems) URL.revokeObjectURL(item.previewUrl);
+      if (selectedAudio) URL.revokeObjectURL(selectedAudio.previewUrl);
     };
-  }, [mediaItems]);
+  }, [mediaItems, selectedAudio]);
 
   const composerContext = useMemo(() => {
-    if (replyTarget) {
-      const projectedThreadTexts = projectedComposerContext
-        ? [
-            projectedComposerContext.threadContext?.rootText,
-            ...(projectedComposerContext.threadContext?.ancestorTexts ?? []),
-            ...(projectedComposerContext.threadContext?.branchTexts ?? []),
-          ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-        : [];
-
-      const projectedCommentTexts = projectedComposerContext?.replyContext?.selectedCommentTexts
-        ?.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-        ?? [];
-
-      const fallbackThreadTexts = [replyTarget.threadRoot?.content, replyTarget.content]
-        .filter((v): v is string => !!v)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      const fallbackCommentTexts = [replyTarget.replyTo?.content]
-        .filter((v): v is string => !!v)
-        .map((v) => v.trim())
-        .filter(Boolean);
-
-      const threadTexts = Array.from(
-        new Set(projectedThreadTexts.length > 0 ? projectedThreadTexts : fallbackThreadTexts),
-      ).slice(0, 8);
-      const commentTexts = Array.from(
-        new Set(projectedCommentTexts.length > 0 ? projectedCommentTexts : fallbackCommentTexts),
-      ).slice(0, 32);
-
-      return buildReplyComposerContext({
-        draftText: text,
-        parentText: projectedComposerContext?.directParent?.text ?? replyParentText ?? '',
-        parentUri: replyTarget.id,
-        parentAuthorHandle: projectedComposerContext?.directParent?.authorHandle ?? replyTarget.author.handle,
-        threadTexts,
-        commentTexts,
-        totalCommentCount:
-          projectedComposerContext?.replyContext?.totalCommentCount
-          ?? Math.max(replyTarget.replyCount ?? 0, commentTexts.length),
-        ...(typeof replyTarget.replyCount === 'number' ? { parentReplyCount: replyTarget.replyCount } : {}),
-        ...(typeof replyTarget.threadCount === 'number' ? { parentThreadCount: replyTarget.threadCount } : {}),
-      });
-    }
-
-    return buildPostComposerContext(text);
-  }, [
-    projectedComposerContext,
-    replyParentText,
-    replyTarget,
-    text,
-  ]);
+    return projectComposeSheetComposerContext({
+      draftText: text,
+      replyTarget,
+      projectedContext: projectedComposerContext,
+    });
+  }, [projectedComposerContext, replyTarget, text]);
+  const replyParentText = composerContext.directParent?.text;
 
   const {
     draftId: composerGuidanceDraftId,
@@ -1456,9 +1565,29 @@ export default function ComposeSheet({ onClose }: Props) {
       videoBlob = await waitForVideoBlob(initialStatus.jobId);
     }
 
+    let captionBlobs: Array<{ lang: string; file: unknown }> | undefined;
+    if (videoItem.captions?.length) {
+      setPostStatus('Uploading caption tracks...');
+      const uploadedCaptions: Array<{ lang: string; file: unknown }> = [];
+      for (const caption of videoItem.captions) {
+        const byteLength = new TextEncoder().encode(caption.content).length;
+        if (byteLength > VIDEO_CAPTION_MAX_BYTES) {
+          throw new Error(`Caption track for ${caption.lang.toUpperCase()} exceeds the ${VIDEO_CAPTION_MAX_BYTES} byte Bluesky limit.`);
+        }
+        const captionBlob = new Blob([caption.content], { type: 'text/vtt' });
+        const upload = await atpCall<BlobUploadResponse>((signal) => agent.uploadBlob(captionBlob, {
+          encoding: 'text/vtt',
+          signal,
+        }), { maxAttempts: 2, timeoutMs: 30_000 });
+        uploadedCaptions.push({ lang: caption.lang, file: upload.data.blob });
+      }
+      captionBlobs = uploadedCaptions;
+    }
+
     return {
       $type: 'app.bsky.embed.video' as const,
       video: videoBlob,
+      ...(captionBlobs ? { captions: captionBlobs } : {}),
       ...(sanitizeAltText(videoItem.alt) ? { alt: sanitizeAltText(videoItem.alt) } : {}),
       ...(videoItem.width > 0 && videoItem.height > 0 ? { aspectRatio: { width: videoItem.width, height: videoItem.height } } : {}),
     };
@@ -1466,6 +1595,7 @@ export default function ComposeSheet({ onClose }: Props) {
 
   const commitPost = useCallback(async () => {
     if (!canPost || !agent.session) return;
+    let optimisticUri: string | null = null;
     setPosting(true);
     setPostStatus('Preparing post...');
     setVideoJobProgress(null);
@@ -1500,6 +1630,7 @@ export default function ComposeSheet({ onClose }: Props) {
         | {
             $type: 'app.bsky.embed.video';
             video: unknown;
+            captions?: Array<{ lang: string; file: unknown }>;
             alt?: string;
             aspectRatio?: { width: number; height: number };
           }
@@ -1556,6 +1687,22 @@ export default function ComposeSheet({ onClose }: Props) {
           $type: 'app.bsky.embed.images',
           images: uploadedImages,
         };
+      } else if (selectedAudio) {
+        setPostStatus('Uploading audio...');
+        const audioUpload = await atpCall<BlobUploadResponse>(
+          (signal) => agent.uploadBlob(selectedAudio.file, { encoding: selectedAudio.mimeType, signal }),
+          { maxAttempts: 2, timeoutMs: 120_000 },
+        );
+        const audioUri = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${agent.session!.did}&cid=${(audioUpload.data.blob as any)?.ref?.$link ?? ''}`;
+        const audioDescription = selectedAudio.artist.trim() || '';
+        embed = {
+          $type: 'app.bsky.embed.external',
+          external: {
+            uri: audioUri,
+            title: selectedAudio.title.trim() || 'Audio',
+            description: audioDescription,
+          },
+        };
       } else if (linkPreview && linkPreview.safetyStatus !== 'unsafe') {
         setPostStatus('Preparing link preview...');
         embed = await buildExternalEmbed(linkPreview);
@@ -1571,15 +1718,76 @@ export default function ComposeSheet({ onClose }: Props) {
           cid: replyTarget.cid ?? '',
         },
       } : undefined;
+      const createdAt = new Date().toISOString();
+      const canOptimisticallyInsertReply = Boolean(
+        replyTarget
+        && replySessionId
+        && videoItems.length === 0
+        && imageItems.length === 0,
+      );
+      optimisticUri = canOptimisticallyInsertReply
+        ? createOptimisticReplyUri(profile?.did ?? agent.session.did ?? '')
+        : null;
+
+      if (optimisticUri && replyTarget) {
+        conversationActions.onInsertOptimisticReply(
+          replyTarget.id,
+          buildOptimisticReplyNode({
+            uri: optimisticUri,
+            authorDid: profile?.did ?? agent.session.did ?? '',
+            authorHandle: profile?.handle ?? 'you',
+            ...(profile?.displayName ? { authorName: profile.displayName } : {}),
+            ...(profile?.avatar ? { authorAvatar: profile.avatar } : {}),
+            text: rt.text,
+            facets: resolveFacets(rt.facets as any),
+            embed: toOptimisticExternalEmbed(linkPreview),
+            parentUri: replyTarget.id,
+            parentAuthorHandle: replyTarget.author.handle,
+            createdAt,
+          }),
+        );
+      }
 
       setPostStatus('Publishing post...');
-      await atpCall((signal) => agent.post({
+      const postResponse = await atpCall((signal) => agent.post({
         text: rt.text,
         facets: rt.facets,
-        createdAt: new Date().toISOString(),
+        createdAt,
         ...(embed ? { embed } : {}),
         ...(replyRef ? { reply: replyRef } : {}),
-      }, { signal }), { maxAttempts: 2, timeoutMs: 20_000 });
+      }, { signal }), { maxAttempts: 2, timeoutMs: 20_000 }) as any;
+
+      if (optimisticUri && replyTarget) {
+        const persistedPostRes = await atpCall(
+          () => agent.getPosts({ uris: [postResponse.uri] }),
+          { maxAttempts: 2, timeoutMs: 12_000 },
+        ).catch(() => null) as any;
+        const persistedPostView = persistedPostRes?.data?.posts?.[0];
+
+        conversationActions.onReconcileOptimisticReply(
+          optimisticUri,
+          persistedPostView
+            ? buildThreadNodeFromPostView({
+                postView: persistedPostView,
+                parentUri: replyTarget.id,
+                parentAuthorHandle: replyTarget.author.handle,
+              })
+            : buildOptimisticReplyNode({
+                uri: postResponse.uri,
+                cid: postResponse.cid,
+                authorDid: profile?.did ?? agent.session.did ?? '',
+                authorHandle: profile?.handle ?? 'you',
+                ...(profile?.displayName ? { authorName: profile.displayName } : {}),
+                ...(profile?.avatar ? { authorAvatar: profile.avatar } : {}),
+                text: rt.text,
+                facets: resolveFacets(rt.facets as any),
+                embed: toOptimisticExternalEmbed(linkPreview),
+                parentUri: replyTarget.id,
+                parentAuthorHandle: replyTarget.author.handle,
+                createdAt,
+              }),
+        );
+      }
 
       if (mediaItems.length > 0) {
         const describedItems = mediaItems.reduce((count, item) => count + (sanitizeAltText(item.alt).length > 0 ? 1 : 0), 0);
@@ -1590,8 +1798,16 @@ export default function ComposeSheet({ onClose }: Props) {
       const usedTags = extractHashtags(sanitizedText);
       if (usedTags.length > 0) saveRecentHashtags(usedTags);
 
+      if (selectedAudio) {
+        URL.revokeObjectURL(selectedAudio.previewUrl);
+        setSelectedAudio(null);
+      }
+
       onClose();
     } catch (err: unknown) {
+      if (optimisticUri) {
+        conversationActions.onRollbackOptimisticReply(optimisticUri);
+      }
       const rawMessage = (err as { message?: string })?.message?.trim() || '';
       if (isVideoFormatCompatibilityError(rawMessage)) {
         setMediaHint('This video format is not supported yet. Convert it to MP4, then try again.');
@@ -1602,7 +1818,22 @@ export default function ComposeSheet({ onClose }: Props) {
       setPostStatus(null);
       setVideoJobProgress(null);
     }
-  }, [agent, buildExternalEmbed, buildVideoEmbed, canPost, linkPreview, mediaItems, onClose, replyTarget, text]);
+  }, [
+    agent,
+    buildExternalEmbed,
+    buildVideoEmbed,
+    canPost,
+    conversationActions,
+    linkPreview,
+    mediaItems,
+    onClose,
+    profile,
+    replySessionId,
+    replyTarget,
+    attachedVideoItem,
+    selectedAudio,
+    text,
+  ]);
 
   // ── Autocomplete: insert completion back into textarea ────────────────────
   const handleInsertCompletion = useCallback((newText: string, newCursor: number) => {
@@ -1811,9 +2042,13 @@ export default function ComposeSheet({ onClose }: Props) {
       setEditingAltId(null);
       setAltDraft('');
     }
+    if (attachedVideoItem?.id === id) {
+      setVideoCaptionError(null);
+      setIsGeneratingVideoCaptions(false);
+    }
   };
 
-  const handleGifSelected = useCallback((gif: TenorGif) => {
+  const handleGifSelected = useCallback((gif: KlipyGif) => {
     if (mediaItems.length >= MAX_MEDIA) {
       setPostError(`You can attach up to ${MAX_MEDIA} photos or GIFs.`);
       return;
@@ -1826,7 +2061,7 @@ export default function ComposeSheet({ onClose }: Props) {
     setMediaItems((prev) => [
       ...prev,
       {
-        id: `tenor-${gif.id}-${Date.now()}`,
+        id: `klipy-${gif.id}-${Date.now()}`,
         file: null,
         previewUrl: gif.media_formats.gif.url,
         remoteUrl: gif.media_formats.gif.url,
@@ -1841,6 +2076,79 @@ export default function ComposeSheet({ onClose }: Props) {
     setShowAttachMenu(false);
     setActiveTool(null);
   }, [mediaItems.length]);
+
+  const handleAudioSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!isLikelyAudioFile(file)) {
+      setPostError('Selected file is not a recognized audio format.');
+      e.target.value = '';
+      return;
+    }
+    const duration = await loadAudioDuration(file);
+    const rawName = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    const mimeType = file.type || 'audio/mpeg';
+    const previewUrl = URL.createObjectURL(file);
+    setSelectedAudio({
+      id: `audio-${Date.now()}`,
+      file,
+      previewUrl,
+      title: rawName || 'Untitled',
+      artist: '',
+      duration,
+      mimeType,
+    });
+    setShowAttachMenu(false);
+    setActiveTool('audio');
+    setPostError(null);
+    setShowPreview(true);
+    e.target.value = '';
+  }, []);
+
+  const removeAudio = useCallback(() => {
+    if (selectedAudio) URL.revokeObjectURL(selectedAudio.previewUrl);
+    setSelectedAudio(null);
+    if (activeTool === 'audio') setActiveTool(null);
+  }, [selectedAudio, activeTool]);
+
+  const clearVideoCaptions = useCallback(() => {
+    setMediaItems((prev) => prev.map((item) => (
+      item.mediaType === 'video'
+        ? { ...item, captions: undefined, generatedTranscriptText: undefined }
+        : item
+    )));
+    setVideoCaptionError(null);
+  }, []);
+
+  const generateVideoCaptions = useCallback(async () => {
+    if (!attachedVideoItem?.file || attachedVideoItem.mediaType !== 'video' || isGeneratingVideoCaptions) return;
+
+    setIsGeneratingVideoCaptions(true);
+    setVideoCaptionError(null);
+    setPostError(null);
+
+    try {
+      const result = await mediaTranscriptionClient.transcribeFile(attachedVideoItem.file, preferredCaptionLanguage ?? undefined);
+      const nextLabel = languageLabelFromCode(result.language);
+      setMediaItems((prev) => prev.map((item) => {
+        if (item.id !== attachedVideoItem.id || item.mediaType !== 'video') return item;
+        const withoutSameLang = (item.captions ?? []).filter((caption) => caption.lang !== result.language);
+        return {
+          ...item,
+          captions: [...withoutSameLang, {
+            lang: result.language,
+            label: nextLabel,
+            content: result.vtt,
+          }],
+          generatedTranscriptText: result.text,
+        };
+      }));
+    } catch (error) {
+      setVideoCaptionError((error as { message?: string })?.message?.trim() || 'Unable to generate captions right now.');
+    } finally {
+      setIsGeneratingVideoCaptions(false);
+    }
+  }, [attachedVideoItem, isGeneratingVideoCaptions, preferredCaptionLanguage]);
 
   const openAltEditor = useCallback((id: string) => {
     const item = mediaItems.find((entry) => entry.id === id);
@@ -2361,6 +2669,67 @@ export default function ComposeSheet({ onClose }: Props) {
                 )}
               </AnimatePresence>
 
+              {selectedAudio && (
+                <div style={{
+                  marginTop: 12,
+                  border: '1px solid var(--sep)',
+                  borderRadius: 14,
+                  padding: 10,
+                  background: 'var(--fill-1)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                      </svg>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
+                        {selectedAudio.title || 'Audio file'}
+                      </span>
+                      {selectedAudio.duration > 0 && (
+                        <span style={{ fontSize: 11, color: 'var(--label-4)' }}>
+                          {Math.floor(selectedAudio.duration / 60)}:{String(Math.floor(selectedAudio.duration % 60)).padStart(2, '0')}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={removeAudio}
+                      aria-label="Remove audio"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--label-3)', fontSize: 18, lineHeight: 1, padding: '0 4px' }}
+                    >×</button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--label-3)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>Track title</label>
+                      <input
+                        type="text"
+                        value={selectedAudio.title}
+                        onChange={(e) => setSelectedAudio(prev => prev ? { ...prev, title: e.target.value } : null)}
+                        placeholder="Track title"
+                        style={{
+                          width: '100%', background: 'var(--fill-2)', border: '1px solid var(--sep)',
+                          borderRadius: 8, padding: '7px 10px', fontSize: 14, color: 'var(--label-1)',
+                          fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--label-3)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>Artist (optional)</label>
+                      <input
+                        type="text"
+                        value={selectedAudio.artist}
+                        onChange={(e) => setSelectedAudio(prev => prev ? { ...prev, artist: e.target.value } : null)}
+                        placeholder="Artist name"
+                        style={{
+                          width: '100%', background: 'var(--fill-2)', border: '1px solid var(--sep)',
+                          borderRadius: 8, padding: '7px 10px', fontSize: 14, color: 'var(--label-1)',
+                          fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {mediaItems.length > 0 && (
                 <div style={{
                   marginTop: 12,
@@ -2536,6 +2905,104 @@ export default function ComposeSheet({ onClose }: Props) {
                     </div>
                   )}
 
+                  {attachedVideoItem && (
+                    <div style={{ marginTop: 10, borderRadius: 12, border: '1px solid var(--sep)', background: 'var(--surface)', padding: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--label-1)' }}>
+                            Video Captions {attachedVideoItem.captions?.length ? `(${attachedVideoItem.captions.length})` : ''}
+                          </div>
+                          <div style={{ marginTop: 3, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }}>
+                            Generate a native WebVTT caption track and attach it to the Bluesky video embed.
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          {(() => {
+                            const btnState = getCaptionButtonState(isGeneratingVideoCaptions, attachedVideoItem.captions?.length);
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => { void generateVideoCaptions(); }}
+                                  disabled={btnState.disabled}
+                                  style={{
+                                    border: 'none',
+                                    background: 'var(--blue)',
+                                    color: '#fff',
+                                    fontSize: 12,
+                                    fontWeight: 800,
+                                    borderRadius: 999,
+                                    padding: '7px 12px',
+                                    cursor: btnState.disabled ? 'default' : 'pointer',
+                                    opacity: btnState.disabled ? 0.7 : 1,
+                                  }}
+                                >
+                                  {btnState.label}
+                                </button>
+                                {btnState.showRemove ? (
+                                  <button
+                                    type="button"
+                                    onClick={clearVideoCaptions}
+                                    style={{
+                                      border: '1px solid var(--sep)',
+                                      background: 'transparent',
+                                      color: 'var(--label-2)',
+                                      fontSize: 12,
+                                      fontWeight: 700,
+                                      borderRadius: 999,
+                                      padding: '7px 12px',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    Remove Captions
+                                  </button>
+                                ) : null}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+
+                      {videoCaptionError && (
+                        <p style={{ marginTop: 8, fontSize: 12, color: 'var(--orange)', lineHeight: 1.35 }}>
+                          {videoCaptionError}
+                        </p>
+                      )}
+
+                      {attachedVideoItem.captions?.length ? (
+                        <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {attachedVideoItem.captions.map((caption) => (
+                            <span
+                              key={`${caption.lang}-${caption.label}`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                padding: '4px 9px',
+                                borderRadius: 999,
+                                background: 'rgba(10,132,255,0.1)',
+                                color: 'var(--blue)',
+                                fontSize: 11,
+                                fontWeight: 700,
+                              }}
+                            >
+                              CC {caption.label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {attachedVideoItem.generatedTranscriptText && (
+                        <div style={{ marginTop: 8, borderRadius: 10, background: 'var(--fill-1)', border: '1px solid var(--sep)', padding: '8px 10px' }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--label-2)', marginBottom: 4 }}>Transcript Preview</div>
+                          <p style={{ margin: 0, fontSize: 12, color: 'var(--label-2)', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>
+                            {attachedVideoItem.generatedTranscriptText.slice(0, 320)}{attachedVideoItem.generatedTranscriptText.length > 320 ? '…' : ''}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {missingAltCount > 0 && (
                     <p style={{ marginTop: 8, fontSize: 12, color: 'var(--orange)', lineHeight: 1.35 }}>
                       {missingAltCount} media item{missingAltCount > 1 ? 's are' : ' is'} missing ALT text.
@@ -2691,6 +3158,27 @@ export default function ComposeSheet({ onClose }: Props) {
                     </svg>
                     <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--label-2)', letterSpacing: 0.1 }}>Tag</span>
                   </button>
+
+                  {/* Audio */}
+                  <button
+                    onClick={() => { audioInputRef.current?.click(); setShowAttachMenu(false); }}
+                    disabled={selectedAudio !== null || mediaItems.length > 0}
+                    style={{
+                      flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                      padding: '10px 6px', borderRadius: 14,
+                      background: activeTool === 'audio' ? 'rgba(0,122,255,0.1)' : 'var(--fill-1)',
+                      border: 'none',
+                      cursor: (selectedAudio !== null || mediaItems.length > 0) ? 'default' : 'pointer',
+                      opacity: (selectedAudio !== null || mediaItems.length > 0) ? 0.45 : 1,
+                    }}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={activeTool === 'audio' ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18V5l12-2v13"/>
+                      <circle cx="6" cy="18" r="3"/>
+                      <circle cx="18" cy="16" r="3"/>
+                    </svg>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: activeTool === 'audio' ? 'var(--blue)' : 'var(--label-2)', letterSpacing: 0.1 }}>Audio</span>
+                  </button>
                 </div>
               </motion.div>
             )}
@@ -2775,6 +3263,14 @@ export default function ComposeSheet({ onClose }: Props) {
         accept="image/*,video/*"
         capture="environment"
         onChange={handleMediaSelected}
+        style={{ display: 'none' }}
+      />
+
+      <input
+        ref={audioInputRef}
+        type="file"
+        accept="audio/*"
+        onChange={handleAudioSelected}
         style={{ display: 'none' }}
       />
 

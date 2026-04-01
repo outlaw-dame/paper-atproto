@@ -38,7 +38,7 @@ Run the auth/retry hardening checks with:
 pnpm test
 ```
 
-For GIF search, create a `.env` file from `.env.example` and set `VITE_TENOR_API_KEY` to a valid Tenor API key.
+For GIF search, create a `.env` file from `.env.example` and set `VITE_KLIPY_API_KEY` to a valid Klipy API key (get one at https://partner.klipy.com/api-keys).
 
 Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
 
@@ -105,10 +105,27 @@ npm install
 npm run dev
 ```
 
+The verify server now supports secure response compression negotiation:
+
+* Uses `Accept-Encoding` with weighted q-values.
+* Prefers `zstd` when supported by client/runtime, otherwise falls back to `gzip`.
+* Skips binary media and already-compressed payloads.
+* Skips responses with `Cache-Control: no-transform`.
+* Applies a minimum/maximum payload window to avoid CPU abuse.
+
+Compression env keys (`server/.env`):
+
+* `COMPRESSION_ENABLED`
+* `COMPRESSION_MIN_BYTES`
+* `COMPRESSION_MAX_BYTES`
+* `COMPRESSION_GZIP_LEVEL`
+* `COMPRESSION_ZSTD_LEVEL`
+
 The server reads `server/.env.example` keys:
 
-* `VERIFY_ENTITY_LINKING_PROVIDER` (`dbpedia` | `rel` | `heuristic`)
+* `VERIFY_ENTITY_LINKING_PROVIDER` (`dbpedia` | `wikidata` | `hybrid` | `rel` | `heuristic`)
 * `VERIFY_ENTITY_LINKING_ENDPOINT`
+* `VERIFY_WIKIDATA_ENDPOINT`
 * `VERIFY_ENTITY_LINKING_TIMEOUT_MS`
 * `VERIFY_ENTITY_LINKING_API_KEY`
 * `GOOGLE_SAFE_BROWSING_API_KEY` (optional, enables URL reputation checks)
@@ -127,6 +144,15 @@ Then run the app:
 ```bash
 pnpm dev
 ```
+
+Production builds also generate precompressed static files (`.gz` and `.zst`) for compressible assets. Ensure your CDN or edge server is configured to:
+
+* Negotiate from `Accept-Encoding` and serve matching precompressed variants.
+* Return `Content-Encoding` and `Vary: Accept-Encoding` correctly.
+* Preserve original MIME type when serving `.gz`/`.zst` files.
+
+Detailed edge/CDN examples are available in `docs/compression-deployment.md`.
+You can run local size/latency benchmarks with `npm run benchmark:compression`.
 
 ### 3. Optional: Switch to REL
 

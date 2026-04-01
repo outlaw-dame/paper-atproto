@@ -16,12 +16,8 @@ import { qk } from '../lib/atproto/queries';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
-import { isAtUri } from '../lib/resolver/atproto';
-import { createVerificationProviders } from '../intelligence/verification/providerFactory';
-import { InMemoryVerificationCache } from '../intelligence/verification/cache';
-import { hydrateConversationSessionWithRetry } from '../conversation/sessionHydration';
-import { useConversationSessionStore } from '../conversation/sessionStore';
-import { projectTimelineConversationHint } from '../conversation/projections/timelineProjection';
+import { useConversationBatchHydration } from '../conversation/sessionHydration';
+import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
 
@@ -90,79 +86,32 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
-  const conversationSessions = useConversationSessionStore((state) => state.byId);
   const publicReadAgent = useMemo(() => new Agent({ service: PUBLIC_APPVIEW_SERVICE }), []);
   const hasLimitedScopeSession = !hasFollowingFeedScope(session?.scope);
   const visibleModes = useMemo(
     () => MODES.filter((item) => !hasLimitedScopeSession || item !== 'Following') as Mode[],
     [hasLimitedScopeSession],
   );
-  const conversationProvidersRef = useRef(createVerificationProviders());
-  const conversationCacheRef = useRef(new InMemoryVerificationCache());
-  const hydratedSessionRootsRef = useRef<Set<string>>(new Set());
-  const hydrationInFlightRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollCleanupRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoRedirectedLimitedScopeRef = useRef(false);
   const filterResults = usePostFilterResults(posts, 'home');
+  const hydrationAgent = hasLimitedScopeSession ? publicReadAgent : agent;
+  const conversationHydrationRoots = useMemo(
+    () => posts.map((post) => post.threadRoot?.id ?? post.id),
+    [posts],
+  );
 
-  const timelineHintByPostId = useMemo(() => {
-    const hints: Record<string, ReturnType<typeof projectTimelineConversationHint>> = {};
-    for (const post of posts) {
-      const rootUri = post.threadRoot?.id ?? post.id;
-      if (!rootUri) continue;
-      const sessionState = conversationSessions[rootUri];
-      if (!sessionState) continue;
-      const hint = projectTimelineConversationHint(sessionState, post.id);
-      if (hint) hints[post.id] = hint;
-    }
-    return hints;
-  }, [conversationSessions, posts]);
+  const timelineHintByPostId = useTimelineConversationHintsProjection(posts);
 
-  useEffect(() => {
-    if (!agent || !session || posts.length === 0) return;
-
-    const hydrationAgent = hasLimitedScopeSession ? publicReadAgent : agent;
-
-    const controller = new AbortController();
-    const targets = Array.from(new Set(
-      posts
-        .map((post) => post.threadRoot?.id ?? post.id)
-        .filter((uri): uri is string => !!uri && isAtUri(uri)),
-    )).slice(0, 8);
-
-    const hydrateWithRetry = async (rootUri: string) => {
-      if (hydratedSessionRootsRef.current.has(rootUri)) return;
-      if (hydrationInFlightRef.current.has(rootUri)) return;
-      hydrationInFlightRef.current.add(rootUri);
-
-      try {
-        try {
-          await hydrateConversationSessionWithRetry({
-            sessionId: rootUri,
-            rootUri,
-            mode: 'thread',
-            agent: hydrationAgent,
-            translationPolicy,
-            providers: conversationProvidersRef.current,
-            cache: conversationCacheRef.current,
-            signal: controller.signal,
-          });
-          hydratedSessionRootsRef.current.add(rootUri);
-        } catch (error) {
-          if (error instanceof Error && error.name === 'AbortError') return;
-        }
-      } finally {
-        hydrationInFlightRef.current.delete(rootUri);
-      }
-    };
-
-    void Promise.all(targets.map((target) => hydrateWithRetry(target)));
-
-    return () => {
-      controller.abort();
-    };
-  }, [agent, hasLimitedScopeSession, posts, publicReadAgent, session, translationPolicy]);
+  useConversationBatchHydration({
+    enabled: Boolean(hydrationAgent && session && posts.length > 0),
+    rootUris: conversationHydrationRoots,
+    mode: 'thread',
+    agent: hydrationAgent ?? publicReadAgent,
+    translationPolicy,
+    maxTargets: 8,
+  });
 
   useEffect(() => {
     if (!hasLimitedScopeSession) {

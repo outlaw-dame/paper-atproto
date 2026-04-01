@@ -4,6 +4,7 @@ import type {
   ConversationSessionId,
   ConversationSessionMode,
 } from './sessionTypes';
+import { createSessionAiDiagnostics } from './modelExecution';
 
 type ConversationSessionStore = {
   byId: Record<ConversationSessionId, ConversationSession>;
@@ -50,6 +51,7 @@ function createEmptySession(
       summaryMode: null,
       threadState: null,
       interpretiveExplanation: null,
+      aiDiagnostics: createSessionAiDiagnostics(),
       premium: {
         status: 'idle',
       },
@@ -76,6 +78,11 @@ function createEmptySession(
       repetitionLevel: 0,
       activityVelocity: 0,
       turningPoints: [],
+      snapshots: [],
+    },
+    mutations: {
+      revision: 0,
+      recent: [],
     },
     meta: {
       status: 'idle',

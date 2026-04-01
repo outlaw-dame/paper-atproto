@@ -660,6 +660,11 @@ function createFixtureSession(params: {
       repetitionLevel: params.repetitionLevel,
       activityVelocity: 0,
       turningPoints: [],
+      snapshots: [],
+    },
+    mutations: {
+      revision: 0,
+      recent: [],
     },
     meta: {
       status: 'ready',

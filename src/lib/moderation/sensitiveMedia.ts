@@ -1,5 +1,11 @@
 import type { MockPost } from '../../data/mockData';
 
+export interface RawContentLabel {
+  val: string;
+  src?: string;
+  neg: boolean;
+}
+
 const CATEGORY_KEYWORDS = {
   sexual: ['porn', 'sexual', 'sex', 'adult'] as const,
   nudity: ['nudity', 'nude', 'explicit-nudity'] as const,
@@ -73,16 +79,37 @@ export function detectSensitiveMedia(post: MockPost): SensitiveMediaAssessment {
 }
 
 export function mapRawLabelValues(raw: unknown): string[] {
+  return sanitizeReasons(
+    mapRawLabelDetails(raw)
+      .filter((label) => !label.neg)
+      .map((label) => label.val),
+  );
+}
+
+export function mapRawLabelDetails(raw: unknown): RawContentLabel[] {
   if (!Array.isArray(raw)) return [];
 
-  const values: string[] = [];
+  const details: RawContentLabel[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const maybeVal = (item as { val?: unknown }).val;
     if (typeof maybeVal !== 'string') continue;
-    values.push(maybeVal);
-    if (values.length >= 20) break;
+    const val = normalizeToken(maybeVal);
+    if (!val) continue;
+
+    const maybeSrc = (item as { src?: unknown }).src;
+    const src = typeof maybeSrc === 'string'
+      ? normalizeToken(maybeSrc)
+      : undefined;
+    const maybeNeg = (item as { neg?: unknown }).neg;
+
+    details.push({
+      val,
+      ...(src ? { src } : {}),
+      neg: Boolean(maybeNeg),
+    });
+    if (details.length >= 20) break;
   }
 
-  return sanitizeReasons(values);
+  return details;
 }

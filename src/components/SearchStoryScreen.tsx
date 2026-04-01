@@ -16,8 +16,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
 import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
-import { atpCall } from '../lib/atproto/client';
-import { mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import { useAppearanceStore } from '../store/appearanceStore';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
 import { useTranslationStore } from '../store/translationStore';
@@ -30,15 +29,17 @@ import { warnMatchReasons } from '../lib/contentFilters/presentation';
 import type { PostFilterMatch } from '../lib/contentFilters/types';
 import ProfileCardTrigger from './ProfileCardTrigger';
 import {
-  projectStoryView,
+  rootUriForStoryPost,
   type StoryProjectedPost,
   type StoryProjection,
 } from '../conversation/projections/storyProjection';
+import { useConversationBatchHydration } from '../conversation/sessionHydration';
+import { useStoryProjection } from '../conversation/sessionSelectors';
+import { useStorySearchResults } from '../conversation/discovery/storySearch';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
   bottomQueryDock as bqdTokens,
-  interpolator as intTokens,
   discovery as disc,
   accent,
   type as typeScale,
@@ -47,6 +48,7 @@ import {
   transitions,
   storyCardVariants,
 } from '../design/index';
+import { postLabelChips, type LabelChip } from '../lib/atproto/labelPresentation';
 
 interface Props {
   query: string;
@@ -56,6 +58,35 @@ interface Props {
 
 const CARD_NAMES = ['Overview', 'Best Source', 'Related', 'Conversation'] as const;
 type CardName = typeof CARD_NAMES[number];
+
+const chipStyleByTone: Record<'neutral' | 'warning' | 'danger' | 'info', React.CSSProperties> = {
+  neutral: { background: 'var(--fill-3)', color: 'var(--label-2)' },
+  warning: { background: 'rgba(255,149,0,0.18)', color: '#ffb454' },
+  danger: { background: 'rgba(255,77,79,0.18)', color: '#ff7b7d' },
+  info: { background: 'rgba(124,233,255,0.2)', color: '#6de7ff' },
+};
+
+function LabelChipRow({ chips }: { chips: LabelChip[] }) {
+  if (chips.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {chips.map((chip) => (
+        <span
+          key={chip.key}
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            borderRadius: 999,
+            padding: '2px 8px',
+            ...chipStyleByTone[chip.tone],
+          }}
+        >
+          {chip.text}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ─── StoryProgressRail ────────────────────────────────────────────────────
 function StoryProgressRail({ total, current }: { total: number; current: number }) {
@@ -119,9 +150,11 @@ function RichText({ text, color }: { text: string; color: string }) {
 function OverviewCard({
   overview,
   resultCount,
+  showAtprotoLabelChips,
 }: {
   overview: StoryProjectedPost | null;
   resultCount: number;
+  showAtprotoLabelChips: boolean;
 }) {
   const navigateToProfile = useProfileNavigation();
   if (!overview) return null;
@@ -129,6 +162,16 @@ function OverviewCard({
   const mediaEmbed = top.embed?.type === 'external' || top.embed?.type === 'video' ? top.embed : null;
   const img = overview.imageUrl;
   const domain = overview.domain ?? '';
+  const synopsisText = overview.synopsisText ?? topText.slice(0, 140);
+  const moderationLabelChips = showAtprotoLabelChips
+    ? postLabelChips({
+      contentLabels: top.contentLabels,
+      labelDetails: top.labelDetails,
+      authorDid: top.author.did,
+      maxChips: 1,
+      includeLabellerProvenance: true,
+    })
+    : [];
 
   return (
     <div style={{
@@ -168,8 +211,50 @@ function OverviewCard({
           fontWeight: typeScale.titleLg[2], letterSpacing: typeScale.titleLg[3],
           color: disc.textPrimary, marginBottom: 10,
         }}>
-          <RichText text={topText.slice(0, 140)} color={disc.textPrimary} />
+          <RichText text={synopsisText} color={disc.textPrimary} />
         </p>
+
+        {(overview.isSessionBacked || overview.sourceSupportPresent || overview.direction) && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {overview.isSessionBacked && (
+              <span style={{
+                padding: '4px 10px',
+                borderRadius: radius.full,
+                background: 'rgba(124,233,255,0.12)',
+                color: accent.cyan400,
+                fontSize: typeScale.metaSm[0],
+                fontWeight: 700,
+              }}>
+                Thread-aware
+              </span>
+            )}
+            {overview.sourceSupportPresent && (
+              <span style={{
+                padding: '4px 10px',
+                borderRadius: radius.full,
+                background: 'rgba(91,124,255,0.14)',
+                color: accent.primary,
+                fontSize: typeScale.metaSm[0],
+                fontWeight: 700,
+              }}>
+                Source-backed
+              </span>
+            )}
+            {overview.direction && (
+              <span style={{
+                padding: '4px 10px',
+                borderRadius: radius.full,
+                background: disc.surfaceFocus,
+                color: disc.textSecondary,
+                fontSize: typeScale.metaSm[0],
+                fontWeight: 700,
+                textTransform: 'capitalize',
+              }}>
+                {overview.direction}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Stats row */}
         <div style={{ display: 'flex', gap: 16, marginBottom: 14 }}>
@@ -206,7 +291,7 @@ function OverviewCard({
                 {domain}
               </span>
             ) : (
-              <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+              <ProfileCardTrigger data={standardProfileCardData} did={top.author.did} disabled={!standardProfileCardData}>
                 <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
                   @{top.author.handle}
                 </button>
@@ -218,16 +303,39 @@ function OverviewCard({
             </span>
           </div>
         )}
+        {moderationLabelChips.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <LabelChipRow chips={moderationLabelChips} />
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ─── BestSourceCard ───────────────────────────────────────────────────────
-function BestSourceCard({ source }: { source: StoryProjectedPost | null }) {
+function BestSourceCard({
+  source,
+  showAtprotoLabelChips,
+}: {
+  source: StoryProjectedPost | null;
+  showAtprotoLabelChips: boolean;
+}) {
   const navigateToProfile = useProfileNavigation();
   if (!source) return null;
   const { post: top, profileCardData: standardProfileCardData, text: topText } = source;
+  const sessionSummary = source.synopsisText && source.synopsisText !== topText
+    ? source.synopsisText
+    : undefined;
+  const moderationLabelChips = showAtprotoLabelChips
+    ? postLabelChips({
+      contentLabels: top.contentLabels,
+      labelDetails: top.labelDetails,
+      authorDid: top.author.did,
+      maxChips: 2,
+      includeLabellerProvenance: true,
+    })
+    : [];
   return (
     <div style={{
       borderRadius: ocTokens.radius,
@@ -243,7 +351,7 @@ function BestSourceCard({ source }: { source: StoryProjectedPost | null }) {
 
       {/* Author */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+        <ProfileCardTrigger data={standardProfileCardData} did={top.author.did} disabled={!standardProfileCardData}>
           <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
             {top.author.avatar
               ? <img src={top.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -251,7 +359,7 @@ function BestSourceCard({ source }: { source: StoryProjectedPost | null }) {
             }
           </div>
         </ProfileCardTrigger>
-        <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+        <ProfileCardTrigger data={standardProfileCardData} did={top.author.did} disabled={!standardProfileCardData}>
           <div>
             <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>{top.author.displayName}</button>
             <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{top.author.handle}</button>
@@ -267,6 +375,35 @@ function BestSourceCard({ source }: { source: StoryProjectedPost | null }) {
       }}>
         <RichText text={topText} color={disc.textSecondary} />
       </p>
+      {moderationLabelChips.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <LabelChipRow chips={moderationLabelChips} />
+        </div>
+      )}
+
+      {sessionSummary && (
+        <div style={{
+          marginBottom: 16,
+          padding: `${space[6]}px ${space[8]}px`,
+          borderRadius: radius[12],
+          background: disc.surfaceFocus,
+          border: `0.5px solid ${disc.lineSubtle}`,
+        }}>
+          <p style={{
+            fontSize: typeScale.metaSm[0],
+            fontWeight: 700,
+            color: disc.textTertiary,
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+            marginBottom: 4,
+          }}>
+            Thread context
+          </p>
+          <p style={{ fontSize: typeScale.bodySm[0], color: disc.textSecondary }}>
+            <RichText text={sessionSummary} color={disc.textSecondary} />
+          </p>
+        </div>
+      )}
 
       {/* Embed if present */}
       {top.embed && (top.embed.type === 'external' || top.embed.type === 'video') && (
@@ -365,9 +502,11 @@ function RelatedEntitiesCard({ entities }: { entities: StoryProjection['relatedE
 function RelatedConversationCard({
   conversations,
   onOpenStory,
+  showAtprotoLabelChips,
 }: {
   conversations: StoryProjectedPost[];
   onOpenStory: (e: StoryEntry) => void;
+  showAtprotoLabelChips: boolean;
 }) {
   const navigateToProfile = useProfileNavigation();
   return (
@@ -383,46 +522,115 @@ function RelatedConversationCard({
       }}>Related Conversations</p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {conversations.map(({ post, profileCardData: standardProfileCardData, text }) => (
-          <motion.div
-            key={post.id}
-            whileTap={{ scale: 0.985 }}
-            onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.content.slice(0, 80) })}
-            style={{
-              background: disc.surfaceCard,
-              borderRadius: radius[20],
-              padding: `${space[8]}px ${space[8]}px`,
-              border: `0.5px solid ${disc.lineSubtle}`,
-              cursor: 'pointer',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
-                <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
-                  {post.author.avatar
-                    ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
-                  }
+        {conversations.map(({
+          post,
+          profileCardData: standardProfileCardData,
+          text,
+          synopsisText,
+          direction,
+          sourceSupportPresent,
+          isSessionBacked,
+        }) => {
+          const moderationLabelChips = showAtprotoLabelChips
+            ? postLabelChips({
+              contentLabels: post.contentLabels,
+              labelDetails: post.labelDetails,
+              authorDid: post.author.did,
+              maxChips: 1,
+              includeLabellerProvenance: true,
+            })
+            : [];
+          return (
+            <motion.div
+              key={post.id}
+              whileTap={{ scale: 0.985 }}
+              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.content.slice(0, 80) })}
+              style={{
+                background: disc.surfaceCard,
+                borderRadius: radius[20],
+                padding: `${space[8]}px ${space[8]}px`,
+                border: `0.5px solid ${disc.lineSubtle}`,
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>
+                  <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
+                    {post.author.avatar
+                      ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+                    }
+                  </div>
+                </ProfileCardTrigger>
+                <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>
+                  <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
+                </ProfileCardTrigger>
+                <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{post.timestamp}</span>
+              </div>
+              <p style={{
+                fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
+                color: disc.textSecondary,
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>
+                <RichText text={text} color={disc.textSecondary} />
+              </p>
+              {moderationLabelChips.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <LabelChipRow chips={moderationLabelChips} />
                 </div>
-              </ProfileCardTrigger>
-              <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
-                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
-              </ProfileCardTrigger>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{post.timestamp}</span>
-            </div>
-            <p style={{
-              fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
-              color: disc.textSecondary,
-              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-            }}>
-              <RichText text={text} color={disc.textSecondary} />
-            </p>
-            <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>❤️ {post.likeCount}</span>
-            </div>
-          </motion.div>
-        ))}
+              )}
+              {synopsisText && synopsisText !== text && (
+                <p style={{
+                  marginTop: 8,
+                  fontSize: typeScale.metaSm[0],
+                  color: disc.textTertiary,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}>
+                  <RichText text={synopsisText} color={disc.textTertiary} />
+                </p>
+              )}
+              {(isSessionBacked || sourceSupportPresent || direction) && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  {isSessionBacked && (
+                    <span style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: accent.cyan400,
+                      fontWeight: 700,
+                    }}>
+                      Thread-aware
+                    </span>
+                  )}
+                  {sourceSupportPresent && (
+                    <span style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: accent.primary,
+                      fontWeight: 700,
+                    }}>
+                      Source-backed
+                    </span>
+                  )}
+                  {direction && (
+                    <span style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: disc.textTertiary,
+                      fontWeight: 700,
+                      textTransform: 'capitalize',
+                    }}>
+                      {direction}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
+                <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>❤️ {post.likeCount}</span>
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
     </div>
   );
@@ -559,13 +767,25 @@ function ModerationNoticeCard({
 // ─── Main component ────────────────────────────────────────────────────────
 export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props) {
   const { agent, session } = useSessionStore();
+  const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const [posts, setPosts] = useState<MockPost[]>([]);
-  const [loading, setLoading] = useState(true);
   const [cardIdx, setCardIdx] = useState(0);
   const [dir, setDir] = useState(1);
   const [refinedQuery, setRefinedQuery] = useState(query);
+  const [searchSort, setSearchSort] = useState<'top' | 'latest'>('top');
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const {
+    posts,
+    loading,
+    loadingMorePosts,
+    hasMorePosts,
+    loadMorePosts,
+  } = useStorySearchResults({
+    query: refinedQuery,
+    searchSort,
+    agent,
+    enabled: Boolean(session && agent),
+  });
   const filterResults = usePostFilterResults(posts, 'explore');
 
   const getModerationMatches = useCallback((postId: string) => filterResults[postId] ?? [], [filterResults]);
@@ -594,34 +814,31 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     setRevealedFilteredPosts({});
   }, [refinedQuery]);
 
-  useEffect(() => {
-    if (!session) return;
-    setLoading(true);
-    atpCall(() => agent.app.bsky.feed.searchPosts({ q: refinedQuery, limit: 25 }))
-      .then(res => {
-        if (res?.data?.posts) {
-          setPosts(
-            res.data.posts
-              .filter((p: any) => hasDisplayableRecordContent(p?.record))
-              .map((p: any) => mapPostViewToMockPost(p))
-          );
-        }
-      })
-      .finally(() => setLoading(false));
-  }, [refinedQuery, agent, session]);
-
   const getTranslatedText = useCallback((post: MockPost): string => {
     return translationById[post.id]?.translatedText ?? post.content;
   }, [translationById]);
 
-  const storyProjection = useMemo(
-    () => projectStoryView({
-      query: refinedQuery,
-      posts: visiblePosts,
-      getTranslatedText,
-    }),
-    [getTranslatedText, refinedQuery, visiblePosts],
+  const visibleStoryRootCandidates = useMemo(
+    () => visiblePosts
+      .slice(0, 6)
+      .map((post) => rootUriForStoryPost(post)),
+    [visiblePosts],
   );
+
+  useConversationBatchHydration({
+    enabled: Boolean(session && agent && visiblePosts.length > 0),
+    rootUris: visibleStoryRootCandidates,
+    mode: 'story',
+    agent,
+    translationPolicy,
+    maxTargets: 6,
+  });
+
+  const storyProjection = useStoryProjection({
+    query: refinedQuery,
+    posts: visiblePosts,
+    getTranslatedText,
+  });
 
   useEffect(() => {
     if (!translationPolicy.autoTranslateExplore) return;
@@ -675,13 +892,15 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
       key="overview"
       overview={storyProjection.overview}
       resultCount={storyProjection.resultCount}
+      showAtprotoLabelChips={showAtprotoLabelChips}
     />,
-    <BestSourceCard key="source" source={storyProjection.bestSource} />,
+    <BestSourceCard key="source" source={storyProjection.bestSource} showAtprotoLabelChips={showAtprotoLabelChips} />,
     <RelatedEntitiesCard key="entities" entities={storyProjection.relatedEntities} />,
     <RelatedConversationCard
       key="conversation"
       conversations={storyProjection.relatedConversations}
       onOpenStory={onOpenStory}
+      showAtprotoLabelChips={showAtprotoLabelChips}
     />,
   ];
 
@@ -736,6 +955,60 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
       {/* Progress rail */}
       <div style={{ position: 'relative', zIndex: 2, flexShrink: 0, paddingBottom: 12 }}>
         <StoryProgressRail total={CARD_NAMES.length} current={cardIdx} />
+      </div>
+
+      <div style={{ position: 'relative', zIndex: 2, padding: '0 20px 10px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={() => setSearchSort('top')}
+          style={{
+            border: 'none',
+            borderRadius: 999,
+            padding: '6px 12px',
+            cursor: 'pointer',
+            background: searchSort === 'top' ? accent.primary : disc.surfaceCard,
+            color: searchSort === 'top' ? '#fff' : disc.textSecondary,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          Top
+        </button>
+        <button
+          type="button"
+          onClick={() => setSearchSort('latest')}
+          style={{
+            border: 'none',
+            borderRadius: 999,
+            padding: '6px 12px',
+            cursor: 'pointer',
+            background: searchSort === 'latest' ? accent.primary : disc.surfaceCard,
+            color: searchSort === 'latest' ? '#fff' : disc.textSecondary,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          Latest
+        </button>
+        {hasMorePosts && (
+          <button
+            type="button"
+            onClick={loadMorePosts}
+            disabled={loadingMorePosts}
+            style={{
+              border: 'none',
+              borderRadius: 999,
+              padding: '6px 12px',
+              cursor: loadingMorePosts ? 'default' : 'pointer',
+              background: loadingMorePosts ? disc.surfaceFocus : 'rgba(124,233,255,0.18)',
+              color: disc.textPrimary,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {loadingMorePosts ? 'Loading…' : 'Load More'}
+          </button>
+        )}
       </div>
 
       {/* Card area */}

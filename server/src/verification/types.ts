@@ -126,7 +126,7 @@ export type VerificationResult = {
   factualState: FactualState;
   reasons: FactualContributionReason[];
   entityLinking?: {
-    provider: 'heuristic' | 'rel' | 'dbpedia';
+    provider: 'heuristic' | 'rel' | 'dbpedia' | 'wikidata' | 'hybrid';
     endpoint?: string;
     linkedEntities: Array<{
       mention: string;

@@ -12,12 +12,13 @@
 
 import { BskyAgent } from '@atproto/api';
 import { paperDB } from './db';
-import { inferenceClient } from './workers/InferenceClient';
 import { atpCall, atpMutate } from './lib/atproto/client';
 import { resolveEmbed, resolveFacets, extractClusterSignals } from './lib/resolver/atproto';
 import { extractRecordDisplayText } from './lib/atproto/recordContent';
 import { z } from 'zod';
 import { AppBskyFeedDefs } from '@atproto/api';
+import { embeddingPipeline } from './intelligence/embeddingPipeline';
+import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 
 // ─── Zod schema for ATProto post validation ────────────────────────────────
 const FeedViewPostSchema = z.object({
@@ -89,12 +90,13 @@ export class PaperSync {
       }
 
       const textsToEmbed = postsToProcess.map(item => sanitize(item.extractedContent));
-      const embeddings = await inferenceClient.embedBatch(textsToEmbed);
+      const embeddings = await embeddingPipeline.embedBatch(textsToEmbed, { mode: 'ingest', batchSize: 12 });
 
       await pg.transaction(async (trx) => {
         for (let i = 0; i < postsToProcess.length; i++) {
           const { post, reply } = postsToProcess[i];
           const embedding = embeddings[i] ?? [];
+          if (embedding.length > 0) recordEmbeddingVector('ingest', embedding);
           const sanitizedContent = textsToEmbed[i] ?? '';
 
           const facets = resolveFacets(post.record.facets);
@@ -140,7 +142,8 @@ export class PaperSync {
     })) ?? (() => { throw new Error('Failed to post'); })();
 
     const pg = paperDB.getPG();
-    const embedding = await inferenceClient.embed(sanitizedText);
+    const embedding = await embeddingPipeline.embed(sanitizedText, { mode: 'ingest' });
+    if (embedding.length > 0) recordEmbeddingVector('ingest', embedding);
 
     await pg.query(
       // NOTE: This assumes the 'posts' table has been migrated to include 'uri', 'reply_to', and 'reply_root' columns.

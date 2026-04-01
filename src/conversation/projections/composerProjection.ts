@@ -1,4 +1,5 @@
 import type { AtUri } from '../../intelligence/interpolatorTypes';
+import type { MockPost } from '../../data/mockData';
 import type { ConversationSession } from '../sessionTypes';
 import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
 import {
@@ -64,6 +65,173 @@ export type ComposerContext = {
   };
 };
 
+const MAX_DRAFT_TEXT_CHARS = 1_200;
+const MAX_PARENT_TEXT_CHARS = 320;
+const MAX_THREAD_TEXT_CHARS = 260;
+const MAX_COMMENT_TEXT_CHARS = 220;
+const MAX_HOSTED_PROMPT_CHARS = 320;
+const MAX_HOSTED_DESCRIPTION_CHARS = 320;
+const MAX_HOSTED_SOURCE_CHARS = 200;
+const MAX_HOSTED_TOPIC_CHARS = 48;
+
+function sanitizeComposerText(value: string, maxChars: number): string {
+  const sanitized = value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (sanitized.length <= maxChars) {
+    return sanitized;
+  }
+
+  return `${sanitized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function uniqComposerTexts(
+  values: Array<string | undefined | null>,
+  limit: number,
+  maxChars: number,
+): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => (typeof value === 'string' ? sanitizeComposerText(value, maxChars) : ''))
+        .filter((value): value is string => value.length > 0),
+    ),
+  ).slice(0, Math.max(0, limit));
+}
+
+function sanitizeComposerProjectionContext(context: ComposerContext): ComposerContext {
+  return {
+    ...context,
+    draftText: sanitizeComposerText(context.draftText, MAX_DRAFT_TEXT_CHARS),
+    ...(context.directParent
+      ? {
+          directParent: {
+            ...context.directParent,
+            text: sanitizeComposerText(context.directParent.text, MAX_PARENT_TEXT_CHARS),
+            ...(context.directParent.authorHandle
+              ? { authorHandle: sanitizeComposerText(context.directParent.authorHandle, 64) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(context.threadContext
+      ? {
+          threadContext: {
+            ...(context.threadContext.rootText
+              ? { rootText: sanitizeComposerText(context.threadContext.rootText, MAX_THREAD_TEXT_CHARS) }
+              : {}),
+            ancestorTexts: uniqComposerTexts(context.threadContext.ancestorTexts, 5, MAX_THREAD_TEXT_CHARS),
+            branchTexts: uniqComposerTexts(context.threadContext.branchTexts, 8, MAX_THREAD_TEXT_CHARS),
+          },
+        }
+      : {}),
+    ...(context.replyContext
+      ? {
+          replyContext: {
+            ...context.replyContext,
+            siblingReplyTexts: uniqComposerTexts(context.replyContext.siblingReplyTexts, 16, MAX_COMMENT_TEXT_CHARS),
+            selectedCommentTexts: uniqComposerTexts(context.replyContext.selectedCommentTexts, 16, MAX_COMMENT_TEXT_CHARS),
+          },
+        }
+      : {}),
+    ...(context.hostedThread
+      ? {
+          hostedThread: {
+            prompt: sanitizeComposerText(context.hostedThread.prompt, MAX_HOSTED_PROMPT_CHARS),
+            ...(context.hostedThread.description
+              ? { description: sanitizeComposerText(context.hostedThread.description, MAX_HOSTED_DESCRIPTION_CHARS) }
+              : {}),
+            ...(context.hostedThread.source
+              ? { source: sanitizeComposerText(context.hostedThread.source, MAX_HOSTED_SOURCE_CHARS) }
+              : {}),
+            topics: uniqComposerTexts(context.hostedThread.topics, 12, MAX_HOSTED_TOPIC_CHARS),
+            ...(context.hostedThread.audience
+              ? { audience: sanitizeComposerText(context.hostedThread.audience, 48) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+export function projectComposeSheetComposerContext(params: {
+  draftText: string;
+  replyTarget?: MockPost | null;
+  projectedContext?: ComposerContext | null;
+}): ComposerContext {
+  const { draftText, replyTarget, projectedContext } = params;
+
+  if (projectedContext) {
+    const merged: ComposerContext = {
+      ...projectedContext,
+      draftText,
+      ...(replyTarget && !projectedContext.directParent
+        ? {
+            directParent: {
+              uri: replyTarget.id,
+              text: replyTarget.content,
+              authorHandle: replyTarget.author.handle,
+            },
+          }
+        : {}),
+      ...(replyTarget && !projectedContext.replyContext
+        ? {
+            replyContext: {
+              siblingReplyTexts: [],
+              selectedCommentTexts: uniqComposerTexts([replyTarget.replyTo?.content], 4, MAX_COMMENT_TEXT_CHARS),
+              ...(typeof replyTarget.replyCount === 'number' ? { totalReplyCount: replyTarget.replyCount } : {}),
+              ...(typeof replyTarget.replyCount === 'number' ? { totalCommentCount: replyTarget.replyCount } : {}),
+              ...(typeof replyTarget.threadCount === 'number' ? { totalThreadCount: replyTarget.threadCount } : {}),
+            },
+          }
+        : {}),
+    };
+
+    return sanitizeComposerProjectionContext(merged);
+  }
+
+  if (!replyTarget) {
+    return sanitizeComposerProjectionContext({
+      mode: 'post',
+      draftText,
+    });
+  }
+
+  return sanitizeComposerProjectionContext({
+    mode: 'reply',
+    draftText,
+    directParent: {
+      uri: replyTarget.id,
+      text: replyTarget.content,
+      authorHandle: replyTarget.author.handle,
+    },
+    threadContext: {
+      ...(replyTarget.threadRoot?.content
+        ? { rootText: replyTarget.threadRoot.content }
+        : {}),
+      ancestorTexts: [],
+      branchTexts: uniqComposerTexts(
+        [replyTarget.content, replyTarget.replyTo?.content],
+        4,
+        MAX_THREAD_TEXT_CHARS,
+      ),
+    },
+    replyContext: {
+      siblingReplyTexts: [],
+      selectedCommentTexts: uniqComposerTexts(
+        [replyTarget.replyTo?.content],
+        4,
+        MAX_COMMENT_TEXT_CHARS,
+      ),
+      ...(typeof replyTarget.replyCount === 'number' ? { totalReplyCount: replyTarget.replyCount } : {}),
+      ...(typeof replyTarget.replyCount === 'number' ? { totalCommentCount: replyTarget.replyCount } : {}),
+      ...(typeof replyTarget.threadCount === 'number' ? { totalThreadCount: replyTarget.threadCount } : {}),
+    },
+  });
+}
+
 export function projectComposerContext(params: {
   session: ConversationSession;
   replyToUri?: string;
@@ -101,7 +269,7 @@ export function projectComposerContext(params: {
     selectedCommentTexts,
   );
 
-  return {
+  return sanitizeComposerProjectionContext({
     mode: replyToUri ? 'reply' : 'post',
     draftText,
     ...(parent
@@ -168,7 +336,7 @@ export function projectComposerContext(params: {
       sourceSupportPresent: session.interpretation.interpolator?.sourceSupportPresent ?? false,
       factualSignalPresent: session.interpretation.interpolator?.factualSignalPresent ?? false,
     },
-  };
+  });
 }
 
 export function projectHostedThreadComposerContext(params: {
@@ -189,7 +357,7 @@ export function projectHostedThreadComposerContext(params: {
     ),
   ).slice(0, 12);
 
-  return {
+  return sanitizeComposerProjectionContext({
     mode: 'hosted_thread',
     draftText: params.draftText,
     hostedThread: {
@@ -205,7 +373,7 @@ export function projectHostedThreadComposerContext(params: {
         ? { replyContextSummary: description.length <= 180 ? description : `${description.slice(0, 177)}...` }
         : {}),
     },
-  };
+  });
 }
 
 function projectPremiumComposerContext(

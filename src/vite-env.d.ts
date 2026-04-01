@@ -3,6 +3,8 @@
 declare module '*.css';
 
 interface ImportMetaEnv {
+	readonly VITE_KLIPY_API_KEY?: string;
+	readonly VITE_KLIPY_CLIENT_KEY?: string;
 	readonly VITE_ATPROTO_OAUTH_CLIENT_ID?: string;
 	readonly VITE_ATPROTO_HANDLE_RESOLVER?: string;
 	readonly VITE_ATPROTO_OAUTH_SCOPE?: string;
@@ -21,6 +23,8 @@ interface ImportMetaEnv {
 	readonly VITE_CLOUDKIT_ENVIRONMENT?: string;
 	readonly VITE_CLOUDKIT_JS_SRC?: string;
 	readonly VITE_ENABLE_DRAFT_RECOVERY_MIRROR?: string;
+	readonly VITE_GLYMPSE_MEDIA_BASE_URL?: string;
+	readonly VITE_GLYMPSE_MEDIA_TIMEOUT_MS?: string;
 }
 
 interface ImportMeta {

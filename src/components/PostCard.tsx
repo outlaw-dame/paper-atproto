@@ -17,16 +17,19 @@ import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
 import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useUiStore } from '../store/uiStore';
+import { useAppearanceStore } from '../store/appearanceStore';
 import {
   recordSensitiveMediaImpression,
   recordSensitiveMediaReveal,
   recordSensitiveMediaRehide,
 } from '../perf/sensitiveMediaTelemetry';
 import { openExternalUrl } from '../lib/safety/externalUrl';
+import { Gif } from './Gif';
 import type { TimelineConversationHint } from '../conversation/projections/timelineProjection';
 import ProfileCardTrigger from './ProfileCardTrigger';
 import { buildStandardProfileCardData } from '../lib/profileCardData';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
+import { postLabelChips } from '../lib/atproto/labelPresentation';
 
 interface PostCardProps {
   post: MockPost;
@@ -62,6 +65,11 @@ type MediaCarouselItem =
       title?: string;
       domain: string;
       aspectRatio?: number;
+      captions?: Array<{
+        lang: string;
+        url: string;
+        label?: string;
+      }>;
     };
 
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, timelineHint, replyingTo, hasContextAbove }: PostCardProps) {
@@ -76,6 +84,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const mediaScrollRef = useRef<HTMLDivElement | null>(null);
   const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation } = useTranslationStore();
+  const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
   const {
     policy: sensitivePolicy,
     revealedPostIds,
@@ -103,6 +112,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         ...(post.embed.title ? { title: post.embed.title } : {}),
         domain: post.embed.domain,
         ...(typeof post.embed.aspectRatio === 'number' ? { aspectRatio: post.embed.aspectRatio } : {}),
+        ...(post.embed.captions ? { captions: post.embed.captions } : {}),
       });
     }
 
@@ -165,6 +175,23 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
   const storyTitle = post.content.slice(0, 80);
   const standardProfileCardData = buildStandardProfileCardData(post);
+  const moderationLabelChips = useMemo(() => {
+    if (!showAtprotoLabelChips) return [];
+    return postLabelChips({
+      contentLabels: post.contentLabels,
+      labelDetails: post.labelDetails,
+      authorDid: post.author.did,
+      maxChips: 2,
+      includeLabellerProvenance: true,
+    });
+  }, [post.author.did, post.contentLabels, post.labelDetails, showAtprotoLabelChips]);
+
+  const chipStyleByTone: Record<'neutral' | 'warning' | 'danger' | 'info', React.CSSProperties> = {
+    neutral: { background: 'var(--fill-3)', color: 'var(--label-2)' },
+    warning: { background: 'rgba(255,149,0,0.18)', color: '#ffb454' },
+    danger: { background: 'rgba(255,77,79,0.18)', color: '#ff7b7d' },
+    info: { background: 'rgba(124,233,255,0.2)', color: '#6de7ff' },
+  };
 
   const openActorProfile = (actor: string) => {
     if (!actor) return;
@@ -190,13 +217,18 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     openExploreSearch(normalized);
   };
 
-  // Handle "open story" click
-  const handleCardClick = (e: React.MouseEvent) => {
-    // Don't trigger if clicking interactive elements
-    if ((e.target as HTMLElement).closest('button, a, .video-player-wrapper')) {
-      return;
-    }
+  const isInteractiveTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false;
+    return !!target.closest('button, a, input, textarea, select, .video-player-wrapper');
+  };
+
+  const openStoryFromCard = () => {
     onOpenStory({ id: post.id, type: 'post', title: storyTitle });
+  };
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (isInteractiveTarget(e.target)) return;
+    openStoryFromCard();
   };
 
   const handleRepostToggle = (e: React.MouseEvent) => {
@@ -380,6 +412,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <ProfileCardTrigger
             data={standardProfileCardData}
+            did={post.author.did}
             disabled={!standardProfileCardData}
           >
             <button
@@ -402,6 +435,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           </ProfileCardTrigger>
           <ProfileCardTrigger
             data={standardProfileCardData}
+            did={post.author.did}
             disabled={!standardProfileCardData}
           >
             <div
@@ -429,6 +463,24 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                 <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
               </div>
               <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
+              {moderationLabelChips.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  {moderationLabelChips.map((chip) => (
+                    <span
+                      key={chip.key}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        padding: '2px 8px',
+                        ...chipStyleByTone[chip.tone],
+                      }}
+                    >
+                      {chip.text}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </ProfileCardTrigger>
         </div>
@@ -442,25 +494,43 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
 
       {timelineHint && (
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          margin: replyingTo ? '0 0 10px' : '0 0 8px',
-          padding: '4px 9px',
-          borderRadius: 999,
-          border: '1px solid var(--stroke-dim)',
-          background: 'var(--surface-2)',
-          color: 'var(--label-3)',
-          fontSize: 'var(--type-meta-sm-size)',
-          lineHeight: 'var(--type-meta-sm-line)',
-          letterSpacing: 'var(--type-meta-sm-track)',
-          fontWeight: 600,
-        }}>
-          <span>{timelineHint.direction}</span>
-          {timelineHint.branchDepth > 0 && <span>depth {timelineHint.branchDepth}</span>}
-          {timelineHint.factualSignalPresent && <span>factual</span>}
-          {timelineHint.sourceSupportPresent && <span>source-backed</span>}
+        <div style={{ margin: replyingTo ? '0 0 10px' : '0 0 8px' }}>
+          {(timelineHint.isReply || timelineHint.continuityLabel) && timelineHint.compactSummary && (
+            <p style={{
+              margin: '0 0 6px',
+              fontSize: 'var(--type-meta-sm-size)',
+              lineHeight: 'var(--type-meta-sm-line)',
+              letterSpacing: 'var(--type-meta-sm-track)',
+              color: 'var(--label-3)',
+              fontWeight: 500,
+            }}>
+              Conversation: {timelineHint.compactSummary}
+            </p>
+          )}
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 6,
+            padding: '4px 9px',
+            borderRadius: 999,
+            border: '1px solid var(--stroke-dim)',
+            background: 'var(--surface-2)',
+            color: 'var(--label-3)',
+            fontSize: 'var(--type-meta-sm-size)',
+            lineHeight: 'var(--type-meta-sm-line)',
+            letterSpacing: 'var(--type-meta-sm-track)',
+            fontWeight: 600,
+          }}>
+            <span>{timelineHint.direction}</span>
+            {timelineHint.dominantTone && timelineHint.dominantTone !== 'forming' && (
+              <span>{timelineHint.dominantTone}</span>
+            )}
+            {timelineHint.branchDepth > 0 && <span>depth {timelineHint.branchDepth}</span>}
+            {timelineHint.continuityLabel && <span>{timelineHint.continuityLabel}</span>}
+            {timelineHint.factualSignalPresent && <span>factual</span>}
+            {timelineHint.sourceSupportPresent && <span>source-backed</span>}
+          </div>
         </div>
       )}
 
@@ -651,6 +721,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       <VideoPlayer
                         url={item.url}
                         postId={post.id}
+                        {...(item.captions ? { captions: item.captions } : {})}
                         {...(item.thumb ? { thumb: item.thumb } : {})}
                         {...(typeof item.aspectRatio === 'number' ? { aspectRatio: item.aspectRatio } : {})}
                         autoplay={false}
@@ -1023,6 +1094,18 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       {/* 3. External Link */}
       {post.embed?.type === 'external' && (() => {
         const externalUrl = post.embed.url;
+        const isGif = externalUrl.includes('tenor.com') || externalUrl.includes('klipy.com');
+        if (isGif) {
+          return (
+            <div style={{ marginTop: 8 }}>
+              <Gif
+                url={externalUrl}
+                title={post.embed.title}
+                {...(post.embed.thumb ? { thumbnail: post.embed.thumb } : {})}
+              />
+            </div>
+          );
+        }
         if (externalEmbedYouTubeRef) {
           return (
             <div style={{ marginTop: 8 }}>
@@ -1165,17 +1248,17 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
               <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
                 {quotedPost.author.avatar
                   ? <img src={quotedPost.author.avatar} alt={quotedPost.author.handle} style={{ width: '100%', height: '100%' }} />
                   : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontSize: 10, fontWeight: 700 }}>{((quotedPost.author.displayName || quotedPost.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
               </div>
             </ProfileCardTrigger>
-            <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
               <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
             </ProfileCardTrigger>
-            <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
               <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
             </ProfileCardTrigger>
           </div>

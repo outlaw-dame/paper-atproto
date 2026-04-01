@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { verifyEvidence } from '../verification/verify-evidence.js';
+import { getEntityLinkingTelemetry, resetEntityLinkingTelemetry } from '../verification/entity-linking.provider.js';
 import { ValidationError, UnauthorizedError, AppError } from '../lib/errors.js';
 import { requireNonEmptyText, sanitizeText, sanitizeUrls } from '../lib/sanitize.js';
 import { env } from '../config/env.js';
@@ -18,7 +19,11 @@ export const verificationRouter = new Hono();
 
 verificationRouter.get('/status', async (c) => {
   const provider = env.VERIFY_ENTITY_LINKING_PROVIDER;
-  const endpoint = env.VERIFY_ENTITY_LINKING_ENDPOINT;
+  const endpoint = provider === 'wikidata'
+    ? env.VERIFY_WIKIDATA_ENDPOINT
+    : provider === 'hybrid'
+      ? `${env.VERIFY_ENTITY_LINKING_ENDPOINT} | ${env.VERIFY_WIKIDATA_ENDPOINT}`
+      : env.VERIFY_ENTITY_LINKING_ENDPOINT;
   const externalLinkingEnabled = provider !== 'heuristic' && Boolean(endpoint);
 
   return c.json({
@@ -40,6 +45,15 @@ verificationRouter.get('/status', async (c) => {
       },
     },
   });
+});
+
+verificationRouter.get('/telemetry', (c) => {
+  return c.json({ ok: true, telemetry: getEntityLinkingTelemetry() });
+});
+
+verificationRouter.delete('/telemetry', (c) => {
+  resetEntityLinkingTelemetry();
+  return c.json({ ok: true });
 });
 
 verificationRouter.post('/evidence', async (c) => {

@@ -1,3 +1,4 @@
+import type { AppBskyActorDefs } from '@atproto/api';
 import type { MockPost } from '../data/mockData';
 import type { ProfileCardData } from '../types/profileCard';
 
@@ -8,6 +9,35 @@ function inferMediaType(
   if (post.embed?.type === 'external') return 'external';
   if ((post.media?.length ?? 0) > 0) return 'image';
   return undefined;
+}
+
+export function buildProfileCardDataFromFullProfile(
+  profile: AppBskyActorDefs.ProfileViewDetailed,
+  existingData?: ProfileCardData | null,
+): ProfileCardData {
+  return {
+    variant: existingData?.variant ?? 'standard',
+    identity: {
+      did: profile.did,
+      handle: profile.handle,
+      ...(profile.displayName ? { displayName: profile.displayName } : {}),
+      ...(profile.avatar ? { avatar: profile.avatar } : {}),
+      ...(profile.banner ? { banner: profile.banner } : {}),
+      ...(profile.description ? { bio: profile.description } : {}),
+    },
+    social: {
+      followersCount: profile.followersCount ?? 0,
+      mutualsCount: 0,
+      followingCount: profile.followsCount ?? 0,
+      isFollowing: !!profile.viewer?.following,
+      canFollow: !profile.viewer?.following && !profile.viewer?.blocking && !profile.viewer?.blockedBy,
+      canBlock: true,
+      isPartial: false,
+    },
+    starterPacks: existingData?.starterPacks ?? [],
+    activity: existingData?.activity ?? { recentPosts: [], popularPosts: [] },
+    ...(existingData?.threadContext ? { threadContext: existingData.threadContext } : {}),
+  };
 }
 
 export function buildStandardProfileCardData(post: MockPost): ProfileCardData | null {

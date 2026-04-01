@@ -484,12 +484,19 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
             throw initError;
           }
 
+          const normalizedInitError = normalizeError(initError);
           recordOAuthBootstrapDebug('bootstrap_error', {
-            kind: normalizeError(initError).kind,
-            status: normalizeError(initError).status,
+            kind: normalizedInitError.kind,
+            status: normalizedInitError.status,
             reason: 'restore_init_first_attempt_failed',
           });
-          clearCachedOAuthBrowserState();
+          // Only wipe cached OAuth state for true auth failures.
+          // Network/transient errors must not destroy stored tokens — on mobile,
+          // the network may not be immediately available after wake from sleep,
+          // and clearing here permanently logs the user out on every resume.
+          if (normalizedInitError.kind === 'auth') {
+            clearCachedOAuthBrowserState();
+          }
           initResult = await initOAuthSession(false);
         }
         if (cancelled) return;
@@ -528,8 +535,17 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
               ...(profileRes.data.avatar ? { avatar: profileRes.data.avatar } : {}),
             });
           }
-        } catch {
-          // Non-fatal.
+        } catch (profileError) {
+          if (!cancelled && normalizeError(profileError).kind === 'auth') {
+            clearOAuthCallbackParams();
+            resetAgent();
+            setSession(null);
+            setProfile(null);
+            setSessionReady(false);
+            setError('Your session expired while restoring profile data. Please sign in again.');
+            return;
+          }
+          // Non-fatal for non-auth failures.
         }
 
         const requestedScope = getOAuthRequestedScope();

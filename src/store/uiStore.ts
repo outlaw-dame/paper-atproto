@@ -23,6 +23,8 @@ interface UiState {
   story: StoryEntry | null;
   searchStoryQuery: string | null;
   exploreSearchQuery: string | null;
+  hashtagFeedQuery: string | null;
+  peopleFeedQuery: string | null;
   unreadCount: number;
   profileDid: string | null;
   composeDraft: string;
@@ -41,6 +43,10 @@ interface UiState {
   closeSearchStory: () => void;
   openExploreSearch: (query: string) => void;
   clearExploreSearch: () => void;
+  openHashtagFeed: (hashtag: string) => void;
+  closeHashtagFeed: () => void;
+  openPeopleFeed: (query: string) => void;
+  closePeopleFeed: () => void;
   setUnreadCount: (n: number) => void;
   openProfile: (did: string) => void;
 }
@@ -54,6 +60,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   story: null,
   searchStoryQuery: null,
   exploreSearchQuery: null,
+  hashtagFeedQuery: null,
+  peopleFeedQuery: null,
   unreadCount: 0,
   profileDid: null,
 
@@ -77,6 +85,10 @@ export const useUiStore = create<UiState>((set, get) => ({
     activeTab: 'explore' as TabId,
   })),
   clearExploreSearch: () => set({ exploreSearchQuery: null }),
+  openHashtagFeed: (hashtag) => set({ hashtagFeedQuery: hashtag }),
+  closeHashtagFeed: () => set({ hashtagFeedQuery: null }),
+  openPeopleFeed: (query) => set({ peopleFeedQuery: query }),
+  closePeopleFeed: () => set({ peopleFeedQuery: null }),
   setUnreadCount: (n) => set({ unreadCount: n }),
   openProfile: (did) => set(s => ({ profileDid: did, prevTab: s.activeTab, activeTab: 'profile' as TabId })),
 

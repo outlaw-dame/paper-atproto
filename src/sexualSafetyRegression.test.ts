@@ -10,6 +10,7 @@ import type { ThreadStateForWriter } from './intelligence/llmContracts';
 
 describe('sexual-content safety regressions', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -280,6 +281,49 @@ describe('sexual-content safety regressions', () => {
     expect(result.summary).not.toMatch(/with a link to/i);
     expect(result.summary).not.toContain('/article/2026/example');
     expect(result.provider).toBe('gemini');
+  });
+
+  it('keeps model-client timeout behavior when an external abort signal is provided', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+      const requestSignal = init?.signal as AbortSignal | undefined;
+      requestSignal?.addEventListener('abort', () => {
+        reject(new DOMException('Timed out', 'AbortError'));
+      }, { once: true });
+    }));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const input: ThreadStateForWriter = {
+      threadId: 't-timeout',
+      summaryMode: 'normal',
+      confidence: {
+        surfaceConfidence: 0.82,
+        entityConfidence: 0.7,
+        interpretiveConfidence: 0.74,
+      },
+      rootPost: {
+        uri: 'at://did:plc:test/app.bsky.feed.post/root',
+        handle: 'root-user',
+        text: 'Root post text',
+        createdAt: new Date().toISOString(),
+      },
+      selectedComments: [],
+      topContributors: [],
+      safeEntities: [],
+      factualHighlights: [],
+      whatChangedSignals: [],
+    };
+
+    const externalController = new AbortController();
+    const promise = callInterpolatorWriter(input, externalController.signal);
+    const capturedError = promise.catch((error) => error);
+
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    const error = await capturedError;
+    expect(error).toMatchObject({ name: 'AbortError' });
   });
 
   it('fails premium deep output closed when safety filtering removes the summary', () => {

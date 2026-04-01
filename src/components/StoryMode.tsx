@@ -37,6 +37,7 @@ import type { PremiumThreadProjection } from '../intelligence/premiumContracts';
 import { WriterEntitySheet, EntityChip } from './EntitySheet';
 import VideoPlayer from './VideoPlayer';
 import YouTubeEmbedCard from './YouTubeEmbedCard';
+import { Gif } from './Gif';
 import { useTranslationStore } from '../store/translationStore';
 import { useUiStore } from '../store/uiStore';
 import { translationClient } from '../lib/i18n/client';
@@ -76,8 +77,9 @@ import { useConversationActions } from '../conversation/sessionActions';
 import { projectComposerContext } from '../conversation/projections/composerProjection';
 import { projectModerationDecision } from '../conversation/projections/moderationProjection';
 import {
-  buildThreadScopedProfileCardData,
-  projectThreadScopedProfileCardData,
+  buildQuotedSnippetThreadScopedProfileCardData,
+  buildQuotedThreadScopedProfileCardData,
+  projectThreadScopedProfileCardDataForNode,
 } from '../conversation/projections/profileCardProjection';
 import type { ConversationSession } from '../conversation/sessionTypes';
 import ProfileCardTrigger from './ProfileCardTrigger';
@@ -330,31 +332,11 @@ function PromptHeroCard({
       })
     : null;
   const quotedThreadProfileCardData: ProfileCardData | null = quoteEmbed?.post
-    ? (() => {
-        const quotedPost = quoteEmbed.post;
-        return buildThreadScopedProfileCardData({
-          did: quotedPost.author.did ?? '',
-          handle: quotedPost.author.handle ?? '',
-          ...(quotedPost.author.displayName ? { displayName: quotedPost.author.displayName } : {}),
-          ...(quotedPost.author.avatar ? { avatar: quotedPost.author.avatar } : {}),
-          threadUri: post.id,
-          compactPosts: quotedPost.content.trim()
-            ? [{
-                uri: quotedPost.id,
-                text: quotedPost.content,
-                createdAt: quotedPost.createdAt,
-                likeCount: quotedPost.likeCount,
-                replyCount: quotedPost.replyCount,
-                hasMedia: Boolean(
-                  quotedPost.media?.length
-                  || quotedPost.embed?.type === 'video'
-                  || quotedPost.embed?.type === 'external',
-                ),
-              }]
-            : [],
-          roleSummary: 'Quoted in thread context',
-        });
-      })()
+    ? buildQuotedThreadScopedProfileCardData({
+        threadUri: post.id,
+        post: quoteEmbed.post,
+        roleSummary: 'Quoted in thread context',
+      })
     : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
   const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
@@ -494,6 +476,7 @@ function PromptHeroCard({
             <VideoPlayer
               url={videoEmbed.url}
               postId={post.id}
+              {...(videoEmbed.captions ? { captions: videoEmbed.captions } : {})}
               {...(videoEmbed.thumb ? { thumb: videoEmbed.thumb } : {})}
               {...(typeof videoEmbed.aspectRatio === 'number' ? { aspectRatio: videoEmbed.aspectRatio } : {})}
               autoplay={false}
@@ -513,6 +496,14 @@ function PromptHeroCard({
         {/* External link card */}
         {post.embed?.type === 'external' && (() => {
           const ext = post.embed;
+          const isGif = ext.url.includes('tenor.com') || ext.url.includes('klipy.com');
+          if (isGif) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <Gif url={ext.url} title={ext.title} thumbnail={ext.thumb} />
+              </div>
+            );
+          }
           if (externalEmbedYouTubeRef) {
             return (
               <div style={{ marginBottom: 16 }}>
@@ -753,19 +744,30 @@ function PromptHeroCard({
             </a>
           )
         )}
-        {post.embed?.type === 'external' && (
-          externalEmbedYouTubeRef ? (
-            <div style={{ marginBottom: 16 }}>
-              <YouTubeEmbedCard
-                url={post.embed.url}
-                title={post.embed.title}
-                description={post.embed.description}
-                thumb={post.embed.thumb}
-                domain={post.embed.domain}
-                compact
-              />
-            </div>
-          ) : (
+        {post.embed?.type === 'external' && (() => {
+          const isGif = post.embed.url.includes('tenor.com') || post.embed.url.includes('klipy.com');
+          if (isGif) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <Gif url={post.embed.url} title={post.embed.title} thumbnail={post.embed.thumb} />
+              </div>
+            );
+          }
+          if (externalEmbedYouTubeRef) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <YouTubeEmbedCard
+                  url={post.embed.url}
+                  title={post.embed.title}
+                  description={post.embed.description}
+                  thumb={post.embed.thumb}
+                  domain={post.embed.domain}
+                  compact
+                />
+              </div>
+            );
+          }
+          return (
             <a
               href={post.embed.url}
               target="_blank"
@@ -789,8 +791,8 @@ function PromptHeroCard({
                 <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.domain}</p>
               </div>
             </a>
-          )
-        )}
+          );
+        })()}
 
         {/* Factual chips from root verification */}
         {rootVerification && (() => {
@@ -1967,7 +1969,7 @@ function ContributionCard({
   node, score, rootUri, session, featured, nested, isOp,
   onFeedback, onQuoteComment, isFollowed, onReplyComment,
 }: {
-  node: ThreadNode;
+  node: ThreadNode & { isOptimistic?: boolean };
   score?: ContributionScores;
   rootUri: string;
   session?: ConversationSession | null;
@@ -1977,8 +1979,8 @@ function ContributionCard({
   isOp?: boolean;
   isFollowed?: boolean;
   onFeedback: (uri: string, fb: ContributionScores['userFeedback']) => void;
-  onQuoteComment?: (node: ThreadNode) => void;
-  onReplyComment?: (node: ThreadNode) => void;
+  onQuoteComment?: (node: ThreadNode & { isOptimistic?: boolean }) => void;
+  onReplyComment?: (node: ThreadNode & { isOptimistic?: boolean }) => void;
 }) {
   const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(score?.userFeedback);
   const [liked, setLiked] = useState(false);
@@ -2073,47 +2075,23 @@ function ContributionCard({
     : null;
   const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : node.text;
   const threadProfileCardData = useMemo<ProfileCardData | null>(() => {
-    if (session) {
-      const projected = projectThreadScopedProfileCardData({
-        session,
-        did: node.authorDid,
-        focusUri: node.uri,
-        ...(typeof isFollowed === 'boolean' ? { isFollowing: isFollowed } : {}),
-      });
-      if (projected) return projected;
-    }
-
     const roleLabel = score?.role && score.role !== 'unknown'
       ? score.role.replace(/_/g, ' ')
       : undefined;
+    const notableAction = score?.sourceSupport && score.sourceSupport > 0.5
+      ? 'Introduced supporting evidence'
+      : score?.clarificationValue && score.clarificationValue > 0.5
+        ? 'Added useful clarification'
+        : undefined;
 
-    return buildThreadScopedProfileCardData({
-      did: node.authorDid,
-      handle: node.authorHandle,
-      ...(node.authorName ? { displayName: node.authorName } : {}),
-      ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
-      threadUri: rootUri,
-      compactPosts: [node, ...(node.replies ?? []).slice(0, 2)]
-        .filter((entry) => (entry.text ?? '').trim().length > 0)
-        .map((entry) => ({
-          uri: entry.uri,
-          text: entry.text,
-          createdAt: entry.createdAt,
-          likeCount: entry.likeCount,
-          replyCount: entry.replyCount,
-          hasMedia:
-            entry.embed?.kind === 'images'
-            || entry.embed?.kind === 'external'
-            || entry.embed?.kind === 'recordWithMedia',
-          ...(roleLabel && entry.uri === node.uri ? { roleBadge: roleLabel } : {}),
-        })),
-      ...(roleLabel ? { roleSummary: roleLabel } : {}),
-      ...(score?.sourceSupport && score.sourceSupport > 0.5
-        ? { notableAction: 'Introduced supporting evidence' }
-        : score?.clarificationValue && score.clarificationValue > 0.5
-          ? { notableAction: 'Added useful clarification' }
-          : {}),
+    return projectThreadScopedProfileCardDataForNode({
+      ...(session ? { session } : {}),
+      node,
+      rootUri,
+      focusUri: node.uri,
       ...(typeof isFollowed === 'boolean' ? { isFollowing: isFollowed } : {}),
+      ...(roleLabel ? { roleLabel } : {}),
+      ...(notableAction ? { notableAction } : {}),
     });
   }, [isFollowed, node, rootUri, score?.clarificationValue, score?.role, score?.sourceSupport, session]);
 
@@ -2173,6 +2151,21 @@ function ContributionCard({
                 fontSize: 10, fontWeight: 800,
                 letterSpacing: '0.04em',
               }}>OP</span>
+            )}
+            {node.isOptimistic && (
+              <span style={{
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                height: 17,
+                padding: '0 6px',
+                borderRadius: 4,
+                background: 'rgba(124,233,255,0.16)',
+                color: accent.cyan400,
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+              }}>Sending</span>
             )}
           </div>
             <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.authorDid || node.authorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, margin: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.authorHandle}</button>
@@ -2242,27 +2235,38 @@ function ContributionCard({
       )}
 
       {/* Embed */}
-      {node.embed?.kind === 'external' && node.embed.external && (
-        <a
-          href={node.embed.external.uri}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          style={{
-            display: 'block', marginBottom: contTokens.gap,
-            background: disc.surfaceCard2, borderRadius: radius[16],
-            padding: `${space[6]}px ${space[8]}px`,
-            textDecoration: 'none',
-            border: `0.5px solid ${disc.lineSubtle}`,
-          }}
-        >
-          {node.embed.external.thumb && <img src={node.embed.external.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
-          {node.embed.external.title && <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{node.embed.external.title}</p>}
-          <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
-            {node.embed.external.domain}
-          </p>
-        </a>
-      )}
+      {node.embed?.kind === 'external' && node.embed.external && (() => {
+        const ext = node.embed.external;
+        const isGif = ext.uri.includes('tenor.com') || ext.uri.includes('klipy.com');
+        if (isGif) {
+          return (
+            <div style={{ marginBottom: contTokens.gap }}>
+              <Gif url={ext.uri} title={ext.title} thumbnail={ext.thumb} />
+            </div>
+          );
+        }
+        return (
+          <a
+            href={ext.uri}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginBottom: contTokens.gap,
+              background: disc.surfaceCard2, borderRadius: radius[16],
+              padding: `${space[6]}px ${space[8]}px`,
+              textDecoration: 'none',
+              border: `0.5px solid ${disc.lineSubtle}`,
+            }}
+          >
+            {ext.thumb && <img src={ext.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
+            {ext.title && <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{ext.title}</p>}
+            <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+              {ext.domain}
+            </p>
+          </a>
+        );
+      })()}
 
       {/* Quote post embed */}
       {(() => {
@@ -2272,22 +2276,18 @@ function ContributionCard({
         if (!quoteEmbed?.quotedText) return null;
         const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDid;
         const quotedThreadProfileCardData: ProfileCardData | null = (() => {
-          return buildThreadScopedProfileCardData({
+          return buildQuotedSnippetThreadScopedProfileCardData({
+            threadUri: rootUri,
             did: quoteEmbed.quotedAuthorDid ?? '',
             handle: quoteEmbed.quotedAuthorHandle ?? '',
             ...(quoteEmbed.quotedAuthorDisplayName
               ? { displayName: quoteEmbed.quotedAuthorDisplayName }
               : {}),
-            threadUri: rootUri,
-            compactPosts: quoteEmbed.quotedText.trim()
-              ? [{
-                  uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${quoteEmbed.quotedAuthorDid ?? 'unknown'}`,
-                  text: quoteEmbed.quotedText,
-                  createdAt: node.createdAt,
-                  hasMedia: Boolean(quoteEmbed.quotedExternal),
-                  ...(quoteEmbed.quotedExternal ? { mediaType: 'external' as const } : {}),
-                }]
-              : [],
+            text: quoteEmbed.quotedText,
+            createdAt: node.createdAt,
+            uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${quoteEmbed.quotedAuthorDid ?? 'unknown'}`,
+            hasMedia: Boolean(quoteEmbed.quotedExternal),
+            ...(quoteEmbed.quotedExternal ? { mediaType: 'external' as const } : {}),
             roleSummary: 'Quoted in thread context',
           });
         })();
@@ -2849,7 +2849,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const conversationMeta = useConversationMeta(entry.id);
   const interpolatedState = useConversationInterpolatedState(entry.id);
   const actions = useConversationActions(entry.id);
-  const rootComposerContext = useComposerContextProjection(entry.id, threadVm?.hero.rootNode?.uri, '');
+  const rootComposerContext = useComposerContextProjection(entry.id, threadVm?.hero?.rootNode?.uri, '');
   const verificationCache = React.useRef(new InMemoryVerificationCache());
   const [quoteTarget, setQuoteTarget] = useState<ThreadNode | null>(null);
   // Set of DIDs the current user follows — used only for bold username treatment
@@ -2870,7 +2870,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const loading = conversationMeta?.status === 'loading';
   const error = conversationMeta?.error ?? null;
   const rootPost = useMemo(() => {
-    if (!threadVm?.hero.rootNode) return null;
+    if (!threadVm?.hero?.rootNode) return null;
 
     const root = threadVm.hero.rootNode;
     return {
@@ -2893,7 +2893,7 @@ export default function StoryMode({ entry, onClose }: Props) {
     };
   }, [threadVm]);
   const replies = useMemo(() => {
-    return threadVm?.contributions.map((contribution) => ({
+    return threadVm?.contributions?.map((contribution) => ({
       uri: contribution.uri,
       cid: '',
       authorDid: contribution.authorDid,
@@ -2910,6 +2910,7 @@ export default function StoryMode({ entry, onClose }: Props) {
       labels: [],
       depth: contribution.depth,
       replies: (contribution.replies ?? []) as ThreadNode[],
+      ...(contribution.isOptimistic ? { isOptimistic: true } : {}),
       ...(contribution.parentAuthorHandle
         ? { parentAuthorHandle: contribution.parentAuthorHandle }
         : {}),
@@ -3001,7 +3002,10 @@ export default function StoryMode({ entry, onClose }: Props) {
     return Object.values(contributionModeration).filter((item) => item.decision === 'warn').length;
   }, [contributionModeration]);
 
-  const rootNodeSession = conversationSession?.graph.nodesByUri[conversationSession.graph.rootUri];
+  const rootGraph = conversationSession?.graph;
+  const rootNodeSession = rootGraph?.rootUri
+    ? rootGraph.nodesByUri[rootGraph.rootUri]
+    : undefined;
   const rootMatches = rootPost ? (threadFilterResults[rootPost.id] ?? []) : [];
   const rootModeration = projectModerationDecision({
     hasUserHide: false,
@@ -3105,7 +3109,7 @@ export default function StoryMode({ entry, onClose }: Props) {
             ) : rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
               <PromptHeroCard
                 post={rootPost}
-                participantCount={threadVm?.hero.participantCount ?? replies.length}
+                participantCount={threadVm?.hero?.participantCount ?? replies.length}
                 {...(interpolatedState?.rootVerification !== undefined
                   ? { rootVerification: interpolatedState.rootVerification }
                   : {})}
@@ -3115,37 +3119,44 @@ export default function StoryMode({ entry, onClose }: Props) {
             {rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
               <>
                 {/* InterpolatorCard */}
-                {threadVm?.interpolator.shouldRender !== false && (
+                {threadVm?.interpolator?.shouldRender !== false && (
                   <InterpolatorCard
                     rootUri={entry.id}
-                    summaryText={threadVm?.interpolator.summaryText ?? ''}
-                    writerSummary={threadVm?.interpolator.writerSummary}
-                    summaryMode={(threadVm?.interpolator.summaryMode ?? undefined) as SummaryMode | undefined}
-                    writerWhatChanged={interpolatedState?.writerResult?.whatChanged}
+                    summaryText={threadVm?.interpolator?.summaryText ?? ''}
+                    writerSummary={threadVm?.interpolator?.writerSummary}
+                    summaryMode={(threadVm?.interpolator?.summaryMode ?? undefined) as SummaryMode | undefined}
+                    writerWhatChanged={
+                      threadVm?.interpolator?.latestContinuity?.whatChanged
+                      ?? interpolatedState?.writerResult?.whatChanged
+                    }
                     writerContributorBlurbs={interpolatedState?.writerResult?.contributorBlurbs}
                     safeEntities={interpolatedState?.writerEntities}
                     clarifications={interpolatedState?.interpolator?.clarificationsAdded ?? []}
                     newAngles={interpolatedState?.interpolator?.newAnglesAdded ?? []}
-                    heatLevel={threadVm?.interpolator.heatLevel ?? 0}
-                    repetitionLevel={threadVm?.interpolator.repetitionLevel ?? 0}
-                    sourceSupportPresent={threadVm?.interpolator.sourceSupportPresent ?? false}
-                    replyCount={threadVm?.hero.participantCount ?? replies.length}
-                    updatedAt={conversationSession?.interpretation.lastComputedAt ?? new Date().toISOString()}
-                    topContributors={threadVm?.interpolator.topContributors ?? []}
-                    entityLandscape={threadVm?.interpolator.entityLandscape ?? []}
-                    factualSignalPresent={threadVm?.interpolator.factualSignalPresent ?? false}
-                    premium={threadVm?.interpolator.premium ?? { status: 'idle', isEntitled: false }}
+                    heatLevel={threadVm?.interpolator?.heatLevel ?? 0}
+                    repetitionLevel={threadVm?.interpolator?.repetitionLevel ?? 0}
+                    sourceSupportPresent={threadVm?.interpolator?.sourceSupportPresent ?? false}
+                    replyCount={threadVm?.hero?.participantCount ?? replies.length}
+                    updatedAt={
+                      threadVm?.interpolator?.latestContinuity?.recordedAt
+                      ?? conversationSession?.interpretation.lastComputedAt
+                      ?? new Date().toISOString()
+                    }
+                    topContributors={threadVm?.interpolator?.topContributors ?? []}
+                    entityLandscape={threadVm?.interpolator?.entityLandscape ?? []}
+                    factualSignalPresent={threadVm?.interpolator?.factualSignalPresent ?? false}
+                    premium={threadVm?.interpolator?.premium ?? { status: 'idle', isEntitled: false }}
                     onEntityTap={setActiveEntity}
                   />
                 )}
 
                 {/* ThreadControls */}
-                {(threadVm?.hero.participantCount ?? replies.length) > 0 && (
+                {(threadVm?.hero?.participantCount ?? replies.length) > 0 && (
                   <ThreadControls
                     active={activeFilter}
                     onChange={setActiveFilter}
                     available={[
-                      ...((threadVm?.filters.available ?? []) as ThreadFilter[]),
+                      ...((threadVm?.filters?.available ?? []) as ThreadFilter[]),
                       'Open Story',
                     ]}
                   />
@@ -3236,7 +3247,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                   });
                 })()}
 
-                {(threadVm?.hero.participantCount ?? replies.length) === 0 && !loading && (
+                {(threadVm?.hero?.participantCount ?? replies.length) === 0 && !loading && (
                   <div style={{ padding: '24px 0', textAlign: 'center' }}>
                     <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No replies yet. Be the first to contribute.</p>
                   </div>

@@ -11,7 +11,7 @@ import {
 } from '@atproto/api';
 import type { MockPost, ChipType } from '../data/mockData';
 import { resolveFacets } from '../lib/resolver/atproto';
-import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia';
+import { detectSensitiveMedia, mapRawLabelDetails, mapRawLabelValues } from '../lib/moderation/sensitiveMedia';
 import {
   asTrimmedString,
   contentUnionToText,
@@ -55,6 +55,10 @@ function isVideoUrl(url: string): boolean {
   return pattern.test(url);
 }
 
+export function isAudioUrl(url: string): boolean {
+  return /\.(mp3|ogg|wav|flac|aac|m4a|opus)(\?.*)?$/i.test(url);
+}
+
 function readBlobRef(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
   const ref = (value as any).ref;
@@ -73,6 +77,46 @@ function buildBlobCdnUrl(did: string, blobLike: unknown): string | undefined {
   return `https://cdn.bsky.app/img/feed_fullsize/plain/${did}/${cid}@jpeg`;
 }
 
+function buildBlobSyncUrl(did: string, blobLike: unknown): string | undefined {
+  const cid = readBlobRef(blobLike);
+  if (!cid) return undefined;
+  return `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
+}
+
+function languageLabelFromCode(lang: string): string {
+  const normalized = lang.trim();
+  if (!normalized) return 'Captions';
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' }).of(normalized) || normalized.toUpperCase();
+  } catch {
+    return normalized.toUpperCase();
+  }
+}
+
+function extractRawVideoEmbed(record: any): any | null {
+  if (record?.embed?.$type === 'app.bsky.embed.video') return record.embed;
+  if (record?.embed?.media?.$type === 'app.bsky.embed.video') return record.embed.media;
+  return null;
+}
+
+function mapRawVideoCaptions(authorDid: string, rawVideoEmbed: any): Array<{ lang: string; url: string; label?: string }> | undefined {
+  const rawCaptions = Array.isArray(rawVideoEmbed?.captions) ? rawVideoEmbed.captions : [];
+  const captions = rawCaptions
+    .map((entry: any) => {
+      const lang = typeof entry?.lang === 'string' ? entry.lang.trim() : '';
+      const url = buildBlobSyncUrl(authorDid, entry?.file);
+      if (!lang || !url) return null;
+      return {
+        lang,
+        url,
+        label: languageLabelFromCode(lang),
+      };
+    })
+    .filter((entry: { lang: string; url: string; label?: string } | null): entry is { lang: string; url: string; label?: string } => Boolean(entry));
+
+  return captions.length > 0 ? captions : undefined;
+}
+
 function summarizeText(text: string, maxChars = 320): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= maxChars) return clean;
@@ -88,15 +132,21 @@ function mapImageViewToMedia(embed: AppBskyEmbedImages.View): NonNullable<MockPo
   }));
 }
 
-function mapVideoViewToEmbed(embed: AppBskyEmbedVideo.View): Extract<NonNullable<MockPost['embed']>, { type: 'video' }> {
+function mapVideoViewToEmbed(
+  embed: AppBskyEmbedVideo.View,
+  rawVideoEmbed: any,
+  authorDid: string,
+): Extract<NonNullable<MockPost['embed']>, { type: 'video' }> {
   const aspectRatio = embed.aspectRatio ? embed.aspectRatio.width / embed.aspectRatio.height : undefined;
   const domain = extractDomain(embed.playlist);
+  const captions = mapRawVideoCaptions(authorDid, rawVideoEmbed);
   return {
     type: 'video',
     url: embed.playlist,
     ...(embed.thumbnail ? { thumb: embed.thumbnail } : {}),
     ...(embed.alt ? { description: embed.alt } : {}),
     ...(aspectRatio ? { aspectRatio } : {}),
+    ...(captions ? { captions } : {}),
     domain: domain === 'video.bsky.app' ? 'bsky.app' : domain,
   };
 }
@@ -122,6 +172,7 @@ function buildExternalEmbedData(embed: AppBskyEmbedExternal.View): Extract<NonNu
 function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<MockPost, 'replyTo' | 'threadRoot'> {
   let media: MockPost['media'];
   let embed: MockPost['embed'];
+  const rawVideoEmbed = extractRawVideoEmbed(record.value);
 
   for (const quotedEmbed of record.embeds ?? []) {
     if (!media && AppBskyEmbedImages.isView(quotedEmbed)) {
@@ -139,7 +190,7 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     }
 
     if (!embed && AppBskyEmbedVideo.isView(quotedEmbed)) {
-      embed = mapVideoViewToEmbed(quotedEmbed);
+      embed = mapVideoViewToEmbed(quotedEmbed, rawVideoEmbed, record.author.did);
       continue;
     }
 
@@ -176,7 +227,8 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     }
   }
 
-  const quotedLabelValues = mapRawLabelValues((record as any).labels);
+  const quotedLabelDetails = mapRawLabelDetails((record as any).labels);
+  const quotedLabelValues = quotedLabelDetails.filter((label) => !label.neg).map((label) => label.val);
 
   const mapped: Omit<MockPost, 'replyTo' | 'threadRoot'> = {
     id: record.uri,
@@ -196,6 +248,7 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     bookmarkCount: 0,
     chips: [],
     ...(quotedLabelValues.length > 0 ? { contentLabels: quotedLabelValues } : {}),
+    ...(quotedLabelDetails.length > 0 ? { labelDetails: quotedLabelDetails } : {}),
     ...(media ? { media } : {}),
     ...(embed ? { embed } : {}),
   };
@@ -213,8 +266,12 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
 export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
   const record = post.record as any; // Cast to access text, etc.
   const embed = post.embed as any;
+  const rawVideoEmbed = extractRawVideoEmbed(record);
+  const postLabelDetails = mapRawLabelDetails((post as any).labels);
+  const recordLabelDetails = mapRawLabelDetails(record?.labels?.values);
   const postLabelValues = mapRawLabelValues((post as any).labels);
   const recordLabelValues = mapRawLabelValues(record?.labels?.values);
+  const labelDetails = [...postLabelDetails, ...recordLabelDetails].slice(0, 20);
   const contentLabels = [...new Set([...postLabelValues, ...recordLabelValues])].slice(0, 20);
   const $type = record?.$type;
 
@@ -290,7 +347,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
       embedData = buildExternalEmbedData(embed);
     }
   } else if (AppBskyEmbedVideo.isView(embed)) {
-    embedData = mapVideoViewToEmbed(embed);
+    embedData = mapVideoViewToEmbed(embed, rawVideoEmbed, post.author.did);
   } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView((embed as any).record)) {
     embedData = {
       type: 'quote' as const,
@@ -364,6 +421,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     ...(article ? { article } : {}),
     viewer,
     ...(contentLabels.length > 0 ? { contentLabels } : {}),
+    ...(labelDetails.length > 0 ? { labelDetails } : {}),
     ...(embedData ? { embed: embedData } : {}),
   };
 

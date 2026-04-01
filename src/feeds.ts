@@ -1,7 +1,8 @@
 import { parseFeed, generateRssFeed, generateAtomFeed, generateJsonFeed } from 'feedsmith';
 import * as jsonld from 'jsonld';
 import { paperDB } from './db';
-import { hybridSearch } from './search';
+import { embeddingPipeline } from './intelligence/embeddingPipeline';
+import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 
 /**
  * Feed Service for consuming and generating ATOM, RSS, JSON, RDF/XML, and JSON-LD feeds.
@@ -214,7 +215,8 @@ export class FeedService {
         const podcast20 = this.getPodcast20ForItem(item, podcast20ByKey);
 
         // Generate embedding for hybrid search — format as pgvector string [x,y,...]
-        const embeddingArr = await hybridSearch.generateEmbedding(item.title + ' ' + content);
+        const embeddingArr = await embeddingPipeline.embed(item.title + ' ' + content, { mode: 'ingest' });
+        if (embeddingArr.length > 0) recordEmbeddingVector('ingest', embeddingArr);
         const embedding = embeddingArr.length ? `[${embeddingArr.join(',')}]` : null;
 
         await pg.query(

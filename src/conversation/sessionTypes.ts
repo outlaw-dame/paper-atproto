@@ -103,6 +103,8 @@ export interface ConversationNode extends ThreadNode {
   branchDepth: number;
   siblingIndex: number;
   descendantCount: number;
+  isOptimistic?: boolean;
+  optimisticClientId?: string;
 
   hiddenByModeration?: boolean;
   warnedByModeration?: boolean;
@@ -165,6 +167,7 @@ export interface SessionInterpretationState {
     detected: boolean;
     category?: MentalHealthCrisisCategory;
   };
+  aiDiagnostics?: SessionAiDiagnostics;
   premium: {
     status: 'idle' | 'loading' | 'ready' | 'error' | 'not_entitled';
     entitlements?: PremiumAiEntitlements;
@@ -203,6 +206,75 @@ export interface SessionTranslationState {
   }>;
 }
 
+export interface ConversationContinuitySnapshot {
+  recordedAt: string;
+  summaryMode?: SummaryMode | null;
+  direction: ConversationDirection;
+  dominantTone?: ThreadStateSignal['dominantTone'];
+  conversationPhase?: ThreadStateSignal['conversationPhase'];
+  heatLevel: number;
+  repetitionLevel: number;
+  sourceSupportPresent: boolean;
+  factualSignalPresent: boolean;
+  continuityLabel?: string;
+  whatChanged: string[];
+}
+
+export type ConversationMutationKind =
+  | 'optimistic_reply_inserted'
+  | 'optimistic_reply_reconciled'
+  | 'optimistic_reply_rolled_back'
+  | 'user_feedback_set'
+  | 'warned_post_revealed'
+  | 'focused_branch_changed';
+
+export interface ConversationMutationDelta {
+  revision: number;
+  at: string;
+  kind: ConversationMutationKind;
+  summary: string;
+  targetUri?: AtUri;
+  relatedUri?: AtUri;
+}
+
+export interface SessionMutationState {
+  revision: number;
+  lastMutationAt?: string;
+  recent: ConversationMutationDelta[];
+}
+
+export type ConversationModelRunStatus =
+  | 'idle'
+  | 'loading'
+  | 'ready'
+  | 'error'
+  | 'skipped';
+
+export type ConversationModelRunSkipReason =
+  | 'interpolator_disabled'
+  | 'minimal_fallback'
+  | 'insufficient_signal'
+  | 'not_entitled'
+  | 'premium_ineligible';
+
+export interface ConversationModelRunDiagnostics {
+  provider: 'interpolator_writer' | 'gemini';
+  status: ConversationModelRunStatus;
+  sourceToken?: string;
+  lastRequestedAt?: string;
+  lastCompletedAt?: string;
+  lastDurationMs?: number;
+  lastError?: string;
+  lastSkipReason?: ConversationModelRunSkipReason;
+  staleDiscardCount: number;
+  lastDiscardedAt?: string;
+}
+
+export interface SessionAiDiagnostics {
+  writer: ConversationModelRunDiagnostics;
+  premium: ConversationModelRunDiagnostics;
+}
+
 export interface SessionTrajectoryState {
   direction: ConversationDirection;
   heatLevel: number;
@@ -213,6 +285,7 @@ export interface SessionTrajectoryState {
     kind: 'new_evidence' | 'new_entity' | 'heat_spike' | 'branch_split';
     uri?: AtUri;
   }>;
+  snapshots: ConversationContinuitySnapshot[];
 }
 
 export interface ConversationSession {
@@ -226,6 +299,7 @@ export interface ConversationSession {
   contributors: SessionContributorState;
   translations: SessionTranslationState;
   trajectory: SessionTrajectoryState;
+  mutations: SessionMutationState;
   meta: {
     status: 'idle' | 'loading' | 'ready' | 'error';
     error?: string | null;

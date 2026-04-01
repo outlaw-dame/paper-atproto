@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { MockPost } from '../../data/mockData';
 import type {
   ConversationNode,
   ConversationSession,
 } from '../sessionTypes';
-import { projectThreadScopedProfileCardData } from './profileCardProjection';
+import {
+  buildQuotedSnippetThreadScopedProfileCardData,
+  buildQuotedThreadScopedProfileCardData,
+  projectThreadScopedProfileCardData,
+  projectThreadScopedProfileCardDataForNode,
+} from './profileCardProjection';
 
 const ROOT_URI = 'at://did:plc:root/app.bsky.feed.post/root';
 const FIRST_URI = 'at://did:plc:reply/app.bsky.feed.post/one';
@@ -158,11 +164,39 @@ function createSession(): ConversationSession {
       repetitionLevel: 0,
       activityVelocity: 0,
       turningPoints: [],
+      snapshots: [],
+    },
+    mutations: {
+      revision: 0,
+      recent: [],
     },
     meta: {
       status: 'ready',
       error: null,
     },
+  };
+}
+
+function createMockPost(overrides: Partial<MockPost>): MockPost {
+  return {
+    id: overrides.id ?? 'at://did:plc:quoted/app.bsky.feed.post/quoted',
+    author: {
+      did: overrides.author?.did ?? 'did:plc:quoted',
+      handle: overrides.author?.handle ?? 'quoted.test',
+      displayName: overrides.author?.displayName ?? 'Quoted Test',
+      ...(overrides.author?.avatar ? { avatar: overrides.author.avatar } : {}),
+    },
+    content: overrides.content ?? 'Quoted post text',
+    createdAt: overrides.createdAt ?? new Date('2026-03-30T12:00:00.000Z').toISOString(),
+    likeCount: overrides.likeCount ?? 2,
+    replyCount: overrides.replyCount ?? 1,
+    repostCount: overrides.repostCount ?? 0,
+    bookmarkCount: overrides.bookmarkCount ?? 0,
+    chips: overrides.chips ?? [],
+    ...(overrides.embed ? { embed: overrides.embed } : {}),
+    ...(overrides.media ? { media: overrides.media } : {}),
+    ...(overrides.images ? { images: overrides.images } : {}),
+    ...(overrides.facets ? { facets: overrides.facets } : {}),
   };
 }
 
@@ -181,5 +215,54 @@ describe('profile card projection', () => {
     expect(data?.threadContext?.compactPosts[0]?.uri).toBe(SECOND_URI);
     expect(data?.threadContext?.roleSummary).toMatch(/clarification|new information/i);
     expect(data?.threadContext?.notableAction).toBe('Introduced high-confidence evidence');
+  });
+
+  it('builds node-backed thread-scoped cards through the projection helper', () => {
+    const session = createSession();
+    const second = session.graph.nodesByUri[SECOND_URI]!;
+
+    const data = projectThreadScopedProfileCardDataForNode({
+      session,
+      node: second,
+      rootUri: ROOT_URI,
+      focusUri: SECOND_URI,
+      isFollowing: true,
+      roleLabel: 'new information',
+      notableAction: 'Added useful clarification',
+    });
+
+    expect(data?.variant).toBe('thread_scoped');
+    expect(data?.identity.handle).toBe('reply.test');
+    expect(data?.threadContext?.threadUri).toBe(ROOT_URI);
+    expect(data?.threadContext?.compactPosts[0]?.uri).toBe(SECOND_URI);
+  });
+
+  it('builds quoted thread-scoped cards from quoted posts and snippets', () => {
+    const quotedPost = createMockPost({
+      content: 'Quoted post text with context.',
+    });
+
+    const fromPost = buildQuotedThreadScopedProfileCardData({
+      threadUri: ROOT_URI,
+      post: quotedPost,
+      roleSummary: 'Quoted in thread context',
+    });
+    const fromSnippet = buildQuotedSnippetThreadScopedProfileCardData({
+      threadUri: ROOT_URI,
+      did: 'did:plc:quoted',
+      handle: 'quoted.test',
+      displayName: 'Quoted Test',
+      text: 'Quoted snippet text',
+      createdAt: quotedPost.createdAt,
+      uri: `${ROOT_URI}#quoted`,
+      hasMedia: true,
+      mediaType: 'external',
+      roleSummary: 'Quoted in thread context',
+    });
+
+    expect(fromPost?.variant).toBe('thread_scoped');
+    expect(fromPost?.threadContext?.compactPosts[0]?.text).toContain('Quoted post text');
+    expect(fromSnippet?.variant).toBe('thread_scoped');
+    expect(fromSnippet?.threadContext?.compactPosts[0]?.mediaType).toBe('external');
   });
 });

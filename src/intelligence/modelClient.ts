@@ -16,6 +16,7 @@ import type {
   ComposerGuidanceWriteResult,
 } from './composer/llmWriterContracts';
 import { getConfiguredApiBaseUrl, resolveApiUrl } from '../lib/apiBase';
+import { composeAbortSignals, sleepWithAbort } from '../lib/abortSignals';
 import type {
   DeepInterpolatorResult,
   PremiumAiEntitlements,
@@ -293,55 +294,65 @@ function describeReplyBehavior(input: ThreadStateForWriter): string {
   return `${subject} ${joinBehaviorPhrases(phrases.slice(0, 3))}.`;
 }
 
-function contributorFallbackBlurb(role: string, handle: string): string {
-  switch (role) {
-    case 'source-bringer':
-    case 'rule-source':
-      return `${handle} brings in source material that grounds the thread.`;
-    case 'counterpoint':
-      return `${handle} pushes back with a specific counterpoint.`;
-    case 'clarifier':
-      return `${handle} adds clarification to the main claim.`;
-    case 'context-setter':
-      return `${handle} adds context that changes how the thread reads.`;
-    case 'question-raiser':
-      return `${handle} presses for specifics in the replies.`;
-    case 'emotional-reaction':
-      return `${handle} raises the temperature more than the signal level.`;
-    default:
-      return `${handle} adds a distinct thread signal.`;
+function inferRootVerb(text: string): string {
+  const lower = text.toLowerCase().trimStart();
+  if (/^(what|why|how|when|where|who|which|is|are|do|does|can|could|would|should|did|has|have)\b/.test(lower)) {
+    return 'asks';
   }
+  if (/^i\b/.test(lower)) {
+    return 'reflects that';
+  }
+  if (/\b(announcing|launching|releasing|introducing|excited to announce|proud to announce)\b/.test(lower)) {
+    return 'announces that';
+  }
+  if (/\b(but |however |actually |in fact |that'?s wrong|you'?re wrong|this is (wrong|false)|disagree)\b/.test(lower)) {
+    return 'argues that';
+  }
+  return 'writes that';
 }
 
 function deterministicWriterFallback(input: ThreadStateForWriter): InterpolatorWriteResult {
-  const rootTopic = sentenceLead(input.rootPost.text, 150);
-  const hasRootTopic = rootTopic.length > 0;
-  const replyLine = describeReplyBehavior(input);
+  const { handle, text } = input.rootPost;
   const visibleReplyCount = input.visibleReplyCount ?? input.selectedComments.length;
 
-  let collapsedSummary: string;
-  if (input.summaryMode === 'minimal_fallback') {
-    const first = hasRootTopic ? ensureSentence(rootTopic) : 'The post makes a specific claim.';
-    collapsedSummary = truncateAtWordBoundary(`${first} ${replyLine}`, 240);
-  } else if (input.summaryMode === 'descriptive_fallback') {
-    const first = hasRootTopic ? ensureSentence(rootTopic) : 'The post raises an early claim.';
-    const limitation = visibleReplyCount >= 6
-      ? 'Visible replies are still too split for a stronger read.'
-      : 'There is not enough visible thread signal yet for a stronger read.';
-    collapsedSummary = truncateAtWordBoundary(`${first} ${replyLine} ${limitation}`, 300);
-  } else {
-    const first = hasRootTopic ? ensureSentence(rootTopic) : 'The post introduces a claim and draws visible responses.';
-    collapsedSummary = truncateAtWordBoundary(`${first} ${replyLine}`, 320);
-  }
+  // Attributed root characterization — "@handle reflects that [content]"
+  // This avoids raw text copy while keeping actual substance.
+  const verb = inferRootVerb(text);
+  const rootExcerpt = truncateAtWordBoundary(text.trim().replace(/\s+/g, ' '), 170);
+  const rootLower = rootExcerpt.charAt(0).toLowerCase() + rootExcerpt.slice(1);
+  const rootSentence = ensureSentence(
+    sanitizeSafeSummaryText(`@${handle} ${verb} ${rootLower}`),
+  );
 
-  const contributorBlurbs = input.topContributors
-    .slice(0, input.summaryMode === 'normal' ? 3 : 2)
-    .map((c) => ({
-      handle: sanitizeSafeSummaryText(c.handle),
-      blurb: sanitizeSafeSummaryText(
-        truncateAtWordBoundary(contributorFallbackBlurb(c.role, c.handle), 160),
-      ),
-    }));
+  // Reply engagement line
+  const replyLine = visibleReplyCount > 0 ? describeReplyBehavior(input) : '';
+
+  // Most-notable reply: use actual text, not a role label
+  const topReply = input.selectedComments
+    .filter((c) => c.impactScore >= 0.35 && c.text.trim().length >= 30 && c.handle !== handle)
+    .sort((a, b) => b.impactScore - a.impactScore)[0];
+  const notableSentence = (topReply && input.summaryMode !== 'minimal_fallback')
+    ? ensureSentence(sanitizeSafeSummaryText(
+        `@${topReply.handle} adds: ${truncateAtWordBoundary(topReply.text.trim(), 130)}`,
+      ))
+    : '';
+
+  const maxLen = input.summaryMode === 'minimal_fallback' ? 240 : 420;
+  const collapsedSummary = sanitizeSafeSummaryText(
+    truncateAtWordBoundary(
+      [rootSentence, replyLine, notableSentence].filter(Boolean).join(' '),
+      maxLen,
+    ),
+  );
+
+  // Contributor blurbs from actual comment text — never from canned role phrases
+  const blurbCandidates = input.selectedComments
+    .filter((c) => c.impactScore >= 0.35 && c.text.trim().length >= 20)
+    .slice(0, input.summaryMode === 'normal' ? 3 : 2);
+  const contributorBlurbs = blurbCandidates.map((c) => ({
+    handle: sanitizeSafeSummaryText(c.handle),
+    blurb: sanitizeSafeSummaryText(truncateAtWordBoundary(c.text.trim(), 160)),
+  }));
 
   const whatChanged = input.summaryMode === 'minimal_fallback'
     ? []
@@ -350,9 +361,13 @@ function deterministicWriterFallback(input: ThreadStateForWriter): InterpolatorW
         .map((signal) => sanitizeSafeSummaryText(truncateAtWordBoundary(signal, 90)));
 
   return {
-    collapsedSummary: sanitizeSafeSummaryText(collapsedSummary),
+    collapsedSummary,
     ...(input.summaryMode === 'normal'
-      ? { expandedSummary: sanitizeSafeSummaryText(truncateAtWordBoundary(`${collapsedSummary} Confidence is reduced, so this summary remains conservative.`, 520)) }
+      ? {
+          expandedSummary: sanitizeSafeSummaryText(
+            truncateAtWordBoundary(`${collapsedSummary} This summary is based on thread data only.`, 520),
+          ),
+        }
       : {}),
     whatChanged,
     contributorBlurbs,
@@ -463,15 +478,25 @@ function shouldPreferDeterministicFallback(
   if (GENERIC_REPLY_ACTIVITY_RE.test(summary)) return true;
   if (ROOT_ONLY_REPLY_ACTIVITY_RE.test(summary)) return false;
 
-  return sentenceCount(summary) <= 1
-    && tokenOverlapRatio(summary, input.rootPost.text) >= 0.72;
+  if (sentenceCount(summary) <= 1 && tokenOverlapRatio(summary, input.rootPost.text) >= 0.72) {
+    return true;
+  }
+
+  // Catch the descriptive_fallback verbatim-copy pattern: first sentence is a
+  // near-verbatim reproduction of the root post regardless of total sentence count.
+  const firstSentence = (summary.split(/[.!?]+/)[0] ?? '').trim();
+  if (
+    firstSentence.length >= 40
+    && input.rootPost.text.length >= 60
+    && tokenOverlapRatio(firstSentence, input.rootPost.text) >= 0.75
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 // ─── Retry helpers ────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(res => setTimeout(res, ms));
-}
 
 function backoffMs(attempt: number): number {
   const exp = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** attempt);
@@ -501,7 +526,9 @@ async function fetchWithRetry<T>(
   for (let attempt = 0; attempt < attempts; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-    const combinedSignal = signal ?? controller.signal;
+    const combinedSignal = signal
+      ? composeAbortSignals([signal, controller.signal])
+      : controller.signal;
 
     try {
       const endpoint = resolveApiUrl(path, BASE_URL);
@@ -521,7 +548,7 @@ async function fetchWithRetry<T>(
           throw new Error(`LLM endpoint ${path} responded ${res.status}`);
         }
         lastError = new Error(`LLM endpoint ${path} responded ${res.status}`);
-        await sleep(backoffMs(attempt));
+        await sleepWithAbort(backoffMs(attempt), combinedSignal);
         continue;
       }
 
@@ -530,7 +557,7 @@ async function fetchWithRetry<T>(
       lastError = err;
       const isAbort = err instanceof Error && err.name === 'AbortError';
       if (isAbort || attempt === attempts - 1) throw err;
-      await sleep(backoffMs(attempt));
+      await sleepWithAbort(backoffMs(attempt), combinedSignal);
     } finally {
       clearTimeout(timeoutId);
     }

@@ -3,6 +3,9 @@ import type { MockPost } from '../data/mockData';
 import { formatTime } from '../data/mockData';
 import TwemojiText from './TwemojiText';
 import YouTubeEmbedCard from './YouTubeEmbedCard';
+import { Gif } from './Gif';
+import AudioEmbed from './AudioEmbed';
+import { isAudioUrl } from '../atproto/mappers';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useUiStore } from '../store/uiStore';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
@@ -33,6 +36,11 @@ export const ContextPost = ({
   const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
   const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
   const externalEmbedYouTubeRef = externalEmbed ? parseYouTubeUrl(externalEmbed.url) : null;
+  const isExternalEmbedGif = externalEmbed
+    ? (externalEmbed.url.includes('tenor.com') || externalEmbed.url.includes('klipy.com'))
+    : false;
+  const isExternalEmbedAudio = externalEmbed ? isAudioUrl(externalEmbed.url) : false;
+  const audioEmbed = post.embed?.type === 'audio' ? post.embed : null;
   const externalLinkYouTubeRef = quoteEmbed?.externalLink ? parseYouTubeUrl(quoteEmbed.externalLink.url) : null;
   const inlineTextYouTubeRef = !post.embed && !(post.media?.length)
     ? extractFirstYouTubeReference({
@@ -91,7 +99,7 @@ export const ContextPost = ({
       marginRight: 10,
     }}>
       {/* Avatar */}
-      <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+      <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>
         <div style={{
           width: 36,
           height: 36,
@@ -212,7 +220,7 @@ export const ContextPost = ({
           )}
         </div>
 
-        <ProfileCardTrigger data={standardProfileCardData} disabled={!standardProfileCardData}>
+        <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -295,7 +303,7 @@ export const ContextPost = ({
                 </svg>
                 Quoted post
               </span>
-              <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+              <ProfileCardTrigger data={quotedStandardProfileCardData} did={quoteEmbed.post.author.did} disabled={!quotedStandardProfileCardData}>
                 <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{
                   fontSize: 'var(--type-label-md-size)',
                   lineHeight: 'var(--type-label-md-line)',
@@ -309,7 +317,7 @@ export const ContextPost = ({
                   {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
                 </button>
               </ProfileCardTrigger>
-              <ProfileCardTrigger data={quotedStandardProfileCardData} disabled={!quotedStandardProfileCardData}>
+              <ProfileCardTrigger data={quotedStandardProfileCardData} did={quoteEmbed.post.author.did} disabled={!quotedStandardProfileCardData}>
                 <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{
                   fontSize: 'var(--type-meta-md-size)',
                   lineHeight: 'var(--type-meta-md-line)',
@@ -603,6 +611,17 @@ export const ContextPost = ({
           </div>
         )}
 
+        {audioEmbed && (
+          <div style={{ marginTop: post.content.trim().length > 0 ? 10 : 0 }}>
+            <AudioEmbed
+              url={audioEmbed.url}
+              title={audioEmbed.title}
+              description={audioEmbed.description}
+              thumbnail={audioEmbed.thumb}
+            />
+          </div>
+        )}
+
         {externalEmbed && (
           externalEmbedYouTubeRef ? (
             <div style={{ marginTop: post.content.trim().length > 0 ? 10 : 0 }}>
@@ -613,6 +632,23 @@ export const ContextPost = ({
                 thumb={externalEmbed.thumb}
                 domain={externalEmbed.domain}
                 compact
+              />
+            </div>
+          ) : isExternalEmbedAudio ? (
+            <div style={{ marginTop: post.content.trim().length > 0 ? 10 : 0 }}>
+              <AudioEmbed
+                url={externalEmbed.url}
+                title={externalEmbed.title}
+                description={externalEmbed.description}
+                thumbnail={externalEmbed.thumb}
+              />
+            </div>
+          ) : isExternalEmbedGif ? (
+            <div style={{ marginTop: post.content.trim().length > 0 ? 10 : 0 }}>
+              <Gif
+                url={externalEmbed.url}
+                title={externalEmbed.title}
+                thumbnail={externalEmbed.thumb}
               />
             </div>
           ) : (

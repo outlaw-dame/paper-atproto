@@ -1,3 +1,5 @@
+import type { MockPost } from '../../data/mockData';
+import type { ThreadNode } from '../../lib/resolver/atproto';
 import type { ConversationalRole, ConversationSession } from '../sessionTypes';
 import type { CompactPostPreview, ProfileCardData } from '../../types/profileCard';
 
@@ -43,6 +45,16 @@ interface BuildThreadScopedProfileCardDataInput {
   mostLabelledReply?: NonNullable<ProfileCardData['threadContext']>['mostLabelledReply'];
   isFollowing?: boolean;
   isPartial?: boolean;
+}
+
+interface ThreadScopedNodeFallbackInput {
+  session?: ConversationSession | null;
+  node: ThreadNode;
+  rootUri: string;
+  focusUri?: string;
+  isFollowing?: boolean;
+  roleLabel?: string;
+  notableAction?: string;
 }
 
 function humanizeRole(role: string): string {
@@ -148,6 +160,115 @@ export function projectThreadScopedProfileCardData(params: {
     ...(roleSummary ? { roleSummary } : {}),
     ...(projection.notableAction ? { notableAction: projection.notableAction } : {}),
     ...(typeof isFollowing === 'boolean' ? { isFollowing } : {}),
+  });
+}
+
+export function projectThreadScopedProfileCardDataForNode(
+  params: ThreadScopedNodeFallbackInput,
+): ProfileCardData | null {
+  const {
+    session,
+    node,
+    rootUri,
+    focusUri,
+    isFollowing,
+    roleLabel,
+    notableAction,
+  } = params;
+
+  if (session) {
+    const projected = projectThreadScopedProfileCardData({
+      session,
+      did: node.authorDid,
+      ...(focusUri ? { focusUri } : { focusUri: node.uri }),
+      ...(typeof isFollowing === 'boolean' ? { isFollowing } : {}),
+    });
+    if (projected) return projected;
+  }
+
+  return buildThreadScopedProfileCardData({
+    did: node.authorDid,
+    handle: node.authorHandle,
+    ...(node.authorName ? { displayName: node.authorName } : {}),
+    ...(node.authorAvatar ? { avatar: node.authorAvatar } : {}),
+    threadUri: rootUri,
+    compactPosts: [node, ...(node.replies ?? []).slice(0, 2)]
+      .filter((entry) => (entry.text ?? '').trim().length > 0)
+      .map((entry) => ({
+        uri: entry.uri,
+        text: entry.text,
+        createdAt: entry.createdAt,
+        likeCount: entry.likeCount,
+        replyCount: entry.replyCount,
+        hasMedia:
+          entry.embed?.kind === 'images'
+          || entry.embed?.kind === 'external'
+          || entry.embed?.kind === 'recordWithMedia',
+        ...(roleLabel && entry.uri === node.uri ? { roleBadge: roleLabel } : {}),
+      })),
+    ...(roleLabel ? { roleSummary: roleLabel } : {}),
+    ...(notableAction ? { notableAction } : {}),
+    ...(typeof isFollowing === 'boolean' ? { isFollowing } : {}),
+  });
+}
+
+export function buildQuotedThreadScopedProfileCardData(params: {
+  threadUri: string;
+  post: MockPost;
+  roleSummary?: string;
+}): ProfileCardData | null {
+  const { threadUri, post, roleSummary } = params;
+  return buildThreadScopedProfileCardData({
+    did: post.author.did ?? '',
+    handle: post.author.handle ?? '',
+    ...(post.author.displayName ? { displayName: post.author.displayName } : {}),
+    ...(post.author.avatar ? { avatar: post.author.avatar } : {}),
+    threadUri,
+    compactPosts: post.content.trim()
+      ? [{
+          uri: post.id,
+          text: post.content,
+          createdAt: post.createdAt,
+          likeCount: post.likeCount,
+          replyCount: post.replyCount,
+          hasMedia: Boolean(
+            post.media?.length
+            || post.embed?.type === 'video'
+            || post.embed?.type === 'external',
+          ),
+        }]
+      : [],
+    ...(roleSummary ? { roleSummary } : {}),
+  });
+}
+
+export function buildQuotedSnippetThreadScopedProfileCardData(params: {
+  threadUri: string;
+  did: string;
+  handle: string;
+  displayName?: string;
+  text: string;
+  createdAt: string;
+  uri: string;
+  hasMedia?: boolean;
+  mediaType?: CompactPostPreview['mediaType'];
+  roleSummary?: string;
+}): ProfileCardData | null {
+  return buildThreadScopedProfileCardData({
+    did: params.did,
+    handle: params.handle,
+    ...(params.displayName ? { displayName: params.displayName } : {}),
+    threadUri: params.threadUri,
+    compactPosts: params.text.trim()
+      ? [{
+          uri: params.uri,
+          text: params.text,
+          createdAt: params.createdAt,
+          hasMedia: params.hasMedia ?? false,
+          ...(params.mediaType ? { mediaType: params.mediaType } : {}),
+        }]
+      : [],
+    ...(params.roleSummary ? { roleSummary: params.roleSummary } : {}),
   });
 }
 

@@ -10,8 +10,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSessionStore } from '../store/sessionStore';
-import { atpCall, atpMutate } from '../lib/atproto/client';
-import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import { atpCall } from '../lib/atproto/client';
 import type { MockPost } from '../data/mockData';
 import type { AppBskyActorDefs, AppBskyFeedDefs } from '@atproto/api';
 import type { StoryEntry } from '../App';
@@ -23,11 +22,28 @@ import { heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
-import { feedService } from '../feeds';
-import { hybridSearch } from '../search';
-import { searchPodcastIndex } from '../lib/podcastIndexClient';
 import { usePlatform, getButtonTokens, getIconBtnTokens } from '../hooks/usePlatform';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { useAppearanceStore } from '../store/appearanceStore';
+import { actorLabelChips } from '../lib/atproto/labelPresentation';
+import { useExploreSearchResults } from '../conversation/discovery/exploreSearch';
+import { useExploreDiscoverContent } from '../conversation/discovery/exploreDiscovery';
+import { projectExploreDiscoverView } from '../conversation/discovery/exploreProjection';
+import { useExploreActorRecommendations } from '../conversation/discovery/exploreRecommendations';
+import {
+  QUICK_FILTERS,
+  type QuickFilter,
+  type DiscoverSectionKey,
+  getExploreStoryTitle,
+  normalizeExternalExploreSearchQuery,
+  normalizeHashtagFeedNavigationQuery,
+  normalizePeopleFeedNavigationQuery,
+  normalizeSearchStoryNavigationQuery,
+  resolveVisibleDiscoverSections,
+  shouldShowDiscoverSection,
+} from '../conversation/discovery/exploreSurface';
+import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
+import { normalizeExternalFeedUrl } from '../lib/feedUrls';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -55,92 +71,12 @@ interface Props {
   onOpenStory: (e: StoryEntry) => void;
 }
 
-interface ExploreFeedResult {
-  id: string;
-  title: string;
-  content?: string;
-  link: string;
-  pubDate?: string;
-  author?: string;
-  enclosureType?: string;
-  feedTitle?: string;
-  feedCategory?: string;
-  score?: number;
-  source?: 'local' | 'podcast-index';
-}
-
-function mapFeedRowToExploreFeedResult(row: any): ExploreFeedResult {
-  return {
-    id: String(row.id),
-    title: String(row.title || 'Untitled feed item'),
-    ...(row.content ? { content: String(row.content) } : {}),
-    link: String(row.link || ''),
-    ...(row.pub_date ? { pubDate: String(row.pub_date) } : {}),
-    ...(row.author ? { author: String(row.author) } : {}),
-    ...(row.enclosure_type ? { enclosureType: String(row.enclosure_type) } : {}),
-    ...(row.feed_title ? { feedTitle: String(row.feed_title) } : {}),
-    ...(row.feed_category ? { feedCategory: String(row.feed_category) } : {}),
-    ...(typeof row.rrf_score === 'number' ? { score: row.rrf_score } : {}),
-    source: 'local',
-  };
-}
-
-function mapPodcastFeedToExploreFeedResult(feed: any): ExploreFeedResult {
-  const categories = feed?.categories && typeof feed.categories === 'object'
-    ? Object.values(feed.categories).filter((value) => typeof value === 'string')
-    : [];
-  return {
-    id: `podcast-index:${String(feed?.id ?? feed?.url ?? Math.random())}`,
-    title: String(feed?.title || 'Untitled podcast'),
-    ...(feed?.description ? { content: String(feed.description) } : {}),
-    link: String(feed?.url || ''),
-    ...(feed?.author ? { author: String(feed.author) } : {}),
-    enclosureType: 'audio/mpeg',
-    feedTitle: String(feed?.title || 'Podcast'),
-    ...(categories.length > 0 ? { feedCategory: String(categories[0]) } : { feedCategory: 'Podcast' }),
-    source: 'podcast-index',
-  };
-}
-
 // ─── Discovery phrases ────────────────────────────────────────────────────
 const DISCOVERY_PHRASES = [
   "What's happening",
   "Explore the conversation",
   "Find what matters",
 ];
-
-const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
-// "Quiet Posters" by @why.bsky.team — posts from your quieter followers
-const QUIET_FEED_URI    = 'at://did:plc:vpkhqolt662uhesyj6nxm7ys/app.bsky.feed.generator/infreq';
-
-/**
- * Score a post by engagement metrics for ranking in top stories.
- * Weights: likes (1x) + reposts (2x) + replies (1.5x) + quotes (1.5x).
- */
-function scorePostEngagement(post: MockPost): number {
-  const quoteCount = (post.embed?.type === 'quote' ? 1 : 0);
-  return post.likeCount + post.repostCount * 2 + post.replyCount * 1.5 + quoteCount * 1.5;
-}
-
-const QUICK_FILTERS = ['Live', 'Topics', 'Conversations', 'Feeds', 'Sources'] as const;
-type QuickFilter = typeof QUICK_FILTERS[number];
-type DiscoverSectionKey =
-  | 'live-sports'
-  | 'sports-pulse'
-  | 'feed-items'
-  | 'top-stories'
-  | 'trending-topics'
-  | 'live-clusters'
-  | 'feeds-to-follow'
-  | 'sources';
-
-const QUICK_FILTER_SECTION_MAP: Record<QuickFilter, readonly DiscoverSectionKey[]> = {
-  Live: ['live-sports', 'sports-pulse', 'live-clusters'],
-  Topics: ['top-stories', 'trending-topics'],
-  Conversations: ['top-stories', 'live-clusters'],
-  Feeds: ['feed-items', 'feeds-to-follow'],
-  Sources: ['sources', 'top-stories'],
-} as const;
 
 function canAutoInlineTranslateExplore(post: MockPost): boolean {
   const textLength = post.content.trim().length;
@@ -150,12 +86,6 @@ function canAutoInlineTranslateExplore(post: MockPost): boolean {
 
 function getAuthorInitial(displayName?: string, handle?: string): string {
   return ((displayName ?? handle ?? '').trim().charAt(0) || '?').toUpperCase();
-}
-
-function getPrimaryPostText(post: MockPost): string {
-  const articleBody = post.article?.body?.trim();
-  if (articleBody) return articleBody;
-  return post.content.trim();
 }
 
 // ─── Shared sub-components ────────────────────────────────────────────────
@@ -192,8 +122,8 @@ function SynopsisChip({ label }: { label: string }) {
 // ─── RichPostText — inline #hashtag linkification ────────────────────────
 function RichPostText({ text, onHashtag, onMention, style }: {
   text: string;
-  onHashtag?: (tag: string) => void;
-  onMention?: (handle: string) => void;
+  onHashtag?: ((tag: string) => void) | undefined;
+  onMention?: ((handle: string) => void) | undefined;
   style?: React.CSSProperties;
 }) {
   const parts = text.split(/(@[\w.]+|#\w+)/g);
@@ -268,14 +198,14 @@ function FeaturedSearchStoryCard({
 }: {
   post: MockPost;
   onTap: () => void;
-  onHashtag?: (tag: string) => void;
-  onEntityTap?: (entity: WriterEntity) => void;
-  translation?: { translatedText: string; sourceLang: string };
+  onHashtag?: ((tag: string) => void) | undefined;
+  onEntityTap?: ((entity: WriterEntity) => void) | undefined;
+  translation?: { translatedText: string; sourceLang: string } | undefined;
   showOriginal: boolean;
   translating: boolean;
   translationError: boolean;
   autoTranslated: boolean;
-  translatedDisplayName?: string;
+  translatedDisplayName?: string | undefined;
   onToggleTranslate: (event: React.MouseEvent) => void;
   onClearTranslation: (event: React.MouseEvent) => void;
 }) {
@@ -347,22 +277,6 @@ function FeaturedSearchStoryCard({
             <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.75)', letterSpacing: '0.01em' }}>{domain}</span>
           </div>
         )}
-        {/* Open-link pill: upper-right corner */}
-        <div style={{
-          position: 'absolute', top: 12, right: 12,
-          background: 'rgba(7,11,18,0.6)',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
-          border: '0.5px solid rgba(255,255,255,0.09)',
-          borderRadius: radius.full,
-          padding: '4px 9px',
-          display: 'flex', alignItems: 'center', gap: 4,
-        }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={accent.cyan400} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-          </svg>
-          <span style={{ fontSize: 11, fontWeight: 600, color: accent.cyan400 }}>Open</span>
-        </div>
       </div>
 
       {/* ── Content zone — seamlessly attached below hero ── */}
@@ -449,7 +363,7 @@ function FeaturedSearchStoryCard({
           <div style={{
             marginBottom: 8,
             border: `0.5px solid ${disc.lineSubtle}`,
-            borderRadius: radius[10],
+            borderRadius: 10,
             background: 'rgba(91,124,255,0.08)',
             overflow: 'hidden',
           }}>
@@ -550,8 +464,8 @@ function LinkedPostMiniCard({
 }: {
   post: MockPost;
   onTap: () => void;
-  onHashtag?: (tag: string) => void;
-  translation?: { translatedText: string; sourceLang: string };
+  onHashtag?: ((tag: string) => void) | undefined;
+  translation?: { translatedText: string; sourceLang: string } | undefined;
   showOriginal: boolean;
   translating: boolean;
   translationError: boolean;
@@ -638,7 +552,7 @@ function LinkedPostMiniCard({
         {hasRenderableTranslation && !showOriginal && (
           <div style={{
             border: `0.5px solid ${disc.lineSubtle}`,
-            borderRadius: radius[10],
+            borderRadius: 10,
             background: 'rgba(91,124,255,0.08)',
             padding: '7px 9px',
             display: 'flex',
@@ -758,12 +672,6 @@ function LiveClusterCard({ title, summary, count, onTap }: { title: string; summ
         <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, fontWeight: 500 }}>
           {count} active threads
         </span>
-        <div style={{ flex: 1 }} />
-        <span style={{
-          padding: '3px 10px', borderRadius: radius.full,
-          background: 'rgba(91,124,255,0.15)', color: accent.primary,
-          fontSize: typeScale.metaSm[0], fontWeight: 600,
-        }}>Open Story →</span>
       </div>
     </motion.div>
   );
@@ -855,9 +763,44 @@ function SectionHeader({ title }: { title: string }) {
 }
 
 // ─── ActorRow (search results) ────────────────────────────────────────────
-function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; onFollow: (did: string) => void }) {
+function ActorRow({
+  actor,
+  onFollow,
+  showMatchChips = false,
+  semanticMatch = false,
+  keywordMatch = false,
+  recommendationReasons = [],
+  recommendationConfidence,
+  onDismiss,
+}: {
+  actor: AppBskyActorDefs.ProfileView;
+  onFollow: (did: string) => void;
+  showMatchChips?: boolean;
+  semanticMatch?: boolean;
+  keywordMatch?: boolean;
+  recommendationReasons?: string[];
+  recommendationConfidence?: number;
+  onDismiss?: ((did: string) => void) | undefined;
+}) {
   const [following, setFollowing] = useState(actor.viewer?.following !== undefined);
   const navigateToProfile = useProfileNavigation();
+  const showProvenanceChips = useAppearanceStore((state) => state.showProvenanceChips);
+  const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
+  const followedBy = Boolean(actor.viewer?.followedBy);
+  const isMutual = following && followedBy;
+  const isMuted = Boolean(actor.viewer?.muted);
+  const isBlocking = Boolean(actor.viewer?.blocking);
+  const isBlockedBy = Boolean(actor.viewer?.blockedBy);
+  const labels = showAtprotoLabelChips
+    ? actorLabelChips({ labels: (actor as any).labels, actorDid: actor.did, maxChips: 3 })
+    : [];
+
+  const chipStyleByTone: Record<'neutral' | 'warning' | 'danger' | 'info', React.CSSProperties> = {
+    neutral: { background: disc.surfaceFocus, color: disc.textSecondary },
+    warning: { background: 'rgba(255,149,0,0.18)', color: '#ffb454' },
+    danger: { background: 'rgba(255,77,79,0.18)', color: '#ff7b7d' },
+    info: { background: 'rgba(124,233,255,0.2)', color: accent.cyan400 },
+  };
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -876,7 +819,90 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
         <button className="interactive-link-button" onClick={() => { void navigateToProfile(actor.did || actor.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', maxWidth: '100%' }}>
           {actor.displayName ?? actor.handle}
         </button>
-          <button className="interactive-link-button" onClick={() => { void navigateToProfile(actor.did || actor.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{actor.handle}</button>
+        <button className="interactive-link-button" onClick={() => { void navigateToProfile(actor.did || actor.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{actor.handle}</button>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+          {isMutual && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(91,124,255,0.15)', color: accent.primary }}>
+              Mutual
+            </span>
+          )}
+          {!isMutual && following && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: disc.surfaceFocus, color: disc.textSecondary }}>
+              Following
+            </span>
+          )}
+          {!isMutual && followedBy && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(124,233,255,0.16)', color: accent.cyan400 }}>
+              Follows you
+            </span>
+          )}
+          {isMuted && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(255,149,0,0.18)', color: '#ffb454' }}>
+              Muted
+            </span>
+          )}
+          {isBlocking && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(255,77,79,0.18)', color: '#ff7b7d' }}>
+              Blocked
+            </span>
+          )}
+          {isBlockedBy && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(255,77,79,0.12)', color: '#ff9d9e' }}>
+              Blocks you
+            </span>
+          )}
+          {showMatchChips && showProvenanceChips && semanticMatch && keywordMatch && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(124,233,255,0.2)', color: accent.cyan400 }}>
+              Semantic + keyword
+            </span>
+          )}
+          {showMatchChips && showProvenanceChips && semanticMatch && !keywordMatch && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: 'rgba(124,233,255,0.2)', color: accent.cyan400 }}>
+              Semantic match
+            </span>
+          )}
+          {showMatchChips && showProvenanceChips && !semanticMatch && keywordMatch && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: disc.surfaceFocus, color: disc.textSecondary }}>
+              Keyword match
+            </span>
+          )}
+          {!showMatchChips && recommendationReasons.map((reason) => (
+            <span
+              key={`${actor.did}:${reason}`}
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 999,
+                padding: '2px 8px',
+                background: reason === 'Sensitive content'
+                  ? 'rgba(255,149,0,0.18)'
+                  : 'rgba(124,233,255,0.2)',
+                color: reason === 'Sensitive content' ? '#ffb454' : accent.cyan400,
+              }}
+            >
+              {reason}
+            </span>
+          ))}
+          {!showMatchChips && typeof recommendationConfidence === 'number' && Number.isFinite(recommendationConfidence) && (
+            <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', background: disc.surfaceFocus, color: disc.textSecondary }}>
+              Match {Math.round(Math.max(0, Math.min(1, recommendationConfidence)) * 100)}%
+            </span>
+          )}
+          {labels.map((label) => (
+            <span
+              key={label.key}
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 999,
+                padding: '2px 8px',
+                ...chipStyleByTone[label.tone],
+              }}
+            >
+              {label.text}
+            </span>
+          ))}
+        </div>
       </div>
       <button
         onClick={() => { setFollowing(v => !v); onFollow(actor.did); }}
@@ -890,6 +916,28 @@ function ActorRow({ actor, onFollow }: { actor: AppBskyActorDefs.ProfileView; on
       >
         {following ? 'Following' : 'Follow'}
       </button>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={() => onDismiss(actor.did)}
+          aria-label="Hide suggestion"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            border: `0.5px solid ${disc.lineSubtle}`,
+            background: disc.surfaceCard,
+            color: disc.textSecondary,
+            fontSize: 16,
+            lineHeight: '28px',
+            textAlign: 'center',
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }
@@ -910,22 +958,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<QuickFilter | null>(null);
-  const [searchPosts, setSearchPosts] = useState<MockPost[]>([]);
-  const [searchFeedItems, setSearchFeedItems] = useState<ExploreFeedResult[]>([]);
-  const [recentFeedItems, setRecentFeedItems] = useState<ExploreFeedResult[]>([]);
-  const [searchActors, setSearchActors] = useState<AppBskyActorDefs.ProfileView[]>([]);
+  const [searchSort, setSearchSort] = useState<'top' | 'latest'>('top');
   const [addingPodcastFeedByUrl, setAddingPodcastFeedByUrl] = useState<Record<string, boolean>>({});
   const [podcastFeedAddStatus, setPodcastFeedAddStatus] = useState<string | null>(null);
-  const [suggestedFeeds, setSuggestedFeeds] = useState<AppBskyFeedDefs.GeneratorView[]>([]);
-  const [suggestedActors, setSuggestedActors] = useState<AppBskyActorDefs.ProfileView[]>([]);
-  const [featuredPost, setFeaturedPost] = useState<MockPost | null>(null);
-  const [linkPosts, setLinkPosts] = useState<MockPost[]>([]);
-  const [trendingPosts, setTrendingPosts] = useState<MockPost[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [discoverLoading, setDiscoverLoading] = useState(true);
   const [focused, setFocused] = useState(false);
   const [featuredIdx, setFeaturedIdx] = useState(0);
-  const [sidePosts, setSidePosts] = useState<MockPost[]>([]);
   const [showOriginalById, setShowOriginalById] = useState<Record<string, boolean>>({});
   const [translatingById, setTranslatingById] = useState<Record<string, boolean>>({});
   const [translationErrorById, setTranslationErrorById] = useState<Record<string, boolean>>({});
@@ -937,6 +974,51 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const phraseIdx = useRef(Math.floor(Math.random() * DISCOVERY_PHRASES.length));
   // Entity sheet state — Narwhal v3 Phase C
   const [activeEntity, setActiveEntity] = useState<WriterEntity | null>(null);
+  const {
+    posts: searchPosts,
+    actors: searchActors,
+    feedItems: searchFeedItems,
+    semanticActorDids: searchSemanticActorDids,
+    keywordActorDids: searchKeywordActorDids,
+    hasMorePosts: hasMoreSearchPosts,
+    hasMoreActors: hasMoreSearchActors,
+    loading,
+    loadingMorePosts: loadingMoreSearchPosts,
+    loadingMoreActors: loadingMoreSearchActors,
+    loadMorePosts: loadMoreSearchPosts,
+    loadMoreActors: loadMoreSearchActors,
+  } = useExploreSearchResults({
+    query: debouncedQuery,
+    searchSort,
+    agent,
+    enabled: sessionReady,
+  });
+  const {
+    suggestedFeeds,
+    suggestedActors,
+    suggestedActorRecommendations,
+    featuredPost,
+    linkPosts,
+    trendingPosts,
+    sidePosts,
+    recentFeedItems,
+    loading: discoverLoading,
+  } = useExploreDiscoverContent({
+    agent,
+    sessionDid: session?.did ?? null,
+    enabled: sessionReady,
+  });
+  const {
+    visibleSuggestedActorRecommendations,
+    visibleSuggestedActors,
+    followSuggestedActor,
+    dismissSuggestedActor,
+  } = useExploreActorRecommendations({
+    agent,
+    sessionDid: session?.did ?? null,
+    suggestedActors,
+    suggestedActorRecommendations,
+  });
 
   const exploreVisiblePool = useMemo(() => {
     const merged = [
@@ -962,11 +1044,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
     [filterResults, sidePosts],
   );
   const visibleDiscoverSections = useMemo(
-    () => (activeFilter ? new Set<DiscoverSectionKey>(QUICK_FILTER_SECTION_MAP[activeFilter]) : null),
+    () => resolveVisibleDiscoverSections(activeFilter),
     [activeFilter],
   );
   const showDiscoverSection = useCallback(
-    (section: DiscoverSectionKey) => visibleDiscoverSections == null || visibleDiscoverSections.has(section),
+    (section: DiscoverSectionKey) => shouldShowDiscoverSection(visibleDiscoverSections, section),
     [visibleDiscoverSections],
   );
 
@@ -986,176 +1068,15 @@ export default function ExploreTab({ onOpenStory }: Props) {
   // Accept external hashtag navigation and open Explore post results directly.
   useEffect(() => {
     if (!exploreSearchQuery) return;
-    const trimmed = exploreSearchQuery.trim();
-    if (!trimmed) {
+    const nextQuery = normalizeExternalExploreSearchQuery(exploreSearchQuery);
+    if (!nextQuery) {
       clearExploreSearch();
       return;
     }
-    const normalized = trimmed.replace(/^#/, '');
-    const nextQuery = normalized ? `#${normalized}` : trimmed;
     setQuery(nextQuery);
     setDebouncedQuery(nextQuery);
     clearExploreSearch();
   }, [clearExploreSearch, exploreSearchQuery]);
-
-  // Live search
-  useEffect(() => {
-    if (!debouncedQuery.trim()) { setSearchPosts([]); setSearchFeedItems([]); setSearchActors([]); return; }
-    if (!sessionReady) return;
-    setLoading(true);
-    Promise.all([
-      atpCall(() => agent.app.bsky.feed.searchPosts({ q: debouncedQuery, limit: 20 })).catch(() => null),
-      atpCall(() => agent.searchActors({ term: debouncedQuery, limit: 8 })).catch(() => null),
-      hybridSearch.searchFeedItems(debouncedQuery, 12).catch(() => null),
-      searchPodcastIndex(debouncedQuery, 8).catch(() => []),
-    ]).then(([postsRes, actorsRes, feedRes, podcastIndexFeeds]) => {
-      if (postsRes?.data?.posts) {
-        setSearchPosts(
-          postsRes.data.posts
-            .filter((p: any) => hasDisplayableRecordContent(p?.record))
-            .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }))
-        );
-      }
-      if (actorsRes?.data?.actors) setSearchActors(actorsRes.data.actors);
-      const localResults = feedRes?.rows
-        ? feedRes.rows.map(mapFeedRowToExploreFeedResult)
-        : [];
-      const podcastResults = Array.isArray(podcastIndexFeeds)
-        ? podcastIndexFeeds.map(mapPodcastFeedToExploreFeedResult)
-        : [];
-      const seenLinks = new Set<string>();
-      const merged = [...localResults, ...podcastResults].filter((item) => {
-        const key = item.link.trim().toLowerCase();
-        if (!key) return false;
-        if (seenLinks.has(key)) return false;
-        seenLinks.add(key);
-        return true;
-      });
-      setSearchFeedItems(merged);
-    }).finally(() => setLoading(false));
-  }, [debouncedQuery, agent, session, sessionReady]);
-
-  // Discover content: whats-hot + trending feeds + quiet posters
-  useEffect(() => {
-    if (!sessionReady) return;
-    setDiscoverLoading(true);
-    const catchWithLog = (label: string) => (err: unknown) => {
-      const e = err as any;
-      console.warn(`[Explore] ${label} failed — status: ${e?.status ?? '?'}, error: ${e?.error ?? e?.message ?? String(err)}`, err);
-      return null;
-    };
-
-    Promise.all([
-      atpCall(() => agent.app.bsky.feed.getSuggestedFeeds({ limit: 10 })).catch(catchWithLog('getSuggestedFeeds')),
-      (session?.did
-        ? atpCall(() => agent.getSuggestions({ limit: 10, relativeToDid: session.did }))
-        : Promise.resolve(null)
-      ).catch(catchWithLog('getSuggestions')),
-      // Whats-hot feed
-      atpCall(() => agent.app.bsky.feed.getFeed({ feed: DISCOVER_FEED_URI, limit: 50 })).catch(catchWithLog('getFeed:whats-hot')),
-      // Trending topics → posts matching trending tags
-      atpCall(() => (agent.app.bsky.unspecced as any).getTrendingTopics({ limit: 5 })).catch(catchWithLog('getTrendingTopics')),
-      // Quiet posters feed
-      atpCall(() => agent.app.bsky.feed.getFeed({ feed: QUIET_FEED_URI, limit: 20 })).catch(catchWithLog('getFeed:quiet-posters')),
-    ]).then(async ([feedsRes, actorsRes, whatsHotRes, trendingTopicsRes, quietRes]) => {
-      if (feedsRes?.data?.feeds) setSuggestedFeeds(feedsRes.data.feeds);
-      if (actorsRes?.data?.actors) setSuggestedActors(actorsRes.data.actors);
-
-      // Collect posts from whats-hot
-      const whatsHotPosts = whatsHotRes?.data?.feed?.length
-        ? whatsHotRes.data.feed
-            .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
-            .map((item: any) => mapFeedViewPost(item))
-        : [];
-
-      // Collect posts from trending topics (fetch top post per trending topic)
-      let trendingPosts: MockPost[] = [];
-      if (trendingTopicsRes?.data?.topics?.length) {
-        const topicLabels = trendingTopicsRes.data.topics.slice(0, 3).map((t: any) => t.topic || t.tag);
-        const trendingSearchResults = await Promise.all(
-          topicLabels.map((topic: string) =>
-            atpCall(() => agent.app.bsky.feed.searchPosts({ q: topic, limit: 8 })).catch(() => null)
-          )
-        );
-        trendingPosts = trendingSearchResults
-          .filter(r => r?.data?.posts?.length)
-          .flatMap((r: any) => r.data.posts.filter((p: any) => hasDisplayableRecordContent(p?.record)).slice(0, 2))
-          .map((p: any) => mapFeedViewPost({ post: p, reply: undefined, reason: undefined }));
-      }
-
-      // Combine whats-hot and trending, dedupe by post URI
-      const allPosts = [...whatsHotPosts, ...trendingPosts];
-      const byUri = new Map<string, MockPost>();
-      for (const post of allPosts) byUri.set(post.id, post);
-      const combined = [...byUri.values()];
-
-      // Sort combined by engagement score
-      const byEngagement = [...combined].sort(
-        (a, b) => scorePostEngagement(b) - scorePostEngagement(a)
-      );
-
-      // ─── Top tier: posts with external links (high engagement) ──────────
-      const featuredCandidates = byEngagement
-        .filter(p => p.embed?.type === 'external' || !!p.article)
-        .slice(0, 6);
-      setLinkPosts(featuredCandidates);
-      setFeaturedPost(featuredCandidates[0] ?? byEngagement[0] ?? null);
-      setTrendingPosts(byEngagement.slice(0, 10));
-
-      // ─── Side-strip formula ──────────────────────────────────────────
-      const topIds = new Set(featuredCandidates.map(p => p.id));
-
-      // Mid-tier: high-engagement posts (not already in top links)
-      const midTier = byEngagement
-        .filter(p => !topIds.has(p.id))
-        .slice(0, 6);
-
-      // Link posts from outside top 6: secondary batch of external-link posts
-      const secondaryLinks = byEngagement
-        .filter(p => (p.embed?.type === 'external' || !!p.article) && !topIds.has(p.id))
-        .sort((a, b) => scorePostEngagement(b) - scorePostEngagement(a))
-        .slice(0, 4);
-
-      // Quiet posters: from dedicated feed, text length > 40 chars
-      const quietMapped = quietRes?.data?.feed?.length
-        ? quietRes.data.feed
-            .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
-            .map((item: any) => mapFeedViewPost(item))
-            .filter((post: MockPost) => getPrimaryPostText(post).length > 40)
-            .slice(0, 3)
-        : [];
-
-      // Underdogs: low-engagement posts with potential
-      const underdogs = byEngagement
-        .filter(p => !topIds.has(p.id) && scorePostEngagement(p) > 5)
-        .sort((a, b) => scorePostEngagement(a) - scorePostEngagement(b))
-        .slice(0, 3);
-
-      // Assemble side-strip:
-      // ~70% from secondary links + mid-tier (quality content with links)
-      // ~5% from quiet posters (underrated creators)
-      // ~25% from underdogs (good engagement, emerging stories)
-      const seen = new Set(topIds);
-      const combined2: MockPost[] = [];
-
-      // Add secondary links and mid-tier (~70%)
-      for (const p of [...secondaryLinks, ...midTier]) {
-        if (!seen.has(p.id)) { seen.add(p.id); combined2.push(p); }
-      }
-
-      // Add quiet posters (~5%)
-      for (const p of quietMapped) {
-        if (!seen.has(p.id)) { seen.add(p.id); combined2.push(p); }
-      }
-
-      // Add underdogs (~25%)
-      for (const p of underdogs) {
-        if (!seen.has(p.id)) { seen.add(p.id); combined2.push(p); }
-      }
-
-      setSidePosts(combined2.slice(0, 10));
-    }).finally(() => setDiscoverLoading(false));
-  }, [agent, session, sessionReady]);
 
   // Reset carousel index when link posts refresh
   useEffect(() => { setFeaturedIdx(0); }, [linkPosts]);
@@ -1196,12 +1117,26 @@ export default function ExploreTab({ onOpenStory }: Props) {
   }, []);
 
   const handleAddPodcastFeed = useCallback(async (feedUrl: string) => {
-    const normalized = feedUrl.trim();
-    if (!normalized) return;
+    const normalized = normalizeExternalFeedUrl(feedUrl);
+    if (!normalized) {
+      setPodcastFeedAddStatus('Enter a valid http(s) podcast feed URL.');
+      addAppNotification({
+        title: 'Invalid Feed URL',
+        message: 'Podcast subscriptions only support valid http(s) feed URLs.',
+        level: 'warning',
+      });
+      return;
+    }
     setPodcastFeedAddStatus(null);
     setAddingPodcastFeedByUrl((prev) => ({ ...prev, [normalized]: true }));
     try {
-      await feedService.addFeed(normalized, 'Podcasts');
+      const subscription = await subscribeToExternalFeed({
+        rawUrl: normalized,
+        category: 'Podcasts',
+      });
+      if (!subscription.ok) {
+        throw subscription;
+      }
       setPodcastFeedAddStatus('Podcast feed added.');
       addAppNotification({
         title: 'Podcast Added',
@@ -1220,78 +1155,49 @@ export default function ExploreTab({ onOpenStory }: Props) {
     }
   }, [addAppNotification]);
 
-  useEffect(() => {
-    let canceled = false;
-    feedService.getRecentFeedItems(12)
-      .then((rows: any[]) => {
-        if (canceled) return;
-        setRecentFeedItems(rows.map(mapFeedRowToExploreFeedResult));
-      })
-      .catch(() => {
-        if (canceled) return;
-        setRecentFeedItems([]);
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [sessionReady]);
-
-  const handleFollow = useCallback(async (did: string) => {
-    if (!session) return;
-    await atpMutate(() => agent.follow(did));
-  }, [agent, session]);
-
   const handleFollowFeed = useCallback(async (uri: string) => {
     // Feed like/follow via ATProto
   }, []);
 
+  const openSearchStory = useCallback((rawQuery: string) => {
+    const normalized = normalizeSearchStoryNavigationQuery(rawQuery);
+    if (!normalized) return;
+    useUiStore.getState().openSearchStory(normalized);
+  }, []);
+
+  const openHashtagFeed = useCallback((rawTag: string) => {
+    const normalized = normalizeHashtagFeedNavigationQuery(rawTag);
+    if (!normalized) return;
+    useUiStore.getState().openHashtagFeed(normalized);
+  }, []);
+
+  const openPeopleFeed = useCallback((rawQuery: string) => {
+    const normalized = normalizePeopleFeedNavigationQuery(rawQuery);
+    if (!normalized) return;
+    useUiStore.getState().openPeopleFeed(normalized);
+  }, []);
+
   const isSearching = debouncedQuery.trim().length > 0;
-
-  const trendingTopics = trendingPosts.flatMap(p =>
-    (getPrimaryPostText(p).match(/#\w+/g) ?? []).slice(0, 2)
-  ).filter((v, i, a) => a.indexOf(v) === i).slice(0, 8);
-
-  // ─── Live clusters from suggestedActors (placeholder) ───────────────────
-  const liveClusters = suggestedActors.slice(0, 3).map(a => ({
-    title: a.displayName ?? a.handle,
-    summary: a.description ?? 'Active discussion happening now',
-    count: Math.floor(Math.random() * 40) + 5,
-    id: a.did,
-  }));
-
-  // ─── Domains from trending posts ────────────────────────────────────────
-  const domains = trendingPosts
-    .filter(p => p.embed?.url)
-    .map(p => {
-      try {
-        const h = new URL(p.embed!.url!).hostname.replace(/^www\./, '');
-        return { domain: h, description: p.embed?.title ?? 'Source' };
-      } catch { return null; }
-    })
-    .filter(Boolean)
-    .filter((v, i, a) => a.findIndex(x => x?.domain === v?.domain) === i)
-    .slice(0, 6) as { domain: string; description: string }[];
-  const hasVisibleDiscoverContent = useMemo(() => {
-    if (visibleDiscoverSections == null) return true;
-    return (
-      visibleDiscoverSections.has('live-sports') ||
-      (visibleDiscoverSections.has('sports-pulse') && sportsPulsePosts.length > 0) ||
-      (visibleDiscoverSections.has('feed-items') && recentFeedItems.length > 0) ||
-      (visibleDiscoverSections.has('top-stories') && filteredLinkPosts.length > 0) ||
-      (visibleDiscoverSections.has('trending-topics') && trendingTopics.length > 0) ||
-      (visibleDiscoverSections.has('live-clusters') && liveClusters.length > 0) ||
-      (visibleDiscoverSections.has('feeds-to-follow') && suggestedFeeds.length > 0) ||
-      (visibleDiscoverSections.has('sources') && domains.length > 0)
-    );
-  }, [
-    domains.length,
+  const {
+    trendingTopics,
+    liveClusters,
+    domains,
+    hasVisibleDiscoverContent,
+  } = useMemo(() => projectExploreDiscoverView({
+    trendingPosts,
+    suggestedActors: visibleSuggestedActors,
+    visibleDiscoverSections,
+    sportsPulsePostCount: sportsPulsePosts.length,
+    recentFeedItemCount: recentFeedItems.length,
+    filteredLinkPostCount: filteredLinkPosts.length,
+    suggestedFeedCount: suggestedFeeds.length,
+  }), [
     filteredLinkPosts.length,
-    liveClusters.length,
     recentFeedItems.length,
     sportsPulsePosts.length,
+    visibleSuggestedActors,
     suggestedFeeds.length,
-    trendingTopics.length,
+    trendingPosts,
     visibleDiscoverSections,
   ]);
 
@@ -1299,7 +1205,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
     event.stopPropagation();
 
     const detected = heuristicDetectLanguage(post.content);
-    const hasRenderableTranslation = !!translationById[post.id] && hasMeaningfulTranslation(post.content, translationById[post.id].translatedText);
+    const translation = translationById[post.id];
+    const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
 
     if (hasRenderableTranslation) {
       setShowOriginalById((prev) => ({ ...prev, [post.id]: !prev[post.id] }));
@@ -1544,7 +1451,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && query.trim().length > 1) {
                     e.currentTarget.blur();
-                    useUiStore.getState().openSearchStory(query.trim());
+                    openSearchStory(query);
                   }
                 }}
                 placeholder="Search stories, topics, feeds"
@@ -1596,7 +1503,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 4 }}
-                onClick={() => useUiStore.getState().openSearchStory(query.trim())}
+                onClick={() => openSearchStory(query)}
                 style={{
                   width: '100%', height: buttonTokens.height,
                   borderRadius: radius.full,
@@ -1655,151 +1562,139 @@ export default function ExploreTab({ onOpenStory }: Props) {
             <motion.div key="search" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ padding: '0 20px' }}>
               {loading ? <DiscoverySpinner /> : (
                 <>
+                  <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSearchSort('top')}
+                      style={{
+                        border: 'none',
+                        borderRadius: 999,
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        background: searchSort === 'top' ? accent.primary : disc.surfaceCard,
+                        color: searchSort === 'top' ? '#fff' : disc.textSecondary,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      Top
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSearchSort('latest')}
+                      style={{
+                        border: 'none',
+                        borderRadius: 999,
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        background: searchSort === 'latest' ? accent.primary : disc.surfaceCard,
+                        color: searchSort === 'latest' ? '#fff' : disc.textSecondary,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      Latest
+                    </button>
+                  </div>
+
+                  {searchPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')).length > 0 && (
+                    <div style={{ marginBottom: 24 }}>
+                      <SectionHeader title="Posts" />
+                      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
+                        {searchPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')).slice(0, 12).map((post) => (
+                          <LinkedPostMiniCard
+                            key={post.id}
+                            post={post}
+                            translation={translationById[post.id]}
+                            showOriginal={!!showOriginalById[post.id]}
+                            translating={!!translatingById[post.id]}
+                            translationError={!!translationErrorById[post.id]}
+                            autoTranslated={autoTranslatedIdsRef.current.has(post.id)}
+                            onToggleTranslate={(event) => handleToggleTranslate(event, post)}
+                            onClearTranslation={(event) => handleClearTranslation(event, post.id)}
+                            onTap={() => onOpenStory({ type: 'post', id: post.id, title: getExploreStoryTitle(post.content) })}
+                            onHashtag={openHashtagFeed}
+                          />
+                        ))}
+                      </div>
+                      {hasMoreSearchPosts && (
+                        <button
+                          type="button"
+                          onClick={loadMoreSearchPosts}
+                          disabled={loadingMoreSearchPosts}
+                          style={{
+                            marginTop: 10,
+                            border: 'none',
+                            borderRadius: 999,
+                            padding: '7px 12px',
+                            cursor: loadingMoreSearchPosts ? 'default' : 'pointer',
+                            background: loadingMoreSearchPosts ? disc.surfaceFocus : accent.primary,
+                            color: '#fff',
+                            fontSize: 11,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {loadingMoreSearchPosts ? 'Loading more posts...' : 'Load more posts'}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {searchActors.length > 0 && (
                     <div style={{ marginBottom: 24 }}>
                       <SectionHeader title="People" />
                       <div style={{ background: disc.surfaceCard, borderRadius: radius[24], padding: `0 ${space[8]}px`, border: `0.5px solid ${disc.lineSubtle}` }}>
-                        {searchActors.map(a => <ActorRow key={a.did} actor={a} onFollow={handleFollow} />)}
+                        {searchActors.map((a) => {
+                          const didKey = a.did.trim().toLowerCase();
+                          return (
+                            <ActorRow
+                              key={a.did}
+                              actor={a}
+                              onFollow={followSuggestedActor}
+                              showMatchChips
+                              semanticMatch={searchSemanticActorDids.has(didKey)}
+                              keywordMatch={searchKeywordActorDids.has(didKey)}
+                            />
+                          );
+                        })}
                       </div>
-                    </div>
-                  )}
-                  {searchPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')).length > 0 && (
-                    <div style={{ marginBottom: 24 }}>
-                      <SectionHeader title="Posts" />
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {searchPosts.slice(0, 8).map(post => (
-                          (() => {
-                            const matches = filterResults[post.id] ?? [];
-                            const isHidden = matches.some((m) => m.action === 'hide');
-                            const isWarned = matches.some((m) => m.action === 'warn');
-                            const isRevealed = !!revealedFilteredPosts[post.id];
-                            if (isHidden) return null;
-                            if (isWarned && !isRevealed) {
-                              const reasons = warnMatchReasons(matches);
-                              return (
-                                <div key={post.id} style={{ border: `0.5px solid ${disc.lineSubtle}`, borderRadius: radius[16], padding: '10px 12px', background: 'rgba(255,149,0,0.08)' }}>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: disc.textPrimary, marginBottom: 4 }}>Content warning</div>
-                                  <div style={{ fontSize: 11, color: disc.textSecondary, marginBottom: 8 }}>This post may include words or topics you asked to warn about.</div>
-                                  <div style={{ fontSize: 12, fontWeight: 700, color: disc.textSecondary, marginBottom: 6 }}>Matches filter:</div>
-                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                                    {reasons.map((entry) => (
-                                      <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: `0.5px solid ${disc.lineSubtle}`, padding: '3px 8px', background: disc.surfaceCard }}>
-                                        <span style={{ fontSize: 11, color: disc.textPrimary, fontWeight: 700 }}>{entry.phrase}</span>
-                                        <span style={{ fontSize: 10, color: disc.textSecondary, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                                          {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
-                                        </span>
-                                      </span>
-                                    ))}
-                                  </div>
-                                  <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [post.id]: true }))} style={{ border: 'none', background: 'transparent', color: accent.primary, fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
-                                    Show post
-                                  </button>
-                                </div>
-                              );
-                            }
-                            const inlineDetectedLanguage = heuristicDetectLanguage(post.content);
-                            const hasInlineTranslation = !!translationById[post.id] && hasMeaningfulTranslation(post.content, translationById[post.id].translatedText);
-                            const shouldOfferInlineTranslation = hasInlineTranslation
-                              || inlineDetectedLanguage.language === 'und'
-                              || !isLikelySameLanguage(inlineDetectedLanguage.language, translationPolicy.userLanguage);
-                            return (
-                          <motion.div
-                            key={post.id}
-                            whileTap={{ scale: 0.985 }}
-                            onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.content.slice(0, 80) })}
+                      {hasMoreSearchActors && (
+                        <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            onClick={loadMoreSearchActors}
+                            disabled={loadingMoreSearchActors}
                             style={{
-                              background: disc.surfaceCard, borderRadius: radius[24],
-                              padding: `${space[8]}px ${space[10]}px`,
-                              border: `0.5px solid ${disc.lineSubtle}`,
-                              cursor: 'pointer',
+                              flex: 1,
+                              border: 'none',
+                              borderRadius: 999,
+                              padding: '7px 12px',
+                              cursor: loadingMoreSearchActors ? 'default' : 'pointer',
+                              background: loadingMoreSearchActors ? disc.surfaceFocus : accent.primary,
+                              color: '#fff',
+                              fontSize: 11,
+                              fontWeight: 700,
                             }}
                           >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                              <div style={{ width: 28, height: 28, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
-                                {post.author.avatar
-                                  ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                  : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700 }}>{getAuthorInitial(post.author.displayName, post.author.handle)}</div>
-                                }
-                              </div>
-                              <button className="interactive-link-button" onClick={(event) => { event.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
-                              <button className="interactive-link-button" onClick={(event) => { event.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{post.author.handle}</button>
-                            </div>
-                            <p style={{ fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`, color: disc.textSecondary, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                              {hasInlineTranslation && !showOriginalById[post.id]
-                                ? translationById[post.id].translatedText
-                                : post.content}
-                            </p>
-
-                            {post.content.trim().length > 0 && shouldOfferInlineTranslation && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-                                <button
-                                  onClick={(event) => handleToggleTranslate(event, post)}
-                                  disabled={!!translatingById[post.id]}
-                                  style={{
-                                    border: 'none',
-                                    background: 'transparent',
-                                    color: accent.primary,
-                                    fontSize: 12,
-                                    fontWeight: 700,
-                                    padding: 0,
-                                    cursor: translatingById[post.id] ? 'default' : 'pointer',
-                                    opacity: translatingById[post.id] ? 0.65 : 1,
-                                  }}
-                                >
-                                  {hasInlineTranslation
-                                    ? (showOriginalById[post.id] ? 'Show translation' : 'Show original')
-                                    : (translatingById[post.id]
-                                      ? 'Translating...'
-                                      : 'Translate')}
-                                </button>
-                                {translationErrorById[post.id] && !hasInlineTranslation && (
-                                  <span style={{ fontSize: 11, color: '#ff6b6b', fontWeight: 600 }}>No translation available</span>
-                                )}
-                              </div>
-                            )}
-
-                            {hasInlineTranslation && !showOriginalById[post.id] && (
-                              <div style={{
-                                marginTop: 8,
-                                border: `0.5px solid ${disc.lineSubtle}`,
-                                borderRadius: radius[10],
-                                background: 'rgba(91,124,255,0.08)',
-                                overflow: 'hidden',
-                              }}>
-                                <div style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'space-between',
-                                  gap: 8,
-                                  padding: '7px 9px',
-                                }}>
-                                  <span style={{ fontSize: 11, color: disc.textSecondary, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {autoTranslatedIdsRef.current.has(post.id)
-                                      ? `Auto-translated from ${translationById[post.id].sourceLang}`
-                                      : `Translated from ${translationById[post.id].sourceLang}`}
-                                  </span>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                                    <button
-                                      onClick={(event) => handleToggleTranslate(event, post)}
-                                      style={{ border: 'none', background: 'transparent', color: accent.primary, fontSize: 11, fontWeight: 700, padding: 0, cursor: 'pointer' }}
-                                    >
-                                      Show original
-                                    </button>
-                                    <button
-                                      onClick={(event) => handleClearTranslation(event, post.id)}
-                                      style={{ border: 'none', background: 'transparent', color: disc.textTertiary, fontSize: 11, fontWeight: 600, padding: 0, cursor: 'pointer' }}
-                                    >
-                                      Clear
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </motion.div>
-                            );
-                          })()
-                        ))}
-                      </div>
+                            {loadingMoreSearchActors ? 'Loading more people...' : 'Load more people'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openPeopleFeed(query)}
+                            style={{
+                              border: `1px solid ${accent.primary}`,
+                              borderRadius: 999,
+                              padding: '6px 12px',
+                              cursor: 'pointer',
+                              background: 'none',
+                              color: accent.primary,
+                              fontSize: 11,
+                              fontWeight: 700,
+                            }}
+                          >
+                            View all
+                          </button>
+                        </div>
+                      )} 
                     </div>
                   )}
                   {searchFeedItems.length > 0 && (
@@ -1918,7 +1813,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                         const query = game
                           ? (game.hashtags[0] ? `#${game.hashtags[0]}` : `${game.awayTeam.name} ${game.homeTeam.name}`)
                           : gameId;
-                        useUiStore.getState().openSearchStory(query);
+                        openSearchStory(query);
                       }}
                     />
                   </div>
@@ -1939,8 +1834,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                             autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
                             onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                             onClearTranslation={(event) => handleClearTranslation(event, p.id)}
-                            onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
-                            onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
+                            onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
+                            onHashtag={openHashtagFeed}
                           />
                         ))}
                       </div>
@@ -2041,8 +1936,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                   translatedDisplayName={translationById[`displayName:${p.author.did}`]?.translatedText}
                                   onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                                   onClearTranslation={(event) => handleClearTranslation(event, p.id)}
-                                  onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
-                                  onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
+                                  onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
+                                  onHashtag={openHashtagFeed}
                                   onEntityTap={(e) => setActiveEntity(e)}
                                 />
                               );
@@ -2129,8 +2024,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
                                 onToggleTranslate={(event) => handleToggleTranslate(event, p)}
                                 onClearTranslation={(event) => handleClearTranslation(event, p.id)}
-                                onTap={() => onOpenStory({ type: 'post', id: p.id, title: p.content.slice(0, 80) })}
-                                onHashtag={tag => useUiStore.getState().openExploreSearch(tag)}
+                                onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
+                                onHashtag={openHashtagFeed}
                               />
                             );
                           })}
@@ -2195,11 +2090,33 @@ export default function ExploreTab({ onOpenStory }: Props) {
                   )}
 
                   {/* People to follow */}
-                  {!activeFilter && suggestedActors.length > 0 && (
+                  {!activeFilter && visibleSuggestedActors.length > 0 && (
                     <div>
                       <SectionHeader title="People to Follow" />
                       <div style={{ background: disc.surfaceCard, borderRadius: radius[24], padding: `0 ${space[8]}px`, border: `0.5px solid ${disc.lineSubtle}` }}>
-                        {suggestedActors.slice(0, 5).map(a => <ActorRow key={a.did} actor={a} onFollow={handleFollow} />)}
+                        {(visibleSuggestedActorRecommendations.length > 0
+                          ? visibleSuggestedActorRecommendations
+                          : visibleSuggestedActors.map((actor) => ({
+                              actor,
+                              score: 0,
+                              confidence: 0.5,
+                              reasons: [] as string[],
+                              semanticMatch: false,
+                              graphMatch: false,
+                              serverMatch: true,
+                            }))
+                        )
+                          .slice(0, 5)
+                          .map((recommendation) => (
+                            <ActorRow
+                              key={recommendation.actor.did}
+                              actor={recommendation.actor}
+                              onFollow={followSuggestedActor}
+                              recommendationReasons={recommendation.reasons}
+                              recommendationConfidence={recommendation.confidence}
+                              onDismiss={(did) => dismissSuggestedActor(did, recommendation.confidence)}
+                            />
+                          ))}
                       </div>
                     </div>
                   )}

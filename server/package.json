@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "translation:download-models": "bash ./scripts/download-translation-models.sh",
-    "translation:setup-python": "python3 -m pip install --upgrade huggingface_hub ctranslate2 sacremoses sentencepiece transformers torch"
+    "translation:setup-python": "python3 -m pip install --upgrade huggingface_hub ctranslate2 sacremoses sentencepiece transformers torch",
+    "transcription:setup-python": "python3 -m pip install --upgrade faster-whisper av"
   },
   "dependencies": {
     "dotenv": "^16.6.1",

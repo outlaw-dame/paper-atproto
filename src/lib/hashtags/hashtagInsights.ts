@@ -14,7 +14,7 @@
 
 import type { BskyAgent } from '@atproto/api';
 import { atpCall } from '../atproto/client';
-import { inferenceClient } from '../../workers/InferenceClient';
+import { embeddingPipeline } from '../../intelligence/embeddingPipeline';
 
 // ─── Cache ─────────────────────────────────────────────────────────────────
 interface CacheEntry<T> {
@@ -170,8 +170,8 @@ async function computeRelevanceScores(
 
   try {
     const [postEmbedding, tagEmbeddings] = await Promise.all([
-      inferenceClient.embed(postText),
-      inferenceClient.embedBatch(tags.map((t) => `#${t} hashtag`)),
+      embeddingPipeline.embed(postText, { mode: 'query' }),
+      embeddingPipeline.embedBatch(tags.map((t) => `#${t} hashtag`), { mode: 'query' }),
     ]);
 
     for (let i = 0; i < tags.length; i++) {

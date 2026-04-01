@@ -52,7 +52,15 @@
 			"mv": true,
 			"corepack": true,
 			"lsof": true,
-			"env": true
+			"env": true,
+			"npm run -s vitest": true,
+			"npx vitest": true,
+			"/^node scripts/eval_hard_negative_thresholds\\.mjs --input scripts/retrieval_hard_negatives\\.sample\\.jsonl$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"apply_patch": true,
+			"cp": true
 		}
 	}
 }

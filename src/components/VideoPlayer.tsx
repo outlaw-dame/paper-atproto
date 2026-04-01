@@ -15,6 +15,11 @@ interface VideoPlayerProps {
   thumb?: string;
   aspectRatio?: number;
   autoplay?: boolean;
+  captions?: Array<{
+    lang: string;
+    url: string;
+    label?: string;
+  }>;
   /** Post ID — used to associate this player with a mini-player session */
   postId?: string;
 }
@@ -24,7 +29,7 @@ interface VideoPlayerProps {
  * When the user scrolls away while a video is playing, it automatically
  * transitions to the floating MiniPlayer at the bottom of the screen.
  */
-export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay = false, postId }: VideoPlayerProps) {
+export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay = false, captions = [], postId }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoplay);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -345,7 +350,18 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
                 playbackRate: event.currentTarget.playbackRate,
               });
             }}
-          />
+          >
+            {captions.map((caption, index) => (
+              <track
+                key={`${caption.lang}-${caption.url}-${index}`}
+                kind="captions"
+                src={caption.url}
+                srcLang={caption.lang}
+                label={caption.label || caption.lang.toUpperCase()}
+                default={index === 0}
+              />
+            ))}
+          </video>
 
           {!isPlaying && (
             <button

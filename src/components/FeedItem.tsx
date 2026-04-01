@@ -3,7 +3,9 @@ import { motion } from 'framer-motion';
 import { Card } from 'konsta/react';
 import { Markdown } from './Markdown';
 import { Gif } from './Gif';
+import AudioEmbed from './AudioEmbed';
 import { LinkPreview } from './LinkPreview';
+import { isAudioUrl } from '../atproto/mappers';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 
 interface FeedItemProps {
@@ -105,8 +107,23 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
               ))}
             </div>
           )}
+          {embed?.type === 'audio' && (
+            <AudioEmbed
+              url={embed.url}
+              title={embed.title}
+              description={embed.description}
+              thumbnail={embed.thumb}
+            />
+          )}
           {embed?.type === 'app.bsky.embed.external' && (
-            embed.external.uri.includes('tenor.com') ? (
+            isAudioUrl(embed.external.uri) ? (
+              <AudioEmbed
+                url={embed.external.uri}
+                title={embed.external.title}
+                description={embed.external.description}
+                thumbnail={typeof embed.external.thumb === 'string' ? embed.external.thumb : undefined}
+              />
+            ) : (embed.external.uri.includes('tenor.com') || embed.external.uri.includes('klipy.com')) ? (
               <Gif 
                 url={embed.external.uri} 
                 title={embed.external.title} 

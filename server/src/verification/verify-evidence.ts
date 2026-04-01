@@ -123,6 +123,11 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
   const grounding = new GeminiGroundingProvider();
   const media = new GoogleVisionMediaProvider();
   const entityLinking = createEntityLinkingProvider();
+  const entityLinkingEndpoint = env.VERIFY_ENTITY_LINKING_PROVIDER === 'wikidata'
+    ? env.VERIFY_WIKIDATA_ENDPOINT
+    : env.VERIFY_ENTITY_LINKING_PROVIDER === 'hybrid'
+      ? `${env.VERIFY_ENTITY_LINKING_ENDPOINT} | ${env.VERIFY_WIKIDATA_ENDPOINT}`
+      : env.VERIFY_ENTITY_LINKING_ENDPOINT;
 
   const claimType = naiveClaimType(input.text);
   const extractedClaim = input.text.trim() || null;
@@ -203,8 +208,8 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
       ? {
           entityLinking: {
             provider: env.VERIFY_ENTITY_LINKING_PROVIDER,
-            ...(env.VERIFY_ENTITY_LINKING_ENDPOINT
-              ? { endpoint: env.VERIFY_ENTITY_LINKING_ENDPOINT }
+            ...(entityLinkingEndpoint
+              ? { endpoint: entityLinkingEndpoint }
               : {}),
             linkedEntities: linkedEntities.map(entity => ({
               mention: entity.mention,

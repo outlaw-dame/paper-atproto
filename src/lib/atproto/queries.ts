@@ -40,6 +40,7 @@ export const qk = {
   suggestions:   ()                      => ['suggestions'] as const,
   suggestedFeeds: ()                     => ['suggestedFeeds'] as const,
   preferences:    ()                     => ['preferences'] as const,
+  labelerServices: (didsKey: string)     => ['labelerServices', didsKey] as const,
   mutes:          ()                     => ['mutes'] as const,
   blocks:         ()                     => ['blocks'] as const,
 };
@@ -295,6 +296,76 @@ export function usePreferences() {
     enabled: !!session,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 30,
+  });
+}
+
+export function useLabelerServices(dids: string[]) {
+  const { agent, session } = useSessionStore();
+  const sortedDids = [...dids].sort();
+  const didsKey = sortedDids.join(',');
+
+  return useQuery({
+    queryKey: qk.labelerServices(didsKey),
+    queryFn: () => atpCall(() => agent.app.bsky.labeler.getServices({ dids: sortedDids, detailed: true })),
+    enabled: !!session && sortedDids.length > 0,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
+  });
+}
+
+export function useSetContentLabelPref() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      label,
+      visibility,
+      labelerDid,
+    }: {
+      label: string;
+      visibility: 'hide' | 'warn' | 'ignore';
+      labelerDid?: string;
+    }) => atpCall(
+      () => agent.setContentLabelPref(label, visibility, labelerDid),
+      {
+        // Explicit jittered retry configuration for transient policy write failures.
+        maxAttempts: 3,
+        baseDelayMs: 250,
+        capDelayMs: 3_000,
+      },
+    ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useAddLabeler() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ did }: { did: string }) => atpCall(() => agent.addLabeler(did)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useRemoveLabeler() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ did }: { did: string }) => atpCall(() => agent.removeLabeler(did)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useRemoveLabelers() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ dids }: { dids: string[] }) => atpCall(() => Promise.all(dids.map((did) => agent.removeLabeler(did)))),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
   });
 }
 

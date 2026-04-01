@@ -1,7 +1,13 @@
-import type { ConversationSession } from '../sessionTypes';
+import type {
+  ConversationContinuitySnapshot,
+  ConversationSession,
+} from '../sessionTypes';
 import type { ProjectionPolicy } from '../sessionPolicies';
 import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
 import type { PremiumThreadProjection } from '../../intelligence/premiumContracts';
+import {
+  resolveCurrentContinuitySnapshot,
+} from '../continuitySnapshots';
 
 export type ThreadFilter =
   | 'Top'
@@ -33,6 +39,7 @@ export interface ThreadProjectionContribution {
   isWarned: boolean;
   isRevealedWarn: boolean;
   isOp: boolean;
+  isOptimistic: boolean;
 
   contributionRole?: string;
   conversationalRole?: string;
@@ -89,6 +96,7 @@ export interface ThreadProjection {
     writerEntities: any[];
     hasMentalHealthCrisis: boolean;
     mentalHealthCategory?: string;
+    latestContinuity: ConversationContinuitySnapshot | null;
     premium: PremiumThreadProjection;
   };
   filters: {
@@ -110,6 +118,7 @@ export function projectThreadView(
   const root = session.graph.nodesByUri[session.graph.rootUri];
   const rootAuthorDid = root?.authorDid;
   const interpolatorSurface = buildInterpolatorSurfaceProjection(session);
+  const continuity = resolveCurrentContinuitySnapshot(session);
 
   const allContributions: ThreadProjectionContribution[] = Object.values(session.graph.nodesByUri)
     .filter((node) => node.uri !== session.graph.rootUri)
@@ -135,6 +144,7 @@ export function projectThreadView(
       isWarned: !!node.warnedByModeration,
       isRevealedWarn: session.structure.revealedWarnUris.includes(node.uri),
       isOp: node.authorDid === rootAuthorDid,
+      isOptimistic: !!node.isOptimistic,
       ...(node.contributionRole ? { contributionRole: node.contributionRole } : {}),
       ...(node.contributionSignal?.role ? { conversationalRole: node.contributionSignal.role } : {}),
       ...(node.contributionSignal?.qualityScore !== undefined
@@ -215,6 +225,7 @@ export function projectThreadView(
       ...(interpolatorSurface.mentalHealthCategory
         ? { mentalHealthCategory: interpolatorSurface.mentalHealthCategory }
         : {}),
+      latestContinuity: continuity,
       premium: {
         status: session.interpretation.premium.status,
         isEntitled: (session.interpretation.premium.entitlements?.capabilities ?? [])
@@ -247,41 +258,58 @@ function applyThreadFilter(
   activeFilter: ThreadFilter,
 ): ThreadProjectionContribution[] {
   const next = [...contributions];
+  const prependOptimistic = (
+    filtered: ThreadProjectionContribution[],
+  ): ThreadProjectionContribution[] => {
+    const optimistic = next.filter((contribution) => contribution.isOptimistic);
+    if (optimistic.length === 0) return filtered;
+
+    const merged: ThreadProjectionContribution[] = [];
+    const seen = new Set<string>();
+    for (const contribution of [...optimistic, ...filtered]) {
+      if (seen.has(contribution.uri)) continue;
+      seen.add(contribution.uri);
+      merged.push(contribution);
+    }
+    return merged;
+  };
 
   switch (activeFilter) {
     case 'Top':
-      return next.sort((a, b) => {
+      return prependOptimistic(next.sort((a, b) => {
+        const optimisticDelta = Number(b.isOptimistic) - Number(a.isOptimistic);
+        if (optimisticDelta !== 0) return optimisticDelta;
         const bScore = b.finalInfluenceScore ?? b.qualityScore ?? 0;
         const aScore = a.finalInfluenceScore ?? a.qualityScore ?? 0;
         return bScore - aScore;
-      });
+      }));
 
     case 'Latest':
-      return next.sort(
+      return prependOptimistic(next.sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      );
+      ));
 
     case 'Clarifying':
-      return next.filter(
+      return prependOptimistic(next.filter(
         (contribution) => contribution.contributionRole === 'clarifying'
           || contribution.conversationalRole === 'clarification',
-      );
+      ));
 
     case 'New angles':
-      return next.filter(
+      return prependOptimistic(next.filter(
         (contribution) => contribution.contributionRole === 'new_information'
           || contribution.contributionRole === 'useful_counterpoint'
           || contribution.conversationalRole === 'new_information',
-      );
+      ));
 
     case 'Source-backed':
-      return next.filter(
+      return prependOptimistic(next.filter(
         (contribution) => contribution.evidencePresent === true
           || (contribution.factualContributionScore ?? 0) > 0.4,
-      );
+      ));
 
     default:
-      return next;
+      return prependOptimistic(next);
   }
 }
 

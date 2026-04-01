@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { precompressPlugin } from './scripts/vite/precompressPlugin';
 
 Object.assign(process.env, loadEnv(process.env.NODE_ENV || 'development', process.cwd(), ''));
 
@@ -14,7 +15,7 @@ const hmrClientPort = process.env.VITE_HMR_CLIENT_PORT
 const hmrPort = process.env.VITE_HMR_PORT
   ? Number(process.env.VITE_HMR_PORT)
   : undefined;
-const enableIsolationHeaders = process.env.VITE_ENABLE_ISOLATION_HEADERS === '1';
+const enableIsolationHeaders = process.env.VITE_ENABLE_ISOLATION_HEADERS !== '0';
 const oauthClientName = process.env.VITE_ATPROTO_OAUTH_CLIENT_NAME?.trim() || 'Glimpse';
 const oauthClientTos = process.env.VITE_ATPROTO_OAUTH_TOS_URI?.trim();
 const oauthClientPrivacy = process.env.VITE_ATPROTO_OAUTH_PRIVACY_URI?.trim();
@@ -131,6 +132,12 @@ export default defineConfig(({ command }) => ({
   base: command === 'serve' ? '/' : '/paper-atproto/',
   plugins: [
     react(),
+    precompressPlugin({
+      minSizeBytes: 1024,
+      gzipLevel: 6,
+      zstdLevel: 8,
+      maxFileBytes: 4_000_000,
+    }),
     {
       name: 'oauth-client-metadata-endpoint',
       configureServer(server) {

@@ -15,7 +15,6 @@ import LoginScreen from './components/LoginScreen';
 import { MiniPlayerProvider } from './context/MiniPlayerContext';
 import MiniPlayer from './components/MiniPlayer';
 import HomeTab from './tabs/HomeTab';
-import OverlayHost from './shell/OverlayHost';
 import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge';
 import PlatformBanners from './shell/PlatformBanners';
 import BadgeSyncBridge from './components/BadgeSyncBridge';
@@ -184,6 +183,7 @@ function ShellModuleRecovery({
 const ExploreTab = lazyWithRetry(() => import('./tabs/ExploreTab'), 'ExploreTab');
 const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab'), 'ActivityTab');
 const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab'), 'ProfileTab');
+const OverlayHost = lazyWithRetry(() => import('./shell/OverlayHost'), 'OverlayHost');
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
@@ -330,7 +330,19 @@ function FloatingComposeFab({ onCompose, onPromptComposer }: { onCompose: () => 
 // ─── AppShell ──────────────────────────────────────────────────────────────
 function AppShell() {
   const { session, isLoading } = useAtp();
-  const { activeTab, prevTab, openStory, profileDid, openCompose, openPromptComposer } = useUiStore();
+  const {
+    activeTab,
+    prevTab,
+    openStory,
+    profileDid,
+    openCompose,
+    openPromptComposer,
+    showCompose,
+    showPromptComposer,
+    story,
+    searchStoryQuery,
+    replyTarget,
+  } = useUiStore();
   const [isTabBarHidden, setIsTabBarHidden] = React.useState(false);
   const [shellRetryKey, setShellRetryKey] = React.useState(0);
   const [loadingTimedOut, setLoadingTimedOut] = React.useState(false);
@@ -480,7 +492,20 @@ function AppShell() {
       <TabBar hidden={isTabBarHidden} />
 
       {/* Overlays: ComposeSheet + StoryMode */}
-      <LazyModuleBoundary resetKey={`overlay:${shellRetryKey}`}>
+      <LazyModuleBoundary
+        resetKey={`overlay:${shellRetryKey}:${showCompose ? replyTarget?.id ?? 'new' : 'closed'}:${showPromptComposer ? 'prompt' : 'prompt-closed'}:${story?.id ?? 'story-closed'}:${searchStoryQuery ?? 'search-closed'}`}
+        fallback={(
+          <ShellModuleRecovery
+            title="Overlay layer needs a clean retry"
+            body="The thread or composer overlay failed to render. Reloading restores the interaction layer without affecting your signed-in session."
+            buttonLabel="Reload overlays"
+            onReload={() => {
+              setShellRetryKey((value) => value + 1);
+              window.location.reload();
+            }}
+          />
+        )}
+      >
         <Suspense fallback={null}>
           <OverlayHost />
         </Suspense>

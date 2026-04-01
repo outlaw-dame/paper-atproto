@@ -8,6 +8,7 @@ import { extractClusterSignals } from '../lib/resolver/atproto';
 import type {
   ConversationNode,
   ConversationSession,
+  ConversationDirection,
   ContributionSignal,
   InterpretiveConfidenceExplanation,
   InterpretiveState,
@@ -220,6 +221,18 @@ export function deriveThreadStateSignal(session: ConversationSession): ThreadSta
     },
     ...(interpretiveState ? { interpretiveState } : {}),
   };
+}
+
+export function deriveConversationDirection(
+  session: ConversationSession,
+): ConversationDirection {
+  const threadState = session.interpretation.threadState;
+  if (!threadState) return 'forming';
+  if (threadState.conversationPhase === 'escalating') return 'escalating';
+  if (threadState.conversationPhase === 'stalled') return 'stalled';
+  if (threadState.dominantTone === 'constructive') return 'clarifying';
+  if (threadState.dominantTone === 'contested') return 'fragmenting';
+  return 'forming';
 }
 
 function mapContributionRoleToConversationalRole(

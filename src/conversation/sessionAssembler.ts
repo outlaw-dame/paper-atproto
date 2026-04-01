@@ -30,10 +30,24 @@ import {
   annotateConversationQuality,
   assignDeferredReasons,
   defaultAnchorLinearPolicy,
+  deriveConversationDirection,
   deriveThreadStateSignal,
 } from './sessionPolicies';
 import { applyInterpretiveConfidence } from './interpretive/interpretiveScoring';
 import { humanizeInterpretiveReason } from './interpretive/interpretiveExplanation';
+import { updateConversationContinuitySnapshots } from './continuitySnapshots';
+import {
+  buildConversationModelSourceToken,
+  matchesConversationModelSourceToken,
+} from './modelSourceToken';
+import {
+  markConversationModelDiscarded,
+  markConversationModelError,
+  markConversationModelLoading,
+  markConversationModelReady,
+  markConversationModelSkipped,
+  shouldRunInterpolatorWriter,
+} from './modelExecution';
 import { detectMentalHealthCrisis } from '../lib/sentiment';
 import type {
   AtUri,
@@ -51,7 +65,6 @@ import type { MockPost } from '../data/mockData';
 import type {
   ConversationNode,
   ConversationSessionMode,
-  ConversationDirection,
   ConversationSession,
   SessionTranslationState,
   MentalHealthCrisisCategory,
@@ -104,16 +117,6 @@ function setSessionError(sessionId: string, message: string): void {
       error: message,
     },
   }));
-}
-
-function deriveConversationDirectionFromSession(session: ConversationSession): ConversationDirection {
-  const threadState = session.interpretation.threadState;
-  if (!threadState) return 'forming';
-  if (threadState.conversationPhase === 'escalating') return 'escalating';
-  if (threadState.conversationPhase === 'stalled') return 'stalled';
-  if (threadState.dominantTone === 'constructive') return 'clarifying';
-  if (threadState.dominantTone === 'contested') return 'fragmenting';
-  return 'forming';
 }
 
 function buildTranslationMap(params: {
@@ -533,16 +536,54 @@ export async function hydrateConversationSession(
       ...nextSession,
       trajectory: {
         ...nextSession.trajectory,
-        direction: deriveConversationDirectionFromSession(nextSession),
+        direction: deriveConversationDirection(nextSession),
       },
     };
+    nextSession = updateConversationContinuitySnapshots(nextSession);
 
     store.updateSession(sessionId, () => nextSession!);
+    const modelSourceToken = buildConversationModelSourceToken(nextSession);
 
     const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
     if (!interpolatorEnabled) {
+      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'writer', {
+        reason: 'interpolator_disabled',
+        sourceToken: modelSourceToken,
+      }));
+      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'premium', {
+        reason: 'premium_ineligible',
+        sourceToken: modelSourceToken,
+      }));
       return;
     }
+
+    const writerGate = shouldRunInterpolatorWriter(nextSession, allReplies.length);
+    if (!writerGate.shouldRun) {
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped(current, 'writer', {
+          reason: writerGate.reason,
+          sourceToken: modelSourceToken,
+        })
+      ));
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped(current, 'premium', {
+          reason: 'premium_ineligible',
+          sourceToken: modelSourceToken,
+        })
+      ));
+      return;
+    }
+
+    const writerRequestedAt = new Date().toISOString();
+    store.updateSession(sessionId, (current) => (
+      markConversationModelLoading(current, 'writer', {
+        sourceToken: modelSourceToken,
+        requestedAt: writerRequestedAt,
+      })
+    ));
+
+    let filteredWriterResult: InterpolatorWriteResult | null = null;
+    let writerInput: ThreadStateForWriter | null = null;
 
     try {
       const translationOutput = await translateWriterInput({
@@ -574,17 +615,21 @@ export async function hydrateConversationSession(
         output: translationOutput,
       });
 
-      store.updateSession(sessionId, (current) => ({
-        ...current,
-        translations: {
-          byUri: {
-            ...current.translations.byUri,
-            ...translationById,
-          },
-        },
-      }));
+      store.updateSession(sessionId, (current) => (
+        matchesConversationModelSourceToken(current, modelSourceToken)
+          ? {
+              ...current,
+              translations: {
+                byUri: {
+                  ...current.translations.byUri,
+                  ...translationById,
+                },
+              },
+            }
+          : markConversationModelDiscarded(current, 'writer')
+      ));
 
-      const writerInput = buildThreadStateForWriter(
+      writerInput = buildThreadStateForWriter(
         rootUri,
         rootNode.text,
         pipeline.interpolator,
@@ -607,20 +652,50 @@ export async function hydrateConversationSession(
       );
 
       const writerResult = await callInterpolatorWriter(writerInput, signal);
-      const filteredWriterResult = redactWriterResultByUserRules(writerResult);
-      if (!filteredWriterResult.abstained) {
-        store.updateSession(sessionId, (current) => ({
-          ...current,
-          interpretation: {
-            ...current.interpretation,
-            writerResult: filteredWriterResult,
-          },
-        }));
+      filteredWriterResult = redactWriterResultByUserRules(writerResult);
+      store.updateSession(sessionId, (current) => {
+        if (!matchesConversationModelSourceToken(current, modelSourceToken)) {
+          return markConversationModelDiscarded(current, 'writer');
+        }
+
+        const nextCurrent = !filteredWriterResult?.abstained
+          ? updateConversationContinuitySnapshots({
+              ...current,
+              interpretation: {
+                ...current.interpretation,
+                writerResult: filteredWriterResult,
+              },
+            })
+          : current;
+
+        return markConversationModelReady(nextCurrent, 'writer', {
+          sourceToken: modelSourceToken,
+          requestedAt: writerRequestedAt,
+        });
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
       }
 
-      const actorDid = useSessionStore.getState().session?.did?.trim();
-      if (!actorDid) {
-        store.updateSession(sessionId, (current) => ({
+      const errorMessage = sanitizeErrorMessage(err);
+      store.updateSession(sessionId, (current) => (
+        matchesConversationModelSourceToken(current, modelSourceToken)
+          ? markConversationModelError(current, 'writer', {
+              sourceToken: modelSourceToken,
+              requestedAt: writerRequestedAt,
+              error: errorMessage,
+            })
+          : markConversationModelDiscarded(current, 'writer')
+      ));
+      console.warn('[conversation] writer step failed', errorMessage);
+      return;
+    }
+
+    const actorDid = useSessionStore.getState().session?.did?.trim();
+    if (!actorDid) {
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped({
           ...current,
           interpretation: {
             ...current.interpretation,
@@ -628,10 +703,32 @@ export async function hydrateConversationSession(
               status: 'not_entitled',
             },
           },
-        }));
-        return;
-      }
+        }, 'premium', {
+          reason: 'not_entitled',
+          sourceToken: modelSourceToken,
+        })
+      ));
+      return;
+    }
 
+    const premiumRequestedAt = new Date().toISOString();
+    store.updateSession(sessionId, (current) => ({
+      ...markConversationModelLoading(current, 'premium', {
+        sourceToken: modelSourceToken,
+        requestedAt: premiumRequestedAt,
+      }),
+      interpretation: {
+        ...current.interpretation,
+        premium: {
+          ...(current.interpretation.premium.entitlements
+            ? { entitlements: current.interpretation.premium.entitlements }
+            : {}),
+          status: 'loading',
+        },
+      },
+    }));
+
+    try {
       const entitlements = await getPremiumAiEntitlements(actorDid, signal);
       store.updateSession(sessionId, (current) => ({
         ...current,
@@ -648,8 +745,20 @@ export async function hydrateConversationSession(
 
       const currentSession = store.getSession(sessionId);
       if (!currentSession) return;
+      if (!matchesConversationModelSourceToken(currentSession, modelSourceToken)) {
+        store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
+        return;
+      }
 
       if (!shouldRunPremiumDeepInterpolator(currentSession, allReplies.length, entitlements)) {
+        store.updateSession(sessionId, (current) => (
+          markConversationModelSkipped(current, 'premium', {
+            reason: entitlements.capabilities.includes('deep_interpolator')
+              ? 'premium_ineligible'
+              : 'not_entitled',
+            sourceToken: modelSourceToken,
+          })
+        ));
         return;
       }
 
@@ -664,14 +773,14 @@ export async function hydrateConversationSession(
         },
       }));
 
-      const baseSummary = !filteredWriterResult.abstained
+      const baseSummary = filteredWriterResult && !filteredWriterResult.abstained
         ? filteredWriterResult.collapsedSummary
         : currentSession.interpretation.interpolator?.summaryText;
 
       const premiumInput = redactPremiumInterpolatorInputByUserRules(
         buildPremiumInterpolatorRequest({
           actorDid,
-          writerInput,
+          writerInput: writerInput!,
           session: currentSession,
           ...(baseSummary ? { baseSummary } : {}),
         }),
@@ -681,42 +790,58 @@ export async function hydrateConversationSession(
       const sourceComputedAt = currentSession.interpretation.lastComputedAt;
 
       store.updateSession(sessionId, (current) => ({
-        ...current,
-        interpretation: {
-          ...current.interpretation,
-          premium: {
-            entitlements,
-            status: 'ready',
-            deepInterpolator: {
-              ...deepInterpolator,
-              ...(sourceComputedAt ? { sourceComputedAt } : {}),
-            },
-          },
-        },
+        ...(matchesConversationModelSourceToken(current, modelSourceToken)
+          ? markConversationModelReady({
+              ...current,
+              interpretation: {
+                ...current.interpretation,
+                premium: {
+                  entitlements,
+                  status: 'ready',
+                  deepInterpolator: {
+                    ...deepInterpolator,
+                    ...(sourceComputedAt ? { sourceComputedAt } : {}),
+                  },
+                },
+              },
+            }, 'premium', {
+              sourceToken: modelSourceToken,
+              requestedAt: premiumRequestedAt,
+            })
+          : markConversationModelDiscarded(current, 'premium')),
       }));
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         return;
       }
-      store.updateSession(sessionId, (current) => ({
-        ...current,
-        interpretation: {
-          ...current.interpretation,
-          premium: {
-            ...(current.interpretation.premium.entitlements
-              ? { entitlements: current.interpretation.premium.entitlements }
-              : {}),
-            status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-              ? 'error'
-              : current.interpretation.premium.status,
-            ...(sanitizeErrorMessage(err)
-              ? { lastError: sanitizeErrorMessage(err) }
-              : {}),
-          },
-        },
-      }));
-      // Non-fatal: deterministic interpolation remains available.
-      console.warn('[conversation] optional translation/writer step failed', sanitizeErrorMessage(err));
+
+      const errorMessage = sanitizeErrorMessage(err);
+      store.updateSession(sessionId, (current) => (
+        matchesConversationModelSourceToken(current, modelSourceToken)
+          ? markConversationModelError({
+              ...current,
+              interpretation: {
+                ...current.interpretation,
+                premium: {
+                  ...(current.interpretation.premium.entitlements
+                    ? { entitlements: current.interpretation.premium.entitlements }
+                    : {}),
+                  status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
+                    ? 'error'
+                    : current.interpretation.premium.status,
+                  ...(errorMessage
+                    ? { lastError: errorMessage }
+                    : {}),
+                },
+              },
+            }, 'premium', {
+              sourceToken: modelSourceToken,
+              requestedAt: premiumRequestedAt,
+              error: errorMessage,
+            })
+          : markConversationModelDiscarded(current, 'premium')
+      ));
+      console.warn('[conversation] premium interpolation failed', errorMessage);
     }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
