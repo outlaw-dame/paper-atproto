@@ -28,3 +28,13 @@ export {
 export * from './redundancy';
 export * from './algorithms';
 export * from './verification/index';
+
+// ─── Phase 0 quality layer ────────────────────────────────────────────────
+// Import Phase 0 submodules via their own index paths — do not re-export at
+// this barrel level to avoid name collisions with the verification submodule
+// (e.g. SourceType, clamp01). Consumers import directly:
+//   import { … } from '../intelligence/context';
+//   import { … } from '../intelligence/heuristics';
+//   import { … } from '../intelligence/fusion';
+//   import { … } from '../intelligence/multimodal';
+//   import { … } from '../intelligence/writer';
