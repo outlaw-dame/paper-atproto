@@ -32,6 +32,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
   // Parse embed if it's a string (from DB)
   const embed = typeof post.embed === 'string' ? JSON.parse(post.embed) : post.embed;
   const navigateToProfile = useProfileNavigation();
+  const avatarFallback = (post.author.handle?.trim()?.[0] ?? '?').toUpperCase();
 
   return (
     <motion.div
@@ -40,7 +41,6 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
       className="cursor-pointer"
     >
       <Card
-        margin="m-4"
         className="overflow-hidden rounded-xl shadow-lg border-none bg-white dark:bg-zinc-900"
       >
         <div className="p-4">
@@ -54,7 +54,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
             ) : (
               <div className="w-10 h-10 rounded-full bg-zinc-200 dark:bg-zinc-700 mr-3 flex items-center justify-center">
                 <span className="text-zinc-500 text-sm font-bold">
-                  {post.author.handle[0].toUpperCase()}
+                  {avatarFallback}
                 </span>
               </div>
             )}

@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 declare module '*.css';
+declare module 'react-twemoji';
+declare module 'jsonld';
 
 interface ImportMetaEnv {
 	readonly VITE_KLIPY_API_KEY?: string;

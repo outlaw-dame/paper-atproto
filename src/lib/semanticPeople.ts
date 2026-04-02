@@ -49,7 +49,7 @@ export async function searchSemanticPeople(
   const profiles: AppBskyActorDefs.ProfileView[] = [];
   for (const result of settled) {
     if (result.status !== 'fulfilled') continue;
-    const profile = result.value?.data;
+    const profile = (result.value as { data?: AppBskyActorDefs.ProfileView } | null)?.data;
     if (!profile?.did || !profile?.handle) continue;
     profiles.push(profile as AppBskyActorDefs.ProfileView);
   }

@@ -191,7 +191,7 @@ export default defineConfig(({ command }) => ({
       // load without requiring CORP headers on every CDN.
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'credentialless',
-    } : undefined,
+    } : {},
   },
   optimizeDeps: {
     exclude: ['@electric-sql/pglite', '@xenova/transformers', 'onnxruntime-web'],

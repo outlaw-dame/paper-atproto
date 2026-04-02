@@ -39,8 +39,8 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw, rehypeSanitize]}
         components={{
-          // Use the Emoji component for text nodes to ensure emojis are Twemojified
-          text: ({ value }) => <Emoji>{value}</Emoji>,
+          // Wrap text-bearing elements so emojis render consistently across platforms.
+          p: ({ children }) => <p><Emoji>{children}</Emoji></p>,
           // Custom renderer for spoilers
           span: ({ node, className, children, ...props }) => {
             if (className === 'spoiler') {
@@ -62,8 +62,8 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
               {children}
             </blockquote>
           ),
-          code: ({ inline, children, className }) => (
-            <code className={`${inline ? 'bg-zinc-100 dark:bg-zinc-800 px-1 rounded' : 'block bg-zinc-100 dark:bg-zinc-800 p-2 rounded my-2 overflow-x-auto'} ${className}`}>
+          code: ({ children, className }) => (
+            <code className={`bg-zinc-100 dark:bg-zinc-800 px-1 rounded ${className || ''}`}>
               {children}
             </code>
           ),
@@ -77,7 +77,9 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
                   onClick={(e) => {
                     e.preventDefault();
                     // Dispatch a custom event that App.tsx can listen to
-                    window.dispatchEvent(new CustomEvent('hashtag-click', { detail: tag }));
+                    if (tag) {
+                      window.dispatchEvent(new CustomEvent('hashtag-click', { detail: tag }));
+                    }
                   }}
                 >
                   {children}

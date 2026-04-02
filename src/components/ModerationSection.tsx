@@ -1084,7 +1084,10 @@ function LabelersSection() {
             const view = serviceByDid.get(did);
             const handle = view?.handle;
             const display = view?.displayName || handle || did;
-            const labelRules = labelerPrefs.find((entry) => entry.did === did)?.labels;
+            const prefEntry = labelerPrefs.find((entry) => entry.did === did);
+            const labelRules: Record<string, LabelVisibility> | undefined = prefEntry && 'labels' in prefEntry && prefEntry.labels
+              ? (prefEntry.labels as Record<string, LabelVisibility>)
+              : undefined;
             const labelRuleCount = labelRules ? Object.keys(labelRules).length : 0;
             const definitions = view?.definitions ?? [];
             const isExpanded = expandedLabelerDid === did;
@@ -1157,7 +1160,7 @@ function LabelersSection() {
                           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                             {options.map((option) => {
                               const active = effectivePref === option;
-                              const optionLabel = option === 'ignore' ? 'Show' : option[0].toUpperCase() + option.slice(1);
+                              const optionLabel = option === 'ignore' ? 'Show' : option.charAt(0).toUpperCase() + option.slice(1);
                               return (
                                 <button
                                   key={option}

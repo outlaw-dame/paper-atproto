@@ -1088,7 +1088,10 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
           capDelayMs: 4_000,
         },
       );
-      const rows = Array.isArray(res?.data?.starterPacks) ? res.data.starterPacks : [];
+      const starterPackResponse = res as { data?: { starterPacks?: any[] } } | null;
+      const rows = Array.isArray(starterPackResponse?.data?.starterPacks)
+        ? starterPackResponse.data.starterPacks
+        : [];
       const enrichedRows = await Promise.all(rows.map(async (pack: any) => {
         const uri = String(pack?.uri ?? '').trim();
         if (!uri) return pack;
@@ -1101,7 +1104,8 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               capDelayMs: 3_500,
             },
           );
-          const detailPack = detailRes?.data?.starterPack ?? detailRes?.data ?? null;
+          const detailData = (detailRes as { data?: any } | null)?.data;
+          const detailPack = detailData?.starterPack ?? detailData ?? null;
           if (!detailPack) return pack;
           return {
             ...pack,

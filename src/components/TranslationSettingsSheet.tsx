@@ -603,7 +603,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         <div key={i} style={{ border: '1px solid var(--sep)', borderRadius: 8, padding: '6px 10px', background: 'var(--fill-1)' }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>{r.name}</div>
                           <div style={{ fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--label-3)' }}>
-                            {r.contact}{r.hours ? ` · ${r.hours}` : ''}
+                            {r.contact}
                           </div>
                         </div>
                       ))}
@@ -618,7 +618,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                             <div key={i} style={{ border: '1px solid var(--sep)', borderRadius: 8, padding: '6px 10px', background: 'var(--fill-1)' }}>
                               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>{r.name}</div>
                               <div style={{ fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--label-3)' }}>
-                                {r.contact}{r.hours ? ` · ${r.hours}` : ''}
+                                {r.contact}
                               </div>
                             </div>
                           ))}

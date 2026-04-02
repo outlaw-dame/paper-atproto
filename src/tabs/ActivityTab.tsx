@@ -17,6 +17,8 @@ const NOTIF_CONFIG: Record<string, { symbol: string; color: string; bg: string }
   app: { symbol: '•', color: 'var(--indigo)', bg: 'rgba(88,86,214,0.12)' },
 };
 
+const DEFAULT_NOTIF_CONFIG = { symbol: '•', color: 'var(--indigo)', bg: 'rgba(88,86,214,0.12)' };
+
 const FILTERS = ['All', 'Mentions', 'Likes', 'Follows', 'App'] as const;
 type Filter = typeof FILTERS[number];
 
@@ -410,7 +412,7 @@ export default function ActivityTab() {
 }
 
 function NotifRow({ n, index, last }: { n: ActivityNotification; index: number; last: boolean }) {
-  const cfg = NOTIF_CONFIG[n.type] ?? NOTIF_CONFIG.app;
+  const cfg = NOTIF_CONFIG[n.type] ?? DEFAULT_NOTIF_CONFIG;
 
   return (
     <motion.div
