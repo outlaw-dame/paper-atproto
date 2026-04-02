@@ -1187,7 +1187,7 @@ function HashtagBrowser({
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function ComposeSheet({ onClose }: Props) {
-  const { agent, profile } = useAtp();
+  const { agent, profile, session } = useAtp();
   const { preferredCaptionLanguage } = useMediaSettingsStore();
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((s) => s.openExploreSearch);
@@ -1548,7 +1548,7 @@ export default function ComposeSheet({ onClose }: Props) {
     }
 
     setPostStatus('Uploading video...');
-    const videoEncoding = resolveVideoUploadMime(file);
+    const videoEncoding: 'video/mp4' = VIDEO_UPLOAD_FALLBACK_MIME;
     const uploadRes = await atpCall<VideoJobStatusResponse>(
       (signal) => agent.app.bsky.video.uploadVideo(file, { signal, encoding: videoEncoding }),
       { maxAttempts: 2, timeoutMs: 180_000 }
@@ -1594,7 +1594,7 @@ export default function ComposeSheet({ onClose }: Props) {
   }, [agent, waitForVideoBlob]);
 
   const commitPost = useCallback(async () => {
-    if (!canPost || !agent.session) return;
+    if (!canPost || !session) return;
     let optimisticUri: string | null = null;
     setPosting(true);
     setPostStatus('Preparing post...');
@@ -1693,7 +1693,7 @@ export default function ComposeSheet({ onClose }: Props) {
           (signal) => agent.uploadBlob(selectedAudio.file, { encoding: selectedAudio.mimeType, signal }),
           { maxAttempts: 2, timeoutMs: 120_000 },
         );
-        const audioUri = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${agent.session!.did}&cid=${(audioUpload.data.blob as any)?.ref?.$link ?? ''}`;
+        const audioUri = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${session.did}&cid=${(audioUpload.data.blob as any)?.ref?.$link ?? ''}`;
         const audioDescription = selectedAudio.artist.trim() || '';
         embed = {
           $type: 'app.bsky.embed.external',
@@ -1726,7 +1726,7 @@ export default function ComposeSheet({ onClose }: Props) {
         && imageItems.length === 0,
       );
       optimisticUri = canOptimisticallyInsertReply
-        ? createOptimisticReplyUri(profile?.did ?? agent.session.did ?? '')
+        ? createOptimisticReplyUri(profile?.did ?? session.did)
         : null;
 
       if (optimisticUri && replyTarget) {
@@ -1734,7 +1734,7 @@ export default function ComposeSheet({ onClose }: Props) {
           replyTarget.id,
           buildOptimisticReplyNode({
             uri: optimisticUri,
-            authorDid: profile?.did ?? agent.session.did ?? '',
+            authorDid: profile?.did ?? session.did,
             authorHandle: profile?.handle ?? 'you',
             ...(profile?.displayName ? { authorName: profile.displayName } : {}),
             ...(profile?.avatar ? { authorAvatar: profile.avatar } : {}),
@@ -1749,13 +1749,13 @@ export default function ComposeSheet({ onClose }: Props) {
       }
 
       setPostStatus('Publishing post...');
-      const postResponse = await atpCall((signal) => agent.post({
+      const postResponse = await atpCall(() => agent.post({
         text: rt.text,
-        facets: rt.facets,
         createdAt,
+        ...(rt.facets ? { facets: rt.facets } : {}),
         ...(embed ? { embed } : {}),
         ...(replyRef ? { reply: replyRef } : {}),
-      }, { signal }), { maxAttempts: 2, timeoutMs: 20_000 }) as any;
+      }), { maxAttempts: 2, timeoutMs: 20_000 }) as any;
 
       if (optimisticUri && replyTarget) {
         const persistedPostRes = await atpCall(
@@ -1775,7 +1775,7 @@ export default function ComposeSheet({ onClose }: Props) {
             : buildOptimisticReplyNode({
                 uri: postResponse.uri,
                 cid: postResponse.cid,
-                authorDid: profile?.did ?? agent.session.did ?? '',
+                authorDid: profile?.did ?? session.did,
                 authorHandle: profile?.handle ?? 'you',
                 ...(profile?.displayName ? { authorName: profile.displayName } : {}),
                 ...(profile?.avatar ? { authorAvatar: profile.avatar } : {}),
@@ -1828,6 +1828,7 @@ export default function ComposeSheet({ onClose }: Props) {
     mediaItems,
     onClose,
     profile,
+    session,
     replySessionId,
     replyTarget,
     attachedVideoItem,
@@ -2114,7 +2115,10 @@ export default function ComposeSheet({ onClose }: Props) {
   const clearVideoCaptions = useCallback(() => {
     setMediaItems((prev) => prev.map((item) => (
       item.mediaType === 'video'
-        ? { ...item, captions: undefined, generatedTranscriptText: undefined }
+        ? (() => {
+            const { captions: _captions, generatedTranscriptText: _generatedTranscriptText, ...rest } = item;
+            return rest;
+          })()
         : item
     )));
     setVideoCaptionError(null);

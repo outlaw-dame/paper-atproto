@@ -171,7 +171,6 @@ async function buildOAuthClient(): Promise<BrowserOAuthClient> {
 
   return new BrowserOAuthClient({
     // Loopback mode for local development when a public client_id is not configured.
-    clientMetadata: undefined,
     handleResolver: OAUTH_HANDLE_RESOLVER,
     responseMode: 'query',
   });

@@ -500,7 +500,11 @@ function PromptHeroCard({
           if (isGif) {
             return (
               <div style={{ marginBottom: 16 }}>
-                <Gif url={ext.url} title={ext.title} thumbnail={ext.thumb} />
+                <Gif
+                  url={ext.url}
+                  title={ext.title}
+                  {...(ext.thumb ? { thumbnail: ext.thumb } : {})}
+                />
               </div>
             );
           }
@@ -749,7 +753,11 @@ function PromptHeroCard({
           if (isGif) {
             return (
               <div style={{ marginBottom: 16 }}>
-                <Gif url={post.embed.url} title={post.embed.title} thumbnail={post.embed.thumb} />
+                <Gif
+                  url={post.embed.url}
+                  title={post.embed.title}
+                  {...(post.embed.thumb ? { thumbnail: post.embed.thumb } : {})}
+                />
               </div>
             );
           }
@@ -2241,7 +2249,11 @@ function ContributionCard({
         if (isGif) {
           return (
             <div style={{ marginBottom: contTokens.gap }}>
-              <Gif url={ext.uri} title={ext.title} thumbnail={ext.thumb} />
+              <Gif
+                url={ext.uri}
+                {...(ext.title ? { title: ext.title } : {})}
+                {...(ext.thumb ? { thumbnail: ext.thumb } : {})}
+              />
             </div>
           );
         }

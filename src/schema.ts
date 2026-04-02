@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, vector, customType, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, vector, customType, jsonb, integer } from 'drizzle-orm/pg-core';
 
 // Custom type for tsvector (Full-Text Search)
 const tsvector = customType<{ data: string }>({
@@ -15,6 +15,11 @@ export const posts = pgTable('posts', {
   embedding: vector('embedding', { dimensions: 384 }), // For semantic search
   searchVector: tsvector('search_vector'), // For full-text search
   embed: text('embed'), // JSON string of ATProto embed
+  // Media signals for ranking boost
+  hasImages: integer('has_images').default(0).notNull(), // 0|1 for quick filtering
+  hasVideo: integer('has_video').default(0).notNull(),
+  hasLink: integer('has_link').default(0).notNull(),
+  imageAltText: text('image_alt_text'), // Concatenated ALT texts for media-aware ranking
 });
 
 export const entities = pgTable('entities', {

@@ -8,6 +8,7 @@
 //   buildInterpolatorSummary — richer summary builder
 //   updateInterpolatorState  — meaningful trigger detection + state merge
 //   atprotoInterpolatorAdapter — main pipeline entry point
+//   algorithms/        — deterministic decision algorithms (contributor selection, change detection, entity centrality, stance clustering)
 //   verification/      — Phase 2: provider abstraction + evidence aggregation layer
 
 export * from './interpolatorTypes';
@@ -18,4 +19,12 @@ export * from './updateInterpolatorState';
 export * from './atprotoInterpolatorAdapter';
 export * from './entityLinking';
 export * from './threadPipeline';
+export * from './contributorSelection';
+export {
+	computeThreadChange,
+	type ThreadChangeResult,
+	type ChangeReason as ThreadPipelineChangeReason,
+} from './changeDetection';
+export * from './redundancy';
+export * from './algorithms';
 export * from './verification/index';

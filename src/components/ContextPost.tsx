@@ -616,8 +616,8 @@ export const ContextPost = ({
             <AudioEmbed
               url={audioEmbed.url}
               title={audioEmbed.title}
-              description={audioEmbed.description}
-              thumbnail={audioEmbed.thumb}
+              {...(audioEmbed.description ? { description: audioEmbed.description } : {})}
+              {...(audioEmbed.thumb ? { thumbnail: audioEmbed.thumb } : {})}
             />
           </div>
         )}
@@ -640,7 +640,7 @@ export const ContextPost = ({
                 url={externalEmbed.url}
                 title={externalEmbed.title}
                 description={externalEmbed.description}
-                thumbnail={externalEmbed.thumb}
+                {...(externalEmbed.thumb ? { thumbnail: externalEmbed.thumb } : {})}
               />
             </div>
           ) : isExternalEmbedGif ? (
@@ -648,7 +648,7 @@ export const ContextPost = ({
               <Gif
                 url={externalEmbed.url}
                 title={externalEmbed.title}
-                thumbnail={externalEmbed.thumb}
+                {...(externalEmbed.thumb ? { thumbnail: externalEmbed.thumb } : {})}
               />
             </div>
           ) : (

@@ -12,7 +12,7 @@
 // The three signals are blended into a 0–100 composite score per tag.
 // Both Bluesky API responses are short-lived cached in memory.
 
-import type { BskyAgent } from '@atproto/api';
+import type { Agent } from '@atproto/api';
 import { atpCall } from '../atproto/client';
 import { embeddingPipeline } from '../../intelligence/embeddingPipeline';
 
@@ -84,7 +84,7 @@ function normalizeVolume(hits: number): number {
  * Fetches Bluesky's live trending topics.
  * Results are cached for TRENDING_TTL_MS. On failure returns [].
  */
-export async function fetchTrendingTopics(agent: BskyAgent): Promise<TrendingTopic[]> {
+export async function fetchTrendingTopics(agent: Agent): Promise<TrendingTopic[]> {
   if (trendingCacheEntry && Date.now() < trendingCacheEntry.expiresAt) {
     return trendingCacheEntry.value;
   }
@@ -117,7 +117,7 @@ export async function fetchTrendingTopics(agent: BskyAgent): Promise<TrendingTop
  * `searchPosts` for `#tag` and using the `hitsTotal` from the response.
  * Results are cached per tag for VOLUME_TTL_MS.
  */
-export async function fetchHashtagVolume(agent: BskyAgent, tag: string): Promise<number> {
+export async function fetchHashtagVolume(agent: Agent, tag: string): Promise<number> {
   const key = tag.toLowerCase();
   const cached = volumeCache.get(key);
   if (cached && Date.now() < cached.expiresAt) return cached.value;
@@ -201,7 +201,7 @@ async function computeRelevanceScores(
  *   15% trending bonus (flat boost when tag is in live trending topics)
  */
 export async function getHashtagInsights(
-  agent: BskyAgent,
+  agent: Agent,
   tags: string[],
   postText: string
 ): Promise<HashtagInsight[]> {

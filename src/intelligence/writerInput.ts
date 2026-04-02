@@ -15,10 +15,20 @@ import type { InterpolatorState, ContributionScores, ContributionRole } from './
 import type { ThreadNode } from '../lib/resolver/atproto';
 import {
   chooseSummaryMode,
-  selectTopCommentsForWriter,
-  contributorMayBeNamed,
   entityMayBeNamed,
 } from './routing';
+import { selectContributors } from './contributorSelection';
+import { selectDiverseComments } from './redundancy';
+import {
+  selectContributorsAlgorithmic,
+  compareSelectionApproaches,
+  computeEntityCentralityScores,
+  buildEntityCentralityResult,
+  getTopCentralEntities,
+  clusterStanceCoverage,
+  filterByStanceDiversity,
+  type EntityInfo,
+} from './algorithms';
 
 export type WriterTranslationMap = Record<string, {
   translatedText?: string;
@@ -79,6 +89,31 @@ function pushSignal(target: string[], prefix: string, rawText: string): void {
   target.push(signal);
 }
 
+function toSafeEntityId(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 64) || 'entity';
+}
+
+function buildScoresByDid(
+  replies: ThreadNode[],
+  scores: Record<string, ContributionScores>,
+): Record<string, ContributionScores> {
+  const byDid: Record<string, ContributionScores> = {};
+
+  for (const reply of replies) {
+    const did = reply.authorDid;
+    if (!did) continue;
+    const score = scores[reply.uri];
+    if (!score) continue;
+
+    const existing = byDid[did];
+    if (!existing || (score.finalInfluenceScore ?? score.usefulnessScore) > (existing.finalInfluenceScore ?? existing.usefulnessScore)) {
+      byDid[did] = score;
+    }
+  }
+
+  return byDid;
+}
+
 // ─── buildThreadStateForWriter ────────────────────────────────────────────
 
 export function buildThreadStateForWriter(
@@ -101,6 +136,8 @@ export function buildThreadStateForWriter(
       interpretiveConfidence: confidence.interpretiveConfidence,
     });
 
+  const maxContributors = summaryMode === 'normal' ? 4 : summaryMode === 'descriptive_fallback' ? 3 : 2;
+
   // ── Selected comments ────────────────────────────────────────────────────
   const rawComments: WriterComment[] = replies.map(reply => {
     const score = scores[reply.uri];
@@ -118,42 +155,198 @@ export function buildThreadStateForWriter(
     return base;
   });
 
-  const selectedComments = selectTopCommentsForWriter(rawComments, summaryMode);
+  // Sort by impact first, then apply diversity-aware selection
+  const sortedRawComments = [...rawComments].sort((a, b) => b.impactScore - a.impactScore);
+  const maxComments = summaryMode === 'normal' ? 10 : summaryMode === 'descriptive_fallback' ? 5 : 3;
+  const selectedComments = selectDiverseComments(sortedRawComments, maxComments);
 
   // ── Top contributors ──────────────────────────────────────────────────────
   // OP is identified from the rootAuthorHandle argument when available.
   // Fall back to the first topContributor handle only if not provided.
   const opHandle = rootAuthorHandle ?? state.topContributors[0]?.handle ?? '';
+  const scoreByDid = buildScoresByDid(replies, scores);
 
-  const topContributors: WriterContributor[] = state.topContributors
-    .filter(c => contributorMayBeNamed(c.avgUsefulnessScore, c.handle === opHandle, summaryMode))
-    .slice(0, 5)
-    .map(c => {
-      const contrib: WriterContributor = {
-        handle: c.handle ?? c.did.slice(-8),
-        role: mapRole(c.dominantRole),
-        impactScore: c.avgUsefulnessScore,
-        stanceSummary: mapRoleToStance(c.dominantRole),
-      };
-      if (c.did) contrib.did = c.did;
-      return contrib;
+  // Try algorithmic selection first; fall back to legacy if it fails
+  let selectedContributorDids: string[];
+  let selectionMethod: 'algorithmic' | 'algorithmic+stance' | 'legacy' = 'legacy';
+
+  try {
+    const algorithmicResult = selectContributorsAlgorithmic(
+      state.topContributors,
+      scoreByDid,
+      {
+        maxContributors,
+        minInclusionThreshold: 0.35,
+      },
+    );
+
+    if (algorithmicResult.selectedContributors.length > 0) {
+      selectedContributorDids = algorithmicResult.selectedContributors.map(c => c.contributorDid);
+      selectionMethod = 'algorithmic';
+
+      try {
+        const stanceClustering = clusterStanceCoverage(state.topContributors, scoreByDid);
+        const stanceDiverseDids = filterByStanceDiversity(stanceClustering, maxContributors);
+        if (stanceDiverseDids.length > 0) {
+          const merged = [
+            ...stanceDiverseDids.filter((did) => selectedContributorDids.includes(did)),
+            ...selectedContributorDids,
+            ...stanceDiverseDids,
+          ];
+          selectedContributorDids = Array.from(new Set(merged)).slice(0, maxContributors);
+          selectionMethod = 'algorithmic+stance';
+        }
+      } catch {
+        // Keep baseline algorithmic selection when stance clustering is unavailable.
+      }
+    } else {
+      // Algorithm returned no selection, use legacy
+      const legacy = selectContributors(
+        state.topContributors,
+        replies,
+        scores,
+        opHandle,
+        summaryMode,
+      );
+      selectedContributorDids = legacy.map(c => c.contributor.did);
+    }
+  } catch (err) {
+    console.error('[writerInput] Contributor selection algorithm failed, falling back to legacy:', err);
+    // Fallback to legacy selection
+    const legacy = selectContributors(
+      state.topContributors,
+      replies,
+      scores,
+      opHandle,
+      summaryMode,
+    );
+    selectedContributorDids = legacy.map(c => c.contributor.did);
+  }
+
+  // Map selected DIDs back to full contributor objects
+  const selectedContributors = state.topContributors
+    .filter(c => selectedContributorDids.includes(c.did))
+    .map(c => ({ contributor: c }));
+
+  // Telemetry: log selection method
+  if (Math.random() < 0.1) { // Log 10% of samples to reduce noise
+    console.log('[writerInput] Contributor selection:', {
+      method: selectionMethod,
+      count: selectedContributorDids.length,
     });
 
+    if (import.meta.env.DEV) {
+      const comparison = compareSelectionApproaches(state.topContributors, scoreByDid);
+      console.log('[writerInput] Selection comparison:', {
+        agreementCount: comparison.agreementCount,
+        algorithmImprovement: comparison.algorithmImprovement,
+        algorithmicCount: comparison.algorithmicResult.selectedContributors.length,
+        legacyCount: comparison.legacyResult.length,
+      });
+    }
+  }
+
+  const topContributors: WriterContributor[] = selectedContributors.map(({ contributor: c }) => {
+    const contrib: WriterContributor = {
+      handle: c.handle ?? c.did.slice(-8),
+      role: mapRole(c.dominantRole),
+      impactScore: c.avgUsefulnessScore,
+      stanceSummary: mapRoleToStance(c.dominantRole),
+    };
+    if (c.did) contrib.did = c.did;
+    return contrib;
+  });
+
   // ── Safe entities ─────────────────────────────────────────────────────────
-  const safeEntities: WriterEntity[] = state.entityLandscape
+  // Filter and rank entities using centrality scoring with fallback to mention counts.
+  const rankedEntities = state.entityLandscape
     .filter(e => entityMayBeNamed(
       e.matchConfidence ?? 0.50,
       Math.min(1, e.mentionCount / 10),
       summaryMode,
     ))
-    .slice(0, 8)
-    .map(e => ({
-      id: e.canonicalEntityId ?? e.entityText.toLowerCase().replace(/\s+/g, '-'),
-      label: e.canonicalLabel ?? e.entityText,
-      type: ENTITY_TYPE_MAP[e.entityKind] ?? 'topic',
-      confidence: e.matchConfidence ?? 0.50,
-      impact: Math.min(1, e.mentionCount / 10),
+    .sort((a, b) => b.mentionCount - a.mentionCount);
+
+  let safeEntities: WriterEntity[] = [];
+
+  try {
+    const dedupedEntities = new Map<string, EntityInfo>();
+    const linkedEntityConfidences = new Map<string, number>();
+    const lowerRootText = rootText.toLowerCase();
+
+    for (const entity of rankedEntities) {
+      const id = entity.canonicalEntityId ?? toSafeEntityId(entity.entityText);
+      if (!dedupedEntities.has(id)) {
+        dedupedEntities.set(id, {
+          id,
+          label: (entity.canonicalLabel ?? entity.entityText).slice(0, 128),
+          type: ENTITY_TYPE_MAP[entity.entityKind] ?? 'topic',
+          mentionCount: Math.max(0, entity.mentionCount),
+        });
+      }
+      linkedEntityConfidences.set(id, Math.max(linkedEntityConfidences.get(id) ?? 0, entity.matchConfidence ?? 0.5));
+    }
+
+    const rootMentionedEntities = new Set<string>();
+    for (const [id, entity] of dedupedEntities) {
+      if (lowerRootText.includes(entity.label.toLowerCase())) {
+        rootMentionedEntities.add(id);
+      }
+    }
+
+    const mentionsByContributor = new Map<string, Set<string>>();
+    for (const reply of replies) {
+      const did = reply.authorDid;
+      if (!did) continue;
+      const score = scores[reply.uri];
+      if (!score) continue;
+
+      const existing = mentionsByContributor.get(did) ?? new Set<string>();
+      for (const impact of score.entityImpacts ?? []) {
+        existing.add(impact.canonicalEntityId ?? toSafeEntityId(impact.entityText));
+      }
+      mentionsByContributor.set(did, existing);
+    }
+
+    const centralityScores = computeEntityCentralityScores(
+      Array.from(dedupedEntities.values()),
+      rootText,
+      rootMentionedEntities,
+      state.topContributors,
+      scoreByDid,
+      replies.map((reply) => reply.authorDid).filter((did): did is string => Boolean(did)),
+      mentionsByContributor,
+      linkedEntityConfidences,
+    );
+
+    const centralityResult = buildEntityCentralityResult(centralityScores);
+    const topEntities = getTopCentralEntities(
+      centralityResult.topCentral.length > 0 ? centralityResult.topCentral : centralityResult.entities,
+      8,
+    );
+
+    safeEntities = topEntities.map((entity) => ({
+      id: entity.entityId,
+      label: entity.entityLabel,
+      type: entity.entityType,
+      confidence: entity.canonicalConfidence,
+      impact: entity.centralityScore,
     }));
+  } catch {
+    safeEntities = [];
+  }
+
+  if (safeEntities.length === 0) {
+    safeEntities = rankedEntities
+      .slice(0, 8)
+      .map(e => ({
+        id: e.canonicalEntityId ?? toSafeEntityId(e.entityText),
+        label: e.canonicalLabel ?? e.entityText,
+        type: ENTITY_TYPE_MAP[e.entityKind] ?? 'topic',
+        confidence: e.matchConfidence ?? 0.50,
+        impact: Math.min(1, e.mentionCount / 10),
+      }));
+  }
 
   // ── Factual highlights ────────────────────────────────────────────────────
   const factualHighlights: string[] = [];

@@ -39,6 +39,12 @@ export class PaperDB {
         embed TEXT
       );
 
+      -- Add media signal columns for better ranking (backward compatible)
+      ALTER TABLE posts ADD COLUMN IF NOT EXISTS has_images INTEGER DEFAULT 0;
+      ALTER TABLE posts ADD COLUMN IF NOT EXISTS has_video INTEGER DEFAULT 0;
+      ALTER TABLE posts ADD COLUMN IF NOT EXISTS has_link INTEGER DEFAULT 0;
+      ALTER TABLE posts ADD COLUMN IF NOT EXISTS image_alt_text TEXT;
+
       -- Create entities table for linking
       CREATE TABLE IF NOT EXISTS entities (
         id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

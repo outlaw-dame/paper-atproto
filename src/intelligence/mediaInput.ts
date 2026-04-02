@@ -91,6 +91,7 @@ export function selectMediaForAnalysis(
       .sort((a, b) => (scores[b.uri]?.finalInfluenceScore ?? 0) - (scores[a.uri]?.finalInfluenceScore ?? 0))[0];
     if (replyWithMedia) {
       const img = replyWithMedia.embed!.images![0];
+      if (!img?.url) return requests;
       const req: MediaAnalysisRequest = {
         threadId,
         mediaUrl: img.url,

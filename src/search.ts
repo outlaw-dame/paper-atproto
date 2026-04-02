@@ -8,11 +8,13 @@
 import { paperDB } from './db';
 import { embeddingPipeline, sanitizeForEmbedding } from './intelligence/embeddingPipeline';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
+import { getMediaBoostFactor } from './lib/media/extractMediaSignals';
 
 interface SearchOptions {
   policyVersion?: string;
   moderationProfileHash?: string;
   disableCache?: boolean;
+  queryHasVisualIntent?: boolean; // NEW: for media-aware ranking
 }
 
 interface CachedVector {
@@ -37,10 +39,25 @@ function normalizeQueryForCache(raw: string): string {
   return sanitizeForEmbedding(raw).slice(0, 256);
 }
 
-function fusedConfidence(row: any): number {
+/**
+ * Detect if a query suggests visual/media search intent.
+ * Examples: "meme", "screenshot", "video", "illustration", "chart", etc.
+ */
+function queryHasVisualIntent(query: string): boolean {
+  const visualKeywords = [
+    'meme', 'screenshot', 'screenshot', 'video', 'image', 'photo', 'picture',
+    'illustration', 'chart', 'graph', 'diagram', 'visual', 'design', 'art',
+    'artwork', 'drawing', 'sketch', 'appearance', 'looks', 'see', 'watch',
+  ];
+  const normalizedQuery = query.toLowerCase();
+  return visualKeywords.some(keyword => normalizedQuery.includes(keyword));
+}
+
+function fusedConfidence(row: any, options?: SearchOptions): number {
   const rrf = Number(row?.rrf_score ?? 0);
   const fts = Number(row?.fts_rank_raw ?? 0);
   const semanticDistance = Number(row?.semantic_distance ?? 1.2);
+  const hasImages = Number(row?.has_images ?? 0) === 1;
 
   const lexicalSignal = Number.isFinite(fts) ? Math.min(1, Math.max(0, fts)) : 0;
   const semanticSignal = Number.isFinite(semanticDistance)
@@ -48,14 +65,27 @@ function fusedConfidence(row: any): number {
     : 0;
   const rrfSignal = Math.min(1, Math.max(0, rrf * 30));
 
-  const blended = 0.45 * rrfSignal + 0.3 * lexicalSignal + 0.25 * semanticSignal;
+  let blended = 0.45 * rrfSignal + 0.3 * lexicalSignal + 0.25 * semanticSignal;
+  
+  // Apply media boost if query has visual intent and post has images
+  const visualIntent = options?.queryHasVisualIntent ?? false;
+  const mediaBoost = getMediaBoostFactor({ 
+    hasImages, 
+    hasVideo: Number(row?.has_video ?? 0) === 1,
+    hasLink: Number(row?.has_link ?? 0) === 1,
+    imageCount: 1,
+    imageAltText: row?.image_alt_text ?? '',
+  }, visualIntent);
+  
+  blended = blended * mediaBoost;
+  
   return Math.round(Math.max(0, Math.min(1, blended)) * 1000) / 1000;
 }
 
-function postProcessRows(rows: any[]): any[] {
+function postProcessRows(rows: any[], options?: SearchOptions): any[] {
   return rows
     .map((row) => {
-      const confidence = fusedConfidence(row);
+      const confidence = fusedConfidence(row, options);
       return {
         ...row,
         confidence_score: confidence,
@@ -117,6 +147,11 @@ export class HybridSearch {
     const queryEmbedding = await this.getQueryEmbedding(query, options);
     const vectorStr = `[${queryEmbedding.join(',')}]`;
     const k = 60;
+    
+    // Detect visual intent in query for media-aware ranking
+    if (!options.queryHasVisualIntent) {
+      options.queryHasVisualIntent = queryHasVisualIntent(query);
+    }
 
     const sql = `
       WITH fts_results AS (
@@ -138,6 +173,10 @@ export class HybridSearch {
       )
       SELECT
         p.*,
+        p.has_images,
+        p.has_video,
+        p.has_link,
+        p.image_alt_text,
         COALESCE(f.fts_rank_raw, 0.0) AS fts_rank_raw,
         COALESCE(s.semantic_distance, 1.2) AS semantic_distance,
         COALESCE(1.0 / ($4 + f.rank), 0.0) + COALESCE(1.0 / ($4 + s.rank), 0.0) as rrf_score
@@ -152,7 +191,7 @@ export class HybridSearch {
     const result = await pg.query(sql, [query, limit, vectorStr, k]);
     return {
       ...result,
-      rows: postProcessRows(result.rows ?? []),
+      rows: postProcessRows(result.rows ?? [], options),
     };
   }
 
@@ -219,7 +258,7 @@ export class HybridSearch {
     const result = await pg.query(sql, [query, limit, vectorStr, k]);
     return {
       ...result,
-      rows: postProcessRows(result.rows ?? []),
+      rows: postProcessRows(result.rows ?? [], options),
     };
   }
 
@@ -297,8 +336,14 @@ export class HybridSearch {
       ),
     ]);
 
-    const postRow = posts.rows?.[0] ?? { total: 0, with_embedding: 0 };
-    const feedRow = feedItems.rows?.[0] ?? { total: 0, with_embedding: 0 };
+    const postRow = (posts.rows?.[0] ?? { total: 0, with_embedding: 0 }) as {
+      total?: number | string;
+      with_embedding?: number | string;
+    };
+    const feedRow = (feedItems.rows?.[0] ?? { total: 0, with_embedding: 0 }) as {
+      total?: number | string;
+      with_embedding?: number | string;
+    };
     const postTotal = Number(postRow.total ?? 0);
     const postWithEmbedding = Number(postRow.with_embedding ?? 0);
     const feedTotal = Number(feedRow.total ?? 0);

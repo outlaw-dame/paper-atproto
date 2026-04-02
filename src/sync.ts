@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { AppBskyFeedDefs } from '@atproto/api';
 import { embeddingPipeline } from './intelligence/embeddingPipeline';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
+import { extractMediaSignalsFromJson } from './lib/media/extractMediaSignals';
 
 // ─── Zod schema for ATProto post validation ────────────────────────────────
 const FeedViewPostSchema = z.object({
@@ -102,21 +103,24 @@ export class PaperSync {
           const facets = resolveFacets(post.record.facets);
           const embed = resolveEmbed(post.record.embed);
           const signals = extractClusterSignals(sanitizedContent, facets, embed, []);
+          const embedJson = JSON.stringify({ ...post.record.embed, _signals: signals });
+          const mediaSignals = extractMediaSignalsFromJson(embedJson);
 
           await trx.query(
-            `INSERT INTO posts (id, uri, author_did, content, created_at, embedding, embed, reply_to, reply_root)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            `INSERT INTO posts (id, author_did, content, created_at, embedding, embed, has_images, has_video, has_link, image_alt_text)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (id) DO NOTHING`,
             [
               post.cid,
-              post.uri,
               post.author.did,
               sanitizedContent,
               post.record.createdAt || post.record.publishedAt || new Date().toISOString(),
               embedding.length ? `[${embedding.join(',')}]` : null,
-              JSON.stringify({ ...post.record.embed, _signals: signals }),
-              reply?.parent?.uri ?? null,
-              reply?.root?.uri ?? null,
+              embedJson,
+              mediaSignals.hasImages ? 1 : 0,
+              mediaSignals.hasVideo ? 1 : 0,
+              mediaSignals.hasLink ? 1 : 0,
+              mediaSignals.imageAltText || null,
             ]
           );
         }
@@ -145,20 +149,28 @@ export class PaperSync {
     const embedding = await embeddingPipeline.embed(sanitizedText, { mode: 'ingest' });
     if (embedding.length > 0) recordEmbeddingVector('ingest', embedding);
 
+    // For user-created posts (no embed), media signals are all 0
+    const mediaSignals = {
+      hasImages: false,
+      hasVideo: false,
+      hasLink: false,
+      imageAltText: null,
+    };
+
     await pg.query(
-      // NOTE: This assumes the 'posts' table has been migrated to include 'uri', 'reply_to', and 'reply_root' columns.
-      `INSERT INTO posts (id, uri, author_did, content, created_at, embedding, embed, reply_to, reply_root)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO posts (id, author_did, content, created_at, embedding, embed, has_images, has_video, has_link, image_alt_text)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         response.cid,
-        response.uri,
         this.agent.session?.did ?? '',
         sanitizedText,
         new Date().toISOString(),
         embedding.length ? `[${embedding.join(',')}]` : null,
         null, // embed
-        null, // reply_to
-        null, // reply_root
+        mediaSignals.hasImages ? 1 : 0,
+        mediaSignals.hasVideo ? 1 : 0,
+        mediaSignals.hasLink ? 1 : 0,
+        mediaSignals.imageAltText,
       ]
     );
 

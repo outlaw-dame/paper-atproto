@@ -57,7 +57,6 @@ class OverlayErrorBoundary extends React.Component<
     if (props.resetKey !== state.lastResetKey) {
       return {
         hasError: false,
-        errorMessage: undefined,
         lastResetKey: props.resetKey,
       };
     }
@@ -280,7 +279,7 @@ export default function OverlayHost() {
               <OverlayErrorFallback
                 title="Thread view unavailable"
                 body="This thread hit a render problem. Close it and try opening the post again."
-                details={errorMessage}
+                {...(errorMessage ? { details: errorMessage } : {})}
                 onClose={closeStory}
               />
             )}

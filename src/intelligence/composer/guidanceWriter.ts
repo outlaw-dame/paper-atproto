@@ -1,8 +1,12 @@
 import { callComposerGuidanceWriter } from '../modelClient';
 import type { ComposerGuidanceWriteRequest } from './llmWriterContracts';
-import type { ComposerContext, ComposerGuidanceResult } from './types';
+import type { ComposerContext, ComposerGuidanceResult, ComposerGuidanceTool } from './types';
 
-function uniq(values: string[]): string[] {
+function uniqTools(values: ComposerGuidanceTool[]): ComposerGuidanceTool[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function uniqStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
@@ -14,7 +18,7 @@ function sanitizeWriterText(value: string | undefined, maxLength: number): strin
 }
 
 function sanitizeBadges(values: string[]): string[] {
-  return uniq(
+  return uniqStrings(
     values
       .map((value) => sanitizeWriterText(value, 24))
       .filter((value): value is string => Boolean(value)),
@@ -67,7 +71,7 @@ export async function maybeWriteComposerGuidance(
 
     return {
       ...guidance,
-      toolsUsed: uniq([...guidance.toolsUsed, 'guidance-writer']),
+      toolsUsed: uniqTools([...guidance.toolsUsed, 'guidance-writer']),
       ui: {
         ...guidance.ui,
         ...(message ? { message } : {}),

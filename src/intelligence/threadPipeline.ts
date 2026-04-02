@@ -29,6 +29,7 @@ import { verifyEvidence } from './verification/verifyEvidence';
 import { withRetry } from './verification/retry';
 import { computeConfidenceState } from './confidence';
 import { chooseSummaryMode } from './routing';
+import { computeThreadChange, type ChangeReason } from './changeDetection';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,10 @@ export interface ThreadPipelineResult {
   verificationByPost: Record<AtUri, VerificationOutcome>;
   rootVerification: VerificationOutcome | null;
   didMeaningfullyChange: boolean;
+  /** 0–1 magnitude of the meaningful change. 0 when no change detected. */
+  changeMagnitude: number;
+  /** Structured reasons for why the thread changed, if it did. */
+  changeReasons: ChangeReason[];
   /** Three-axis confidence state computed after scoring and verification. */
   confidence: ConfidenceState;
   /** Summary mode derived from confidence — used to build writer input and choose fallback. */
@@ -228,10 +233,7 @@ export async function runVerifiedThreadPipeline(
     }
   }
 
-  const didMeaningfullyChange =
-    options.previous == null ||
-    interpolator.version > (options.previous.version ?? 0) ||
-    candidates.length > 0;
+  const changeResult = computeThreadChange(options.previous ?? null, interpolator, scores);
 
   const confidence = computeConfidenceState(interpolator, scores);
   const summaryMode = chooseSummaryMode({
@@ -244,7 +246,9 @@ export async function runVerifiedThreadPipeline(
     scores,
     verificationByPost,
     rootVerification,
-    didMeaningfullyChange,
+    didMeaningfullyChange: changeResult.didMeaningfullyChange,
+    changeMagnitude: changeResult.changeMagnitude,
+    changeReasons: changeResult.changeReasons,
     confidence,
     summaryMode,
   };

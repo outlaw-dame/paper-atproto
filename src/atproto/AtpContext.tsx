@@ -11,6 +11,7 @@
 import React, { createContext, useContext, useEffect, useCallback } from 'react';
 import { Agent } from '@atproto/api';
 import type { AppBskyActorDefs } from '@atproto/api';
+import type { OAuthSession } from '@atproto/oauth-client-browser';
 import { useSessionStore, saveRecentHandle, clearRecentHandles, type SessionData } from '../store/sessionStore';
 import { ATP_AUTH_EXPIRED_EVENT, atpCall } from '../lib/atproto/client';
 import { normalizeError } from '../lib/atproto/errors';
@@ -39,6 +40,8 @@ let hasWarnedMissingAtpProvider = false;
 let oauthInitInFlight: Promise<{ session?: unknown } | null> | null = null;
 let oauthInitModeInFlight: 'callback' | 'restore' | null = null;
 const enableAuthDebugLogs = import.meta.env.DEV && import.meta.env.VITE_OAUTH_DEBUG === '1';
+
+type OAuthInitResult = { session?: OAuthSession; state?: string | null } | null;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -79,7 +82,7 @@ function toSafeAuthDiagnostic(error: unknown): { kind: string; message: string; 
   return {
     kind: normalized.kind,
     message: normalized.message,
-    status: normalized.status,
+    ...(normalized.status !== undefined ? { status: normalized.status } : {}),
   };
 }
 
@@ -226,16 +229,19 @@ function toSafeLoginErrorShape(error: unknown): Record<string, unknown> {
   };
 }
 
-function initOAuthSessionOnce(oauthClient: Awaited<ReturnType<typeof getOAuthClient>>, shouldProcessCallback: boolean) {
+function initOAuthSessionOnce(
+  oauthClient: Awaited<ReturnType<typeof getOAuthClient>>,
+  shouldProcessCallback: boolean,
+): Promise<OAuthInitResult> {
   const mode: 'callback' | 'restore' = shouldProcessCallback ? 'callback' : 'restore';
   if (oauthInitInFlight && oauthInitModeInFlight === mode) {
-    return oauthInitInFlight;
+    return oauthInitInFlight as Promise<OAuthInitResult>;
   }
 
   oauthInitModeInFlight = mode;
   oauthInitInFlight = withTimeout(
     withRetry(
-      () => oauthClient.init(shouldProcessCallback),
+      () => oauthClient.init(shouldProcessCallback) as Promise<OAuthInitResult>,
       {
         maxAttempts: 3,
         baseDelayMs: 350,
@@ -245,12 +251,13 @@ function initOAuthSessionOnce(oauthClient: Awaited<ReturnType<typeof getOAuthCli
     OAUTH_INIT_TIMEOUT_MS,
     'OAuth init timed out. Please try sign-in again.',
   )
+    .then((result) => result ?? null)
     .finally(() => {
       oauthInitInFlight = null;
       oauthInitModeInFlight = null;
     });
 
-  return oauthInitInFlight;
+  return oauthInitInFlight as Promise<OAuthInitResult>;
 }
 
 async function startOAuthLogin(
@@ -379,7 +386,7 @@ export interface AtpContextValue {
   login: (identifier: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Direct agent access for one-off calls that aren't worth a query hook */
-  agent: ReturnType<typeof useSessionStore>['agent'];
+  agent: Agent;
   isHostedOAuthClientConfigured: boolean;
   oauthConfigWarning: string | null;
   oauthConfigBlockingError: string | null;
@@ -476,7 +483,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
             return initOAuthSessionOnce(client, shouldProcessCallback);
           }, shouldProcessCallback ? 'oauth callback init' : 'oauth session restore');
         const shouldProcessCallback = hadCallbackParams;
-        let initResult: Awaited<ReturnType<typeof initOAuthSessionOnce>>;
+        let initResult: OAuthInitResult;
         try {
           initResult = await initOAuthSession(shouldProcessCallback);
         } catch (initError) {
@@ -518,11 +525,11 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        const oauthSession = initResult.session;
+        const oauthSession = initResult.session as OAuthSession;
         const authedAgent = new Agent(oauthSession);
         setAgent(authedAgent);
 
-        let handle = oauthSession.did;
+        let handle: string = oauthSession.did;
         let email: string | undefined;
         try {
           const profileRes = await atpCall(_signal => authedAgent.getProfile({ actor: oauthSession.did }));
@@ -600,9 +607,9 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
             setSession({
               did: oauthSession.did,
               handle,
-              email,
-              issuer: tokenInfo.iss,
-              scope: tokenInfo.scope,
+              ...(email ? { email } : {}),
+              ...(tokenInfo.iss ? { issuer: tokenInfo.iss } : {}),
+              ...(tokenInfo.scope ? { scope: tokenInfo.scope } : {}),
             });
           }
         } catch {
@@ -622,7 +629,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
               setError('Sign-in completed, but permissions could not be verified. Please authorize access and try again.');
               return;
             }
-            setSession({ did: oauthSession.did, handle, email });
+            setSession({ did: oauthSession.did, handle, ...(email ? { email } : {}) });
           }
         }
 

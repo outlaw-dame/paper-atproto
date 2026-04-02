@@ -59,15 +59,15 @@ export function useTimelineFeed(mode: 'Following' | 'Discover' | 'Feeds') {
       let _cursor: string | undefined;
 
       if (mode === 'Following') {
-        const res = await atpCall(s => agent.getTimeline({ limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.getTimeline({ limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       } else if (mode === 'Discover') {
-        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_URI, limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_URI, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       } else {
-        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       }
@@ -147,12 +147,12 @@ export function useLikes(actor: string | undefined) {
   return useQuery({
     queryKey: qk.likes(actor ?? ''),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(s => agent.listRecords({
+      const res = await atpCall(() => agent.com.atproto.repo.listRecords({
         repo: actor!,
         collection: 'app.bsky.feed.like',
         limit: 50,
       }), { signal });
-      return res.data.records;
+      return (res as any).data.records;
     },
     enabled: !!session && !!actor,
     staleTime: 1000 * 60 * 5,
@@ -183,8 +183,8 @@ export function useSavedFeeds() {
   return useQuery<AppBskyFeedDefs.GeneratorView[], Error>({
     queryKey: qk.savedFeeds(),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(
-        s => agent.app.bsky.feed.getSavedFeeds({ limit: 100 }),
+      const res: any = await atpCall(
+        () => (agent.app.bsky.feed as any).getSavedFeeds({ limit: 100 }),
         { signal, maxAttempts: 4, baseDelayMs: 250, capDelayMs: 8_000 },
       );
       return res.data.feeds ?? [];
@@ -235,7 +235,7 @@ export function useSearchPosts(query: string) {
     queryKey: qk.search(query),
     queryFn: async ({ signal }) => {
       const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: query, limit: 25 }), { signal });
-      return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post, reply: undefined, reason: undefined }));
+      return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post }));
     },
     enabled: !!session && query.trim().length > 1,
     staleTime: 1000 * 60,
