@@ -41,6 +41,15 @@ function logChangeDetectionError(event: string, error: unknown): void {
   console.error(`[changeDetection] ${event}`, toSafeErrorMeta(error));
 }
 
+function safeSnapshotTimestamp(snapshot: ThreadStateSnapshot | null): string {
+  if (!snapshot) return '';
+  try {
+    return typeof snapshot.timestamp === 'string' ? snapshot.timestamp : '';
+  } catch {
+    return '';
+  }
+}
+
 // ─── Type Contracts ──────────────────────────────────────────────────────────
 
 export interface ThreadStateSnapshot {
@@ -372,6 +381,7 @@ export function computeThreadChangeDelta(
   options: ChangeDetectionOptions = {},
 ): ThreadChangeDelta {
   const minThreshold = options.minChangeThreshold ?? 0.40;
+  const previousTimestamp = safeSnapshotTimestamp(previous);
 
   // If no previous state, can't compute delta; assume minimal change
   if (!previous) {
@@ -395,7 +405,7 @@ export function computeThreadChangeDelta(
   }
 
   try {
-    const prevTime = new Date(previous.timestamp).getTime();
+    const prevTime = new Date(previousTimestamp).getTime();
     const currTime = new Date(current.timestamp).getTime();
     const rawElapsedSeconds = (currTime - prevTime) / 1000;
     const elapsedSeconds = Number.isFinite(rawElapsedSeconds)
@@ -460,7 +470,7 @@ export function computeThreadChangeDelta(
 
     return {
       timestamp: current.timestamp,
-      timestampPrevious: previous.timestamp,
+      timestampPrevious: previousTimestamp,
       elapsedSeconds,
       newAngleDelta: newAngle,
       contributorShiftDelta: contributorShift,
@@ -479,7 +489,7 @@ export function computeThreadChangeDelta(
     logChangeDetectionError('delta_computation_failed', err);
     return {
       timestamp: current.timestamp,
-      timestampPrevious: previous?.timestamp ?? '',
+      timestampPrevious: previousTimestamp,
       elapsedSeconds: 0,
       newAngleDelta: 0,
       contributorShiftDelta: 0,
