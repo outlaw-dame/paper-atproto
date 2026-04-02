@@ -1,5 +1,6 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import type { AppBskyActorDefs } from '@atproto/api';
 import ProfileCard from './ProfileCard';
 import type { ProfileCardData } from '../types/profileCard';
 import { useSessionStore } from '../store/sessionStore';
@@ -66,14 +67,21 @@ export default function ProfileCardTrigger({
   const lastTap        = useRef<number>(0);
   const cardRef        = useRef<HTMLDivElement>(null);
   const fetchedDid     = useRef<string | null>(null);
+  const [fetchedProfile, setFetchedProfile] = useState<AppBskyActorDefs.ProfileViewDetailed | null>(null);
+  const targetDid = did ?? data?.identity.did ?? '';
 
-  const [displayData, setDisplayData] = useState<ProfileCardData | null | undefined>(data);
-
-  // Keep displayData in sync when the incoming data prop changes (e.g. new post loaded)
   useEffect(() => {
-    setDisplayData(data);
     fetchedDid.current = null;
-  }, [data]);
+    setFetchedProfile((current) => {
+      if (!current) return current;
+      return current.did === targetDid ? current : null;
+    });
+  }, [targetDid]);
+
+  const displayData = useMemo<ProfileCardData | null | undefined>(() => {
+    if (!fetchedProfile) return data;
+    return buildProfileCardDataFromFullProfile(fetchedProfile, data);
+  }, [data, fetchedProfile]);
 
   const maybeLoadFullProfile = useCallback(() => {
     if (!did || !agent) return;
@@ -82,9 +90,7 @@ export default function ProfileCardTrigger({
     fetchedDid.current = did;
     atpCall(() => agent.getProfile({ actor: did }))
       .then((res) => {
-        setDisplayData((prev) =>
-          buildProfileCardDataFromFullProfile(res.data, prev),
-        );
+        setFetchedProfile(res.data);
       })
       .catch(() => {
         fetchedDid.current = null; // allow retry on next open

@@ -61,8 +61,119 @@ type AiSessionTelemetrySnapshot = {
   };
 };
 
+type WriterDiagnosticsSnapshot = {
+  startedAt: string;
+  lastUpdatedAt: string;
+  telemetryEvents: number;
+  clientOutcomes: {
+    model: number;
+    fallback: number;
+    total: number;
+    modelToFallbackRatio: number | null;
+    fallbackRate: number;
+  };
+  fallbackReasonDistribution: {
+    'abstained-response-fallback': number;
+    'root-only-response-fallback': number;
+    'failure-fallback': number;
+    totalFallbacks: number;
+  };
+  safetyFilter: {
+    runs: number;
+    mutated: number;
+    blocked: number;
+    mutationRate: number;
+    blockRate: number;
+  };
+};
+
+type WriterDiagnosticsAlert = {
+  severity: 'high' | 'medium';
+  message: string;
+};
+
+const WRITER_ALERT_THRESHOLDS = {
+  fallbackRateHigh: 0.45,
+  fallbackRateMedium: 0.25,
+  rootOnlyFallbackRateHigh: 0.30,
+  rootOnlyFallbackRateMedium: 0.15,
+  failureFallbackRateHigh: 0.15,
+  mutationRateHigh: 0.35,
+  mutationRateMedium: 0.20,
+  blockRateHigh: 0.05,
+} as const;
+
+function jitteredBackoffMs(attempt: number, baseMs = 250, maxMs = 1500): number {
+  const exp = Math.min(maxMs, baseMs * 2 ** attempt);
+  const jitter = exp * 0.25;
+  return Math.max(120, Math.floor(exp - jitter + Math.random() * jitter * 2));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(input: RequestInfo, init: RequestInit, attempts = 2): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(input, init);
+      if (response.ok) return response;
+      if (response.status < 500 && response.status !== 429) return response;
+      lastError = new Error(`Request failed (${response.status})`);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < attempts - 1) {
+      await sleep(jitteredBackoffMs(attempt));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Request failed');
+}
+
 function formatRate(value: number): string {
   return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
+}
+
+function deriveWriterDiagnosticsAlerts(snapshot: WriterDiagnosticsSnapshot): WriterDiagnosticsAlert[] {
+  const alerts: WriterDiagnosticsAlert[] = [];
+  const fallbackRate = snapshot.clientOutcomes.fallbackRate;
+  const totalFallbacks = Math.max(1, snapshot.fallbackReasonDistribution.totalFallbacks);
+  const rootOnlyRate = snapshot.fallbackReasonDistribution['root-only-response-fallback'] / totalFallbacks;
+  const failureRate = snapshot.fallbackReasonDistribution['failure-fallback'] / totalFallbacks;
+  const mutationRate = snapshot.safetyFilter.mutationRate;
+  const blockRate = snapshot.safetyFilter.blockRate;
+
+  if (fallbackRate >= WRITER_ALERT_THRESHOLDS.fallbackRateHigh) {
+    alerts.push({ severity: 'high', message: 'High fallback rate detected. Model outputs are being replaced too often.' });
+  } else if (fallbackRate >= WRITER_ALERT_THRESHOLDS.fallbackRateMedium) {
+    alerts.push({ severity: 'medium', message: 'Fallback rate is elevated. Review prompt quality and reply grounding.' });
+  }
+
+  if (rootOnlyRate >= WRITER_ALERT_THRESHOLDS.rootOnlyFallbackRateHigh) {
+    alerts.push({ severity: 'high', message: 'Root-only fallback is dominating fallback traffic. Replies may be under-utilized.' });
+  } else if (rootOnlyRate >= WRITER_ALERT_THRESHOLDS.rootOnlyFallbackRateMedium) {
+    alerts.push({ severity: 'medium', message: 'Root-only fallback is rising. Verify summary-reply grounding behavior.' });
+  }
+
+  if (failureRate >= WRITER_ALERT_THRESHOLDS.failureFallbackRateHigh) {
+    alerts.push({ severity: 'high', message: 'Provider failure fallback is elevated. Investigate upstream reliability and latency.' });
+  }
+
+  if (mutationRate >= WRITER_ALERT_THRESHOLDS.mutationRateHigh) {
+    alerts.push({ severity: 'high', message: 'Safety mutation rate is high. Writer outputs may be too close to safety boundaries.' });
+  } else if (mutationRate >= WRITER_ALERT_THRESHOLDS.mutationRateMedium) {
+    alerts.push({ severity: 'medium', message: 'Safety mutation rate is elevated. Monitor for readability degradation.' });
+  }
+
+  if (blockRate >= WRITER_ALERT_THRESHOLDS.blockRateHigh) {
+    alerts.push({ severity: 'high', message: 'Safety block rate is high. Some outputs are being fully suppressed.' });
+  }
+
+  return alerts;
 }
 
 const MODES: Array<{
@@ -88,6 +199,7 @@ const MODES: Array<{
 ];
 
 export default function LocalAiRuntimeSection() {
+  const supportsClientTelemetry = import.meta.env.DEV;
   const settingsMode = useRuntimeStore((state) => state.settingsMode);
   const setSettingsMode = useRuntimeStore((state) => state.setSettingsMode);
   const capability = useRuntimeStore((state) => state.capability);
@@ -105,6 +217,18 @@ export default function LocalAiRuntimeSection() {
   const [telemetryResetting, setTelemetryResetting] = React.useState(false);
   const [telemetryError, setTelemetryError] = React.useState<string | null>(null);
   const [telemetryUpdatedAt, setTelemetryUpdatedAt] = React.useState<number | null>(null);
+  const [writerDiagnostics, setWriterDiagnostics] = React.useState<WriterDiagnosticsSnapshot | null>(null);
+  const [writerDiagnosticsLoading, setWriterDiagnosticsLoading] = React.useState(false);
+  const [writerDiagnosticsResetting, setWriterDiagnosticsResetting] = React.useState(false);
+  const [writerDiagnosticsError, setWriterDiagnosticsError] = React.useState<string | null>(null);
+  const [writerDiagnosticsUpdatedAt, setWriterDiagnosticsUpdatedAt] = React.useState<number | null>(null);
+  const resolvedModelSpecs = React.useMemo(() => browserModelManager.getResolvedModelSpecs(), []);
+
+  const hasReadyLocalMultimodal = React.useMemo(() => (
+    Object.values(resolvedModelSpecs).some((spec) => (
+      spec.sessionKind === 'multimodal' && spec.currentRuntimeSupport === 'ready'
+    ))
+  ), [resolvedModelSpecs]);
 
   const refreshCapability = React.useCallback(async () => {
     if (refreshing) return;
@@ -119,6 +243,12 @@ export default function LocalAiRuntimeSection() {
   }, [refreshing]);
 
   const refreshSessionTelemetry = React.useCallback(async () => {
+    if (!supportsClientTelemetry) {
+      setTelemetry(null);
+      setTelemetryUpdatedAt(null);
+      setTelemetryError(null);
+      return;
+    }
     if (!sessionDid) {
       setTelemetryError('Sign in to inspect AI session telemetry.');
       setTelemetry(null);
@@ -153,7 +283,7 @@ export default function LocalAiRuntimeSection() {
     } finally {
       setTelemetryLoading(false);
     }
-  }, [sessionDid, telemetryLoading]);
+  }, [sessionDid, supportsClientTelemetry, telemetryLoading]);
 
   const refreshRuntimeSmoke = React.useCallback(async () => {
     if (smokeRefreshing) return;
@@ -168,6 +298,12 @@ export default function LocalAiRuntimeSection() {
   }, [smokeRefreshing]);
 
   const resetSessionTelemetry = React.useCallback(async () => {
+    if (!supportsClientTelemetry) {
+      setTelemetry(null);
+      setTelemetryUpdatedAt(null);
+      setTelemetryError(null);
+      return;
+    }
     if (!sessionDid || telemetryResetting) return;
 
     setTelemetryResetting(true);
@@ -191,23 +327,113 @@ export default function LocalAiRuntimeSection() {
     } finally {
       setTelemetryResetting(false);
     }
-  }, [refreshSessionTelemetry, sessionDid, telemetryResetting]);
+  }, [refreshSessionTelemetry, sessionDid, supportsClientTelemetry, telemetryResetting]);
+
+  const refreshWriterDiagnostics = React.useCallback(async () => {
+    if (!supportsClientTelemetry) {
+      setWriterDiagnostics(null);
+      setWriterDiagnosticsUpdatedAt(null);
+      setWriterDiagnosticsError(null);
+      return;
+    }
+    if (writerDiagnosticsLoading) return;
+
+    setWriterDiagnosticsLoading(true);
+    setWriterDiagnosticsError(null);
+
+    try {
+      const response = await fetchWithRetry('/api/llm/admin/diagnostics', { method: 'GET' }, 2);
+      if (!response.ok) {
+        throw new Error(`Writer diagnostics fetch failed (${response.status}).`);
+      }
+
+      const body = await response.json() as { writer?: WriterDiagnosticsSnapshot };
+      if (!body.writer) {
+        throw new Error('Writer diagnostics response was empty.');
+      }
+
+      setWriterDiagnostics(body.writer);
+      setWriterDiagnosticsUpdatedAt(Date.now());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load writer diagnostics.';
+      setWriterDiagnosticsError(message);
+    } finally {
+      setWriterDiagnosticsLoading(false);
+    }
+  }, [supportsClientTelemetry, writerDiagnosticsLoading]);
+
+  const resetWriterDiagnostics = React.useCallback(async () => {
+    if (!supportsClientTelemetry) {
+      setWriterDiagnostics(null);
+      setWriterDiagnosticsUpdatedAt(null);
+      setWriterDiagnosticsError(null);
+      return;
+    }
+    if (writerDiagnosticsResetting) return;
+
+    setWriterDiagnosticsResetting(true);
+    setWriterDiagnosticsError(null);
+
+    try {
+      const response = await fetchWithRetry('/api/llm/admin/diagnostics', { method: 'DELETE' }, 2);
+      if (!response.ok && response.status !== 204) {
+        throw new Error(`Writer diagnostics reset failed (${response.status}).`);
+      }
+
+      await refreshWriterDiagnostics();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to reset writer diagnostics.';
+      setWriterDiagnosticsError(message);
+    } finally {
+      setWriterDiagnosticsResetting(false);
+    }
+  }, [refreshWriterDiagnostics, supportsClientTelemetry, writerDiagnosticsResetting]);
 
   React.useEffect(() => {
+    if (!supportsClientTelemetry) {
+      setTelemetry(null);
+      setTelemetryUpdatedAt(null);
+      setTelemetryError(null);
+      return;
+    }
     if (!sessionDid) {
       setTelemetry(null);
       setTelemetryUpdatedAt(null);
       return;
     }
     void refreshSessionTelemetry();
-  }, [refreshSessionTelemetry, sessionDid]);
+  }, [refreshSessionTelemetry, sessionDid, supportsClientTelemetry]);
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry) {
+      setWriterDiagnostics(null);
+      setWriterDiagnosticsUpdatedAt(null);
+      setWriterDiagnosticsError(null);
+      return;
+    }
+
+    void refreshWriterDiagnostics();
+  }, [refreshWriterDiagnostics, supportsClientTelemetry]);
+
+  const writerAlerts = React.useMemo(
+    () => (writerDiagnostics ? deriveWriterDiagnosticsAlerts(writerDiagnostics) : []),
+    [writerDiagnostics],
+  );
+
+  const multimodalStatus = !capability
+    ? 'unknown'
+    : !capability.multimodalAllowed
+      ? 'off'
+      : hasReadyLocalMultimodal
+        ? 'local on-demand'
+        : 'remote-backed on-demand';
 
   const capabilitySummary = capability
     ? [
         `Tier: ${capability.tier}`,
         `WebGPU: ${capability.webgpu ? 'yes' : 'no'}`,
         `Text generation: ${capability.generationAllowed ? 'allowed' : 'off'}`,
-        `Multimodal: ${capability.multimodalAllowed ? 'on-demand only' : 'off'}`,
+        `Multimodal: ${multimodalStatus}`,
       ].join(' • ')
     : 'Capability probe has not finished yet.';
 
@@ -405,7 +631,7 @@ export default function LocalAiRuntimeSection() {
             <button
               type="button"
               onClick={() => { void refreshSessionTelemetry(); }}
-              disabled={!sessionDid || telemetryLoading}
+              disabled={!supportsClientTelemetry || !sessionDid || telemetryLoading}
               style={{
                 appearance: 'none',
                 border: '1px solid var(--sep)',
@@ -417,8 +643,8 @@ export default function LocalAiRuntimeSection() {
                 font: 'inherit',
                 fontSize: 11,
                 fontWeight: 700,
-                cursor: (!sessionDid || telemetryLoading) ? 'default' : 'pointer',
-                opacity: (!sessionDid || telemetryLoading) ? 0.65 : 1,
+                cursor: (!supportsClientTelemetry || !sessionDid || telemetryLoading) ? 'default' : 'pointer',
+                opacity: (!supportsClientTelemetry || !sessionDid || telemetryLoading) ? 0.65 : 1,
               }}
             >
               {telemetryLoading ? 'Loading…' : 'Refresh'}
@@ -426,7 +652,7 @@ export default function LocalAiRuntimeSection() {
             <button
               type="button"
               onClick={() => { void resetSessionTelemetry(); }}
-              disabled={!sessionDid || telemetryResetting}
+              disabled={!supportsClientTelemetry || !sessionDid || telemetryResetting}
               style={{
                 appearance: 'none',
                 border: '1px solid var(--sep)',
@@ -438,8 +664,8 @@ export default function LocalAiRuntimeSection() {
                 font: 'inherit',
                 fontSize: 11,
                 fontWeight: 700,
-                cursor: (!sessionDid || telemetryResetting) ? 'default' : 'pointer',
-                opacity: (!sessionDid || telemetryResetting) ? 0.65 : 1,
+                cursor: (!supportsClientTelemetry || !sessionDid || telemetryResetting) ? 'default' : 'pointer',
+                opacity: (!supportsClientTelemetry || !sessionDid || telemetryResetting) ? 0.65 : 1,
               }}
             >
               {telemetryResetting ? 'Resetting…' : 'Reset'}
@@ -447,7 +673,13 @@ export default function LocalAiRuntimeSection() {
           </div>
         </div>
 
-        {!sessionDid && (
+        {!supportsClientTelemetry && (
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+            This panel is disabled outside local development. Server-side AI session telemetry stays admin-protected in production and requires a secret that is never exposed to the browser.
+          </p>
+        )}
+
+        {supportsClientTelemetry && !sessionDid && (
           <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
             Sign in to inspect hydration/replay telemetry.
           </p>
@@ -507,6 +739,128 @@ export default function LocalAiRuntimeSection() {
         {telemetryError && (
           <p style={{ margin: 0, fontSize: 11, color: 'var(--red, #d14b4b)', lineHeight: 1.4 }}>
             {telemetryError}
+          </p>
+        )}
+      </div>
+
+      <div
+        style={{
+          border: '1px solid var(--sep)',
+          borderRadius: 10,
+          padding: '10px 12px',
+          background: 'var(--surface, #fff)',
+          display: 'grid',
+          gap: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
+            Writer diagnostics
+          </p>
+          <div style={{ display: 'inline-flex', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => { void refreshWriterDiagnostics(); }}
+              disabled={!supportsClientTelemetry || writerDiagnosticsLoading}
+              style={{
+                appearance: 'none',
+                border: '1px solid var(--sep)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--label-1)',
+                borderRadius: 8,
+                minHeight: 28,
+                padding: '4px 8px',
+                font: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: (!supportsClientTelemetry || writerDiagnosticsLoading) ? 'default' : 'pointer',
+                opacity: (!supportsClientTelemetry || writerDiagnosticsLoading) ? 0.65 : 1,
+              }}
+            >
+              {writerDiagnosticsLoading ? 'Loading…' : 'Refresh'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { void resetWriterDiagnostics(); }}
+              disabled={!supportsClientTelemetry || writerDiagnosticsResetting}
+              style={{
+                appearance: 'none',
+                border: '1px solid var(--sep)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--label-1)',
+                borderRadius: 8,
+                minHeight: 28,
+                padding: '4px 8px',
+                font: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: (!supportsClientTelemetry || writerDiagnosticsResetting) ? 'default' : 'pointer',
+                opacity: (!supportsClientTelemetry || writerDiagnosticsResetting) ? 0.65 : 1,
+              }}
+            >
+              {writerDiagnosticsResetting ? 'Resetting…' : 'Reset'}
+            </button>
+          </div>
+        </div>
+
+        {!supportsClientTelemetry && (
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+            Writer diagnostics are intentionally hidden outside local development. Production access remains secret-gated server-side.
+          </p>
+        )}
+
+        {writerDiagnostics && (
+          <>
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Outcomes: model <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.model}</strong>
+              {' • '}fallback <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.fallback}</strong>
+              {' • '}fallback rate <strong style={{ color: 'var(--label-1)' }}>{formatRate(writerDiagnostics.clientOutcomes.fallbackRate)}</strong>
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Fallback reasons:
+              {' '}abstained {writerDiagnostics.fallbackReasonDistribution['abstained-response-fallback']}
+              {' • '}root-only {writerDiagnostics.fallbackReasonDistribution['root-only-response-fallback']}
+              {' • '}failure {writerDiagnostics.fallbackReasonDistribution['failure-fallback']}
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Safety filter:
+              {' '}runs {writerDiagnostics.safetyFilter.runs}
+              {' • '}mutated {writerDiagnostics.safetyFilter.mutated} ({formatRate(writerDiagnostics.safetyFilter.mutationRate)})
+              {' • '}blocked {writerDiagnostics.safetyFilter.blocked} ({formatRate(writerDiagnostics.safetyFilter.blockRate)})
+            </p>
+
+            {writerAlerts.length > 0 && (
+              <div style={{ display: 'grid', gap: 4 }}>
+                {writerAlerts.map((alert) => (
+                  <p
+                    key={alert.message}
+                    style={{
+                      margin: 0,
+                      fontSize: 11,
+                      lineHeight: 1.4,
+                      color: alert.severity === 'high' ? 'var(--red, #d14b4b)' : 'var(--yellow, #c58b16)',
+                    }}
+                  >
+                    {alert.severity === 'high' ? 'High alert: ' : 'Watch: '}
+                    {alert.message}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {writerDiagnosticsUpdatedAt && (
+              <p style={{ margin: 0, fontSize: 11, color: 'var(--label-4)' }}>
+                Updated {new Date(writerDiagnosticsUpdatedAt).toLocaleTimeString()}.
+              </p>
+            )}
+          </>
+        )}
+
+        {writerDiagnosticsError && (
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--red, #d14b4b)', lineHeight: 1.4 }}>
+            {writerDiagnosticsError}
           </p>
         )}
       </div>

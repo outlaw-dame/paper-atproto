@@ -25,6 +25,7 @@ const {
   mockWriteSessionMessage: vi.fn(),
   envMock: {
     NODE_ENV: 'production',
+    AI_SESSION_TELEMETRY_ADMIN_SECRET: 'super-secret',
     CORS_ALLOWED_ORIGINS: 'https://app.glympse.example',
     CORS_ALLOW_PRIVATE_NETWORK_IN_DEV: true,
   },
@@ -103,6 +104,7 @@ describe('aiSessionsRouter security/privacy behavior', () => {
   beforeEach(() => {
     resetAiSessionTelemetry();
     envMock.NODE_ENV = 'production';
+    envMock.AI_SESSION_TELEMETRY_ADMIN_SECRET = 'super-secret';
     envMock.CORS_ALLOWED_ORIGINS = TRUSTED_ORIGIN;
     envMock.CORS_ALLOW_PRIVATE_NETWORK_IN_DEV = true;
     mockAssertSessionAccess.mockReset();
@@ -246,7 +248,7 @@ describe('aiSessionsRouter security/privacy behavior', () => {
     expect(mockReadEventLane).not.toHaveBeenCalled();
   });
 
-  it('returns and resets AI session telemetry via protected endpoints', async () => {
+  it('requires an admin secret before returning and resetting AI session telemetry', async () => {
     mockBootstrapSession.mockReturnValue(makeBootstrapPayload());
 
     await aiSessionsRouter.request(`/${VALID_SESSION_ID}/bootstrap`, {
@@ -257,11 +259,22 @@ describe('aiSessionsRouter security/privacy behavior', () => {
       },
     });
 
+    const forbiddenSnapshot = await aiSessionsRouter.request('/telemetry', {
+      method: 'GET',
+      headers: {
+        ...DID_HEADER,
+        Origin: TRUSTED_ORIGIN,
+      },
+    });
+
+    expect(forbiddenSnapshot.status).toBe(403);
+
     const snapshot = await aiSessionsRouter.request('/telemetry', {
       method: 'GET',
       headers: {
         ...DID_HEADER,
         Origin: TRUSTED_ORIGIN,
+        'X-AI-Telemetry-Admin-Secret': 'super-secret',
       },
     });
 
@@ -276,6 +289,7 @@ describe('aiSessionsRouter security/privacy behavior', () => {
       headers: {
         ...DID_HEADER,
         Origin: TRUSTED_ORIGIN,
+        'X-AI-Telemetry-Admin-Secret': 'super-secret',
       },
     });
     expect(reset.status).toBe(204);

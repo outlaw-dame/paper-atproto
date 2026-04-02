@@ -1,290 +1,327 @@
 # paper-atproto — Architecture
 
-> **North Star:** A modernised, local-first social reader combining the best of Facebook Paper (gesture-driven, immersive cards), Neeva Gist (entity-first, story-assembled search), and Apple's Human Interface Guidelines — built on the decentralised AT Protocol.
+> **North Star:** a local-first ATProto reader where deterministic resolution, bounded algorithms, and selectively-invoked models flow through one coherent interpretation system rather than a collection of disconnected AI features.
 
 ---
 
 ## Design Principles
 
-| Principle | Application |
+| Principle | How the code applies it |
 |---|---|
-| **Deterministic first** | All ATProto object resolution (AT URIs, DIDs, facets, labels, embeds) is pure and synchronous — no inference required for the base layer |
-| **Inference off the main thread** | All Transformers.js model calls run in a dedicated web worker via `InferenceClient`. The UI thread is never blocked by model inference |
-| **Local-first** | PGlite (Postgres in WASM) stores all synced posts, embeddings, and cluster signals in IndexedDB/OPFS. The app works offline after initial sync |
-| **Progressive enrichment** | Posts are useful immediately (deterministic layer). Embeddings and scoring are added asynchronously. NER/Wikidata enrichment is deferred to on-demand story opening |
-| **Apple HIG** | All UI follows iOS/macOS conventions: spring physics, safe areas, system colours, bottom sheets, gesture dismissal |
+| **Deterministic first** | Resolver, thread shaping, heuristics, and ranking all execute before any remote model call. |
+| **Algorithms decide** | Models synthesize language; bounded algorithms decide contributor inclusion, entity ranking, stance balance, and meaningful change. |
+| **Remote models are advisory, not authoritative** | Server writers, multimodal analysis, and premium Gemini enrich an already-structured thread state instead of owning the primary truth. |
+| **Security and privacy by default** | Browser clients never call Ollama or Gemini directly; routes enforce origin checks, payload validation, sanitization, and least-privilege access. |
+| **Fail soft, fail bounded** | Verification, multimodal, translation, and writer calls all degrade to deterministic behavior when confidence, policy, or upstream availability is weak. |
+| **Local runtime stays explicit** | The worker classifier stack is always local; larger browser text generation is opt-in on capable devices; browser multimodal remains staged until safe. |
 
 ---
 
-## Dual Pipeline Architecture
+## One AI System
 
-### Pipeline A — Entity / Story Search (Gist-style)
+The app now has a single end-to-end interpretation architecture with six connected lanes:
 
-Inspired by Neeva Gist's approach of assembling a *story* from multiple signals rather than returning a ranked list of documents.
+| Lane | Responsibility | Primary entry points |
+|---|---|---|
+| **1. Deterministic substrate** | ATProto resolution, context shaping, heuristics, moderation-aware shaping | `src/lib/resolver/atproto.ts`, `src/intelligence/context/*`, `src/intelligence/heuristics/*` |
+| **2. Decision layer** | Contributor selection, thread-change detection, entity centrality, stance coverage, comment diversity | `src/intelligence/algorithms/*`, `src/intelligence/redundancy.ts`, `src/intelligence/writerInput.ts`, `src/intelligence/updateInterpolatorState.ts` |
+| **3. Evidence enrichment** | Verification, translation, media gating, factual and confidence blending | `src/intelligence/threadPipeline.ts`, `src/intelligence/verification/*`, `src/lib/i18n/threadTranslation.ts`, `src/intelligence/mediaInput.ts` |
+| **4. Default model execution** | Server-side writer and multimodal analysis behind bounded contracts and safety filters | `src/intelligence/modelClient.ts`, `server/src/routes/llm.ts`, `server/src/services/qwenWriter.ts`, `server/src/services/qwenMultimodal.ts` |
+| **5. Premium deep interpretation** | Higher-depth Gemini interpolation for entitled users only | `server/src/routes/premiumAi.ts`, `server/src/ai/providerRouter.ts`, `server/src/ai/providers/geminiConversation.provider.ts` |
+| **6. Session and transport plane** | Durable AI sessions, replay lanes, presence, message state, telemetry | `src/aiSessions/*`, `server/src/routes/aiSessions.ts`, `server/src/ai/sessions/*` |
 
-```
-Feed post arrives
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tier 1: Deterministic ATProto Resolution               │
-│  src/lib/resolver/atproto.ts                            │
-│                                                         │
-│  • parseAtUri()        — AT URI → { repo, collection,  │
-│                          rkey }                         │
-│  • resolveFacets()     — byte-accurate mention/tag/link │
-│  • resolveEmbed()      — typed embed (image, external,  │
-│                          record, recordWithMedia)        │
-│  • resolveLabels()     — { src, val, neg, cts }         │
-│  • canonicalDomain()   — URL → hostname (no www.)       │
-│  • extractClusterSignals() — hashtags, domains,         │
-│                          mentionedDids, quotedUris,      │
-│                          labelValues                     │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tier 2: Semantic Embedding (off-thread)                │
-│  src/workers/inference.worker.ts                        │
-│  src/workers/InferenceClient.ts                         │
-│                                                         │
-│  • Model: Xenova/all-MiniLM-L6-v2 (quantized ONNX)     │
-│  • 384-d embeddings stored in PGlite pgvector column    │
-│  • Worker warm-up on app start; lazy model download     │
-│  • Promise-based API: inferenceClient.embed(text)       │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tier 3: Clustering (Phase 2)                           │
-│                                                         │
-│  Group posts by shared cluster signals:                 │
-│  • Shared quoted AT URI                                 │
-│  • Shared canonical domain                             │
-│  • Shared hashtag                                       │
-│  • Cosine similarity of embeddings (pgvector <=>)       │
-│  • Mentioned DID overlap                                │
-│                                                         │
-│  Output: StoryCluster { rootUri, members[], signals }   │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tier 4: Story Card Assembly                            │
-│  src/components/StoryMode.tsx                           │
-│                                                         │
-│  Cards rendered in order:                               │
-│  0. Overview   — stats, gist summary, author, media     │
-│  1. Source     — full text with byte-accurate facets,   │
-│                  labels, AT URI                         │
-│  2. Conversation — scored replies (see Pipeline B)      │
-│  3. Signals    — deterministic cluster signals          │
-│  4. Interpolator — Pipeline B rolling state             │
-└─────────────────────────────────────────────────────────┘
-```
+The older “dual pipeline” idea still exists, but only as two subflows inside this broader system:
+
+- **Search / discovery flow** remains local-first and embedding-backed.
+- **Thread interpretation flow** now runs through a verified, multi-stage orchestration path.
 
 ---
 
-### Pipeline B — Rolling Conversation Interpolation (Narwhal-style)
+## End-to-End Thread Interpretation Flow
 
-Inspired by Narwhal's approach of maintaining a *rolling state* of a conversation that updates as new replies arrive and as user feedback is collected.
+The authoritative orchestration path for thread understanding lives in [`src/conversation/sessionAssembler.ts`](src/conversation/sessionAssembler.ts).
 
-```
-Thread opened in StoryMode
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Step 1: Thread Resolution                              │
-│  resolveThread(ThreadViewPost) → ThreadNode tree        │
-│                                                         │
-│  Each node: { uri, text, facets, embed, labels,         │
-│               likeCount, replyCount, replies[] }        │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Step 2: Usefulness Scoring                             │
-│  src/store/threadStore.ts                               │
-│                                                         │
-│  Phase 1 (current): heuristicScoreReply()               │
-│  • Signals: question mark, link presence, word count,   │
-│    agreement/disagreement keywords, repetition check    │
-│  • Output: ContributionRole + usefulnessScore (0–1)     │
-│                                                         │
-│  Phase 2 (planned): SetFit few-shot classifier          │
-│  • 8–16 labelled examples per role                      │
-│  • Runs in inference worker                             │
-│  • Roles: clarifying | new_information | direct_response│
-│    | repetitive | provocative | useful_counterpoint     │
-│    | story_worthy                                        │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Step 3: Rolling State Update                           │
-│  useThreadStore (Zustand)                               │
-│                                                         │
-│  ThreadState per root URI:                              │
-│  • summaryText        — human-readable summary          │
-│  • salientClaims[]    — key claims from the thread      │
-│  • clarificationsAdded[] — clarifying replies           │
-│  • newAnglesAdded[]   — new-information replies         │
-│  • repetitionLevel    — 0–1 fraction of repetitive      │
-│  • heatLevel          — 0–1 conflict/derailment signal  │
-│  • sourceSupportPresent — any external links cited      │
-│  • replyScores{}      — per-reply score + user feedback │
-│  • version            — incremented on each update      │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Step 4: User Feedback Loop                             │
-│                                                         │
-│  Per-reply feedback buttons in ConversationCard:        │
-│  • Clarifying | New to me | Provocative | AHA!          │
-│                                                         │
-│  Feedback stored in threadStore.replyScores[uri]        │
-│  → Phase 2: used to fine-tune SetFit classifier         │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Step 5: Interpolator Card                              │
-│  StoryMode card index 4                                 │
-│                                                         │
-│  Displays:                                              │
-│  • AI-generated rolling summary                         │
-│  • Heat level + repetition meters                       │
-│  • New angles introduced                                │
-│  • Top 3 most useful replies                            │
-│  • Source support indicator                             │
-└─────────────────────────────────────────────────────────┘
-```
+### 1. Fetch and normalize
 
----
+1. The client resolves the thread through `agent.getPostThread(...)`.
+2. `resolveThread(...)` converts raw ATProto thread data into typed `ThreadNode`s.
+3. `buildSessionGraph(...)` shapes the graph used by projections and UI surfaces.
 
-## Module Map
+Primary files:
 
-```
-src/
-├── lib/
-│   ├── atproto/
-│   │   ├── errors.ts       — typed error kinds + retryability
-│   │   ├── retry.ts        — decorrelated jitter backoff
-│   │   ├── client.ts       — atpCall / atpMutate (all API calls)
-│   │   └── queries.ts      — TanStack Query hooks
-│   └── resolver/
-│       ├── mappers.ts      — ATProto object to UI model mappers
-│       └── atproto.ts      — Pipeline A Tier 1: deterministic resolver
-│
-├── workers/
-│   ├── inference.worker.ts — Transformers.js worker (off main thread)
-│   └── InferenceClient.ts  — Promise-based worker API
-│
-├── store/
-│   ├── sessionStore.ts     — Zustand: BskyAgent + session + profile
-│   ├── uiStore.ts          — Zustand: active tab, compose, story
-│   └── threadStore.ts      — Zustand: Pipeline B rolling thread state
-│
-├── atproto/
-│   └── AtpContext.tsx      — React context (delegates to sessionStore)
-│
-├── shell/
-│   ├── TabBar.tsx          — bottom nav with unread badge
-│   └── OverlayHost.tsx     — ComposeSheet + StoryMode overlay manager
-│
-├── components/
-│   ├── StoryMode.tsx       — 5-card story reader (both pipelines)
-│   ├── PostCard.tsx        — feed card with tappable body + RichText
-│   ├── ComposeSheet.tsx    — live-preview composer with facet detection
-│   ├── LoginScreen.tsx     — app-password login
-│   └── EntitySheet.tsx     — entity details (Phase 3: live ATProto data)
-│
-└── tabs/
-    ├── HomeTab.tsx         — timeline + author feed + discover (TanStack Query)
-    ├── ExploreTab.tsx      — search + suggested feeds + suggested actors
-    ├── InboxTab.tsx        — live notifications + mark-as-read
-    └── LibraryTab.tsx      — liked posts + my feeds + my packs
-```
+- `src/conversation/sessionAssembler.ts`
+- `src/lib/resolver/atproto.ts`
+- `src/conversation/sessionGraph.ts`
 
-### Composer Guidance Layer
+### 2. Score, verify, and measure change
 
-- Legacy tone pipeline core: `src/intelligence/composeTonePipeline.ts`
-- Shared composer orchestration: `src/intelligence/composer/guidancePipeline.ts`
-- Context shaping: `src/intelligence/composer/contextBuilder.ts`
-- Policy routing + staged execution: `src/intelligence/composer/routing.ts`, `src/hooks/useComposerGuidance.ts`
-- Selective writer-copy pass: `src/intelligence/composer/guidanceWriter.ts`, `server/src/services/qwenComposerGuidanceWriter.ts`
-- Shared hook + store: `src/hooks/useComposerGuidance.ts`, `src/store/composerGuidanceStore.ts`
-- Shared banner UI: `src/components/ComposerGuidanceBanner.tsx`
-- Deterministic substrate: `src/lib/sentiment.ts`
-- Current authoring surfaces: `src/components/ComposeSheet.tsx`, `src/components/PromptComposer.tsx`
-- Levels: `alert`, `warning`, `caution`, `positive`, `ok`
-- Current pipeline stages:
-       - `heuristic` (deterministic safety/context + supportive/constructive rules)
-       - `zero-shot-tone` (worker-hosted model-backed tone classification)
-       - `abuse-score` (worker-hosted `Xenova/toxic-bert` abuse scoring)
-       - `sentiment-polarity` (local Twitter-RoBERTa sentiment classifier)
-       - `emotion` (local Cardiff emotion classifier)
-       - `targeted-sentiment` (local Cardiff reply-targeted classifier)
-       - `quality-score` (local SetFit-compatible linear head over MiniLM embeddings)
-       - `guidance-writer` (optional Qwen advisory copy pass after local scoring settles)
-- Positive architecture contains both:
-       - `supportiveReplySignals[]` (empathy/validation/support language)
-       - `constructiveSignals[]` (practical help/context-building language)
-- Reply-context inputs include parent text plus thread activity context:
-       - `parentReplyCount`
-       - `parentThreadCount`
-- Thread-aware context inputs include full conversation snippets when available:
-       - `threadTexts[]` (root/threaded post bodies)
-       - `commentTexts[]` (reply/comment bodies)
-       - `totalCommentCount`
-- High-activity reply threads lower the threshold for showing constructive/supportive guidance to reduce pile-on tone and encourage helpful replies to the original poster.
+`runVerifiedThreadPipeline(...)` is the base interpretation pipeline:
+
+1. `runInterpolatorPipeline(...)` computes the local reply-scoring state.
+2. Contribution scores are lifted into richer `ContributionScores`.
+3. Verification candidates are selected and verified with retry and concurrency limits.
+4. Verification outcomes are merged back into the per-reply scores.
+5. Thread change, confidence, and summary mode are computed.
+
+Primary files:
+
+- `src/intelligence/threadPipeline.ts`
+- `src/intelligence/atprotoInterpolatorAdapter.ts`
+- `src/intelligence/verification/*`
+- `src/intelligence/changeDetection.ts`
+- `src/intelligence/confidence.ts`
+
+### 3. Apply decision algorithms
+
+The decision layer is not separate from the pipeline; it is consumed directly by writer shaping and interpolator updates.
+
+Shipped integrations:
+
+- **Contributor selection** via `selectContributorsAlgorithmic(...)`
+- **Stance coverage** via `clusterStanceCoverage(...)` and `filterByStanceDiversity(...)`
+- **Entity centrality** via `computeEntityCentralityScores(...)`
+- **Meaningful thread change** via `computeThreadChangeDelta(...)`
+- **Comment diversity suppression** via `selectDiverseComments(...)`
+
+Primary files:
+
+- `src/intelligence/writerInput.ts`
+- `src/intelligence/updateInterpolatorState.ts`
+- `src/intelligence/algorithms/*`
+- `src/intelligence/redundancy.ts`
+
+### 4. Safety and interpretation shaping
+
+Before any writer is called, the session state is hardened and shaped:
+
+- Moderation and user rules are applied.
+- Mental-health crisis detection runs over root and high-salience replies.
+- Interpretive confidence, continuity, thread-state, and trajectory are derived.
+
+Primary files:
+
+- `src/conversation/sessionAssembler.ts`
+- `src/conversation/sessionPolicies.ts`
+- `src/conversation/interpretive/*`
+- `src/conversation/continuitySnapshots.ts`
+- `src/lib/sentiment.ts`
+
+### 5. Translation and multimodal gating
+
+The system enriches the thread only when it has enough justification:
+
+1. `translateWriterInput(...)` produces privacy-aware translation output.
+2. `detectMediaSignals(...)` and `shouldRunMultimodal(...)` decide whether media matters.
+3. `selectMediaForAnalysis(...)` chooses at most a bounded set of media items.
+4. Remote multimodal analysis returns structured `WriterMediaFinding`s.
+
+Primary files:
+
+- `src/lib/i18n/threadTranslation.ts`
+- `src/intelligence/mediaInput.ts`
+- `src/intelligence/modelClient.ts`
+- `server/src/routes/llm.ts`
+- `server/src/services/qwenMultimodal.ts`
+
+### 6. Default writer and premium deep interpolation
+
+Once the thread state is fully shaped:
+
+1. `buildThreadStateForWriter(...)` constructs a bounded writer payload.
+2. `callInterpolatorWriter(...)` requests the default thread summary writer.
+3. If the user is entitled and the thread warrants it, `callPremiumDeepInterpolator(...)` requests a Gemini-backed premium interpretation.
+
+Primary files:
+
+- `src/intelligence/writerInput.ts`
+- `src/intelligence/modelClient.ts`
+- `server/src/routes/llm.ts`
+- `server/src/routes/premiumAi.ts`
+- `server/src/ai/providerRouter.ts`
+
+### 7. Session transport and replay
+
+AI sessions are a parallel control plane, not a separate interpretation engine:
+
+- Session bootstrap, event/state/presence lanes, and generation status live behind `/api/ai/sessions/*`.
+- Durable read proxies and telemetry exist for replay and observability.
+- Production telemetry is admin-protected and not exposed to the browser by default.
+
+Primary files:
+
+- `src/aiSessions/*`
+- `server/src/routes/aiSessions.ts`
+- `server/src/ai/sessions/*`
 
 ---
 
-## Phase Roadmap
+## Search and Discovery Flow
 
-### Phase 1 (complete)
-- Deterministic ATProto resolver (`lib/resolver/atproto.ts`)
-- Inference worker + `InferenceClient` (all Transformers.js off main thread)
-- `sync.ts` and `search.ts` migrated to use `InferenceClient`
-- NER/Wikidata removed from sync hot path
-- StoryMode rebuilt as 5-card typed deck (Overview, Source, Conversation, Signals, Interpolator)
-- Pipeline B: `threadStore`, `heuristicScoreReply`, `buildRollingSummary`
-- User feedback buttons on replies (Clarifying / New to me / Provocative / AHA!)
-- TanStack Query + Zustand session/UI stores
-- Shell refactor: `TabBar`, `OverlayHost`
-- Retry/backoff transport layer
+Search remains local-first, but it now shares the same architectural values as thread interpretation.
 
-### Phase 2 (planned)
-- SetFit few-shot classifier in inference worker (replaces heuristic scorer)
-- Optional Detoxify/server moderation provider as an alternate `abuse-score` backend
-- Pipeline A Tier 3: clustering by shared signals + cosine similarity
-- EntitySheet wired to live ATProto actor/feed/hashtag data
-- OAuth + PKCE login flow (app-password as fallback)
+### Current shipped path
 
-### Phase 3 (planned)
-- Explore rebuilt as entity-first results (actors, feeds, topics, domains)
-- StoryMode cluster view: multiple posts assembled into one story
-- Reading queue with PGlite persistence
-- Optional GPT-4.1-mini summarisation for Interpolator card
-- Labeler integration: user-configurable label filters
+1. Deterministic ATProto resolution extracts stable search signals.
+2. Text embeddings are generated off-thread in the inference worker.
+3. Local PGlite + pgvector hybrid search powers discovery.
+4. Explore/story discovery modules project the results into UI surfaces.
+
+Primary files:
+
+- `src/search.ts`
+- `src/intelligence/embeddingPipeline.ts`
+- `src/workers/inference.worker.ts`
+- `src/conversation/discovery/*`
+- `src/tabs/ExploreTab.tsx`
+
+### Current limitation
+
+Search is coherent and local-first, but it is not yet driven by the full future story-clustering algorithm described in the roadmap. That remains planned work rather than hidden behavior.
 
 ---
 
-## Key Decisions
+## Composer Guidance Flow
 
-**Why not NER in the sync hot path?**
-The original `sync.ts` called `distilbert-base-uncased-finetuned-conll03-english` (a 260MB model) on every synced post, on the main thread, blocking the UI. ATProto's native facets already provide byte-accurate mention/hashtag/link spans — deterministically, with zero inference cost. NER is preserved for optional on-demand enrichment only.
+Composer guidance is part of the same architecture, not a standalone AI feature.
 
-**Why heuristics before SetFit?**
-SetFit requires a small labelled dataset and a worker-side training loop. The heuristic scorer provides immediately useful role labels and usefulness scores while that dataset is being built from user feedback (the four feedback buttons on every reply).
+### Flow
 
-**Why keep `MockPost` as the internal type?**
-All existing components (PostCard, LibraryTab cards, OverviewCard) already render `MockPost`. The `mapFeedViewPost` adapter converts live ATProto data at the boundary, keeping the component layer stable while the data layer evolves.
+1. `buildReplyComposerContext(...)` or `buildHostedThreadComposerContext(...)` shapes the authoring context.
+2. `analyzeComposerGuidanceImmediate(...)` runs the immediate local path.
+3. `analyzeComposerGuidance(...)` runs the async staged path.
+4. Optional server writer polish is requested only after local scoring is already available.
 
-**Authentication**
-The app uses ATProto app-passwords (not the main account password) stored in `localStorage` via the `persistSession` callback in `BskyAgent`. OAuth + PKCE is planned for Phase 2. All PDS communication is over HTTPS. Session tokens are never logged.
+Primary files:
 
-**Sync and conflict resolution**
-The local PGlite database is append-only for synced posts (`ON CONFLICT DO NOTHING`). User-created posts are pushed to the PDS first, then indexed locally. Conflict resolution is last-write-wins at the PDS level (ATProto's MST handles this).
+- `src/intelligence/composer/contextBuilder.ts`
+- `src/intelligence/composer/guidancePipeline.ts`
+- `src/intelligence/composeTonePipeline.ts`
+- `src/hooks/useComposerGuidance.ts`
+- `server/src/services/qwenComposerGuidanceWriter.ts`
+
+### What this means architecturally
+
+Composer guidance is another consumer of the same principles:
+
+- deterministic context first
+- bounded local models second
+- remote copy polish last
+- always with local fallback UI text
+
+---
+
+## Local Runtime Boundaries
+
+The browser runtime is intentionally conservative.
+
+### Shipped today
+
+- The classifier / scoring worker stack is local and always available as the hot path.
+- Browser text generation can be enabled on capable devices through the runtime policy layer.
+- Remote fallback remains available for heavier features.
+
+Primary files:
+
+- `src/runtime/modelPolicy.ts`
+- `src/runtime/modelManager.ts`
+- `src/components/LocalAiRuntimeSection.tsx`
+
+### Intentionally not shipped yet
+
+- Local browser multimodal generation is **planned/staged**, not treated as production-ready.
+- Remote multimodal analysis is still the supported path when media interpretation is needed.
+
+This boundary is deliberate: capability policy may allow multimodal in principle, but browser VLM runtime support is not presented as production-ready until the local path is safe.
+
+---
+
+## Security, Privacy, and Resilience
+
+These are part of the architecture, not post-hoc add-ons.
+
+### Browser / server boundaries
+
+- The browser never calls Ollama or Gemini directly.
+- All model traffic is proxied through Hono routes with schema validation.
+- Premium routes require DID headers and trusted origins.
+
+Primary files:
+
+- `server/src/routes/llm.ts`
+- `server/src/routes/premiumAi.ts`
+- `server/src/routes/aiSessions.ts`
+
+### Validation and sanitization
+
+- Zod-backed input parsing and output validation gate model I/O.
+- URL sanitization, Safe Browsing checks, and no-store headers protect remote processing and sensitive data paths.
+- Writer and multimodal outputs are filtered before use.
+
+Primary files:
+
+- `server/src/llm/schemas.ts`
+- `server/src/llm/policyGateway.ts`
+- `server/src/lib/sanitize.ts`
+- `server/src/services/safetyFilters.ts`
+- `src/lib/safety/*`
+
+### Retry, backoff, and bounded failure
+
+- Network and verification calls use bounded retries.
+- LLM routes use circuit breakers.
+- Durable session reads/writes have explicit timeouts, retry attempts, and fail-open/fail-closed controls.
+
+Primary files:
+
+- `src/intelligence/modelClient.ts`
+- `src/intelligence/verification/retry.ts`
+- `server/src/lib/circuit-breaker.ts`
+- `server/src/config/env.ts`
+
+### Telemetry protection
+
+- AI session telemetry is admin-protected in production through `AI_SESSION_TELEMETRY_ADMIN_SECRET`.
+- The browser runtime panel disables telemetry inspection outside local development.
+
+Primary files:
+
+- `server/src/routes/aiSessions.ts`
+- `src/components/LocalAiRuntimeSection.tsx`
+
+---
+
+## Shipped vs Planned
+
+### Shipped
+
+- Verified thread pipeline
+- Phase 1 decision algorithms integrated into real code paths
+- Comment-level redundancy suppression
+- Remote multimodal gating and analysis
+- Premium deep interpolation entitlement lane
+- AI session transport with durable replay protections
+
+### Planned
+
+- Story clustering for Explore
+- Explanation generation for user-visible algorithm reasons
+- Context summarization selector for tighter composer context packing
+- Translation selection algorithm
+- Multimodal escalation algorithm for search-time visual specialization
+- Production-safe local browser multimodal runtime
+
+---
+
+## Canonical Files
+
+If you only read a small slice of the codebase, start here:
+
+1. `src/conversation/sessionAssembler.ts`
+2. `src/intelligence/threadPipeline.ts`
+3. `src/intelligence/writerInput.ts`
+4. `src/intelligence/algorithms/index.ts`
+5. `server/src/routes/llm.ts`
+6. `server/src/routes/premiumAi.ts`
+7. `server/src/routes/aiSessions.ts`
+
+These files describe the real system more accurately than any historical planning notes.

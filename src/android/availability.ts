@@ -68,13 +68,13 @@ export function detectAndroidEnhancementAvailability(): AndroidEnhancementAvaila
 
     const fromUad = uadPlatform.includes('android');
 
-    // Vibration API is available ONLY on Android Chrome in mainstream browsers.
-    // window.chrome is present in Chromium-based browsers but not WebKit/Gecko.
-    // navigator.standalone is absent in Chrome (it's an Apple-only property).
+    // Capability fallback: require a strongly Android-specific pair of APIs.
+    // Vibration alone is not sufficient because desktop Chromium also exposes
+    // navigator.vibrate. Contact Picker remains Android Chrome-specific.
     const fromCapabilities =
       vibrationApiAvailable &&
-      'chrome' in window &&
-      !('standalone' in navigator);
+      contactPickerAvailable &&
+      'chrome' in window;
 
     // UA fallback — lowest priority.
     const fromUa = /android/i.test(navigator.userAgent);

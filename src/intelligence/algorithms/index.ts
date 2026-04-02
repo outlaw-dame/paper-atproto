@@ -26,7 +26,7 @@ export * from './entityCentrality';
 export * from './stanceClustering';
 
 /**
- * Future algorithms (not yet implemented):
+ * Future algorithms (not yet implemented here):
  *
  * - **storyClustering** (HIGH): Identify natural conversation clusters
  *   File: storyClustering.ts (TODO)
@@ -37,6 +37,7 @@ export * from './stanceClustering';
  *   File: redundancyNetwork.ts (TODO)
  *   Purpose: Suppress content already conveyed by other contributors
  *   Impact: +25% content diversity, fewer "I agree" pile-ons
+ *   Note: a lighter-weight shipped version already exists in ../redundancy.ts
  *
  * - **contextSummarizationSelector** (MEDIUM): Pick posts for in-context summarization
  *   File: contextSummarization.ts (TODO)

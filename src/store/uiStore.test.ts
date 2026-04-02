@@ -67,7 +67,7 @@ describe('uiStore resume state', () => {
     expect(useUiStore.getState().prevTab).toBe('activity');
   });
 
-  it('persists resumable navigation overlays and feed context', () => {
+  it('persists stable navigation state but clears transient overlays', () => {
     useUiStore.setState({
       activeTab: 'profile',
       prevTab: 'explore',
@@ -86,11 +86,11 @@ describe('uiStore resume state', () => {
       prevTab: 'explore',
       homeFeedMode: 'Feeds',
       profileDid: 'did:plc:resume0002',
-      story: { type: 'post', id: 'at://did:plc:resume0002/app.bsky.feed.post/1', title: 'Resume thread' },
-      searchStoryQuery: 'world cup',
+      story: null,
       exploreSearchQuery: '#mlb',
-      hashtagFeedQuery: 'mlb',
-      peopleFeedQuery: 'baseball writers',
+      searchStoryQuery: null,
+      hashtagFeedQuery: null,
+      peopleFeedQuery: null,
     });
   });
 

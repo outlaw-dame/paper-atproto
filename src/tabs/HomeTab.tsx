@@ -531,21 +531,24 @@ export default function HomeTab({ onOpenStory }: Props) {
       : emptyArray
   );
 
-  // Sync bookmark state from store to posts when posts or bookmarks change
+  // Sync bookmark state from store to posts when bookmarks change.
+  // Only depends on bookmarkedUris — using setPosts functional form avoids
+  // adding `posts` as a dep, which would create a setState→posts→effect cycle.
   useEffect(() => {
-    if (posts.length === 0) return;
-
     const uriSet = new Set(bookmarkedUris);
-    const hasChanges = posts.some((post) => {
-      const isBookmarked = uriSet.has(post.id);
-      const hasBookmarkState = !!post.viewer?.bookmark;
-      return isBookmarked !== hasBookmarkState;
-    });
 
-    if (!hasChanges) return;
+    setPosts((prev) => {
+      if (prev.length === 0) return prev;
 
-    setPosts((prev) =>
-      prev.map((post) => {
+      const hasChanges = prev.some((post) => {
+        const isBookmarked = uriSet.has(post.id);
+        const hasBookmarkState = !!post.viewer?.bookmark;
+        return isBookmarked !== hasBookmarkState;
+      });
+
+      if (!hasChanges) return prev;
+
+      return prev.map((post) => {
         const isBookmarked = uriSet.has(post.id);
         const hasBookmarkState = !!post.viewer?.bookmark;
 
@@ -566,9 +569,9 @@ export default function HomeTab({ onOpenStory }: Props) {
           ...post,
           viewer: restViewer,
         };
-      })
-    );
-  }, [posts, bookmarkedUris]);
+      });
+    });
+  }, [bookmarkedUris]);
 
   const { addBookmark, removeBookmark } = useBookmarksStore();
 

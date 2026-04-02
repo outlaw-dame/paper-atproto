@@ -151,12 +151,13 @@ class BrowserModelManager {
     await current.instance.dispose();
   }
 
-  getResolvedModelSpecs(): Record<string, Pick<ModelSpec, 'label' | 'currentRuntimeSupport' | 'runtimeNote'>> {
+  getResolvedModelSpecs(): Record<string, Pick<ModelSpec, 'label' | 'sessionKind' | 'currentRuntimeSupport' | 'runtimeNote'>> {
     return Object.fromEntries(
       Object.entries(MODEL_SPECS).map(([choice, spec]) => [
         choice,
         {
           label: spec.label,
+          sessionKind: spec.sessionKind,
           currentRuntimeSupport: spec.currentRuntimeSupport,
           ...(spec.runtimeNote ? { runtimeNote: spec.runtimeNote } : {}),
         },

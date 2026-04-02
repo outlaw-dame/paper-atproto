@@ -137,14 +137,6 @@ a {
   transition: none;
 }
 
-/* Scroll containers: restore the default background on Android since the
- * overflow:hidden above doesn't affect non-button scroll elements. */
-[data-platform="android"] .scroll-y,
-[data-platform="android"] .scroll-x {
-  overflow: hidden;
-}
-
-/* ─────────────────────────────────────────────────────────────────────────── */
 [data-platform="android"] button:active {
   opacity: 1;
   transition: none;
@@ -621,6 +613,8 @@ a { text-decoration: none; color: inherit; }
 .scroll-y {
   overflow-y: auto;
   overflow-x: hidden;
+  min-height: 0;
+  min-width: 0;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   overscroll-behavior-x: none;
@@ -630,6 +624,8 @@ a { text-decoration: none; color: inherit; }
 .scroll-x {
   overflow-x: auto;
   overflow-y: hidden;
+  min-width: 0;
+  min-height: 0;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
 }

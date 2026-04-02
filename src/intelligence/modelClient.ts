@@ -124,6 +124,12 @@ type InterpolatorTelemetrySnapshot = {
   failed: number;
 };
 
+type InterpolatorTelemetryReason =
+  | 'success'
+  | 'abstained-response-fallback'
+  | 'root-only-response-fallback'
+  | 'failure-fallback';
+
 type PremiumEntitlementCacheEntry = {
   value: PremiumAiEntitlements;
   expiresAt: number;
@@ -143,8 +149,62 @@ const interpolatorTelemetry: InterpolatorTelemetrySnapshot = {
   failed: 0,
 };
 
-function logInterpolatorTelemetry(reason: string): void {
+const WRITER_OUTCOME_TELEMETRY_PATH = '/api/llm/telemetry/writer-outcome';
+const WRITER_OUTCOME_TELEMETRY_MAX_ATTEMPTS = 2;
+
+function backoffWithJitterMs(attempt: number, baseMs = 200, maxMs = 1_500): number {
+  const exp = Math.min(maxMs, baseMs * 2 ** attempt);
+  const jitter = exp * 0.25;
+  return Math.max(100, Math.floor(exp - jitter + Math.random() * jitter * 2));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function postWriterOutcomeTelemetry(reason: InterpolatorTelemetryReason): Promise<void> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return;
+
+  const outcome = reason === 'success' ? 'model' : 'fallback';
+  const endpoint = resolveApiUrl(WRITER_OUTCOME_TELEMETRY_PATH, BASE_URL);
+  const payload = {
+    outcome,
+    reason,
+    telemetry: { ...interpolatorTelemetry },
+  };
+
+  for (let attempt = 0; attempt < WRITER_OUTCOME_TELEMETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+        credentials: 'same-origin',
+      });
+
+      if (response.ok || response.status === 204 || response.status === 403) {
+        return;
+      }
+
+      if (response.status < 500 && response.status !== 429) {
+        return;
+      }
+    } catch {
+      // Best-effort telemetry only. Fail silently.
+    }
+
+    if (attempt < WRITER_OUTCOME_TELEMETRY_MAX_ATTEMPTS - 1) {
+      await sleep(backoffWithJitterMs(attempt));
+    }
+  }
+}
+
+function logInterpolatorTelemetry(reason: InterpolatorTelemetryReason): void {
   console.info('[interpolator/telemetry]', reason, { ...interpolatorTelemetry });
+  void postWriterOutcomeTelemetry(reason);
 }
 
 export function getInterpolatorTelemetrySnapshot(): InterpolatorTelemetrySnapshot {
@@ -474,6 +534,24 @@ function tokenOverlapRatio(summary: string, root: string): number {
   return overlap / summaryTokens.size;
 }
 
+function hasReplyGroundingSignal(result: InterpolatorWriteResult): boolean {
+  const summary = (result.collapsedSummary ?? '').toLowerCase();
+  const expanded = (result.expandedSummary ?? '').toLowerCase();
+
+  if (ROOT_ONLY_REPLY_ACTIVITY_RE.test(summary) || ROOT_ONLY_REPLY_ACTIVITY_RE.test(expanded)) {
+    return true;
+  }
+
+  if ((result.whatChanged ?? []).length > 0) return true;
+
+  const specificContributorBlurbs = (result.contributorBlurbs ?? []).filter((entry) => {
+    const blurb = entry.blurb?.trim() ?? '';
+    return blurb.length >= 24 && !/\b(is contributing|responded to the post)\b/i.test(blurb);
+  });
+
+  return specificContributorBlurbs.length > 0;
+}
+
 function shouldPreferDeterministicFallback(
   input: ThreadStateForWriter,
   result: InterpolatorWriteResult,
@@ -481,10 +559,12 @@ function shouldPreferDeterministicFallback(
   const summary = result.collapsedSummary?.trim() ?? '';
   if (!summary) return false;
   if (input.selectedComments.length < 3 && input.whatChangedSignals.length < 2) return false;
-  if (GENERIC_REPLY_ACTIVITY_RE.test(summary)) return true;
-  if (ROOT_ONLY_REPLY_ACTIVITY_RE.test(summary)) return false;
+  const hasReplyGrounding = hasReplyGroundingSignal(result);
 
-  if (sentenceCount(summary) <= 1 && tokenOverlapRatio(summary, input.rootPost.text) >= 0.72) {
+  if (GENERIC_REPLY_ACTIVITY_RE.test(summary)) return true;
+  if (hasReplyGrounding) return false;
+
+  if (sentenceCount(summary) <= 1 && tokenOverlapRatio(summary, input.rootPost.text) >= 0.88) {
     return true;
   }
 
@@ -494,7 +574,7 @@ function shouldPreferDeterministicFallback(
   if (
     firstSentence.length >= 40
     && input.rootPost.text.length >= 60
-    && tokenOverlapRatio(firstSentence, input.rootPost.text) >= 0.75
+    && tokenOverlapRatio(firstSentence, input.rootPost.text) >= 0.90
   ) {
     return true;
   }

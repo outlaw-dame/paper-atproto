@@ -14,16 +14,24 @@ A local-first ATProto social reader inspired by Facebook Paper, Neeva Gist, and 
 
 ## Core Architecture
 
-The app uses a **Dual Pipeline** architecture for content processing:
+The app now runs as one connected AI system with layered execution rather than a few disconnected model features:
 
-1.  **Pipeline A (Story Search):**
-    *   **Deterministic Layer:** Resolves AT URIs, facets, and labels synchronously.
-    *   **Inference Layer:** Generates embeddings off-thread using `all-MiniLM-L6-v2`.
-    *   **Storage:** Persists to local PGlite with vector search.
+1. **Deterministic substrate**
+   Resolves ATProto objects, shapes thread/search context, and applies safety-aware heuristics before any remote model is invoked.
 
-2.  **Pipeline B (Conversation Interpolation):**
-    *   **Rolling State:** Scores threads for "usefulness" (clarifying, new info, counterpoint).
-    *   **Scoring:** Currently uses heuristics; planned migration to SetFit classifier.
+2. **Decision layer**
+   Uses bounded algorithms for contributor selection, thread-change detection, entity centrality, stance coverage, and comment diversity.
+
+3. **Evidence enrichment**
+   Adds verification, translation, and multimodal gating only when the thread actually warrants it.
+
+4. **Model execution lanes**
+   Uses server-side writers and multimodal analysis for the default path, with premium Gemini interpolation for entitled users and explicit browser-runtime policies for larger local models.
+
+5. **Session/control plane**
+   Streams AI session state, presence, and replay lanes through protected `/api/ai/sessions/*` routes.
+
+The canonical architecture and execution flow now live in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Getting Started
 
@@ -223,16 +231,17 @@ Configure:
 
 ## Current Status
 
-🚧 **Active Prototype / Refactoring**
+🚧 **Active prototype with a connected interpretation pipeline**
 
 ### Implemented
-*   App Password Auth (`AtpContext` + `sessionStore`)
-*   Feed Sync with off-thread embeddings
-*   Hybrid Search (FTS + Vector)
-*   Story Mode UI (5-card layout)
+* App Password Auth plus hardened OAuth/browser-origin safeguards
+* Verified thread pipeline with confidence, verification, and summary-mode shaping
+* Phase 1 decision algorithms wired into production code paths
+* Hybrid search with off-thread embeddings and local vector storage
+* Story mode, multimodal gating, premium deep interpolation, and AI session transport
 
 ### In Progress
-*   Refactoring sync pipeline
-*   Migrating thread scoring to SetFit
-*   Adding unit tests
-*   OAuth protocol compliance planning (see `OAUTH_COMPLIANCE_RESEARCH.md`)
+* SetFit-backed replacement for remaining heuristic scoring paths
+* Story-clustering and deeper discovery algorithms from the roadmap
+* Safer local browser generation runtime expansion, especially multimodal
+* Continued test hardening and rollout validation

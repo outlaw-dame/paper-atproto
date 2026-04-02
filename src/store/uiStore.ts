@@ -34,6 +34,19 @@ export interface UiResumeState {
   peopleFeedQuery: string | null;
 }
 
+function clearTransientOverlayResumeState(state: UiResumeState): UiResumeState {
+  return {
+    ...state,
+    // Full-screen overlays and feed drill-ins are intentionally not resumed.
+    // Rehydrating them across reloads can reopen stale thread/search state and
+    // strand the app inside a crashing surface after a deployment or bug fix.
+    story: null,
+    searchStoryQuery: null,
+    hashtagFeedQuery: null,
+    peopleFeedQuery: null,
+  };
+}
+
 function sanitizeBoundedString(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim().replace(/[\u0000-\u001f\u007f]/g, ' ');
@@ -72,7 +85,7 @@ export function sanitizeUiResumeState(value: unknown): UiResumeState {
     peopleFeedQuery: sanitizeBoundedString(source.peopleFeedQuery, MAX_QUERY_LENGTH),
   };
 
-  return sanitized;
+  return clearTransientOverlayResumeState(sanitized);
 }
 
 interface UiState {
@@ -116,7 +129,7 @@ interface UiState {
 }
 
 export function selectUiResumeState(state: UiState): UiResumeState {
-  return sanitizeUiResumeState({
+  return clearTransientOverlayResumeState(sanitizeUiResumeState({
     activeTab: state.activeTab,
     prevTab: state.prevTab,
     homeFeedMode: state.homeFeedMode,
@@ -126,7 +139,7 @@ export function selectUiResumeState(state: UiState): UiResumeState {
     searchStoryQuery: state.searchStoryQuery,
     hashtagFeedQuery: state.hashtagFeedQuery,
     peopleFeedQuery: state.peopleFeedQuery,
-  });
+  }));
 }
 
 export const useUiStore = create<UiState>()(
@@ -178,7 +191,7 @@ export const useUiStore = create<UiState>()(
     {
       name: 'glympse.ui.state.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 2,
+      version: 3,
       partialize: selectUiResumeState,
       migrate: (persistedState) => sanitizeUiResumeState(persistedState),
       onRehydrateStorage: () => (_state, error) => {

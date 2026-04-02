@@ -114,7 +114,27 @@
 				"approve": true,
 				"matchCommandLine": true
 			},
-			"git checkout": true
+			"git checkout": true,
+			"/^node -e \"const fs=require\\('fs'\\);const q=fs\\.readFileSync\\('server/src/services/qwenWriter\\.ts','utf8'\\);const m=q\\.match\\(/const SYSTEM_PROMPT_BASE = `\\(\\[\\\\s\\\\S\\]\\*\\?\\)`;/\\);console\\.log\\('writer_system_prompt_chars',m\\?m\\[1\\]\\.length:'na'\\);\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e \"const fs=require\\('fs'\\);const s=fs\\.readFileSync\\('src/intelligence/modelClient\\.ts','utf8'\\);const idx=s\\.indexOf\\('function shouldPreferDeterministicFallback'\\);console\\.log\\('has_root_only_fallback',idx>=0\\);\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);if\\(start<0\\)\\{console\\.log\\(\"writer_system_prompt_chars na\"\\);process\\.exit\\(0\\);\\}const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=end>=0\\?rest\\.slice\\(0,end\\):rest;console\\.log\\(\"writer_system_prompt_chars\",body\\.length\\);'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenComposerGuidanceWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);if\\(start<0\\)\\{console\\.log\\(\"composer_system_prompt_chars na\"\\);process\\.exit\\(0\\);\\}const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=end>=0\\?rest\\.slice\\(0,end\\):rest;console\\.log\\(\"composer_system_prompt_chars\",body\\.length\\);'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=rest\\.slice\\(0,end\\);console\\.log\\(\"writer_system_prompt_chars\",body\\.length\\);'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			}
 		}
 	}
 }

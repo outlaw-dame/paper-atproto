@@ -27,7 +27,7 @@ describe('GeminiGroundingProvider', () => {
   it('fails closed when remote grounding is not explicitly enabled', async () => {
     envMock.VERIFY_GEMINI_GROUNDING_ENABLED = false;
     const provider = new GeminiGroundingProvider();
-    (provider as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
+    (provider as unknown as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
       models: {
         generateContent: mockGenerateContent,
       },
@@ -63,7 +63,7 @@ describe('GeminiGroundingProvider', () => {
     });
 
     const provider = new GeminiGroundingProvider();
-    (provider as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
+    (provider as unknown as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
       models: {
         generateContent: mockGenerateContent,
       },

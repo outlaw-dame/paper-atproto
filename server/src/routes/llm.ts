@@ -42,6 +42,14 @@ import {
   finalizeLlmOutput,
   prepareLlmInput,
 } from '../llm/policyGateway.js';
+import { assertTrustedBrowserOrigin, appendVaryHeader } from '../lib/originPolicy.js';
+import {
+  getWriterDiagnostics,
+  recordWriterClientOutcome,
+  recordWriterSafetyFilterRun,
+  resetWriterDiagnostics,
+  type WriterClientReason,
+} from '../llm/writerDiagnostics.js';
 
 type LlmRouterContext = {
   Variables: {
@@ -174,6 +182,43 @@ function validationIssues(error: ValidationError): unknown {
   return (error.details as { issues?: unknown } | undefined)?.issues;
 }
 
+function assertDiagnosticsAccess(c: any): void {
+  if (env.NODE_ENV !== 'production') return;
+
+  const configuredSecret = env.AI_SESSION_TELEMETRY_ADMIN_SECRET?.trim();
+  if (!configuredSecret) {
+    throw new AppError(403, 'FORBIDDEN', 'Diagnostics endpoint is disabled in production.');
+  }
+
+  const providedSecret = c.req.header('X-AI-Telemetry-Admin-Secret')?.trim();
+  if (!providedSecret || providedSecret !== configuredSecret) {
+    throw new AppError(403, 'FORBIDDEN', 'Diagnostics endpoint requires an admin secret.');
+  }
+}
+
+function applyDiagnosticsHeaders(c: any): void {
+  c.header('Cache-Control', 'no-store, private');
+  c.header('Pragma', 'no-cache');
+  c.header('X-Content-Type-Options', 'nosniff');
+  appendVaryHeader(c, 'Origin');
+}
+
+const WriterOutcomeTelemetrySchema = z.object({
+  outcome: z.enum(['model', 'fallback']),
+  reason: z.enum([
+    'success',
+    'abstained-response-fallback',
+    'root-only-response-fallback',
+    'failure-fallback',
+  ]),
+  telemetry: z.object({
+    attempted: z.number().int().min(0).max(1_000_000),
+    succeeded: z.number().int().min(0).max(1_000_000),
+    abstained: z.number().int().min(0).max(1_000_000),
+    failed: z.number().int().min(0).max(1_000_000),
+  }).optional(),
+});
+
 llmRouter.use('*', async (c, next) => {
   const requestId = c.req.header(REQUEST_ID_HEADER) || buildRequestId();
   c.set('requestId', requestId);
@@ -191,6 +236,46 @@ llmRouter.use('*', async (c, next) => {
       durationMs: Date.now() - startedAt,
     });
   }
+});
+
+// ─── POST /telemetry/writer-outcome ───────────────────────────────────────
+
+llmRouter.post('/telemetry/writer-outcome', async (c) => {
+  assertTrustedBrowserOrigin(c, 'Writer telemetry');
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const parsed = WriterOutcomeTelemetrySchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'Invalid telemetry payload', issues: parsed.error.issues }, 400);
+  }
+
+  recordWriterClientOutcome({
+    outcome: parsed.data.outcome,
+    reason: parsed.data.reason as WriterClientReason,
+  });
+
+  return c.body(null, 204);
+});
+
+// ─── GET/DELETE /admin/diagnostics ────────────────────────────────────────
+
+llmRouter.get('/admin/diagnostics', (c) => {
+  assertDiagnosticsAccess(c);
+  applyDiagnosticsHeaders(c);
+  return c.json({ writer: getWriterDiagnostics() });
+});
+
+llmRouter.delete('/admin/diagnostics', (c) => {
+  assertDiagnosticsAccess(c);
+  resetWriterDiagnostics();
+  applyDiagnosticsHeaders(c);
+  return c.body(null, 204);
 });
 
 // ─── POST /write/interpolator ──────────────────────────────────────────────
@@ -225,6 +310,13 @@ llmRouter.post('/write/interpolator', async (c) => {
 
   try {
     const result = await withCircuitProtection(c, 'interpolator', () => runInterpolatorWriter(prepared.data as any));
+    const filterResult = filterWriterResponse({ ...result });
+    const wasMutated = JSON.stringify(filterResult.filtered) !== JSON.stringify(result);
+    recordWriterSafetyFilterRun({
+      mutated: wasMutated,
+      blocked: !filterResult.safetyMetadata.passed,
+    });
+
     const { data: filtered, safetyMetadata } = finalizeLlmOutput(
       WriterResponseSchema,
       result,
@@ -233,7 +325,7 @@ llmRouter.post('/write/interpolator', async (c) => {
         requestId,
       },
       {
-        filter: (value) => filterWriterResponse({ ...value }) as any,
+        filter: () => filterResult as any,
       },
     );
     const safety = safetyMetadata ?? {

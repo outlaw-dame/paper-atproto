@@ -275,16 +275,17 @@ function PromptHeroCard({
   const [repostCount, setRepostCount] = useState(post.repostCount);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const sessionDid = useSessionStore((state) => state.session?.did ?? '');
-  const bookmarkedUris = useBookmarksStore((state) => (
-    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
+  const bookmarked = useBookmarksStore((state) => (
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []).includes(post.id) : false
   ));
   const addBookmark = useBookmarksStore((state) => state.addBookmark);
   const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
-  const bookmarked = bookmarkedUris.includes(post.id);
-  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const { openProfile, openExploreSearch } = useUiStore();
+  const translationPolicy = useTranslationStore((state) => state.policy);
+  const translation = useTranslationStore((state) => state.byId[post.id]);
+  const upsertTranslation = useTranslationStore((state) => state.upsertTranslation);
+  const openProfile = useUiStore((state) => state.openProfile);
+  const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const navigateToProfile = useProfileNavigation();
-  const translation = translationById[post.id];
   const detectedRootLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
   const shouldOfferTranslation = hasRenderableTranslation
@@ -2021,16 +2022,17 @@ function ContributionCard({
   const [translating, setTranslating] = useState(false);
   const [showAllReplies, setShowAllReplies] = useState(false);
   const sessionDid = useSessionStore((state) => state.session?.did ?? '');
-  const bookmarkedUris = useBookmarksStore((state) => (
-    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
+  const bookmarked = useBookmarksStore((state) => (
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []).includes(node.uri) : false
   ));
   const addBookmark = useBookmarksStore((state) => state.addBookmark);
   const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
-  const bookmarked = bookmarkedUris.includes(node.uri);
-  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const { openProfile, openExploreSearch } = useUiStore();
+  const translationPolicy = useTranslationStore((state) => state.policy);
+  const translation = useTranslationStore((state) => state.byId[node.uri]);
+  const upsertTranslation = useTranslationStore((state) => state.upsertTranslation);
+  const openProfile = useUiStore((state) => state.openProfile);
+  const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const navigateToProfile = useProfileNavigation();
-  const translation = translationById[node.uri];
   const detectedReplyLanguage = useMemo(() => heuristicDetectLanguage(node.text), [node.text]);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(node.text, translation.translatedText);
   const shouldOfferTranslation = hasRenderableTranslation
@@ -2884,8 +2886,10 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export default function StoryMode({ entry, onClose }: Props) {
-  const { agent, session, profile } = useSessionStore();
-  const { openComposeReply } = useUiStore();
+  const agent = useSessionStore((state) => state.agent);
+  const session = useSessionStore((state) => state.session);
+  const profile = useSessionStore((state) => state.profile);
+  const openComposeReply = useUiStore((state) => state.openComposeReply);
   const translationPolicy = useTranslationStore((state) => state.policy);
   const conversationSession = useConversationSession(entry.id);
   const [activeFilter, setActiveFilter] = useState<ThreadFilterOption>('Top');
@@ -2911,7 +2915,7 @@ export default function StoryMode({ entry, onClose }: Props) {
         setFollowedDids(dids);
       })
       .catch(() => {}); // non-critical, fail silently
-  }, [session?.did]);
+  }, [agent, session?.did]);
   const loading = conversationMeta?.status === 'loading';
   const error = conversationMeta?.error ?? null;
   const rootPost = useMemo(() => {
@@ -3105,6 +3109,18 @@ export default function StoryMode({ entry, onClose }: Props) {
     openComposeReply(getReplyComposerPayload(node));
   }, [getReplyComposerPayload, onClose, openComposeReply]);
 
+  const handleCloseEntity = useCallback(() => {
+    setActiveEntity(null);
+  }, []);
+
+  const entitySheetRelatedPosts = useMemo(() => 
+    replies.map(r => ({
+      id: r.uri, content: r.text,
+      author: { handle: r.authorHandle ?? '', displayName: r.authorName ?? '', did: r.authorDid ?? '', ...(r.authorAvatar != null ? { avatar: r.authorAvatar } : {}) },
+      likeCount: r.likeCount ?? 0, repostCount: r.repostCount ?? 0, replyCount: r.replyCount ?? 0,
+      bookmarkCount: 0, createdAt: '', chips: [] as ChipType[],
+    })), [replies]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 32 }}
@@ -3122,13 +3138,8 @@ export default function StoryMode({ entry, onClose }: Props) {
       {/* Entity sheet — Narwhal v3 Phase C */}
       <WriterEntitySheet
         entity={activeEntity}
-        relatedPosts={replies.map(r => ({
-          id: r.uri, content: r.text,
-          author: { handle: r.authorHandle ?? '', displayName: r.authorName ?? '', did: r.authorDid ?? '', ...(r.authorAvatar != null ? { avatar: r.authorAvatar } : {}) },
-          likeCount: r.likeCount ?? 0, repostCount: r.repostCount ?? 0, replyCount: r.replyCount ?? 0,
-          bookmarkCount: 0, createdAt: '', chips: [] as ChipType[],
-        }))}
-        onClose={() => setActiveEntity(null)}
+        relatedPosts={entitySheetRelatedPosts}
+        onClose={handleCloseEntity}
       />
 
       {/* HostBar */}
