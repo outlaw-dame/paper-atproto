@@ -28,16 +28,6 @@ export * from './stanceClustering';
 /**
  * Future algorithms (not yet implemented):
  *
- * - **entityCentrality** (VERY HIGH): Rank entities by multi-factor importance
- *   File: entityCentrality.ts
- *   Purpose: Replace surface extraction with principled graph-native scoring
- *   Impact: +15% Explore accuracy, unified entity ranking
- *
- * - **stanceClustering** (VERY HIGH): Group contributors by viewpoint
- *   File: stanceClustering.ts
- *   Purpose: Suppress same-stance redundancy, ensure diversity
- *   Impact: +20% contributor quality, more balanced narratives
- *
  * - **storyClustering** (HIGH): Identify natural conversation clusters
  *   File: storyClustering.ts (TODO)
  *   Purpose: Break mega-threads into natural sub-stories

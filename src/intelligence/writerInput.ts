@@ -30,6 +30,20 @@ import {
   type EntityInfo,
 } from './algorithms';
 
+function toSafeErrorMeta(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) {
+    return {
+      name: error.name || 'Error',
+      message: error.message.replace(/[\u0000-\u001F\u007F]/g, ' ').slice(0, 180),
+    };
+  }
+
+  return {
+    name: 'UnknownError',
+    message: 'Unknown writer-input algorithm error',
+  };
+}
+
 export type WriterTranslationMap = Record<string, {
   translatedText?: string;
   sourceLang?: string;
@@ -130,6 +144,9 @@ export function buildThreadStateForWriter(
     summaryMode?: SummaryMode;
   },
 ): ThreadStateForWriter {
+  const debugAlgorithmTelemetry = import.meta.env.DEV
+    || import.meta.env.VITE_DEBUG_ALGORITHM_COMPARISON === '1';
+
   const summaryMode: SummaryMode = options?.summaryMode
     ?? chooseSummaryMode({
       surfaceConfidence: confidence.surfaceConfidence,
@@ -211,7 +228,11 @@ export function buildThreadStateForWriter(
       selectedContributorDids = legacy.map(c => c.contributor.did);
     }
   } catch (err) {
-    console.error('[writerInput] Contributor selection algorithm failed, falling back to legacy:', err);
+    console.error('[writerInput] contributor_selection_fallback', {
+      ...toSafeErrorMeta(err),
+      contributorCount: state.topContributors.length,
+      replyCount: replies.length,
+    });
     // Fallback to legacy selection
     const legacy = selectContributors(
       state.topContributors,
@@ -229,13 +250,13 @@ export function buildThreadStateForWriter(
     .map(c => ({ contributor: c }));
 
   // Telemetry: log selection method
-  if (Math.random() < 0.1) { // Log 10% of samples to reduce noise
+  if (debugAlgorithmTelemetry && Math.random() < 0.1) { // Log 10% of samples to reduce noise
     console.log('[writerInput] Contributor selection:', {
       method: selectionMethod,
       count: selectedContributorDids.length,
     });
 
-    if (import.meta.env.DEV) {
+    if (debugAlgorithmTelemetry) {
       const comparison = compareSelectionApproaches(state.topContributors, scoreByDid);
       console.log('[writerInput] Selection comparison:', {
         agreementCount: comparison.agreementCount,
@@ -332,7 +353,12 @@ export function buildThreadStateForWriter(
       confidence: entity.canonicalConfidence,
       impact: entity.centralityScore,
     }));
-  } catch {
+  } catch (err) {
+    console.warn('[writerInput] entity_centrality_fallback', {
+      ...toSafeErrorMeta(err),
+      candidateEntityCount: rankedEntities.length,
+      contributorCount: state.topContributors.length,
+    });
     safeEntities = [];
   }
 
