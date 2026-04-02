@@ -397,7 +397,10 @@ export function computeThreadChangeDelta(
   try {
     const prevTime = new Date(previous.timestamp).getTime();
     const currTime = new Date(current.timestamp).getTime();
-    const elapsedSeconds = Math.max(0, (currTime - prevTime) / 1000);
+    const rawElapsedSeconds = (currTime - prevTime) / 1000;
+    const elapsedSeconds = Number.isFinite(rawElapsedSeconds)
+      ? Math.max(0, rawElapsedSeconds)
+      : 0;
 
     // Compute deltas
     const newAngle = computeNewAngleDelta(previous, current);
