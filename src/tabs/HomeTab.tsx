@@ -522,9 +522,14 @@ export default function HomeTab({ onOpenStory }: Props) {
   }, [agent, session]);
 
   const sessionDid = session?.did ?? '';
-  const bookmarkedUris = useBookmarksStore((state) => (
-    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
-  ));
+  // Create a memoized default empty array to prevent new references on every render
+  const emptyArray = useMemo(() => [], []);
+  // Select bookmarked URIs - use memoized fallback to prevent infinite loops
+  const bookmarkedUris = useBookmarksStore((state) =>
+    sessionDid && state.bookmarksByDid[sessionDid]
+      ? state.bookmarksByDid[sessionDid]
+      : emptyArray
+  );
 
   // Sync bookmark state from store to posts when posts or bookmarks change
   useEffect(() => {

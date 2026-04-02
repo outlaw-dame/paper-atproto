@@ -4,6 +4,24 @@ import {
   prepareLocalTextGenerationRequest,
 } from './localPolicyGateway';
 
+/**
+ * Pre-initialize ONNX Runtime configuration to prevent "registerBackend" errors
+ * Should be called early in app bootstrap before async transformers imports
+ */
+export async function preConfigureOnnxRuntime(): Promise<void> {
+  try {
+    const transformers = await import('@xenova/transformers');
+    configureTransformersRuntime(transformers.env, false);
+    // Mark that ONNX has been pre-configured
+    console.debug('[ONNX] Runtime pre-configured successfully');
+  } catch (err) {
+    // Silently handle configuration failures - transformers may not be used
+    if (err instanceof Error) {
+      console.debug('[ONNX] Pre-configuration skipped:', err.message);
+    }
+  }
+}
+
 export interface GenerateTextRequest {
   prompt: string;
   systemPrompt?: string;

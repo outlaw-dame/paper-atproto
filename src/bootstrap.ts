@@ -7,6 +7,7 @@ import {
 import { initPlatformBootstrap } from './pwa/bootstrap';
 import { installExternalLinkGuard } from './lib/safety/externalLinkGuard';
 import { getStaticPlatformInfo } from './lib/platformDetect';
+import { preConfigureOnnxRuntime } from './runtime/generationSession';
 // import { inferenceClient } from './workers/InferenceClient';
 
 function shouldSkipVectorIndexBuild(): boolean {
@@ -25,6 +26,9 @@ export async function initApp() {
 
   // Apply a global guard so all target=_blank outbound links pass through URL safety checks.
   installExternalLinkGuard();
+
+  // Pre-configure ONNX Runtime to prevent registerBackend errors from transformers.js
+  await preConfigureOnnxRuntime();
 
   // 1. Initialize DB and Extensions
   markBootstrapStageStarted('dbInit');
