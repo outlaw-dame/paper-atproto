@@ -5,7 +5,7 @@ import type {
   SessionAiDiagnostics,
 } from './sessionTypes';
 
-type ConversationModelRunKind = 'writer' | 'premium';
+type ConversationModelRunKind = 'writer' | 'multimodal' | 'premium';
 
 function createConversationModelRunDiagnostics(
   provider: ConversationModelRunDiagnostics['provider'],
@@ -20,6 +20,7 @@ function createConversationModelRunDiagnostics(
 export function createSessionAiDiagnostics(): SessionAiDiagnostics {
   return {
     writer: createConversationModelRunDiagnostics('interpolator_writer'),
+    multimodal: createConversationModelRunDiagnostics('qwen_multimodal'),
     premium: createConversationModelRunDiagnostics('gemini'),
   };
 }

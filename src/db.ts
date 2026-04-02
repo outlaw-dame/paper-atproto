@@ -1,30 +1,47 @@
-import { PGlite } from '@electric-sql/pglite';
-import { vector } from '@electric-sql/pglite/vector';
+import type { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
+import {
+  createPaperDbClient,
+  type PaperDbClient,
+  type PaperDbRuntimeInfo,
+} from './db/runtime';
 import * as schema from './schema';
 
 /**
- * Database Utility using PGlite and Drizzle ORM.
- * Persists to IndexedDB for local-first reliability.
+ * Database utility using PGlite and Drizzle ORM.
+ * Prefers a worker-backed IndexedDB runtime in capable browsers and falls back
+ * to an in-thread client when needed.
  */
 
 export class PaperDB {
-  private pg: PGlite;
-  private db: any;
+  private pg: PaperDbClient | null = null;
+  private db: any = null;
+  private runtimeInfo: PaperDbRuntimeInfo | null = null;
+  private initPromise: Promise<void> | null = null;
 
-  constructor() {
-    this.pg = new PGlite('idb://paper-atproto-db', {
-      extensions: {
-        vector,
-      },
-    });
-    // Initialize Drizzle with PGlite
-    this.db = drizzle(this.pg, { schema });
+  private requirePG(): PaperDbClient {
+    if (!this.pg) {
+      throw new Error('PaperDB accessed before init() completed');
+    }
+
+    return this.pg;
   }
 
-  async init() {
-    // Create tables for ATProto records with hybrid search support
-    await this.pg.exec(`
+  private requireDB() {
+    if (!this.db) {
+      throw new Error('PaperDB accessed before init() completed');
+    }
+
+    return this.db;
+  }
+
+  private async initialize(): Promise<void> {
+    const { client, runtime } = await createPaperDbClient();
+    const db = drizzle(client as unknown as PGlite, { schema });
+
+    try {
+      // Create tables for ATProto records with hybrid search support
+      await client.exec(`
       -- Enable pgvector extension
       CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -92,10 +109,16 @@ export class PaperDB {
       -- Create index for full-text search (GIN)
       CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN(search_vector);
       CREATE INDEX IF NOT EXISTS idx_feed_items_search_vector ON feed_items USING GIN(search_vector);
+
+      -- Create indexes for hot feed/search paths and foreign-key maintenance.
+      CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_entities_post_id ON entities (post_id);
+      CREATE INDEX IF NOT EXISTS idx_feed_items_feed_id_pub_date ON feed_items (feed_id, pub_date DESC);
+      CREATE INDEX IF NOT EXISTS idx_feed_items_pub_date ON feed_items (pub_date DESC);
     `);
 
-    // Trigger to update search_vector on insert/update
-    await this.pg.exec(`
+      // Trigger to update search_vector on insert/update
+      await client.exec(`
       CREATE OR REPLACE FUNCTION posts_search_vector_update() RETURNS trigger AS $$
       BEGIN
         new.search_vector := to_tsvector('english', new.content);
@@ -121,13 +144,36 @@ export class PaperDB {
       BEFORE INSERT OR UPDATE ON feed_items
       FOR EACH ROW EXECUTE FUNCTION feed_items_search_vector_update();
     `);
+
+      this.pg = client;
+      this.db = db;
+      this.runtimeInfo = runtime;
+    } catch (error) {
+      this.pg = null;
+      this.db = null;
+      this.runtimeInfo = null;
+      await client.close().catch(() => {});
+      throw error;
+    }
+  }
+
+  async init() {
+    if (this.pg && this.db) return;
+    if (!this.initPromise) {
+      this.initPromise = this.initialize().finally(() => {
+        this.initPromise = null;
+      });
+    }
+
+    await this.initPromise;
   }
 
   // Build HNSW vector indexes separately — deferred after startup so the memory
   // spike from index construction (pgvector loads the full embedding column into
   // the WASM heap) doesn't hit during first paint or on low-memory mobile devices.
   async buildIndexes() {
-    await this.pg.exec(`
+    await this.init();
+    await this.requirePG().exec(`
       CREATE INDEX IF NOT EXISTS idx_posts_embedding
         ON posts USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
       CREATE INDEX IF NOT EXISTS idx_feed_items_embedding
@@ -136,12 +182,40 @@ export class PaperDB {
   }
 
   getDB() {
-    return this.db;
+    return this.requireDB();
   }
 
   getPG() {
-    return this.pg;
+    return this.requirePG();
+  }
+
+  getRuntimeInfo(): PaperDbRuntimeInfo {
+    if (!this.runtimeInfo) {
+      throw new Error('PaperDB runtime requested before init() completed');
+    }
+
+    return { ...this.runtimeInfo };
+  }
+
+  async close() {
+    const pendingInit = this.initPromise;
+    if (pendingInit) {
+      await pendingInit.catch(() => {});
+    }
+
+    const client = this.pg;
+    this.pg = null;
+    this.db = null;
+    this.runtimeInfo = null;
+    this.initPromise = null;
+    await client?.close().catch(() => {});
   }
 }
 
 export const paperDB = new PaperDB();
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    void paperDB.close();
+  });
+}

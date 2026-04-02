@@ -8,14 +8,37 @@ const EnvSchema = z.object({
   QWEN_WRITER_MODEL: z.string().default('qwen3:4b-instruct-2507-q4_K_M'),
   QWEN_MULTIMODAL_MODEL: z.string().default('qwen3-vl:4b-instruct-q4_K_M'),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  LLM_MEDIA_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+  LLM_MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(8_000_000),
+  LLM_MEDIA_MAX_REDIRECTS: z.coerce.number().int().min(0).max(10).default(3),
+  LLM_LOCAL_ONLY: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v !== 'false').default('true'),
+  ),
+  LLM_STARTUP_CHECK: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v !== 'false').default('true'),
+  ),
+  LLM_STARTUP_FAIL_CLOSED: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
+  LLM_STARTUP_TIMEOUT_MS: z.coerce.number().int().positive().default(6_000),
+  QWEN_WRITER_MODEL_DIGEST: z.string().optional(),
+  QWEN_MULTIMODAL_MODEL_DIGEST: z.string().optional(),
   LLM_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z.string().optional().transform((v) => v !== 'false').default('true'),
   ),
   GOOGLE_FACT_CHECK_API_KEY: z.string().min(1).optional(),
   GOOGLE_SAFE_BROWSING_API_KEY: z.string().min(1).optional(),
+  SAFE_BROWSING_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(2000),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_GROUNDING_MODEL: z.string().default('gemini-2.5-flash'),
+  VERIFY_GEMINI_GROUNDING_ENABLED: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
   GEMINI_DEEP_INTERPOLATOR_MODEL: z.string().default('gemini-2.5-flash'),
   GEMINI_COMPOSER_MODEL: z.string().default('gemini-2.5-flash'),
   GEMINI_COMPOSER_ENABLED: z.preprocess(
@@ -31,6 +54,42 @@ const EnvSchema = z.object({
   PREMIUM_AI_ALLOWLIST_DIDS: z.string().optional().default(''),
   PREMIUM_AI_TIMEOUT_MS: z.coerce.number().int().positive().default(25_000),
   PREMIUM_AI_RETRY_ATTEMPTS: z.coerce.number().int().positive().default(2),
+  AI_DURABLE_EVENTS_READ_BASE_URL: z.string().url().optional(),
+  AI_DURABLE_STATE_READ_BASE_URL: z.string().url().optional(),
+  AI_DURABLE_PRESENCE_READ_BASE_URL: z.string().url().optional(),
+  AI_DURABLE_EVENTS_WRITE_BASE_URL: z.string().url().optional(),
+  AI_DURABLE_STATE_WRITE_BASE_URL: z.string().url().optional(),
+  AI_DURABLE_PRESENCE_WRITE_BASE_URL: z.string().url().optional(),
+  AI_DURABLE_READ_BEARER_TOKEN: z.string().min(1).optional(),
+  AI_DURABLE_WRITE_BEARER_TOKEN: z.string().min(1).optional(),
+  AI_DURABLE_READ_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
+  AI_DURABLE_WRITE_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
+  AI_DURABLE_RETRY_ATTEMPTS: z.coerce.number().int().positive().default(3),
+  AI_DURABLE_FAIL_OPEN: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
+  AI_SESSION_TELEMETRY_ADMIN_SECRET: z.string().min(1).optional(),
+  RATE_LIMIT_REDIS_URL: z.string().url().optional(),
+  RATE_LIMIT_REDIS_PREFIX: z.string().default('paper:ratelimit'),
+    RATE_LIMIT_REDIS_FAIL_CLOSED: z.preprocess(
+      (v) => (typeof v === 'boolean' ? String(v) : v),
+      z.string().optional().transform((v) => v === 'true').default('false'),
+    ),
+    RATE_LIMIT_TRUST_PROXY: z.preprocess(
+      (v) => (typeof v === 'boolean' ? String(v) : v),
+      z.string().optional().transform((v) => v === 'true').default('false'),
+    ),
+    RATE_LIMIT_TRUSTED_IP_HEADER: z.string().default('cf-connecting-ip'),
+  CORS_ALLOWED_ORIGINS: z.string().optional().default(''),
+  CORS_ALLOW_PRIVATE_NETWORK_IN_DEV: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v !== 'false').default('true'),
+  ),
+  AI_SAFE_BROWSING_FAIL_CLOSED: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
   VERIFY_API_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z
@@ -87,7 +146,7 @@ const EnvSchema = z.object({
   COMPRESSION_MIN_BYTES: z.coerce.number().int().min(0).default(1024),
   COMPRESSION_MAX_BYTES: z.coerce.number().int().positive().default(1_500_000),
   COMPRESSION_GZIP_LEVEL: z.coerce.number().int().min(1).max(9).default(6),
-  COMPRESSION_ZSTD_LEVEL: z.coerce.number().int().min(1).max(22).default(8),
+  COMPRESSION_ZSTD_LEVEL: z.coerce.number().int().min(1).max(22).default(3),
 
   // ── Web Push ──────────────────────────────────────────────────────────────
   // VAPID keys are required when actually sending push notifications.

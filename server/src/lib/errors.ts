@@ -34,8 +34,8 @@ export class UnauthorizedError extends AppError {
 }
 
 export class RateLimitError extends AppError {
-  constructor(message = 'Rate limit exceeded') {
-    super(429, 'RATE_LIMITED', message);
+  constructor(message = 'Rate limit exceeded', retryAfterMs?: number) {
+    super(429, 'RATE_LIMITED', message, retryAfterMs === undefined ? undefined : { retryAfterMs });
     this.name = 'RateLimitError';
   }
 }

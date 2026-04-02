@@ -22,6 +22,7 @@ import type { LiveNotification } from '../../atproto/mappers';
 import { AtUri } from '@atproto/syntax';
 import { useModerationStore } from '../../store/moderationStore';
 import type { AppBskyFeedDefs, AppBskyGraphDefs } from '@atproto/api';
+import { normalizeAtprotoSearchQuery } from '../searchQuery';
 
 // ─── Query key factory ─────────────────────────────────────────────────────
 export const qk = {
@@ -230,14 +231,15 @@ export function useSubscribedLists() {
 // ─── Search posts ──────────────────────────────────────────────────────────
 export function useSearchPosts(query: string) {
   const { agent, session } = useSessionStore();
+  const normalizedQuery = normalizeAtprotoSearchQuery(query);
 
   return useQuery({
-    queryKey: qk.search(query),
+    queryKey: qk.search(normalizedQuery),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: query, limit: 25 }), { signal });
+      const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: normalizedQuery, limit: 25 }), { signal });
       return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post }));
     },
-    enabled: !!session && query.trim().length > 1,
+    enabled: !!session && normalizedQuery.length > 1,
     staleTime: 1000 * 60,
     gcTime: 1000 * 60 * 5,
   });

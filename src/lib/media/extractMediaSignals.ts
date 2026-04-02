@@ -14,11 +14,49 @@ export interface MediaSignals {
 }
 
 export interface AtprotoEmbed {
+  $type?: string;
   images?: Array<{ image?: { mimeType?: string }; alt?: string }>;
   video?: { video?: { mimeType?: string } };
   external?: { uri?: string; title?: string; description?: string };
   quote?: Record<string, any>;
   record?: Record<string, any>;
+  media?: AtprotoEmbed | null;
+}
+
+function emptyMediaSignals(): MediaSignals {
+  return {
+    hasImages: false,
+    hasVideo: false,
+    hasLink: false,
+    imageAltText: '',
+    imageCount: 0,
+  };
+}
+
+function collectImageEntries(embed: AtprotoEmbed): Array<{ alt?: string }> {
+  const topLevel = Array.isArray(embed.images) ? embed.images : [];
+  const nestedMedia = embed.media && typeof embed.media === 'object' ? embed.media : null;
+  const nested = nestedMedia && Array.isArray(nestedMedia.images) ? nestedMedia.images : [];
+  return [...topLevel, ...nested];
+}
+
+function readRecordUri(record: unknown): string {
+  if (!record || typeof record !== 'object') return '';
+  const uri = (record as { uri?: unknown }).uri;
+  return typeof uri === 'string' ? uri.trim() : '';
+}
+
+function readExternalUri(external: unknown): string {
+  if (!external || typeof external !== 'object') return '';
+  const uri = (external as { uri?: unknown }).uri;
+  return typeof uri === 'string' ? uri.trim() : '';
+}
+
+function hasVideoPayload(embed: AtprotoEmbed | null | undefined): boolean {
+  if (!embed || typeof embed !== 'object') return false;
+  if (embed.video && typeof embed.video === 'object') return true;
+  if (typeof embed.$type === 'string' && embed.$type.includes('.video')) return true;
+  return hasVideoPayload(embed.media ?? null);
 }
 
 /**
@@ -27,31 +65,33 @@ export interface AtprotoEmbed {
  */
 export function extractMediaSignals(embed: AtprotoEmbed | null | undefined): MediaSignals {
   if (!embed) {
-    return {
-      hasImages: false,
-      hasVideo: false,
-      hasLink: false,
-      imageAltText: '',
-      imageCount: 0,
-    };
+    return emptyMediaSignals();
   }
 
-  const hasImages = !!(embed.images && embed.images.length > 0);
-  const imageCount = embed.images?.length ?? 0;
-  
+  const imageEntries = collectImageEntries(embed);
+  const hasImages = imageEntries.length > 0;
+  const imageCount = imageEntries.length;
+
   // Concatenate all ALT texts
-  const imageAltText = embed.images
+  const imageAltText = imageEntries
     ?.map((img) => img.alt?.trim() || '')
     .filter((alt) => alt.length > 0)
     .join(' | ')
     .slice(0, 2000) || ''; // Cap at 2000 chars to avoid bloating index
 
-  const hasVideo = !!(embed.video);
-  
-  // Link detection: external card or quote-post
+  const hasVideo = hasVideoPayload(embed);
+
+  const media = embed.media && typeof embed.media === 'object' ? embed.media : null;
+  const topLevelExternalUri = readExternalUri(embed.external);
+  const nestedExternalUri = readExternalUri(media?.external);
+  const recordUri = readRecordUri(embed.record) || readRecordUri(media?.record);
+
+  // Link detection: external card, quote-post, or record-with-media quote target.
   const hasLink =
-    !!(embed.external && embed.external.uri) ||
-    !!(embed.quote && embed.record); // Quote posts contain linked record
+    topLevelExternalUri.length > 0 ||
+    nestedExternalUri.length > 0 ||
+    recordUri.length > 0 ||
+    !!(embed.quote && embed.record);
 
   return {
     hasImages,
@@ -70,13 +110,7 @@ export function extractMediaSignalsFromJson(
   embedJson: string | null | undefined,
 ): MediaSignals {
   if (!embedJson) {
-    return {
-      hasImages: false,
-      hasVideo: false,
-      hasLink: false,
-      imageAltText: '',
-      imageCount: 0,
-    };
+    return emptyMediaSignals();
   }
 
   try {
@@ -84,13 +118,7 @@ export function extractMediaSignalsFromJson(
     return extractMediaSignals(embed);
   } catch (err) {
     console.warn('[extractMediaSignalsFromJson] Failed to parse embed:', err);
-    return {
-      hasImages: false,
-      hasVideo: false,
-      hasLink: false,
-      imageAltText: '',
-      imageCount: 0,
-    };
+    return emptyMediaSignals();
   }
 }
 
@@ -108,10 +136,18 @@ export function getMediaBoostFactor(
 ): number {
   if (!queryHasVisualIntent) return 1.0; // No boost for text-only queries
 
-  // Boost posts with images if query suggests visual content
+  let boost = 1;
   if (mediaSignals.hasImages) {
-    return 1.15; // 15% boost for posts with media
+    boost += 0.12 + Math.min(mediaSignals.imageCount, 4) * 0.015;
   }
-
-  return 1.0;
+  if (mediaSignals.hasVideo) {
+    boost += 0.16;
+  }
+  if (mediaSignals.hasLink) {
+    boost += 0.04;
+  }
+  if (mediaSignals.imageAltText.trim().length > 0) {
+    boost += 0.02;
+  }
+  return Math.min(1.28, Math.round(boost * 1000) / 1000);
 }

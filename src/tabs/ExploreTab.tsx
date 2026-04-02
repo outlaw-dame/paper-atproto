@@ -44,6 +44,7 @@ import {
 } from '../conversation/discovery/exploreSurface';
 import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
 import { normalizeExternalFeedUrl } from '../lib/feedUrls';
+import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -970,8 +971,40 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const autoTranslatedIdsRef = useRef<Set<string>>(new Set());
   const autoAttemptedIdsRef = useRef<Set<string>>(new Set());
   const carouselIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const phraseIdx = useRef(Math.floor(Math.random() * DISCOVERY_PHRASES.length));
+  const viewResumeKey = useMemo(() => {
+    if (!session?.did) return null;
+    return `explore:${session.did}`;
+  }, [session?.did]);
+
+  const persistViewScroll = useCallback(() => {
+    if (!viewResumeKey || !scrollRef.current) return;
+    writeViewScrollPosition(viewResumeKey, scrollRef.current.scrollTop);
+  }, [viewResumeKey]);
+
+  useEffect(() => {
+    if (!viewResumeKey) return;
+    const top = readViewScrollPosition(viewResumeKey);
+    if (top <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = top;
+      }
+    }, 50);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [viewResumeKey]);
+
+  useEffect(() => {
+    return () => {
+      persistViewScroll();
+    };
+  }, [persistViewScroll]);
   // Entity sheet state — Narwhal v3 Phase C
   const [activeEntity, setActiveEntity] = useState<WriterEntity | null>(null);
   const {
@@ -1389,7 +1422,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
       </div>
 
       {/* ── Scrollable content ───────────────────────────────────────────── */}
-      <div className="scroll-y" style={{ flex: 1, position: 'relative', zIndex: 1 }}>
+      <div ref={scrollRef} className="scroll-y" style={{ flex: 1, position: 'relative', zIndex: 1 }} onScroll={persistViewScroll}>
         <div style={{ padding: '20px 20px 0' }}>
 
           {/* ── Hero title block ──────────────────────────────────────── */}

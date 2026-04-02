@@ -2,19 +2,23 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslationStore } from '../store/translationStore';
 import { useMediaSettingsStore } from '../store/mediaSettingsStore';
-import ContentFilterSettingsSection from './ContentFilterSettingsSection';
 import AccountPrefsSection from './AccountPrefsSection';
-import ModerationSettingsPage from './ModerationSettingsPage';
-import FeedsSettingsPage from './FeedsSettingsPage';
+import LazyModuleBoundary from './LazyModuleBoundary';
+import { SettingsPageFallback } from './TranslationSettingsSheetFallback';
 import AppleSettingsSection from './AppleSettingsSection';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry';
+import {
+  getBootstrapTelemetrySnapshot,
+  type BootstrapTelemetrySnapshot,
+} from '../perf/bootstrapTelemetry';
 import {
   getRecommendationTelemetrySnapshot,
   type RecommendationTelemetrySnapshot,
 } from '../perf/recommendationTelemetry';
 import { getLocalizedCrisisResources } from '../lib/mentalHealthResources';
 import { useAppearanceStore } from '../store/appearanceStore';
+import { lazyWithRetry } from '../lib/lazyWithRetry';
 
 interface Props {
   open: boolean;
@@ -27,6 +31,14 @@ type LanguageOption = {
 };
 
 type SettingsPage = 'translation' | 'moderation' | 'feeds' | 'appearance' | 'debug' | 'location';
+const ModerationSettingsPage = lazyWithRetry(
+  () => import('./ModerationSettingsPage'),
+  'ModerationSettingsPage',
+);
+const FeedsSettingsPage = lazyWithRetry(
+  () => import('./FeedsSettingsPage'),
+  'FeedsSettingsPage',
+);
 
 interface ComposeDebugSnapshot {
   draftText: string;
@@ -176,6 +188,9 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const [recommendationMetrics, setRecommendationMetrics] = useState<RecommendationTelemetrySnapshot>(
     () => getRecommendationTelemetrySnapshot(),
   );
+  const [bootstrapMetrics, setBootstrapMetrics] = useState<BootstrapTelemetrySnapshot>(
+    () => getBootstrapTelemetrySnapshot(),
+  );
   const [composeDebug, setComposeDebug] = useState<ComposeDebugSnapshot | null>(null);
 
   const systemLang = useMemo(() => {
@@ -189,11 +204,12 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const languageOptions = useMemo(() => buildLanguageOptions(systemLang), [systemLang]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || page !== 'debug') return;
 
     const refresh = () => {
       setAltMetrics(getAltTextMetricsSnapshot());
       setRecommendationMetrics(getRecommendationTelemetrySnapshot());
+      setBootstrapMetrics(getBootstrapTelemetrySnapshot());
       if (typeof window !== 'undefined') {
         const snapshot = (window as Window & { __PAPER_COMPOSE_DEBUG__?: unknown }).__PAPER_COMPOSE_DEBUG__;
         setComposeDebug((snapshot ?? null) as ComposeDebugSnapshot | null);
@@ -202,7 +218,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
     refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [open, page]);
 
   useEffect(() => {
     if (!open) return;
@@ -506,9 +522,27 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 </>
               )}
 
-              {page === 'moderation' && <ModerationSettingsPage />}
+              {page === 'moderation' && (
+                <LazyModuleBoundary
+                  resetKey={page}
+                  fallback={<SettingsPageFallback label="Moderation settings failed to load." />}
+                >
+                  <React.Suspense fallback={<SettingsPageFallback label="Loading moderation settings…" />}>
+                    <ModerationSettingsPage />
+                  </React.Suspense>
+                </LazyModuleBoundary>
+              )}
 
-              {page === 'feeds' && <FeedsSettingsPage />}
+              {page === 'feeds' && (
+                <LazyModuleBoundary
+                  resetKey={page}
+                  fallback={<SettingsPageFallback label="Feed settings failed to load." />}
+                >
+                  <React.Suspense fallback={<SettingsPageFallback label="Loading feed settings…" />}>
+                    <FeedsSettingsPage />
+                  </React.Suspense>
+                </LazyModuleBoundary>
+              )}
 
               {page === 'appearance' && (
                 <>
@@ -694,6 +728,51 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         </p>
                       </div>
                     )}
+                  </div>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Bootstrap telemetry (debug)</h4>
+                      <button
+                        type="button"
+                        onClick={() => setBootstrapMetrics(getBootstrapTelemetrySnapshot())}
+                        style={{
+                          border: '1px solid var(--sep)',
+                          borderRadius: 8,
+                          background: 'var(--fill-1)',
+                          color: 'var(--label-2)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }}>
+                      Tracks local bootstrap stages in memory only so DB and runtime startup can be profiled without persisting user state.
+                    </p>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {(Object.entries(bootstrapMetrics) as Array<[keyof BootstrapTelemetrySnapshot, BootstrapTelemetrySnapshot[keyof BootstrapTelemetrySnapshot]]>).map(([key, value]) => (
+                        <div key={key} style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                            <span>{key}</span>
+                            <span>{value.status}</span>
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 13, fontWeight: 800, color: 'var(--label-1)' }}>
+                            {value.durationMs === null ? '—' : `${value.durationMs}ms`}
+                          </div>
+                          {value.message && (
+                            <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }}>
+                              {value.message}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
                   <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />

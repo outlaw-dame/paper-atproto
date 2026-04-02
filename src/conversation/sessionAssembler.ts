@@ -9,9 +9,17 @@ import { THREAD_RETRY_DEFAULTS } from '../intelligence/retry';
 import { buildThreadStateForWriter } from '../intelligence/writerInput';
 import {
   callInterpolatorWriter,
+  callMediaAnalyzer,
   callPremiumDeepInterpolator,
   getPremiumAiEntitlements,
 } from '../intelligence/modelClient';
+import {
+  detectMediaSignals,
+  deriveMediaFactualHints,
+  mergeMediaResults,
+  selectMediaForAnalysis,
+  shouldRunMultimodal,
+} from '../intelligence/mediaInput';
 import { translateWriterInput } from '../lib/i18n/threadTranslation';
 import type { VerificationProviders } from '../intelligence/verification/types';
 import type { VerificationCache } from '../intelligence/verification/cache';
@@ -51,11 +59,13 @@ import {
 import { detectMentalHealthCrisis } from '../lib/sentiment';
 import type {
   AtUri,
+  ContributionScores,
   ThreadPost,
 } from '../intelligence/interpolatorTypes';
 import type {
   InterpolatorWriteResult,
   ThreadStateForWriter,
+  WriterMediaFinding,
 } from '../intelligence/llmContracts';
 import type {
   PremiumInterpolatorRequest,
@@ -143,6 +153,140 @@ function buildTranslationMap(params: {
   }
 
   return byUri;
+}
+
+function buildNearbyTextByUri(params: {
+  rootUri: AtUri;
+  rootText: string;
+  replies: ThreadNode[];
+  translationById: SessionTranslationState['byUri'];
+}): Record<string, string | undefined> {
+  const { rootUri, rootText, replies, translationById } = params;
+  const byUri: Record<string, string | undefined> = {
+    [rootUri]: translationById[rootUri]?.translatedText ?? rootText,
+  };
+
+  for (const reply of replies) {
+    byUri[reply.uri] = translationById[reply.uri]?.translatedText ?? reply.text;
+  }
+
+  return byUri;
+}
+
+type ThreadMediaAnalysisPlan =
+  | {
+      shouldRun: false;
+      reason: 'multimodal_not_needed' | 'no_media_candidates';
+    }
+  | {
+      shouldRun: true;
+      requests: ReturnType<typeof selectMediaForAnalysis>;
+    };
+
+type ThreadMediaAnalysisOutcome =
+  | {
+      status: 'ready';
+      findings: WriterMediaFinding[];
+      attempted: number;
+      failures: number;
+    }
+  | {
+      status: 'error';
+      error: string;
+      attempted: number;
+      failures: number;
+    };
+
+function planThreadMediaAnalysis(params: {
+  threadId: string;
+  root: ThreadNode;
+  replies: ThreadNode[];
+  scores: Record<string, ContributionScores>;
+  nearbyTextByUri: Record<string, string | undefined>;
+}): ThreadMediaAnalysisPlan {
+  const {
+    threadId,
+    root,
+    replies,
+    scores,
+    nearbyTextByUri,
+  } = params;
+
+  const mediaSignals = detectMediaSignals(root, replies, scores);
+  if (!shouldRunMultimodal(mediaSignals)) {
+    return {
+      shouldRun: false,
+      reason: 'multimodal_not_needed',
+    };
+  }
+
+  const requests = selectMediaForAnalysis(
+    threadId,
+    root,
+    replies,
+    scores,
+    {
+      nearbyTextByUri,
+      factualHints: deriveMediaFactualHints(replies, scores),
+    },
+  );
+
+  if (requests.length === 0) {
+    return {
+      shouldRun: false,
+      reason: 'no_media_candidates',
+    };
+  }
+
+  return {
+    shouldRun: true,
+    requests,
+  };
+}
+
+async function executeThreadMediaAnalysis(params: {
+  threadId: string;
+  requests: ReturnType<typeof selectMediaForAnalysis>;
+  signal?: AbortSignal;
+}): Promise<ThreadMediaAnalysisOutcome> {
+  const { threadId, requests, signal } = params;
+  const results = [];
+  let failures = 0;
+
+  for (const request of requests) {
+    try {
+      results.push(await callMediaAnalyzer(request, signal));
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error;
+      }
+      failures += 1;
+    }
+  }
+
+  if (failures > 0) {
+    console.warn('[conversation] multimodal analysis degraded', {
+      threadId,
+      attempted: requests.length,
+      failures,
+    });
+  }
+
+  if (results.length === 0) {
+    return {
+      status: 'error',
+      error: 'Multimodal analysis failed for all selected media.',
+      attempted: requests.length,
+      failures,
+    };
+  }
+
+  return {
+    status: 'ready',
+    findings: mergeMediaResults(results),
+    attempted: requests.length,
+    failures,
+  };
 }
 
 function asThreadPostEnvelope(value: unknown): ThreadViewPostEnvelope {
@@ -455,6 +599,7 @@ export async function hydrateConversationSession(
         confidence: pipeline.confidence,
         summaryMode: pipeline.summaryMode,
         writerResult: null,
+        mediaFindings: [],
         threadState: null,
         interpretiveExplanation: null,
         lastComputedAt: new Date().toISOString(),
@@ -550,6 +695,10 @@ export async function hydrateConversationSession(
         reason: 'interpolator_disabled',
         sourceToken: modelSourceToken,
       }));
+      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'multimodal', {
+        reason: 'interpolator_disabled',
+        sourceToken: modelSourceToken,
+      }));
       store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'premium', {
         reason: 'premium_ineligible',
         sourceToken: modelSourceToken,
@@ -561,6 +710,12 @@ export async function hydrateConversationSession(
     if (!writerGate.shouldRun) {
       store.updateSession(sessionId, (current) => (
         markConversationModelSkipped(current, 'writer', {
+          reason: writerGate.reason,
+          sourceToken: modelSourceToken,
+        })
+      ));
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped(current, 'multimodal', {
           reason: writerGate.reason,
           sourceToken: modelSourceToken,
         })
@@ -584,6 +739,7 @@ export async function hydrateConversationSession(
 
     let filteredWriterResult: InterpolatorWriteResult | null = null;
     let writerInput: ThreadStateForWriter | null = null;
+    let mediaFindings: WriterMediaFinding[] = [];
 
     try {
       const translationOutput = await translateWriterInput({
@@ -629,6 +785,95 @@ export async function hydrateConversationSession(
           : markConversationModelDiscarded(current, 'writer')
       ));
 
+      const sessionAfterTranslation = store.getSession(sessionId);
+      if (!sessionAfterTranslation) return;
+      if (!matchesConversationModelSourceToken(sessionAfterTranslation, modelSourceToken)) {
+        store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'writer'));
+        return;
+      }
+
+      const nearbyTextByUri = buildNearbyTextByUri({
+        rootUri,
+        rootText: rootNode.text,
+        replies: allReplies,
+        translationById,
+      });
+
+      const mediaPlan = planThreadMediaAnalysis({
+        threadId: rootUri,
+        root: rootNode,
+        replies: allReplies,
+        scores: pipeline.scores,
+        nearbyTextByUri,
+      });
+
+      if (!mediaPlan.shouldRun) {
+        store.updateSession(sessionId, (current) => (
+          matchesConversationModelSourceToken(current, modelSourceToken)
+            ? markConversationModelSkipped(current, 'multimodal', {
+                reason: mediaPlan.reason,
+                sourceToken: modelSourceToken,
+              })
+            : markConversationModelDiscarded(current, 'multimodal')
+        ));
+      } else {
+        const multimodalRequestedAt = new Date().toISOString();
+        store.updateSession(sessionId, (current) => (
+          matchesConversationModelSourceToken(current, modelSourceToken)
+            ? markConversationModelLoading(current, 'multimodal', {
+                sourceToken: modelSourceToken,
+                requestedAt: multimodalRequestedAt,
+              })
+            : markConversationModelDiscarded(current, 'multimodal')
+        ));
+
+        const mediaOutcome = await executeThreadMediaAnalysis({
+          threadId: rootUri,
+          requests: mediaPlan.requests,
+          ...(signal ? { signal } : {}),
+        });
+
+        mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
+        store.updateSession(sessionId, (current) => {
+          if (!matchesConversationModelSourceToken(current, modelSourceToken)) {
+            return markConversationModelDiscarded(current, 'multimodal');
+          }
+
+          if (mediaOutcome.status === 'error') {
+            return markConversationModelError(current, 'multimodal', {
+              sourceToken: modelSourceToken,
+              requestedAt: multimodalRequestedAt,
+              error: mediaOutcome.error,
+            });
+          }
+
+          const nextCurrent = mediaFindings.length > 0
+            ? {
+                ...current,
+                interpretation: {
+                  ...current.interpretation,
+                  mediaFindings,
+                },
+              }
+            : current;
+
+          return markConversationModelReady(nextCurrent, 'multimodal', {
+            sourceToken: modelSourceToken,
+            requestedAt: multimodalRequestedAt,
+          });
+        });
+      }
+
+      const sessionAfterMedia = store.getSession(sessionId);
+      if (!sessionAfterMedia) return;
+      if (!matchesConversationModelSourceToken(sessionAfterMedia, modelSourceToken)) {
+        store.updateSession(sessionId, (current) => markConversationModelDiscarded(
+          markConversationModelDiscarded(current, 'multimodal'),
+          'writer',
+        ));
+        return;
+      }
+
       writerInput = buildThreadStateForWriter(
         rootUri,
         rootNode.text,
@@ -648,6 +893,7 @@ export async function hydrateConversationSession(
         rootNode.authorHandle ?? undefined,
         {
           summaryMode: nextSession.interpretation.summaryMode ?? pipeline.summaryMode,
+          ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
         },
       );
 

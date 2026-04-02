@@ -42,14 +42,13 @@ export async function searchSemanticPeople(
   const dids = uniqueDidCandidates((hybridRes?.rows ?? []) as HybridAuthorRow[], maxProfiles);
   if (dids.length === 0) return [];
 
-  const settled = await Promise.allSettled(
-    dids.map((did) => atpCall(() => agent.getProfile({ actor: did })).catch(() => null)),
-  );
+  // Use the batched endpoint (up to 25 DIDs per call) rather than N individual fetches.
+  const res = await atpCall(
+    () => agent.app.bsky.actor.getProfiles({ actors: dids }),
+  ).catch(() => null) as { data?: { profiles?: AppBskyActorDefs.ProfileView[] } } | null;
 
   const profiles: AppBskyActorDefs.ProfileView[] = [];
-  for (const result of settled) {
-    if (result.status !== 'fulfilled') continue;
-    const profile = (result.value as { data?: AppBskyActorDefs.ProfileView } | null)?.data;
+  for (const profile of res?.data?.profiles ?? []) {
     if (!profile?.did || !profile?.handle) continue;
     profiles.push(profile as AppBskyActorDefs.ProfileView);
   }

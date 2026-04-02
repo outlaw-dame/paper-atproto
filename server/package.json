@@ -13,11 +13,12 @@
     "transcription:setup-python": "python3 -m pip install --upgrade faster-whisper av"
   },
   "dependencies": {
-    "dotenv": "^16.6.1",
     "@google-cloud/vision": "^5.2.0",
     "@google/genai": "^1.0.0",
     "@hono/node-server": "^1.13.0",
+    "dotenv": "^16.6.1",
     "hono": "^4.7.0",
+    "ioredis": "^5.10.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {

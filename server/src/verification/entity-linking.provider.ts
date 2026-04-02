@@ -34,6 +34,7 @@ const HINT_MATCH_SIMILARITY_THRESHOLD = 0.8;
 const MAX_RETRY_ATTEMPTS = 4;
 const INITIAL_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 4_000;
+const MIN_BACKOFF_MS = 100;
 const MAX_DBPEDIA_TEXT_CHARS = 1_500;
 const MAX_MENTION_CHARS = 80;
 
@@ -152,9 +153,11 @@ function parseRetryAfterMs(value: string | null): number | null {
   return null;
 }
 
-function computeBackoffMs(attempt: number): number {
+export function computeBackoffMs(attempt: number): number {
   const cap = Math.min(MAX_BACKOFF_MS, INITIAL_BACKOFF_MS * 2 ** attempt);
-  return Math.floor(Math.random() * cap);
+  const floor = Math.min(MIN_BACKOFF_MS, cap);
+  const unit = Math.min(0.999999999, Math.max(0, Math.random()));
+  return floor + Math.floor(unit * (cap - floor + 1));
 }
 
 function shouldRetryHttpStatus(status: number): boolean {

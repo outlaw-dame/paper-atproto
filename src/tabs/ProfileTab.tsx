@@ -7,12 +7,14 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppBskyFeedDefs, AppBskyActorDefs, AppBskyGraphDefs } from '@atproto/api';
 import { useSessionStore } from '../store/sessionStore';
+import { useBookmarksStore } from '../store/bookmarksStore';
 import { useUiStore } from '../store/uiStore';
 import { useTranslationStore } from '../store/translationStore';
 import { atpCall } from '../lib/atproto/client';
 import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
 import PostCard from '../components/PostCard';
-import TranslationSettingsSheet from '../components/TranslationSettingsSheet';
+import LazyModuleBoundary from '../components/LazyModuleBoundary';
+import TranslationSettingsSheetFallback from '../components/TranslationSettingsSheetFallback';
 import type { MockPost } from '../data/mockData';
 import { formatCount, formatTime } from '../data/mockData';
 import type { StoryEntry } from '../App';
@@ -33,6 +35,8 @@ import {
 import { useConversationBatchHydration } from '../conversation/sessionHydration';
 import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
 import { embeddingPipeline } from '../intelligence/embeddingPipeline';
+import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
+import { lazyWithRetry } from '../lib/lazyWithRetry';
 
 // ─── Sub-tabs ──────────────────────────────────────────────────────────────
 const PROFILE_TABS = ['Posts', 'Library', 'Media', 'Feeds', 'Starter Packs', 'Lists'] as const;
@@ -257,6 +261,10 @@ function formatFeaturedTagRelativeLastUsed(isoDate: string | null): string {
 }
 
 const HASHTAG_RE = /(^|\s)#([a-z0-9_]{2,64})\b/gi;
+const TranslationSettingsSheet = lazyWithRetry(
+  () => import('../components/TranslationSettingsSheet'),
+  'TranslationSettingsSheet',
+);
 const WORD_RE = /[a-z0-9_]{2,64}/gi;
 const POPULAR_TAG_FALLBACK = [
   'news',
@@ -738,13 +746,14 @@ function MediaGrid({ posts, onOpenStory }: { posts: MockPost[]; onOpenStory: (e:
         {mediaPosts.map((post, i) => {
           const thumbUrl = post.media?.[0]?.url;
           const byline = post.author.displayName || post.author.handle;
+          const storyRootId = post.threadRoot?.id ?? post.id;
           return (
             <motion.button
               key={post.id}
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: i * 0.03 }}
-              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+              onClick={() => onOpenStory({ type: 'post', id: storyRootId, title: post.author.displayName })}
               className="media-card"
               style={{
                 position: 'relative',
@@ -805,13 +814,14 @@ function getLibraryStoryDescription(post: MockPost): string {
 function WePresentStoryCard({ post, index, onOpenStory }: { post: MockPost; index: number; onOpenStory: (e: StoryEntry) => void }) {
   const thumbUrl = post.media?.[0]?.url ?? (post.embed?.type === 'external' ? (post.embed as { thumb?: string }).thumb : null);
   const byline = post.author.displayName || post.author.handle;
+  const storyRootId = post.threadRoot?.id ?? post.id;
 
   return (
     <motion.button
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.03 }}
-      onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+      onClick={() => onOpenStory({ type: 'post', id: storyRootId, title: post.author.displayName })}
       className="wepresent-card"
       style={{
         width: '100%',
@@ -934,6 +944,10 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const [viewerMutedOverride, setViewerMutedOverride] = useState<boolean | null>(null);
   const [viewerBlockedOverride, setViewerBlockedOverride] = useState<boolean | null>(null);
   const [mlFeaturedHashtags, setMlFeaturedHashtags] = useState<FeaturedHashtag[] | null>(null);
+  const sessionDid = session?.did ?? '';
+  const bookmarkedUris = useBookmarksStore((state) => (
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
+  ));
 
   // Derive profile fields early so they are safe to use in memo/effect hooks below.
   const displayName = profile?.displayName ?? profile?.handle ?? session?.handle ?? '';
@@ -962,6 +976,59 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const unblockActor = useUnblockActor();
 
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPersistedScrollTopRef = useRef<number | null>(null);
+  const libraryLoadRequestRef = useRef(0);
+  const reactiveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewResumeKey = useMemo(() => {
+    if (!session?.did || !did) return null;
+    return `profile:${session.did}:${did}`;
+  }, [did, session?.did]);
+
+  const flushViewScrollPersistence = useCallback(() => {
+    if (!viewResumeKey || !scrollRef.current) return;
+    const nextTop = Math.max(0, Math.floor(scrollRef.current.scrollTop));
+    if (lastPersistedScrollTopRef.current === nextTop) return;
+    lastPersistedScrollTopRef.current = nextTop;
+    writeViewScrollPosition(viewResumeKey, nextTop);
+  }, [viewResumeKey]);
+
+  const persistViewScroll = useCallback(() => {
+    if (!viewResumeKey || !scrollRef.current) return;
+    if (scrollPersistTimerRef.current) return;
+    scrollPersistTimerRef.current = setTimeout(() => {
+      scrollPersistTimerRef.current = null;
+      flushViewScrollPersistence();
+    }, 180);
+  }, [flushViewScrollPersistence, viewResumeKey]);
+
+  useEffect(() => {
+    if (!viewResumeKey) return;
+    const top = readViewScrollPosition(viewResumeKey);
+    if (top <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = top;
+        lastPersistedScrollTopRef.current = top;
+      }
+    }, 50);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [viewResumeKey]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollPersistTimerRef.current) {
+        clearTimeout(scrollPersistTimerRef.current);
+        scrollPersistTimerRef.current = null;
+      }
+      flushViewScrollPersistence();
+    };
+  }, [flushViewScrollPersistence]);
 
   // Reset content when switching to a different user
   useEffect(() => {
@@ -1043,16 +1110,49 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     finally { setLoading(false); }
   }, [agent, did]);
 
-  // ── Load liked posts (Library) ─────────────────────────────────────────────
+  // ── Load bookmarked posts (Library) ────────────────────────────────────────
   const loadLiked = useCallback(async () => {
-    if (!did) return;
+    const requestId = ++libraryLoadRequestRef.current;
     setLoading(true);
     try {
-      const res = await atpCall(s => agent.getActorLikes({ actor: did, limit: 40 }));
-      setLiked(res.data.feed.filter(i => (i.post.record as any)?.text).map(mapFeedViewPost));
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, [agent, did]);
+      const uris = useBookmarksStore.getState().getBookmarkedUris(sessionDid);
+      if (!uris || uris.length === 0) {
+        if (requestId === libraryLoadRequestRef.current) {
+          setLiked([]);
+        }
+        return;
+      }
+
+      // ATProto getPosts is capped at 25 URIs per call — chunk and fan out.
+      const CHUNK_SIZE = 25;
+      const chunks: string[][] = [];
+      for (let i = 0; i < uris.length; i += CHUNK_SIZE) {
+        chunks.push(uris.slice(i, i + CHUNK_SIZE));
+      }
+      const results = await Promise.all(
+        chunks.map((chunk) => atpCall(() => agent.getPosts({ uris: chunk }))),
+      );
+
+      const posts = results
+        .flatMap((res) => res.data.posts)
+        .filter((i) => (i.record as any)?.text)
+        .map((post): any => ({ post }))
+        .map(mapFeedViewPost);
+
+      if (requestId === libraryLoadRequestRef.current) {
+        setLiked(posts);
+      }
+    } catch (err) {
+      if (requestId === libraryLoadRequestRef.current) {
+        console.error('Failed to load bookmarks:', err);
+        setLiked([]);
+      }
+    } finally {
+      if (requestId === libraryLoadRequestRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [agent, sessionDid]);
 
   // ── Load feeds ────────────────────────────────────────────────────────────
   const loadFeeds = useCallback(async () => {
@@ -1239,6 +1339,25 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     else if (tab === 'Lists') loadLists();
   }, [tab, loadPosts, loadLiked, loadFeeds, loadStarterPacks, loadLists]);
 
+  // Keep Library in sync when bookmarks change while the Library tab is active.
+  // Debounce to prevent a spinner flash on every rapid add/remove.
+  useEffect(() => {
+    if (tab !== 'Library') return;
+    if (reactiveRefreshTimerRef.current !== null) {
+      clearTimeout(reactiveRefreshTimerRef.current);
+    }
+    reactiveRefreshTimerRef.current = setTimeout(() => {
+      reactiveRefreshTimerRef.current = null;
+      loadLiked();
+    }, 300);
+    return () => {
+      if (reactiveRefreshTimerRef.current !== null) {
+        clearTimeout(reactiveRefreshTimerRef.current);
+        reactiveRefreshTimerRef.current = null;
+      }
+    };
+  }, [tab, bookmarkedUris, loadLiked]);
+
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleToggleRepost = useCallback(async (p: MockPost) => {
     // Similar to HomeTab
@@ -1249,8 +1368,37 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   }, [agent, session]);
 
   const handleBookmark = useCallback(async (p: MockPost) => {
-    // Placeholder
-  }, []);
+    if (!sessionDid) return;
+    const postUri = p.id;
+    const { isBookmarked, addBookmark, removeBookmark } = useBookmarksStore.getState();
+    const wasBookmarked = isBookmarked(sessionDid, postUri);
+
+    // Update local state
+    setPosts((prev) => prev.map((item) => {
+      if (item.id !== p.id) return item;
+      const viewer = item.viewer ?? {};
+      if (wasBookmarked) {
+        const { bookmark: _bookmark, ...restViewer } = viewer;
+        return {
+          ...item,
+          bookmarkCount: Math.max(0, item.bookmarkCount - 1),
+          viewer: restViewer,
+        };
+      }
+      return {
+        ...item,
+        bookmarkCount: item.bookmarkCount + 1,
+        viewer: { ...viewer, bookmark: 'bookmarked' },
+      };
+    }));
+
+    // Persist to account-scoped store
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, postUri);
+    } else {
+      addBookmark(sessionDid, postUri);
+    }
+  }, [sessionDid]);
 
   const handleMore = useCallback((p: MockPost) => {
     // Placeholder
@@ -1645,7 +1793,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
             return [{ kind: 'post' as const, post: p }];
           });
 
-          if (cards.length === 0) return <EmptyState message="Liked posts will appear here." />;
+          if (cards.length === 0) return <EmptyState message="Bookmarked posts will appear here." />;
 
           return (
             <div style={{ maxWidth: 1120, margin: '0 auto', padding: '10px 0 14px' }}>
@@ -1714,7 +1862,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               <div className="wepresent-shell">
               <div style={{ display: 'flex', flexDirection: platform.isMobile ? 'column' : 'row', alignItems: platform.isMobile ? 'stretch' : 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
                 <h2 className="wepresent-list-title" style={{ margin: 0, color: 'var(--label-1)' }}>
-                  Story Library
+                  Bookmarks
                 </h2>
                 <div style={{ width: platform.isMobile ? '100%' : 260 }}>
                   <label htmlFor="profile-library-sort" style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--label-3)', marginBottom: 6 }}>
@@ -1881,7 +2029,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
       </div>
 
       {/* ── Scrollable body ───────────────────────────────────────────────── */}
-      <div className="scroll-y" style={{ flex: 1 }}>
+      <div ref={scrollRef} className="scroll-y" style={{ flex: 1 }} onScroll={persistViewScroll}>
 
         {/* ── Profile header ──────────────────────────────────────────────── */}
         {profileLoading ? (
@@ -2224,7 +2372,33 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
         <div style={{ height: 32 }} />
       </div>
 
-      <TranslationSettingsSheet open={showTranslationSettings} onClose={() => setShowTranslationSettings(false)} />
+      {showTranslationSettings ? (
+        <LazyModuleBoundary
+          resetKey={`profile-settings:${showTranslationSettings ? 'open' : 'closed'}`}
+          fallback={
+            <TranslationSettingsSheetFallback
+              open={showTranslationSettings}
+              onClose={() => setShowTranslationSettings(false)}
+              title="Settings unavailable"
+              message="The settings module could not finish loading. Close this sheet and try again."
+            />
+          }
+        >
+          <React.Suspense
+            fallback={
+              <TranslationSettingsSheetFallback
+                open={showTranslationSettings}
+                onClose={() => setShowTranslationSettings(false)}
+              />
+            }
+          >
+            <TranslationSettingsSheet
+              open={showTranslationSettings}
+              onClose={() => setShowTranslationSettings(false)}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      ) : null}
     </div>
   );
 }

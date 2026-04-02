@@ -311,7 +311,8 @@ export function useExploreSearchResults(params: {
     if (!enabled || !agent) return;
     if (!sanitizedQuery || loadingMorePosts || (!page.postCursor && !page.tagPostCursor)) return;
 
-    const requestVersion = requestVersionRef.current;
+    const requestVersion = requestVersionRef.current + 1;
+    requestVersionRef.current = requestVersion;
     const normalizedQuery = normalizeAtprotoSearchQuery(sanitizedQuery);
     const isHashtagQuery = sanitizedQuery.startsWith('#');
     setLoadingMorePosts(true);
@@ -343,6 +344,9 @@ export function useExploreSearchResults(params: {
           isHashtagQuery,
         }));
       })
+      .catch(() => {
+        // Pagination failures are non-fatal; leave existing results intact.
+      })
       .finally(() => {
         if (requestVersion !== requestVersionRef.current) return;
         setLoadingMorePosts(false);
@@ -361,7 +365,8 @@ export function useExploreSearchResults(params: {
     if (!enabled || !agent) return;
     if (!sanitizedQuery || loadingMoreActors || !page.actorCursor) return;
 
-    const requestVersion = requestVersionRef.current;
+    const requestVersion = requestVersionRef.current + 1;
+    requestVersionRef.current = requestVersion;
     const normalizedQuery = normalizeAtprotoSearchQuery(sanitizedQuery);
     setLoadingMoreActors(true);
 

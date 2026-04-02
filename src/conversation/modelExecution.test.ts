@@ -5,6 +5,7 @@ import {
   markConversationModelDiscarded,
   markConversationModelLoading,
   markConversationModelReady,
+  markConversationModelSkipped,
   shouldRunInterpolatorWriter,
 } from './modelExecution';
 
@@ -170,6 +171,16 @@ describe('model execution policy', () => {
 });
 
 describe('model execution diagnostics', () => {
+  it('initializes a dedicated multimodal diagnostics lane', () => {
+    const diagnostics = createSessionAiDiagnostics();
+
+    expect(diagnostics.multimodal).toEqual({
+      provider: 'qwen_multimodal',
+      status: 'idle',
+      staleDiscardCount: 0,
+    });
+  });
+
   it('tracks loading, ready, and stale discard state', () => {
     const loading = markConversationModelLoading(createSession(), 'writer', {
       sourceToken: 'source-token',
@@ -191,5 +202,17 @@ describe('model execution diagnostics', () => {
     expect(discarded.interpretation.aiDiagnostics?.writer.lastDiscardedAt).toBe(
       '2026-03-31T00:00:03.000Z',
     );
+  });
+
+  it('tracks multimodal skip state independently from the writer', () => {
+    const skipped = markConversationModelSkipped(createSession(), 'multimodal', {
+      reason: 'multimodal_not_needed',
+      sourceToken: 'source-token',
+      completedAt: '2026-03-31T00:00:01.000Z',
+    });
+
+    expect(skipped.interpretation.aiDiagnostics?.multimodal.status).toBe('skipped');
+    expect(skipped.interpretation.aiDiagnostics?.multimodal.lastSkipReason).toBe('multimodal_not_needed');
+    expect(skipped.interpretation.aiDiagnostics?.writer.status).toBe('idle');
   });
 });

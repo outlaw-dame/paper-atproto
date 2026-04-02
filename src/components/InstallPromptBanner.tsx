@@ -244,11 +244,11 @@ export default function InstallPromptBanner() {
               aria-label="Dismiss install prompt"
               style={{
                 flexShrink: 0,
-                background: 'color-mix(in srgb, var(--label-1) 8%, transparent)',
+                background: 'none',
                 border: 'none',
                 borderRadius: '50%',
-                width: 28,
-                height: 28,
+                minWidth: 44,
+                minHeight: 44,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

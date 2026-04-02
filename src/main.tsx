@@ -4,6 +4,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import './styles/globals.css';
 
+if (import.meta.env.PROD) {
+  // Recover from stale dynamic-import chunks after a new deployment.
+  window.addEventListener('vite:preloadError', (event) => {
+    event.preventDefault();
+    window.location.reload();
+  });
+}
+
 // ─── TanStack Query client ─────────────────────────────────────────────────
 // Global defaults: retry only once (individual queries can override),
 // stale data is shown while revalidating, errors don't crash the tree.

@@ -15,6 +15,15 @@ type PendingRequest = {
   reject: (reason: any) => void;
 };
 
+type SmokeCheckResult = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  crossOriginIsolated: boolean;
+  allowLocalModels: boolean;
+  allowRemoteModels: boolean;
+  assetIntegrityOk: boolean;
+  assetError: string | null;
+};
+
 class InferenceClient {
   private worker: Worker | null = null;
   private pending = new Map<string, PendingRequest>();
@@ -86,12 +95,39 @@ class InferenceClient {
     return this.worker;
   }
 
-  private send<T>(type: string, payload?: any): Promise<T> {
+  private send<T>(type: string, payload?: any, options: { timeoutMs?: number } = {}): Promise<T> {
     const id = String(++this.idCounter);
     const worker = this.getWorker();
 
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      const settle = (callback: () => void) => {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        callback();
+      };
+
+      this.pending.set(id, {
+        resolve: (value) => {
+          settle(() => resolve(value));
+        },
+        reject: (reason) => {
+          settle(() => reject(reason));
+        },
+      });
+
+      const timeoutMs = Number(options.timeoutMs ?? 0);
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeoutId = setTimeout(() => {
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          this.pending.delete(id);
+          reject(new Error(`Worker request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+
       worker.postMessage({ id, type, payload });
     });
   }
@@ -159,6 +195,10 @@ class InferenceClient {
     qualityError?: string | null;
   }> {
     return this.send('status');
+  }
+
+  async runSmokeCheck(timeoutMs = 6000): Promise<SmokeCheckResult> {
+    return this.send<SmokeCheckResult>('smoke', undefined, { timeoutMs });
   }
 
   async captionImage(imageUrl: string): Promise<string> {

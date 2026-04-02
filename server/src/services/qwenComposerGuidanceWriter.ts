@@ -3,6 +3,7 @@ import type { RetryOptions } from '../lib/retry.js';
 import { GoogleGenAI } from '@google/genai';
 import { env } from '../config/env.js';
 import { detectHarmfulContent, ensureSafetyInstructions } from '../lib/safeguards.js';
+import { ensureOllamaLocalUrlPolicy } from '../lib/ollama-policy.js';
 
 export interface ComposerGuidanceWriterRequest {
   mode: 'post' | 'reply' | 'hosted_thread';
@@ -223,6 +224,7 @@ async function callOllama(
   messages: OllamaChatMessage[],
   timeoutMs: number,
 ): Promise<string> {
+  ensureOllamaLocalUrlPolicy();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

@@ -371,6 +371,70 @@ export function filterMediaAnalyzerResponse(response: Record<string, any>): { fi
   };
 }
 
+/**
+ * Filter composer-guidance output.
+ * The primary guidance message is required, so fail closed if it becomes unsafe.
+ * Optional suggestion/badges are dropped when they do not pass filtering.
+ */
+export function filterComposerGuidanceResponse(
+  response: Record<string, any>,
+): { filtered: Record<string, any>; safetyMetadata: SafetyFilterResult } {
+  let overallSeverity: 'none' | 'low' | 'medium' | 'high' = 'none';
+  let blocked = false;
+  const allFlags = new Set<string>();
+  const filtered = { ...response };
+
+  const applyTextField = (value: unknown, required = false): string => {
+    if (typeof value !== 'string') {
+      if (required) blocked = true;
+      return '';
+    }
+
+    const result = filterTextContent(value);
+    result.categories.forEach((category) => allFlags.add(category));
+    overallSeverity = mergeSeverity(overallSeverity, result);
+
+    if (!result.passed && required) {
+      blocked = true;
+    }
+
+    return result.filtered.trim();
+  };
+
+  filtered.message = applyTextField(filtered.message, true);
+
+  if (typeof filtered.suggestion === 'string') {
+    const nextSuggestion = applyTextField(filtered.suggestion);
+    if (nextSuggestion) {
+      filtered.suggestion = nextSuggestion;
+    } else {
+      delete filtered.suggestion;
+    }
+  }
+
+  if (Array.isArray(filtered.badges)) {
+    filtered.badges = filtered.badges
+      .map((value: unknown) => applyTextField(value))
+      .filter((value: string) => value.length > 0)
+      .slice(0, 3);
+  }
+
+  const hasMessage = typeof filtered.message === 'string' && filtered.message.length > 0;
+  const passed = !blocked && hasMessage;
+
+  return {
+    filtered,
+    safetyMetadata: {
+      passed,
+      flagged: allFlags.size > 0,
+      categories: Array.from(allFlags),
+      severity: overallSeverity,
+      filtered: hasMessage ? filtered.message : '',
+      ...(!passed ? { reason: 'Composer guidance output failed safety filtering' } : {}),
+    },
+  };
+}
+
 // ─── Detection Helper Functions ────────────────────────────────────────────
 
 function hasProfanity(text: string): boolean {

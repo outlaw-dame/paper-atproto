@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapPostViewToMockPost, hasDisplayableRecordContent } from '../../atproto/mappers';
 import type { MockPost } from '../../data/mockData';
 import { atpCall } from '../../lib/atproto/client';
 import { isAtUri } from '../../lib/resolver/atproto';
 import { normalizeAtprotoSearchQuery } from '../../lib/searchQuery';
+import {
+  getLocalHybridPostUri,
+  mapHybridPostRowToMockPost,
+} from '../../lib/exploreSearchResults';
 import { hybridSearch } from '../../search';
 
 type StorySearchAgent = any;
@@ -43,10 +47,38 @@ export function collectStorySearchHydrationUris(
   return Array.from(
     new Set(
       localHybridRows
-        .map((row) => String((row as { id?: unknown })?.id ?? ''))
-        .filter((id): id is string => isAtUri(id)),
+        .map((row) => getLocalHybridPostUri(row))
+        .filter((id): id is string => typeof id === 'string' && isAtUri(id)),
     ),
   ).slice(0, Math.max(0, maxUris));
+}
+
+export function mergeHydratedLocalStoryPosts(
+  localHybridRows: unknown,
+  hydratedLocalPosts: MockPost[],
+): MockPost[] {
+  if (!Array.isArray(localHybridRows)) {
+    return hydratedLocalPosts;
+  }
+
+  const hydratedById = new Map(
+    hydratedLocalPosts.map((post) => [post.id.trim().toLowerCase(), post] as const),
+  );
+  const merged: MockPost[] = [];
+
+  for (const row of localHybridRows) {
+    const uri = getLocalHybridPostUri(row);
+    const hydrated = uri ? hydratedById.get(uri.trim().toLowerCase()) : undefined;
+    if (hydrated) {
+      merged.push(hydrated);
+      hydratedById.delete(uri!.trim().toLowerCase());
+      continue;
+    }
+    merged.push(mapHybridPostRowToMockPost(row));
+  }
+
+  merged.push(...hydratedById.values());
+  return dedupeStorySearchPosts(merged);
 }
 
 export function resolveStorySearchPage(params: {
@@ -95,9 +127,11 @@ async function hydrateLocalHybridStoryPosts(
     () => agent.getPosts({ uris: localUris }),
   ).catch(() => null) as any;
 
-  return (hydrateRes?.data?.posts ?? [])
+  const hydratedLocalPosts = (hydrateRes?.data?.posts ?? [])
     .filter((post: any) => hasDisplayableRecordContent(post?.record))
     .map((post: any) => mapPostViewToMockPost(post));
+
+  return mergeHydratedLocalStoryPosts(localHybridRows, hydratedLocalPosts);
 }
 
 function emptyStorySearchPage(): StorySearchPage {
@@ -119,20 +153,25 @@ export function useStorySearchResults(params: {
   const [page, setPage] = useState<StorySearchPage>(emptyStorySearchPage);
   const [loading, setLoading] = useState(false);
   const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const requestVersionRef = useRef(0);
 
   useEffect(() => {
     const rawQuery = query.trim();
     if (!enabled || !agent) {
+      requestVersionRef.current += 1;
       setPage(emptyStorySearchPage());
       setLoading(false);
       return;
     }
     if (!rawQuery) {
+      requestVersionRef.current += 1;
       setPage(emptyStorySearchPage());
       setLoading(false);
       return;
     }
 
+    const requestVersion = requestVersionRef.current + 1;
+    requestVersionRef.current = requestVersion;
     const normalizedQuery = normalizeAtprotoSearchQuery(rawQuery);
     const isHashtagQuery = rawQuery.startsWith('#');
     let disposed = false;
@@ -158,7 +197,7 @@ export function useStorySearchResults(params: {
           agent,
           localHybridRes?.rows,
         );
-        if (disposed) return;
+        if (disposed || requestVersion !== requestVersionRef.current) return;
         setPage(resolveStorySearchPage({
           postsRes,
           tagPostsRes,
@@ -167,11 +206,11 @@ export function useStorySearchResults(params: {
         }));
       })
       .catch(() => {
-        if (disposed) return;
+        if (disposed || requestVersion !== requestVersionRef.current) return;
         setPage(emptyStorySearchPage());
       })
       .finally(() => {
-        if (disposed) return;
+        if (disposed || requestVersion !== requestVersionRef.current) return;
         setLoading(false);
       });
 
@@ -189,6 +228,7 @@ export function useStorySearchResults(params: {
     const isHashtagQuery = rawQuery.startsWith('#');
     setLoadingMorePosts(true);
 
+    const paginationVersion = requestVersionRef.current;
     void Promise.all([
       page.postCursor
         ? atpCall(() => agent.app.bsky.feed.searchPosts({
@@ -208,6 +248,7 @@ export function useStorySearchResults(params: {
         : Promise.resolve(null),
     ])
       .then(([postsRes, tagPostsRes]) => {
+        if (paginationVersion !== requestVersionRef.current) return;
         setPage((current) => resolveStorySearchPage({
           postsRes,
           tagPostsRes,
@@ -215,7 +256,11 @@ export function useStorySearchResults(params: {
           isHashtagQuery,
         }));
       })
+      .catch(() => {
+        // Pagination failures are non-fatal; leave existing results intact.
+      })
       .finally(() => {
+        if (paginationVersion !== requestVersionRef.current) return;
         setLoadingMorePosts(false);
       });
   }, [

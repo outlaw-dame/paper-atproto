@@ -9,6 +9,10 @@ const CACHEABLE_SAME_ORIGIN_PATTERNS: RegExp[] = [
   /\/paper-atproto\/assets\/[^/]+\.(js|css)$/,
   /\/paper-atproto\/(manifest\.json|favicon\.svg|offline\.html|apple-touch-icon\.png)$/,
   /\/paper-atproto\/(icon-192|icon-512)\.png$/,
+  // ML model weights — both base paths (GitHub Pages vs Cloudflare root deploy)
+  /(?:\/paper-atproto)?\/models\//,
+  // Cloudflare base-path variants for assets
+  /\/assets\/[^/]+\.(js|css)$/,
 ];
 
 const AVATAR_ORIGINS = new Set([

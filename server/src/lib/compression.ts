@@ -4,12 +4,17 @@ import { promisify } from 'node:util';
 import { env } from '../config/env.js';
 
 const gzip = promisify(gzipCallback);
+const MAX_ZSTD_WINDOW_LOG = 23;
 
 const TRANSIENT_ENCODING_HEADER_MAX_LEN = 512;
 const MIN_COMPRESSIBLE_LENGTH = 64;
+const NON_COMPRESSIBLE_CONTENT_TYPES = [
+  /^text\/event-stream(?:;|$)/i,
+];
 const COMPRESSIBLE_CONTENT_TYPES = [
   /^text\//i,
   /^application\/(?:json|javascript|xml|x-javascript|x-www-form-urlencoded)(?:;|$)/i,
+  /^application\/[a-z0-9.+-]+\+(?:json|xml)(?:;|$)/i,
   /^application\/(?:manifest\+json|ld\+json)(?:;|$)/i,
   /^image\/svg\+xml(?:;|$)/i,
 ];
@@ -22,15 +27,34 @@ const ALREADY_COMPRESSED_CONTENT_TYPES = [
 
 type ContentEncoding = 'zstd' | 'gzip' | 'identity';
 
-type ZstdCompressOptions = { level?: number };
-type ZstdCompressSync = (buffer: Uint8Array, options?: ZstdCompressOptions) => Buffer;
+type ZstdCompressCallback = (
+  buffer: Uint8Array,
+  options: ZstdOptions,
+  callback: (error: Error | null, result: Buffer) => void,
+) => void;
+type ZstdOptions = {
+  level?: number;
+  maxOutputLength?: number;
+  params?: Record<number, number>;
+};
+type ZstdCompressSync = (buffer: Uint8Array, options?: ZstdOptions) => Buffer;
 
 const zlibAny = (await import('node:zlib')) as unknown as {
+  constants?: {
+    ZSTD_c_compressionLevel?: number;
+    ZSTD_c_windowLog?: number;
+  };
+  zstdCompress?: ZstdCompressCallback;
   zstdCompressSync?: ZstdCompressSync;
 };
+const zstdCompress = zlibAny.zstdCompress
+  ? promisify((buffer: Uint8Array, options: ZstdOptions, callback: (error: Error | null, result: Buffer) => void) => (
+    zlibAny.zstdCompress?.(buffer, options, callback)
+  ))
+  : null;
 
 function supportsZstd(): boolean {
-  return typeof zlibAny.zstdCompressSync === 'function';
+  return typeof zstdCompress === 'function' || typeof zlibAny.zstdCompressSync === 'function';
 }
 
 function parseAcceptEncoding(headerValue: string | undefined): Map<string, number> {
@@ -83,6 +107,7 @@ function resolveEncoding(headerValue: string | undefined): ContentEncoding {
 }
 
 function isCompressibleContentType(contentType: string): boolean {
+  if (NON_COMPRESSIBLE_CONTENT_TYPES.some((pattern) => pattern.test(contentType))) return false;
   if (ALREADY_COMPRESSED_CONTENT_TYPES.some((pattern) => pattern.test(contentType))) return false;
   return COMPRESSIBLE_CONTENT_TYPES.some((pattern) => pattern.test(contentType));
 }
@@ -163,14 +188,38 @@ async function readResponseBodyWithLimit(
 
 async function compressBody(body: Uint8Array, encoding: ContentEncoding): Promise<Uint8Array> {
   if (encoding === 'gzip') {
-    return gzip(body, { level: env.COMPRESSION_GZIP_LEVEL });
+    return gzip(body, {
+      level: env.COMPRESSION_GZIP_LEVEL,
+      maxOutputLength: body.byteLength + 64 * 1024,
+    });
   }
 
-  if (encoding === 'zstd' && zlibAny.zstdCompressSync) {
-    return zlibAny.zstdCompressSync(body, { level: env.COMPRESSION_ZSTD_LEVEL });
+  if (encoding === 'zstd') {
+    const zstdOptions: ZstdOptions = {
+      level: env.COMPRESSION_ZSTD_LEVEL,
+      maxOutputLength: body.byteLength + 64 * 1024,
+    };
+    if (zlibAny.constants?.ZSTD_c_compressionLevel !== undefined && zlibAny.constants?.ZSTD_c_windowLog !== undefined) {
+      zstdOptions.params = {
+        [zlibAny.constants.ZSTD_c_compressionLevel]: env.COMPRESSION_ZSTD_LEVEL,
+        [zlibAny.constants.ZSTD_c_windowLog]: MAX_ZSTD_WINDOW_LOG,
+      };
+    }
+
+    if (zstdCompress) {
+      return zstdCompress(body, zstdOptions);
+    }
+
+    if (zlibAny.zstdCompressSync) {
+      return zlibAny.zstdCompressSync(body, zstdOptions);
+    }
   }
 
   return body;
+}
+
+function shouldSkipCompressionForStatus(status: number): boolean {
+  return status < 200 || status === 204 || status === 206 || status === 304;
 }
 
 export function compressionMiddleware(): MiddlewareHandler {
@@ -186,13 +235,20 @@ export function compressionMiddleware(): MiddlewareHandler {
 
     const response = c.res;
     const status = response.status;
-    if (status < 200 || status === 204 || status === 304) return;
+    if (shouldSkipCompressionForStatus(status)) return;
 
     if (response.headers.has('Content-Encoding')) return;
     if (hasNoTransformDirective(response.headers.get('Cache-Control'))) return;
+    if (response.headers.has('Content-Range')) return;
 
     const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
     if (!isCompressibleContentType(contentType)) return;
+
+    const currentVary = response.headers.get('Vary');
+    const varyWithEncoding = appendVary(currentVary, 'Accept-Encoding');
+    if (varyWithEncoding !== currentVary) {
+      response.headers.set('Vary', varyWithEncoding);
+    }
 
     const encoding = resolveEncoding(c.req.header('accept-encoding'));
     if (encoding === 'identity') return;
@@ -235,7 +291,6 @@ export function compressionMiddleware(): MiddlewareHandler {
       const headers = new Headers(response.headers);
       headers.set('Content-Encoding', encoding);
       headers.set('Content-Length', String(compressedNodeBuffer.byteLength));
-      headers.set('Vary', appendVary(response.headers.get('Vary'), 'Accept-Encoding'));
       headers.delete('ETag');
 
       c.res = new Response(compressedNodeBuffer as unknown as BodyInit, {

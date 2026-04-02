@@ -30,6 +30,7 @@ export type TranslationResult = {
   cached: boolean;
   modelVersion: string;
   qualityTier: 'default' | 'optimized' | 'local';
+  runtimeProfile?: 'latency' | 'quality' | 'privacy';
 };
 
 export type InlineTranslateRequest = {

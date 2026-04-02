@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAtp } from '../atproto/AtpContext';
+import { uploadBlob } from '../atproto/blobUpload';
 import { RichText } from '@atproto/api';
 import { inferenceClient } from '../workers/InferenceClient';
 import { getAltTextMetricsSnapshot, recordAltPostCoverage, recordBulkAltRun } from '../perf/altTextTelemetry';
@@ -31,6 +32,13 @@ import { extractRecordDisplayText } from '../lib/atproto/recordContent';
 import { mediaTranscriptionClient } from '../lib/media/transcriptionClient';
 import { getCaptionButtonState } from '../lib/media/captionButtonState';
 import { useMediaSettingsStore } from '../store/mediaSettingsStore';
+import {
+  MAX_FAVORITE_HASHTAGS,
+  MAX_RECENT_HASHTAGS,
+  MAX_STORED_HASHTAG_LENGTH,
+  normalizeStoredHashtag,
+  readStoredHashtags,
+} from '../lib/hashtagStorage';
 
 interface Props {
   onClose: () => void;
@@ -83,12 +91,6 @@ const ALT_REQUIREMENT_KEY = 'paper.compose.requireAltText';
 const RECENT_HASHTAGS_KEY = 'paper.compose.recentHashtags';
 const FAVORITE_HASHTAGS_KEY = 'paper.compose.favoriteHashtags';
 
-interface BlobUploadResponse {
-  data: {
-    blob: unknown;
-  };
-}
-
 interface VideoJobStatus {
   state: string;
   progress?: number;
@@ -137,8 +139,8 @@ function hashtagScore(tag: string): number {
 
 function saveRecentHashtags(tags: string[]) {
   try {
-    const prev: string[] = JSON.parse(localStorage.getItem(RECENT_HASHTAGS_KEY) ?? '[]');
-    const merged = [...new Set([...tags, ...prev])].slice(0, 30);
+    const prev = readStoredHashtags(RECENT_HASHTAGS_KEY, MAX_RECENT_HASHTAGS);
+    const merged = [...new Set([...tags, ...prev])].slice(0, MAX_RECENT_HASHTAGS);
     localStorage.setItem(RECENT_HASHTAGS_KEY, JSON.stringify(merged));
   } catch { /* ignore */ }
 }
@@ -373,6 +375,21 @@ function toUserFacingPostError(err: unknown): string {
   }
 
   return rawMessage;
+}
+
+function readBlobCid(blobLike: unknown): string | null {
+  if (!blobLike || typeof blobLike !== 'object') return null;
+  const ref = (blobLike as { ref?: unknown }).ref;
+  if (!ref || typeof ref !== 'object') return null;
+  const link = (ref as { $link?: unknown }).$link;
+  if (typeof link === 'string' && link.length > 0) return link;
+  if (typeof (ref as { toString?: () => string }).toString === 'function') {
+    const asText = (ref as { toString: () => string }).toString();
+    if (typeof asText === 'string' && asText.length > 0 && asText !== '[object Object]') {
+      return asText;
+    }
+  }
+  return null;
 }
 
 function isVideoFormatCompatibilityError(message: string): boolean {
@@ -1057,10 +1074,10 @@ function HashtagBrowser({
   onClose: () => void;
 }) {
   const [favorites, setFavorites] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem(FAVORITE_HASHTAGS_KEY) ?? '[]'); } catch { return []; }
+    return readStoredHashtags(FAVORITE_HASHTAGS_KEY, MAX_FAVORITE_HASHTAGS);
   });
   const [recents] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem(RECENT_HASHTAGS_KEY) ?? '[]'); } catch { return []; }
+    return readStoredHashtags(RECENT_HASHTAGS_KEY, MAX_RECENT_HASHTAGS);
   });
   const [search, setSearch] = useState('');
   const [trendingTopics, setTrendingTopics] = useState<TrendingTopic[]>([]);
@@ -1079,7 +1096,11 @@ function HashtagBrowser({
   }, [agent]);
 
   const toggleFavorite = (tag: string) => {
-    const next = favorites.includes(tag) ? favorites.filter((f) => f !== tag) : [tag, ...favorites];
+    const normalizedTag = normalizeStoredHashtag(tag);
+    if (!normalizedTag || normalizedTag.length > MAX_STORED_HASHTAG_LENGTH) return;
+    const next = favorites.includes(normalizedTag)
+      ? favorites.filter((f) => f !== normalizedTag)
+      : [normalizedTag, ...favorites].slice(0, MAX_FAVORITE_HASHTAGS);
     setFavorites(next);
     try {
       localStorage.setItem(FAVORITE_HASHTAGS_KEY, JSON.stringify(next));
@@ -1241,10 +1262,10 @@ export default function ComposeSheet({ onClose }: Props) {
   // ── Autocomplete: hashtag sources ────────────────────────────────────────
   const [acTrendingTopics, setAcTrendingTopics] = useState<string[]>([]);
   const [acRecentHashtags] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem(RECENT_HASHTAGS_KEY) ?? '[]') as string[]; } catch { return []; }
+    return readStoredHashtags(RECENT_HASHTAGS_KEY, MAX_RECENT_HASHTAGS);
   });
   const [acFavoriteHashtags] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem(FAVORITE_HASHTAGS_KEY) ?? '[]') as string[]; } catch { return []; }
+    return readStoredHashtags(FAVORITE_HASHTAGS_KEY, MAX_FAVORITE_HASHTAGS);
   });
 
   useEffect(() => {
@@ -1463,10 +1484,13 @@ export default function ComposeSheet({ onClose }: Props) {
         if (imageResponse.ok) {
           const imageBlob = await imageResponse.blob();
           if (imageBlob.type.startsWith('image/')) {
-            const upload = await agent.uploadBlob(imageBlob, {
-              encoding: imageBlob.type || 'image/jpeg',
+            const thumbUpload = await uploadBlob(agent, imageBlob, 'image', {
+              maxAttempts: 2,
+              timeoutMs: 60_000,
             });
-            thumbBlobRef = upload.data.blob;
+            if (thumbUpload.ok) {
+              thumbBlobRef = thumbUpload.blob;
+            }
           }
         }
       } catch {
@@ -1575,11 +1599,14 @@ export default function ComposeSheet({ onClose }: Props) {
           throw new Error(`Caption track for ${caption.lang.toUpperCase()} exceeds the ${VIDEO_CAPTION_MAX_BYTES} byte Bluesky limit.`);
         }
         const captionBlob = new Blob([caption.content], { type: 'text/vtt' });
-        const upload = await atpCall<BlobUploadResponse>((signal) => agent.uploadBlob(captionBlob, {
-          encoding: 'text/vtt',
-          signal,
-        }), { maxAttempts: 2, timeoutMs: 30_000 });
-        uploadedCaptions.push({ lang: caption.lang, file: upload.data.blob });
+        const captionUpload = await uploadBlob(agent, captionBlob, 'caption', {
+          maxAttempts: 2,
+          timeoutMs: 30_000,
+        });
+        if (!captionUpload.ok) {
+          throw new Error(captionUpload.message);
+        }
+        uploadedCaptions.push({ lang: caption.lang, file: captionUpload.blob });
       }
       captionBlobs = uploadedCaptions;
     }
@@ -1613,6 +1640,9 @@ export default function ComposeSheet({ onClose }: Props) {
 
       if (videoItems.length > 1) {
         throw new Error('Please attach only one video per post.');
+      }
+      if (selectedAudio && (videoItems.length > 0 || imageItems.length > 0)) {
+        throw new Error('Use either photos/video or audio in one post, not both.');
       }
       if (videoItems.length > 0 && imageItems.length > 0) {
         throw new Error('Mixing photos and video in one post is not supported yet. Use either photos/GIFs or one video.');
@@ -1657,7 +1687,6 @@ export default function ComposeSheet({ onClose }: Props) {
         }> = [];
         for (const item of imageItems) {
           let blobToUpload: Blob | File | null = item.file;
-          let encoding = item.file?.type || 'image/jpeg';
 
           if (!blobToUpload && item.remoteUrl) {
             const remoteRes = await fetch(item.remoteUrl);
@@ -1665,20 +1694,25 @@ export default function ComposeSheet({ onClose }: Props) {
               throw new Error('Failed to fetch selected GIF. Try another GIF.');
             }
             blobToUpload = await remoteRes.blob();
-            encoding = blobToUpload.type || 'image/gif';
+            if (!blobToUpload.type) {
+              blobToUpload = new Blob([blobToUpload], { type: 'image/gif' });
+            }
           }
 
           if (!blobToUpload) {
             throw new Error('Missing media data for upload.');
           }
 
-          const upload = await atpCall<BlobUploadResponse>((signal) => agent.uploadBlob(blobToUpload!, {
-            encoding,
-            signal,
-          }), { maxAttempts: 2, timeoutMs: 60_000 });
+          const upload = await uploadBlob(agent, blobToUpload, 'image', {
+            maxAttempts: 2,
+            timeoutMs: 60_000,
+          });
+          if (!upload.ok) {
+            throw new Error(upload.message);
+          }
           const alt = sanitizeAltText(item.alt);
           uploadedImages.push({
-            image: upload.data.blob,
+            image: upload.blob,
             alt,
             ...(item.width > 0 && item.height > 0 ? { aspectRatio: { width: item.width, height: item.height } } : {}),
           });
@@ -1689,11 +1723,18 @@ export default function ComposeSheet({ onClose }: Props) {
         };
       } else if (selectedAudio) {
         setPostStatus('Uploading audio...');
-        const audioUpload = await atpCall<BlobUploadResponse>(
-          (signal) => agent.uploadBlob(selectedAudio.file, { encoding: selectedAudio.mimeType, signal }),
-          { maxAttempts: 2, timeoutMs: 120_000 },
-        );
-        const audioUri = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${session.did}&cid=${(audioUpload.data.blob as any)?.ref?.$link ?? ''}`;
+        const audioUpload = await uploadBlob(agent, selectedAudio.file, 'audio', {
+          maxAttempts: 2,
+          timeoutMs: 120_000,
+        });
+        if (!audioUpload.ok) {
+          throw new Error(audioUpload.message);
+        }
+        const audioCid = readBlobCid(audioUpload.blob);
+        if (!audioCid) {
+          throw new Error('Audio upload succeeded but did not return a valid blob reference.');
+        }
+        const audioUri = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(session.did)}&cid=${encodeURIComponent(audioCid)}`;
         const audioDescription = selectedAudio.artist.trim() || '';
         embed = {
           $type: 'app.bsky.embed.external',
@@ -1954,6 +1995,12 @@ export default function ComposeSheet({ onClose }: Props) {
     setPostError(null);
     setMediaHint(null);
 
+    if (selectedAudio) {
+      setPostError('Remove audio before adding photos or video.');
+      e.target.value = '';
+      return;
+    }
+
     const existingVideos = mediaItems.filter((item) => item.mediaType === 'video').length;
     const existingImages = mediaItems.filter((item) => item.mediaType === 'image').length;
     const slotsLeft = Math.max(0, MAX_MEDIA - mediaItems.length);
@@ -2050,6 +2097,11 @@ export default function ComposeSheet({ onClose }: Props) {
   };
 
   const handleGifSelected = useCallback((gif: KlipyGif) => {
+    if (selectedAudio) {
+      setPostError('Remove audio before adding GIFs.');
+      return;
+    }
+
     if (mediaItems.length >= MAX_MEDIA) {
       setPostError(`You can attach up to ${MAX_MEDIA} photos or GIFs.`);
       return;
@@ -2076,11 +2128,16 @@ export default function ComposeSheet({ onClose }: Props) {
     setShowGifPicker(false);
     setShowAttachMenu(false);
     setActiveTool(null);
-  }, [mediaItems.length]);
+  }, [mediaItems.length, selectedAudio]);
 
   const handleAudioSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (mediaItems.length > 0) {
+      setPostError('Remove photos or video before adding audio.');
+      e.target.value = '';
+      return;
+    }
     if (!isLikelyAudioFile(file)) {
       setPostError('Selected file is not a recognized audio format.');
       e.target.value = '';
@@ -2104,7 +2161,7 @@ export default function ComposeSheet({ onClose }: Props) {
     setPostError(null);
     setShowPreview(true);
     e.target.value = '';
-  }, []);
+  }, [mediaItems.length]);
 
   const removeAudio = useCallback(() => {
     if (selectedAudio) URL.revokeObjectURL(selectedAudio.previewUrl);
@@ -3063,12 +3120,12 @@ export default function ComposeSheet({ onClose }: Props) {
                   {/* Media */}
                   <button
                     onClick={() => { openMediaPicker(); setShowAttachMenu(false); }}
-                    disabled={mediaItems.length >= MAX_MEDIA}
+                    disabled={mediaItems.length >= MAX_MEDIA || selectedAudio !== null}
                     style={{
                       flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
                       padding: '10px 6px', borderRadius: 14,
-                      background: 'var(--fill-1)', border: 'none', cursor: mediaItems.length >= MAX_MEDIA ? 'default' : 'pointer',
-                      opacity: mediaItems.length >= MAX_MEDIA ? 0.45 : 1,
+                      background: 'var(--fill-1)', border: 'none', cursor: (mediaItems.length >= MAX_MEDIA || selectedAudio !== null) ? 'default' : 'pointer',
+                      opacity: (mediaItems.length >= MAX_MEDIA || selectedAudio !== null) ? 0.45 : 1,
                     }}
                   >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--label-2)" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
@@ -3082,12 +3139,12 @@ export default function ComposeSheet({ onClose }: Props) {
                   {/* Camera */}
                   <button
                     onClick={() => { openCameraPicker(); setShowAttachMenu(false); }}
-                    disabled={mediaItems.length >= MAX_MEDIA}
+                    disabled={mediaItems.length >= MAX_MEDIA || selectedAudio !== null}
                     style={{
                       flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
                       padding: '10px 6px', borderRadius: 14,
-                      background: 'var(--fill-1)', border: 'none', cursor: mediaItems.length >= MAX_MEDIA ? 'default' : 'pointer',
-                      opacity: mediaItems.length >= MAX_MEDIA ? 0.45 : 1,
+                      background: 'var(--fill-1)', border: 'none', cursor: (mediaItems.length >= MAX_MEDIA || selectedAudio !== null) ? 'default' : 'pointer',
+                      opacity: (mediaItems.length >= MAX_MEDIA || selectedAudio !== null) ? 0.45 : 1,
                     }}
                   >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--label-2)" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
@@ -3100,11 +3157,13 @@ export default function ComposeSheet({ onClose }: Props) {
                   {/* GIF */}
                   <button
                     onClick={() => { setShowGifPicker(true); setActiveTool('gif'); setShowAttachMenu(false); }}
+                    disabled={selectedAudio !== null}
                     style={{
                       flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
                       padding: '10px 6px', borderRadius: 14,
                       background: activeTool === 'gif' ? 'rgba(0,122,255,0.1)' : 'var(--fill-1)',
-                      border: 'none', cursor: 'pointer',
+                      border: 'none', cursor: selectedAudio !== null ? 'default' : 'pointer',
+                      opacity: selectedAudio !== null ? 0.45 : 1,
                     }}
                   >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={activeTool === 'gif' ? 'var(--blue)' : 'var(--label-2)'} strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">

@@ -14,6 +14,8 @@ export interface HardNegativeDatasetRow {
 
 const STORAGE_KEY = 'glympse.search-hard-negative-signals.v1';
 const MAX_SIGNALS = 2_000;
+const SIGNAL_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+const MAX_CLOCK_SKEW_MS = 1000 * 60 * 5;
 
 function sanitizeQuery(query: string): string {
   return query.trim().replace(/\s+/g, ' ').slice(0, 160);
@@ -35,6 +37,7 @@ function readSignals(): SearchCorrectionSignal[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as SearchCorrectionSignal[];
     if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
     return parsed.filter((signal) => (
       signal
       && typeof signal.query === 'string'
@@ -42,6 +45,10 @@ function readSignals(): SearchCorrectionSignal[] {
       && (signal.relevance === 'relevant' || signal.relevance === 'irrelevant')
       && typeof signal.confidenceScore === 'number'
       && typeof signal.recordedAt === 'number'
+      && Number.isFinite(signal.recordedAt)
+      && signal.recordedAt > 0
+      && signal.recordedAt >= now - SIGNAL_TTL_MS
+      && signal.recordedAt <= now + MAX_CLOCK_SKEW_MS
     ));
   } catch {
     return [];
@@ -51,7 +58,11 @@ function readSignals(): SearchCorrectionSignal[] {
 function writeSignals(signals: SearchCorrectionSignal[]): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(signals.slice(-MAX_SIGNALS)));
+    const now = Date.now();
+    const fresh = signals
+      .filter((s) => s.recordedAt >= now - SIGNAL_TTL_MS && s.recordedAt <= now + MAX_CLOCK_SKEW_MS)
+      .slice(-MAX_SIGNALS);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
   } catch {
     // Best-effort persistence only.
   }

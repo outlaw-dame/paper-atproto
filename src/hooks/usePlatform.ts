@@ -6,10 +6,18 @@
 //   isMobile    — isIOS || isAndroid
 //   isPWA       — running in standalone/PWA mode (home-screen launch)
 //
+// isPWA is reactive: it updates if the display mode changes within the
+// session (e.g. the user installs the app while the page is open in Chrome).
+//
+// Static platform data (UA, pointer, memory) is sourced from
+// src/lib/platformDetect.ts — the single source of truth shared with
+// bootstrap.ts, runtimePrefetch.ts, and the android/ module.
+//
 // Usage:
 //   const { isIOS, isMobile } = usePlatform();
 
-import { useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { getStaticPlatformInfo } from '../lib/platformDetect';
 
 export interface PlatformInfo {
   isIOS: boolean;
@@ -23,32 +31,56 @@ export interface PlatformInfo {
   canHover: boolean;
 }
 
-export function usePlatform(): PlatformInfo {
-  return useMemo(() => {
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    const mm = typeof window !== 'undefined' ? window.matchMedia.bind(window) : null;
-    const isIOS = /iphone|ipad|ipod/i.test(ua);
-    const isAndroid = /android/i.test(ua);
-    const isStandalone =
-      (!!mm && (mm('(display-mode: standalone)').matches || mm('(display-mode: minimal-ui)').matches)) ||
-      (isIOS && 'standalone' in navigator && (navigator as any).standalone === true);
-    const prefersCoarsePointer = !!mm && mm('(pointer: coarse)').matches;
-    const hasAnyCoarsePointer = !!mm && mm('(any-pointer: coarse)').matches;
-    const hasAnyFinePointer = !!mm && mm('(any-pointer: fine)').matches;
-    const canHover = !!mm && (mm('(hover: hover)').matches || mm('(any-hover: hover)').matches);
+// UA-based and static media-query signals never change — compute once,
+// delegating to the shared platformDetect utility.
+function getStaticPlatform() {
+  const {
+    isIOS,
+    isAndroid,
+    prefersCoarsePointer,
+    hasAnyCoarsePointer,
+    hasAnyFinePointer,
+    canHover,
+  } = getStaticPlatformInfo();
+  return { isIOS, isAndroid, prefersCoarsePointer, hasAnyCoarsePointer, hasAnyFinePointer, canHover };
+}
 
-    return {
-      isIOS,
-      isAndroid,
-      isMobile: isIOS || isAndroid,
-      isPWA: isStandalone,
-      isStandalone,
-      prefersCoarsePointer,
-      hasAnyCoarsePointer,
-      hasAnyFinePointer,
-      canHover,
+function readIsStandalone(isIOS: boolean): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches ||
+    (isIOS && 'standalone' in navigator && (navigator as Record<string, unknown>).standalone === true)
+  );
+}
+
+export function usePlatform(): PlatformInfo {
+  const static_ = useMemo(getStaticPlatform, []);
+  const [isStandalone, setIsStandalone] = useState(() => readIsStandalone(static_.isIOS));
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // React to the user installing the app while the page is open.
+    const standaloneQuery = window.matchMedia('(display-mode: standalone)');
+    const minimalQuery = window.matchMedia('(display-mode: minimal-ui)');
+
+    const update = () => setIsStandalone(readIsStandalone(static_.isIOS));
+
+    standaloneQuery.addEventListener('change', update);
+    minimalQuery.addEventListener('change', update);
+    return () => {
+      standaloneQuery.removeEventListener('change', update);
+      minimalQuery.removeEventListener('change', update);
     };
-  }, []);
+  }, [static_.isIOS]);
+
+  return useMemo((): PlatformInfo => ({
+    ...static_,
+    isMobile: static_.isIOS || static_.isAndroid,
+    isPWA: isStandalone,
+    isStandalone,
+  }), [static_, isStandalone]);
 }
 
 // ─── Platform-aware button tokens ─────────────────────────────────────────────

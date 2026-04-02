@@ -63,6 +63,37 @@ function resolveMarianModel(sourceLang: string, targetLang: string): MarianModel
 export class MarianProvider {
   readonly modelVersion = 'Helsinki-NLP/opus-mt';
 
+  async translateBatch(input: {
+    texts: string[];
+    sourceLang: string;
+    targetLang: string;
+  }): Promise<MarianTranslationOutput[]> {
+    if (input.texts.length === 0) return [];
+    if (input.sourceLang === input.targetLang) {
+      return input.texts.map((translatedText) => ({
+        translatedText,
+        modelVersion: this.modelVersion,
+      }));
+    }
+
+    const model = resolveMarianModel(input.sourceLang, input.targetLang);
+    const modelsRootDir = ct2WorkerBridge.getModelsRootDir();
+    const translatedTexts = await ct2WorkerBridge.translateBatch({
+      provider: 'marian',
+      modelDir: `${modelsRootDir}/ct2/${model.modelShortName}_int8`,
+      hfDir: `${modelsRootDir}/hf/${model.modelShortName}`,
+      sourceLang: model.sourceLang,
+      targetLang: model.targetLang,
+      texts: input.texts,
+      ...(model.targetPrefix ? { targetPrefix: model.targetPrefix } : {}),
+    });
+
+    return translatedTexts.map((translatedText) => ({
+      translatedText,
+      modelVersion: `Helsinki-NLP/${model.modelShortName}`,
+    }));
+  }
+
   async translate(input: MarianTranslateInput): Promise<MarianTranslationOutput> {
     if (input.sourceLang === input.targetLang) {
       return {

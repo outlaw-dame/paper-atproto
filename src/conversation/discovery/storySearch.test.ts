@@ -3,6 +3,7 @@ import type { MockPost } from '../../data/mockData';
 import {
   collectStorySearchHydrationUris,
   dedupeStorySearchPosts,
+  mergeHydratedLocalStoryPosts,
   resolveStorySearchPage,
 } from './storySearch';
 
@@ -59,7 +60,7 @@ describe('storySearch helpers', () => {
 
   it('collects unique ATProto hydration uris with a limit', () => {
     const uris = collectStorySearchHydrationUris([
-      { id: 'at://did:plc:one/app.bsky.feed.post/one' },
+      { id: 'bafy-one', uri: 'at://did:plc:one/app.bsky.feed.post/one' },
       { id: 'at://did:plc:two/app.bsky.feed.post/two' },
       { id: 'https://example.com/not-atproto' },
       { id: 'at://did:plc:one/app.bsky.feed.post/one' },
@@ -69,6 +70,35 @@ describe('storySearch helpers', () => {
       'at://did:plc:one/app.bsky.feed.post/one',
       'at://did:plc:two/app.bsky.feed.post/two',
     ]);
+  });
+
+  it('prefers hydrated ATProto posts but falls back to local hybrid rows', () => {
+    const merged = mergeHydratedLocalStoryPosts(
+      [
+        {
+          id: 'bafy-local',
+          uri: 'at://did:plc:local/app.bsky.feed.post/local',
+          content: 'stale local copy',
+          author_did: 'did:plc:local',
+        },
+        {
+          id: 'local-offline-only',
+          content: 'offline only local post',
+          author_did: 'did:plc:offline',
+          created_at: '2026-04-01T00:00:00.000Z',
+        },
+      ],
+      [
+        makeMockPost('at://did:plc:local/app.bsky.feed.post/local'),
+      ],
+    );
+
+    expect(merged.map((post) => post.id)).toEqual([
+      'at://did:plc:local/app.bsky.feed.post/local',
+      'local-offline-only',
+    ]);
+    expect(merged[0]?.content).toBe('post at://did:plc:local/app.bsky.feed.post/local');
+    expect(merged[1]?.content).toBe('offline only local post');
   });
 
   it('resolves an initial story page with remote, tag, and hydrated local posts', () => {

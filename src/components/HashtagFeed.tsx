@@ -6,6 +6,7 @@ import { atpCall } from '../lib/atproto/client';
 import { mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers';
 import type { MockPost } from '../data/mockData';
 import { normalizeAtprotoSearchQuery } from '../lib/searchQuery';
+import { mapHybridPostRowToMockPost } from '../lib/exploreSearchResults';
 import { hybridSearch } from '../search';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { useTranslationStore } from '../store/translationStore';
@@ -89,36 +90,7 @@ function HashtagFeed({ hashtag }: { hashtag: string }) {
 
       // Add hybrid/semantic search results
       if (hybridRes?.rows?.length) {
-        const hybridPosts = hybridRes.rows
-          .map((row: any) => {
-            const authorDid = String(row?.author_did || row?.authorDid || 'did:plc:local');
-            const createdAt = (() => {
-              const raw = row?.created_at || row?.createdAt;
-              if (!raw) return new Date().toISOString();
-              return new Date(raw).toISOString();
-            })();
-            const handle = authorDid.startsWith('did:')
-              ? `${authorDid.slice(-8)}.local`
-              : 'local-user';
-
-            return {
-              id: String(row?.id || crypto.randomUUID()),
-              ...(row?.cid ? { cid: String(row.cid) } : {}),
-              author: {
-                did: authorDid,
-                handle,
-                displayName: handle,
-              },
-              content: String(row?.content || ''),
-              createdAt,
-              timestamp: createdAt,
-              likeCount: 0,
-              replyCount: 0,
-              repostCount: 0,
-              bookmarkCount: 0,
-              chips: [],
-            } as MockPost;
-          });
+        const hybridPosts = hybridRes.rows.map((row: any) => mapHybridPostRowToMockPost(row));
         allPosts.push(...hybridPosts);
       }
 

@@ -4,41 +4,17 @@ import { useActivityStore } from '../store/activityStore';
 import { searchPodcastIndex, type PodcastIndexSearchFeed } from '../lib/podcastIndexClient';
 import type { Feed, FeedItem } from '../schema';
 import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
+import {
+  readEpisodeEntries,
+  type PodcastEpisodeEntry,
+  writeEpisodeEntries,
+} from '../lib/podcastEpisodeStorage';
 
 type FeedCategory = 'News' | 'Podcasts' | 'Videos' | 'General';
 
 const SUPPORTED_FEED_TYPES = ['RSS', 'ATOM', 'JSON Feed', 'JSON-LD', 'RDF/XML'];
 const SAVED_EPISODES_KEY = 'paper-atproto.podcast.saved.v1';
 const DOWNLOADED_EPISODES_KEY = 'paper-atproto.podcast.downloaded.v1';
-
-interface PodcastEpisodeEntry {
-  id: string;
-  title: string;
-  showTitle: string;
-  link: string;
-  pubDate?: string | undefined;
-}
-
-function readEpisodeEntries(key: string): PodcastEpisodeEntry[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as PodcastEpisodeEntry[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeEpisodeEntries(key: string, entries: PodcastEpisodeEntry[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(entries));
-  } catch {
-    // ignore storage write errors
-  }
-}
 
 function inferPodcastCategory(feed: Feed): string {
   const corpus = `${feed.title || ''} ${feed.description || ''}`.toLowerCase();

@@ -10,6 +10,10 @@ export interface YouTubeReference {
   startSeconds?: number;
 }
 
+export interface YouTubeEmbedOptions {
+  autoplay?: boolean;
+}
+
 const HREF_RE = /href\s*=\s*["']([^"']+)["']/gi;
 const URL_RE = /https?:\/\/[^\s<>"']+/gi;
 
@@ -122,6 +126,35 @@ export function parseYouTubeUrl(rawUrl: string): YouTubeReference | null {
 
 export function buildYouTubeThumbnailUrl(videoId: string, quality: 'default' | 'mqdefault' | 'hqdefault' | 'sddefault' = 'hqdefault'): string {
   return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/${quality}.jpg`;
+}
+
+export function buildYouTubeEmbedUrl(
+  reference: YouTubeReference,
+  options: YouTubeEmbedOptions = {},
+): string | null {
+  const autoplay = options.autoplay === true ? '1' : '0';
+
+  const embed = reference.videoId
+    ? new URL(`https://www.youtube-nocookie.com/embed/${encodeURIComponent(reference.videoId)}`)
+    : new URL('https://www.youtube-nocookie.com/embed/videoseries');
+
+  embed.searchParams.set('autoplay', autoplay);
+  embed.searchParams.set('playsinline', '1');
+  embed.searchParams.set('rel', '0');
+
+  if (reference.playlistId) {
+    embed.searchParams.set('list', reference.playlistId);
+  }
+
+  if (reference.startSeconds !== undefined && reference.startSeconds > 0) {
+    embed.searchParams.set('start', String(reference.startSeconds));
+  }
+
+  return sanitizeExternalUrl(embed.toString(), {
+    stripTracking: true,
+    stripHash: true,
+    rejectLocalHosts: true,
+  });
 }
 
 export function extractUrlsFromText(text: string): string[] {

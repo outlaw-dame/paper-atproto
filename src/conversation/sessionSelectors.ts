@@ -124,6 +124,7 @@ export function useConversationInterpolatedState(sessionId: string) {
       return {
         interpolator: session.interpretation.interpolator,
         writerResult: session.interpretation.writerResult,
+        mediaFindings: session.interpretation.mediaFindings ?? [],
         summaryMode: session.interpretation.summaryMode,
         confidence: session.interpretation.confidence,
         threadState: session.interpretation.threadState,

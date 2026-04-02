@@ -17,6 +17,7 @@ export interface TranscriptionResult {
   languageProbability?: number;
   durationSeconds?: number;
   model: string;
+  profile?: 'fast' | 'quality' | 'long_form';
   segments: TranscriptionSegment[];
 }
 
@@ -25,6 +26,7 @@ type WorkerRequest = {
   filePath: string;
   language?: string;
   maxVttBytes?: number;
+  profile?: 'fast' | 'quality' | 'long_form';
 };
 
 type WorkerResponse =

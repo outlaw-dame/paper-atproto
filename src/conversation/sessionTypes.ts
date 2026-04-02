@@ -13,6 +13,7 @@ import type {
   SummaryMode,
   InterpolatorWriteResult,
   WriterEntity,
+  WriterMediaFinding,
 } from '../intelligence/llmContracts';
 import type {
   DeepInterpolatorResult,
@@ -158,6 +159,7 @@ export interface SessionInterpretationState {
   interpolator: ThreadInterpolatorState | null;
   scoresByUri: Record<AtUri, ContributionScores>;
   writerResult: InterpolatorWriteResult | null;
+  mediaFindings?: WriterMediaFinding[];
   confidence: ConfidenceState | null;
   summaryMode: SummaryMode | null;
   threadState: ThreadStateSignal | null;
@@ -254,11 +256,13 @@ export type ConversationModelRunSkipReason =
   | 'interpolator_disabled'
   | 'minimal_fallback'
   | 'insufficient_signal'
+  | 'multimodal_not_needed'
+  | 'no_media_candidates'
   | 'not_entitled'
   | 'premium_ineligible';
 
 export interface ConversationModelRunDiagnostics {
-  provider: 'interpolator_writer' | 'gemini';
+  provider: 'interpolator_writer' | 'qwen_multimodal' | 'gemini';
   status: ConversationModelRunStatus;
   sourceToken?: string;
   lastRequestedAt?: string;
@@ -272,6 +276,7 @@ export interface ConversationModelRunDiagnostics {
 
 export interface SessionAiDiagnostics {
   writer: ConversationModelRunDiagnostics;
+  multimodal: ConversationModelRunDiagnostics;
   premium: ConversationModelRunDiagnostics;
 }
 

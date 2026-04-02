@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm run test -- --reporter=verbose --reporter=json --outputFile=test-results.json
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## CI Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # ── Test results ──────────────────────────────────────────────────
+          if [ -f test-results.json ]; then
+            total=$(node -e "const r=require('./test-results.json');console.log(r.numTotalTests ?? 0)")
+            passed=$(node -e "const r=require('./test-results.json');console.log(r.numPassedTests ?? 0)")
+            failed=$(node -e "const r=require('./test-results.json');console.log(r.numFailedTests ?? 0)")
+            echo "### Tests" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$failed" = "0" ]; then
+              echo "✅ **${passed}/${total} passing**" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "❌ **${failed} failing** (${passed}/${total} passed)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+
+            # Security-relevant test suites
+            echo "#### Security-path coverage" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Suite | Status |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+            node -e "
+              const r = require('./test-results.json');
+              const suites = r.testResults ?? [];
+              const security = [
+                'safebrowsing', 'originpolicy', 'verificationroute',
+                'mediaroute', 'llmmultimodal', 'qwenmultimodal',
+                'aisessionsstore', 'sexualsafety', 'durablepolicy',
+                'externallinkguard', 'loggingsafety'
+              ];
+              const matched = suites.filter(s =>
+                security.some(k => (s.name ?? '').toLowerCase().includes(k))
+              );
+              for (const s of matched) {
+                const name = (s.name ?? '').split('/').slice(-1)[0].replace('.test.ts','');
+                const status = s.status === 'passed' ? '✅ pass' : '❌ FAIL';
+                console.log('|' + name + '|' + status + '|');
+              }
+              if (!matched.length) console.log('| _(none matched)_ | – |');
+            " >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # ── Bundle sizes ──────────────────────────────────────────────────
+          if [ -d dist/assets ]; then
+            echo "### Bundle chunks" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Chunk | Raw | Gzip |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+            node -e "
+              const fs = require('fs');
+              const path = require('path');
+              const zlib = require('zlib');
+              const dir = 'dist/assets';
+              const files = fs.readdirSync(dir)
+                .filter(f => f.endsWith('.js') && !/\.worker[-.]/.test(f))
+                .map(f => {
+                  const fullPath = path.join(dir, f);
+                  const source = fs.readFileSync(fullPath);
+                  const size = source.byteLength;
+                  const gzipSize = zlib.gzipSync(source, { level: 6 }).byteLength;
+                  return {
+                    name: f.replace(/-[A-Za-z0-9_]{8}\.js$/, '.js'),
+                    size,
+                    gzipSize,
+                  };
+                })
+                .sort((a, b) => b.size - a.size)
+                .slice(0, 20);
+              for (const f of files) {
+                const kb = (f.size / 1024).toFixed(1);
+                const gzipKb = (f.gzipSize / 1024).toFixed(1);
+                const warn = f.size > 500_000 ? ' ⚠️' : '';
+                console.log('|' + f.name + '|' + kb + ' kB' + warn + '|' + gzipKb + ' kB|');
+              }
+            " >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -37,7 +37,11 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
       lastError = error;
       const isLast = attempt === options.attempts - 1;
       if (!shouldRetry(error) || isLast) break;
-      await sleep(computeDelay(attempt, options.baseDelayMs, options.maxDelayMs, options.jitter));
+      const retryAfterMs = (error as { details?: { retryAfterMs?: unknown } }).details?.retryAfterMs;
+      const serverDelay = typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)
+        ? Math.max(0, Math.min(options.maxDelayMs, Math.floor(retryAfterMs)))
+        : null;
+      await sleep(serverDelay ?? computeDelay(attempt, options.baseDelayMs, options.maxDelayMs, options.jitter));
     }
   }
 

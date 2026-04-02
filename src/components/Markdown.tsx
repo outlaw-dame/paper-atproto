@@ -9,6 +9,7 @@ import { sanitizeExternalUrl } from '../lib/safety/externalUrl';
 interface MarkdownProps {
   content: string;
   className?: string;
+  onHashtag?: (tag: string) => void;
 }
 
 /**
@@ -30,7 +31,7 @@ const preprocessDiscordMarkdown = (content: string): string => {
  * A robust Markdown component that supports GFM and Discord-flavored features.
  * It includes security sanitization and integrates with the Twemoji component.
  */
-export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
+export const Markdown: React.FC<MarkdownProps> = ({ content, className, onHashtag }) => {
   const processedContent = preprocessDiscordMarkdown(content);
 
   return (
@@ -76,9 +77,13 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className }) => {
                   className="text-blue-500 hover:underline font-medium"
                   onClick={(e) => {
                     e.preventDefault();
-                    // Dispatch a custom event that App.tsx can listen to
                     if (tag) {
-                      window.dispatchEvent(new CustomEvent('hashtag-click', { detail: tag }));
+                      if (onHashtag) {
+                        onHashtag(tag);
+                      } else {
+                        // Backward-compatible fallback for legacy consumers.
+                        window.dispatchEvent(new CustomEvent('hashtag-click', { detail: tag }));
+                      }
                     }
                   }}
                 >

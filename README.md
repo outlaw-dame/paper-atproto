@@ -121,6 +121,16 @@ Compression env keys (`server/.env`):
 * `COMPRESSION_GZIP_LEVEL`
 * `COMPRESSION_ZSTD_LEVEL`
 
+Rate limiting env keys (`server/.env`):
+
+* `RATE_LIMIT_REDIS_URL` (optional; enables shared Redis-backed limiting)
+* `RATE_LIMIT_REDIS_PREFIX` (optional; default `paper:ratelimit`)
+* `RATE_LIMIT_REDIS_FAIL_CLOSED` (optional; default `false`; when `true`, requests fail with `503` if Redis limiter is unavailable)
+* `RATE_LIMIT_TRUST_PROXY` (optional; default `false`; only trust proxy IP header when enabled)
+* `RATE_LIMIT_TRUSTED_IP_HEADER` (optional; default `cf-connecting-ip`; header used when proxy trust is enabled)
+
+Operational details and failover behavior are documented in `docs/rate-limit-runbook.md`.
+
 The server reads `server/.env.example` keys:
 
 * `VERIFY_ENTITY_LINKING_PROVIDER` (`dbpedia` | `wikidata` | `hybrid` | `rel` | `heuristic`)

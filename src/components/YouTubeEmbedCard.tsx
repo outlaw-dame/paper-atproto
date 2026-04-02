@@ -1,7 +1,6 @@
-import React, { useMemo } from 'react';
-import ReactPlayer from 'react-player';
+import React, { useEffect, useMemo, useState, startTransition } from 'react';
 import { openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl';
-import { buildYouTubeThumbnailUrl, parseYouTubeUrl } from '../lib/youtube';
+import { buildYouTubeEmbedUrl, buildYouTubeThumbnailUrl, parseYouTubeUrl } from '../lib/youtube';
 
 interface YouTubeEmbedCardProps {
   url: string;
@@ -22,16 +21,32 @@ export default function YouTubeEmbedCard({
   compact = false,
   openButtonLabel,
 }: YouTubeEmbedCardProps) {
+  const [showInlinePlayer, setShowInlinePlayer] = useState(false);
   const reference = useMemo(() => parseYouTubeUrl(url), [url]);
   const safeUrl = sanitizeExternalUrl(reference?.normalizedUrl ?? url);
+  const inlineEmbedUrl = useMemo(
+    () => (reference ? buildYouTubeEmbedUrl(reference, { autoplay: true }) : null),
+    [reference],
+  );
+  const safeThumb = thumb
+    ? sanitizeExternalUrl(thumb, {
+        stripTracking: true,
+        stripHash: true,
+        rejectLocalHosts: true,
+      })
+    : null;
 
   if (!reference || !safeUrl) {
     return null;
   }
 
-  const previewImage = thumb
+  useEffect(() => {
+    setShowInlinePlayer(false);
+  }, [safeUrl]);
+
+  const previewImage = safeThumb
     || (reference.videoId ? buildYouTubeThumbnailUrl(reference.videoId) : undefined)
-    || true;
+    || null;
   const metaDomain = domain || reference.domain;
   const providerLabel = reference.kind === 'playlist'
     ? 'YouTube playlist'
@@ -59,21 +74,108 @@ export default function YouTubeEmbedCard({
         }}
       >
         <div style={{ position: 'absolute', inset: 0 }}>
-          <ReactPlayer
-            src={safeUrl}
-            controls
-            playsInline
-            width="100%"
-            height="100%"
-            light={previewImage}
-            previewAriaLabel={resolvedTitle}
-            config={{
-              youtube: {
-                rel: 0,
-                ...(reference.startSeconds !== undefined ? { start: reference.startSeconds } : {}),
-              },
-            }}
-          />
+          {showInlinePlayer && inlineEmbedUrl ? (
+            <iframe
+              src={inlineEmbedUrl}
+              title={resolvedTitle}
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+              sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                display: 'block',
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!inlineEmbedUrl) {
+                  void openExternalUrl(safeUrl);
+                  return;
+                }
+                startTransition(() => {
+                  setShowInlinePlayer(true);
+                });
+              }}
+              aria-label={reference.kind === 'playlist' ? 'Play YouTube playlist inline' : 'Play YouTube video inline'}
+              style={{
+                appearance: 'none',
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                padding: 0,
+                margin: 0,
+                cursor: 'pointer',
+                position: 'relative',
+                display: 'block',
+                background: previewImage
+                  ? `center / cover no-repeat url("${previewImage}")`
+                  : 'linear-gradient(180deg, rgba(18,18,18,0.84), rgba(0,0,0,0.96))',
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'linear-gradient(180deg, rgba(0,0,0,0.04), rgba(0,0,0,0.42))',
+                }}
+              />
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: 64,
+                  height: 64,
+                  borderRadius: 999,
+                  background: 'rgba(0,0,0,0.68)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  boxShadow: '0 12px 24px rgba(0,0,0,0.24)',
+                  display: 'grid',
+                  placeItems: 'center',
+                }}
+              >
+                <span
+                  style={{
+                    width: 0,
+                    height: 0,
+                    borderTop: '11px solid transparent',
+                    borderBottom: '11px solid transparent',
+                    borderLeft: '18px solid #fff',
+                    marginLeft: 4,
+                  }}
+                />
+              </span>
+              <span
+                style={{
+                  position: 'absolute',
+                  left: 12,
+                  bottom: 12,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(0,0,0,0.62)',
+                  color: '#fff',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.01em',
+                }}
+              >
+                {reference.kind === 'playlist' ? 'Play playlist' : 'Play inline'}
+              </span>
+            </button>
+          )}
         </div>
       </div>
       <div style={{ padding: compact ? '10px 12px' : '12px 14px' }}>

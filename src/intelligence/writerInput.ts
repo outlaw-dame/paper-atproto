@@ -8,6 +8,7 @@ import type {
   WriterComment,
   WriterContributor,
   WriterEntity,
+  WriterMediaFinding,
   ConfidenceState,
   SummaryMode,
 } from './llmContracts';
@@ -107,6 +108,43 @@ function toSafeEntityId(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 64) || 'entity';
 }
 
+function sanitizeWriterMediaFindings(
+  findings: ThreadStateForWriter['mediaFindings'],
+): WriterMediaFinding[] {
+  if (!Array.isArray(findings)) return [];
+
+  return findings
+    .filter((finding): finding is WriterMediaFinding => typeof finding === 'object' && finding !== null)
+    .map((finding) => {
+      const mediaType = ['screenshot', 'chart', 'document', 'photo', 'meme', 'unknown'].includes(finding.mediaType)
+        ? finding.mediaType
+        : 'unknown';
+      const summary = finding.summary.replace(/\s+/g, ' ').trim().slice(0, 280);
+      const confidence = Math.max(0, Math.min(1, Number.isFinite(finding.confidence) ? finding.confidence : 0));
+      const cautionFlags = Array.isArray(finding.cautionFlags)
+        ? Array.from(new Set(
+            finding.cautionFlags
+              .filter((value): value is string => typeof value === 'string')
+              .map((value) => value.replace(/\s+/g, ' ').trim().slice(0, 80))
+              .filter(Boolean),
+          )).slice(0, 6)
+        : [];
+      const extractedText = typeof finding.extractedText === 'string'
+        ? finding.extractedText.replace(/\s+/g, ' ').trim().slice(0, 280)
+        : undefined;
+
+      return {
+        mediaType,
+        summary,
+        confidence,
+        ...(extractedText ? { extractedText } : {}),
+        ...(cautionFlags.length > 0 ? { cautionFlags } : {}),
+      };
+    })
+    .filter((finding) => finding.summary.length > 0)
+    .slice(0, 3);
+}
+
 function buildScoresByDid(
   replies: ThreadNode[],
   scores: Record<string, ContributionScores>,
@@ -142,6 +180,7 @@ export function buildThreadStateForWriter(
   rootAuthorHandle?: string,
   options?: {
     summaryMode?: SummaryMode;
+    mediaFindings?: ThreadStateForWriter['mediaFindings'];
   },
 ): ThreadStateForWriter {
   const debugAlgorithmTelemetry = import.meta.env.DEV
@@ -438,6 +477,7 @@ export function buildThreadStateForWriter(
     text: (translationById?.[state.rootUri]?.translatedText ?? rootText).slice(0, 500),
     createdAt: state.updatedAt,
   };
+  const mediaFindings = sanitizeWriterMediaFindings(options?.mediaFindings);
 
   return {
     threadId,
@@ -450,6 +490,9 @@ export function buildThreadStateForWriter(
     safeEntities,
     factualHighlights: factualHighlights.slice(0, 5),
     whatChangedSignals: whatChangedSignals.slice(0, 6),
+    ...(mediaFindings.length > 0
+      ? { mediaFindings }
+      : {}),
   };
 }
 

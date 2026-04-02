@@ -9,9 +9,12 @@ const tsvector = customType<{ data: string }>({
 
 export const posts = pgTable('posts', {
   id: text('id').primaryKey(),
+  uri: text('uri'),
   authorDid: text('author_did').notNull(),
   content: text('content').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  replyTo: text('reply_to'),
+  replyRoot: text('reply_root'),
   embedding: vector('embedding', { dimensions: 384 }), // For semantic search
   searchVector: tsvector('search_vector'), // For full-text search
   embed: text('embed'), // JSON string of ATProto embed

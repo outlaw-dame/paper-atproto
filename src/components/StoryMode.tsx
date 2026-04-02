@@ -40,6 +40,7 @@ import YouTubeEmbedCard from './YouTubeEmbedCard';
 import { Gif } from './Gif';
 import { useTranslationStore } from '../store/translationStore';
 import { useUiStore } from '../store/uiStore';
+import { useBookmarksStore } from '../store/bookmarksStore';
 import { translationClient } from '../lib/i18n/client';
 import { heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
@@ -85,6 +86,7 @@ import type { ConversationSession } from '../conversation/sessionTypes';
 import ProfileCardTrigger from './ProfileCardTrigger';
 import type { ProfileCardData } from '../types/profileCard';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
+import { Markdown } from './Markdown';
 
 interface Props {
   entry: StoryEntry;
@@ -271,8 +273,14 @@ function PromptHeroCard({
   const [likeCount, setLikeCount] = useState(post.likeCount);
   const [reposted, setReposted] = useState(!!post.viewer?.repost);
   const [repostCount, setRepostCount] = useState(post.repostCount);
-  const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
+  const sessionDid = useSessionStore((state) => state.session?.did ?? '');
+  const bookmarkedUris = useBookmarksStore((state) => (
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
+  ));
+  const addBookmark = useBookmarksStore((state) => state.addBookmark);
+  const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
+  const bookmarked = bookmarkedUris.includes(post.id);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const { openProfile, openExploreSearch } = useUiStore();
   const navigateToProfile = useProfileNavigation();
@@ -315,6 +323,17 @@ function PromptHeroCard({
       // Keep original text visible.
     } finally {
       setTranslating(false);
+    }
+  };
+
+  const handleBookmark = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!sessionDid) return;
+    const wasBookmarked = useBookmarksStore.getState().isBookmarked(sessionDid, post.id);
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, post.id);
+    } else {
+      addBookmark(sessionDid, post.id);
     }
   };
 
@@ -433,11 +452,13 @@ function PromptHeroCard({
             opacity: 0.95, 
             lineHeight: 1.7, 
             marginBottom: 32, 
-            whiteSpace: 'pre-wrap',
-            fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
             letterSpacing: '-0.01em'
           }}>
-            <RichText text={post.article.body} facets={[]} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
+            <Markdown
+              content={post.article.body}
+              className="story-article-markdown"
+              onHashtag={handleHashtagClick}
+            />
           </div>
         )}
 
@@ -904,7 +925,7 @@ function PromptHeroCard({
           {/* Bookmark */}
           <button
             style={{ ...heroActionBtnStyle, color: bookmarked ? accent.primary : 'rgba(255,255,255,0.55)' }}
-            onClick={e => { e.stopPropagation(); setBookmarked(v => !v); }}
+            onClick={handleBookmark}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill={bookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={bookmarked ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
@@ -1995,11 +2016,17 @@ function ContributionCard({
   const [likeCount, setLikeCount] = useState(node.likeCount);
   const [reposted, setReposted] = useState(false);
   const [repostCount, setRepostCount] = useState(node.repostCount);
-  const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [showAllReplies, setShowAllReplies] = useState(false);
+  const sessionDid = useSessionStore((state) => state.session?.did ?? '');
+  const bookmarkedUris = useBookmarksStore((state) => (
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
+  ));
+  const addBookmark = useBookmarksStore((state) => state.addBookmark);
+  const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
+  const bookmarked = bookmarkedUris.includes(node.uri);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const { openProfile, openExploreSearch } = useUiStore();
   const navigateToProfile = useProfileNavigation();
@@ -2030,7 +2057,13 @@ function ContributionCard({
 
   const handleBookmark = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setBookmarked(v => !v);
+    if (!sessionDid) return;
+    const wasBookmarked = useBookmarksStore.getState().isBookmarked(sessionDid, node.uri);
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, node.uri);
+    } else {
+      addBookmark(sessionDid, node.uri);
+    }
   };
 
   const handleTranslate = async (e: React.MouseEvent) => {

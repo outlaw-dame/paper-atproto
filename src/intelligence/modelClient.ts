@@ -17,6 +17,7 @@ import type {
 } from './composer/llmWriterContracts';
 import { getConfiguredApiBaseUrl, resolveApiUrl } from '../lib/apiBase';
 import { composeAbortSignals, sleepWithAbort } from '../lib/abortSignals';
+import { sanitizeUrlForProcessing } from '../lib/safety/externalUrl';
 import type {
   DeepInterpolatorResult,
   PremiumAiEntitlements,
@@ -126,6 +127,11 @@ type InterpolatorTelemetrySnapshot = {
 type PremiumEntitlementCacheEntry = {
   value: PremiumAiEntitlements;
   expiresAt: number;
+};
+
+type ModelClientRequestError = Error & {
+  status?: number;
+  retryable?: boolean;
 };
 
 const premiumEntitlementCache = new Map<string, PremiumEntitlementCacheEntry>();
@@ -544,10 +550,13 @@ async function fetchWithRetry<T>(
 
       if (!res.ok) {
         const canRetryStatus = retryableStatuses.includes(res.status) || isRetryable(res.status);
+        const error = new Error(`LLM endpoint ${path} responded ${res.status}`) as ModelClientRequestError;
+        error.status = res.status;
+        error.retryable = canRetryStatus;
         if (!canRetryStatus || attempt === attempts - 1) {
-          throw new Error(`LLM endpoint ${path} responded ${res.status}`);
+          throw error;
         }
-        lastError = new Error(`LLM endpoint ${path} responded ${res.status}`);
+        lastError = error;
         await sleepWithAbort(backoffMs(attempt), combinedSignal);
         continue;
       }
@@ -556,7 +565,8 @@ async function fetchWithRetry<T>(
     } catch (err: unknown) {
       lastError = err;
       const isAbort = err instanceof Error && err.name === 'AbortError';
-      if (isAbort || attempt === attempts - 1) throw err;
+      const retryable = (err as ModelClientRequestError)?.retryable;
+      if (isAbort || retryable === false || attempt === attempts - 1) throw err;
       await sleepWithAbort(backoffMs(attempt), combinedSignal);
     } finally {
       clearTimeout(timeoutId);
@@ -573,6 +583,60 @@ function sanitizeArray(values: unknown, maxItems: number, maxLen: number): strin
     .map((value) => sanitizeSafeSummaryText(truncateAtWordBoundary(value, maxLen)))
     .filter((value) => value.trim().length > 0)
     .slice(0, maxItems);
+}
+
+function sanitizeProcessingText(value: string | undefined, maxLen: number): string {
+  return (value ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
+function sanitizeMediaAnalysisRequest(input: MediaAnalysisRequest): MediaAnalysisRequest {
+  const mediaUrl = sanitizeUrlForProcessing(input.mediaUrl);
+  if (!mediaUrl) {
+    throw new Error('Unsafe media URL for remote multimodal processing.');
+  }
+
+  return {
+    threadId: sanitizeProcessingText(input.threadId, 300),
+    mediaUrl,
+    nearbyText: sanitizeProcessingText(input.nearbyText, 400),
+    candidateEntities: sanitizeArray(input.candidateEntities, 10, 80),
+    factualHints: sanitizeArray(input.factualHints, 5, 120),
+    ...(input.mediaAlt
+      ? { mediaAlt: sanitizeProcessingText(input.mediaAlt, 300) }
+      : {}),
+  };
+}
+
+function sanitizeMediaAnalysisResult(value: MediaAnalysisResult): MediaAnalysisResult {
+  const raw = typeof value === 'object' && value !== null
+    ? (value as unknown as Record<string, unknown>)
+    : {};
+  const mediaType = ['screenshot', 'chart', 'document', 'photo', 'meme', 'unknown'].includes(raw.mediaType as string)
+    ? raw.mediaType as MediaAnalysisResult['mediaType']
+    : 'unknown';
+  const mediaSummary = sanitizeSafeSummaryText(
+    truncateAtWordBoundary(
+      typeof raw.mediaSummary === 'string' ? raw.mediaSummary : '',
+      280,
+    ),
+  );
+  const extractedText = typeof raw.extractedText === 'string'
+    ? sanitizeProcessingText(raw.extractedText, 500)
+    : '';
+
+  return {
+    mediaCentrality: Math.max(0, Math.min(1, Number.isFinite(raw.mediaCentrality) ? Number(raw.mediaCentrality) : 0)),
+    mediaType,
+    mediaSummary,
+    candidateEntities: sanitizeArray(raw.candidateEntities, 5, 80),
+    confidence: Math.max(0, Math.min(1, Number.isFinite(raw.confidence) ? Number(raw.confidence) : 0)),
+    cautionFlags: sanitizeArray(raw.cautionFlags, 6, 80),
+    ...(extractedText ? { extractedText } : {}),
+  };
 }
 
 function sanitizeDeepInterpolatorResult(
@@ -684,11 +748,12 @@ export async function callMediaAnalyzer(
   input: MediaAnalysisRequest,
   signal?: AbortSignal,
 ): Promise<MediaAnalysisResult> {
-  return fetchWithRetry<MediaAnalysisResult>(
+  const result = await fetchWithRetry<MediaAnalysisResult>(
     '/api/llm/analyze/media',
-    input,
+    sanitizeMediaAnalysisRequest(input),
     signal,
   );
+  return sanitizeMediaAnalysisResult(result);
 }
 
 /**

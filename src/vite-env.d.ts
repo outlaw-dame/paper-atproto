@@ -27,6 +27,10 @@ interface ImportMetaEnv {
 	readonly VITE_ENABLE_DRAFT_RECOVERY_MIRROR?: string;
 	readonly VITE_GLYMPSE_MEDIA_BASE_URL?: string;
 	readonly VITE_GLYMPSE_MEDIA_TIMEOUT_MS?: string;
+	readonly VITE_PGLITE_USE_WORKER?: string;
+	readonly VITE_PGLITE_RELAXED_DURABILITY?: string;
+	readonly VITE_PGLITE_WORKER_INIT_TIMEOUT_MS?: string;
+	readonly VITE_AI_SESSION_MINIMAL_PERSISTENCE?: string;
 }
 
 interface ImportMeta {

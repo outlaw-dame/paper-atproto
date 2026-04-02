@@ -5,6 +5,10 @@ import { getEntityLinkingTelemetry, resetEntityLinkingTelemetry } from '../verif
 import { ValidationError, UnauthorizedError, AppError } from '../lib/errors.js';
 import { requireNonEmptyText, sanitizeText, sanitizeUrls } from '../lib/sanitize.js';
 import { env } from '../config/env.js';
+import {
+  checkUrlAgainstSafeBrowsing,
+  shouldBlockSafeBrowsingVerdict,
+} from '../services/safeBrowsing.js';
 
 const VerifyRequestSchema = z.object({
   postUri: z.string().optional(),
@@ -16,6 +20,27 @@ const VerifyRequestSchema = z.object({
 });
 
 export const verificationRouter = new Hono();
+
+function applySensitiveResponseHeaders(c: any): void {
+  c.header('Cache-Control', 'no-store, private');
+  c.header('Pragma', 'no-cache');
+  c.header('X-Content-Type-Options', 'nosniff');
+}
+
+async function sanitizeVerificationImageUrls(urls: string[] | undefined): Promise<string[]> {
+  const sanitized = sanitizeUrls(urls);
+  if (sanitized.length === 0) return [];
+
+  const verdicts = await Promise.all(sanitized.map(async (url) => ({
+    url,
+    verdict: await checkUrlAgainstSafeBrowsing(url),
+  })));
+
+  return verdicts
+    .filter(({ verdict }) => !shouldBlockSafeBrowsingVerdict(verdict))
+    .map(({ url }) => url)
+    .slice(0, env.VERIFY_MAX_URLS);
+}
 
 verificationRouter.get('/status', async (c) => {
   const provider = env.VERIFY_ENTITY_LINKING_PROVIDER;
@@ -37,6 +62,11 @@ verificationRouter.get('/status', async (c) => {
         debug: env.VERIFY_ENTITY_LINKING_DEBUG,
         externalLinkingEnabled,
       },
+      grounding: {
+        provider: 'gemini_google_search',
+        enabled: env.VERIFY_GEMINI_GROUNDING_ENABLED,
+        providerAvailable: Boolean(env.GEMINI_API_KEY),
+      },
       limits: {
         maxTextChars: env.VERIFY_MAX_TEXT_CHARS,
         maxUrls: env.VERIFY_MAX_URLS,
@@ -57,6 +87,8 @@ verificationRouter.delete('/telemetry', (c) => {
 });
 
 verificationRouter.post('/evidence', async (c) => {
+  applySensitiveResponseHeaders(c);
+
   if (env.VERIFY_SHARED_SECRET) {
     const presented = c.req.header('x-verify-shared-secret');
     if (presented !== env.VERIFY_SHARED_SECRET) throw new UnauthorizedError();
@@ -68,11 +100,12 @@ verificationRouter.post('/evidence', async (c) => {
   if (!parsed.success) throw new ValidationError('Invalid verification payload', parsed.error.flatten());
 
   const input = parsed.data;
+  const imageUrls = await sanitizeVerificationImageUrls(input.imageUrls);
   const result = await verifyEvidence({
     ...(input.postUri !== undefined ? { postUri: input.postUri } : {}),
     text: requireNonEmptyText(input.text),
     urls: sanitizeUrls(input.urls),
-    imageUrls: sanitizeUrls(input.imageUrls),
+    imageUrls,
     ...(input.languageCode !== undefined ? { languageCode: input.languageCode } : {}),
     topicHints: (input.topicHints ?? []).map(sanitizeText).filter(Boolean).slice(0, 10),
   });
@@ -81,6 +114,9 @@ verificationRouter.post('/evidence', async (c) => {
 });
 
 verificationRouter.onError((error, c) => {
+  if (c.req.path.endsWith('/evidence')) {
+    applySensitiveResponseHeaders(c);
+  }
   if (error instanceof AppError) {
     return c.json({ ok: false, error: { code: error.code, message: error.message } }, error.status as any);
   }

@@ -10,6 +10,7 @@ import { withRetry } from '../lib/retry.js';
 import type { RetryOptions } from '../lib/retry.js';
 import { env } from '../config/env.js';
 import { ensureSafetyInstructions, filterWriterResponse } from '../lib/safeguards.js';
+import { ensureOllamaLocalUrlPolicy } from '../lib/ollama-policy.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 // These mirror src/intelligence/llmContracts.ts — kept local to avoid
@@ -184,11 +185,48 @@ const OLLAMA_OPTIONS = {
   num_predict: 600,
 } as const;
 
+const MAX_ROOT_POST_CHARS = 700;
+const MAX_REPLY_CHARS = 360;
+const MAX_SIGNAL_CHARS = 220;
+const MAX_FACTUAL_HIGHLIGHT_CHARS = 220;
+const MAX_MEDIA_SUMMARY_CHARS = 280;
+const MAX_MEDIA_EXTRACTED_TEXT_CHARS = 320;
+
+function normalizePromptText(value: string, maxChars: number): string {
+  return value
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxChars);
+}
+
+function normalizeHandle(handle: string): string {
+  const normalized = normalizePromptText(handle, 100)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '');
+  return normalized || 'unknown';
+}
+
+function extractJsonObject(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) return fenced[1].trim();
+
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    return trimmed.slice(start, end + 1);
+  }
+
+  return trimmed;
+}
+
 async function callOllama(
   model: string,
   messages: OllamaChatMessage[],
   timeoutMs: number,
 ): Promise<string> {
+  ensureOllamaLocalUrlPolicy();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -341,49 +379,59 @@ function buildUserMessage(request: WriterRequest): string {
     lines.push(`VISIBLE REPLIES: ${request.visibleReplyCount}`);
   }
   lines.push('');
-  lines.push(`ROOT POST — @${request.rootPost.handle}:`);
-  lines.push(request.rootPost.text);
+  lines.push(`ROOT POST — @${normalizeHandle(request.rootPost.handle)}:`);
+  lines.push(normalizePromptText(request.rootPost.text, MAX_ROOT_POST_CHARS));
 
   if (request.selectedComments.length > 0) {
     lines.push('');
     lines.push('REPLIES:');
     request.selectedComments.forEach((c, i) => {
-      lines.push(`${i + 1}. @${c.handle} [impact:${c.impactScore.toFixed(2)}]: ${c.text}`);
+      lines.push(
+        `${i + 1}. @${normalizeHandle(c.handle)} [impact:${c.impactScore.toFixed(2)}]: ${normalizePromptText(c.text, MAX_REPLY_CHARS)}`,
+      );
     });
   }
 
   if (request.topContributors.length > 0) {
     lines.push('');
     // Label makes it explicit these are participants, not the topic.
-    const handles = request.topContributors.map(c => c.handle).join(', ');
+    const handles = request.topContributors.map(c => normalizeHandle(c.handle)).join(', ');
     lines.push(`CONTRIBUTORS: ${handles}`);
   }
 
   if (request.safeEntities.length > 0) {
     lines.push('');
     lines.push('VERIFIED ENTITIES:');
-    request.safeEntities.forEach(e => lines.push(`- ${e.label} [${e.type}]`));
+    request.safeEntities.forEach((e) => lines.push(
+      `- ${normalizePromptText(e.label, 120)} [${normalizePromptText(e.type, 40)}]`,
+    ));
   }
 
   if (request.whatChangedSignals.length > 0) {
     lines.push('');
     lines.push('THREAD SIGNALS:');
-    request.whatChangedSignals.forEach(s => lines.push(`- ${s}`));
+    request.whatChangedSignals.forEach((s) => lines.push(`- ${normalizePromptText(s, MAX_SIGNAL_CHARS)}`));
   }
 
   if (request.factualHighlights.length > 0) {
     lines.push('');
     lines.push('FACTUAL HIGHLIGHTS:');
-    request.factualHighlights.forEach(h => lines.push(`- ${h}`));
+    request.factualHighlights.forEach((h) => lines.push(`- ${normalizePromptText(h, MAX_FACTUAL_HIGHLIGHT_CHARS)}`));
   }
 
   if (request.mediaFindings && request.mediaFindings.length > 0) {
     lines.push('');
     lines.push('MEDIA:');
-    request.mediaFindings.forEach(m => {
-      lines.push(`- ${m.mediaType} (confidence:${m.confidence.toFixed(2)}): ${m.summary}`);
-      if (m.extractedText) lines.push(`  extracted text: ${m.extractedText}`);
-      if (m.cautionFlags?.length) lines.push(`  caution: ${m.cautionFlags.join(', ')}`);
+    request.mediaFindings.forEach((m) => {
+      lines.push(
+        `- ${normalizePromptText(m.mediaType, 40)} (confidence:${m.confidence.toFixed(2)}): ${normalizePromptText(m.summary, MAX_MEDIA_SUMMARY_CHARS)}`,
+      );
+      if (m.extractedText) {
+        lines.push(`  extracted text: ${normalizePromptText(m.extractedText, MAX_MEDIA_EXTRACTED_TEXT_CHARS)}`);
+      }
+      if (m.cautionFlags?.length) {
+        lines.push(`  caution: ${m.cautionFlags.map((flag) => normalizePromptText(flag, 40)).join(', ')}`);
+      }
     });
   }
 
@@ -409,7 +457,7 @@ export async function runInterpolatorWriter(request: WriterRequest): Promise<Wri
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawContent);
+    parsed = JSON.parse(extractJsonObject(rawContent));
   } catch {
     throw new Error('Writer returned invalid JSON');
   }

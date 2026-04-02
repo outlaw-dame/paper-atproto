@@ -26,15 +26,19 @@
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       html, body {
         height: 100%;
-        font-family: -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", sans-serif;
+        /* system-ui resolves to SF Pro on Apple, Roboto on Android */
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", sans-serif;
         background: var(--bg);
         color: var(--fg);
+        color-scheme: light dark;
+        overscroll-behavior: none;
       }
       body {
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        /* All four safe-area insets so landscape iPhones/iPads are covered */
+        padding: env(safe-area-inset-top, 16px) env(safe-area-inset-right, 16px) env(safe-area-inset-bottom, 16px) env(safe-area-inset-left, 16px);
       }
       .card {
         background: var(--card);
@@ -66,11 +70,15 @@
         border: none;
         border-radius: 10px;
         padding: 12px 24px;
+        /* 16px floor prevents iOS auto-zoom on focus */
         font-size: 16px;
         font-weight: 600;
         cursor: pointer;
         width: 100%;
+        /* Apple HIG: minimum touch target is 44pt */
+        min-height: 44px;
         -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
       }
       button:active { opacity: 0.8; }
     </style>

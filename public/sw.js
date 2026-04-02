@@ -26,8 +26,11 @@ const IMAGES_CACHE   = `glimpse-images-${CACHE_VERSION}`;
 const AVATARS_CACHE  = `glimpse-avatars-${CACHE_VERSION}`;
 const FEED_CACHE     = `glimpse-feed-${CACHE_VERSION}`;
 const PREVIEWS_CACHE = `glimpse-safe-previews-${CACHE_VERSION}`;
+// ML model weights: cache-first, separate cache so version bumps to the above
+// caches don't evict locally-stored models unnecessarily.
+const MODELS_CACHE   = 'glimpse-models-v1';
 
-const ALL_CACHES = [SHELL_CACHE, IMAGES_CACHE, AVATARS_CACHE, FEED_CACHE, PREVIEWS_CACHE];
+const ALL_CACHES = [SHELL_CACHE, IMAGES_CACHE, AVATARS_CACHE, FEED_CACHE, PREVIEWS_CACHE, MODELS_CACHE];
 
 const BASE_PATH = getBasePath();
 const OFFLINE_URL = pathFor('offline.html');
@@ -128,6 +131,14 @@ self.addEventListener('fetch', (event) => {
     // Safe OG/preview metadata from allowed origins: stale-while-revalidate.
     if (isSafePreviewAsset(url)) {
       event.respondWith(staleWhileRevalidate(request, PREVIEWS_CACHE, PREVIEWS_CACHE_MAX_ENTRIES));
+      return;
+    }
+
+    // ML model weights from same origin: cache-first.
+    // Models are large and change only when the app deploys a new version.
+    // No entry cap — the browser/OS enforces storage quotas independently.
+    if (isModelAsset(url)) {
+      event.respondWith(cacheFirst(request, MODELS_CACHE));
       return;
     }
 
@@ -272,6 +283,12 @@ function isAllowedImageAsset(url) {
 function isSafePreviewAsset(url) {
   if (!ALLOWED_IMAGE_ORIGINS.has(url.origin)) return false;
   return url.pathname.includes('/img/feed_thumbnail') || url.pathname.includes('/img/feed_fullsize');
+}
+
+function isModelAsset(url) {
+  if (url.origin !== self.location.origin) return false;
+  // Match /models/ or /paper-atproto/models/ depending on deployment base path.
+  return url.pathname.includes('/models/');
 }
 
 // ─── Push ─────────────────────────────────────────────────────────────────────

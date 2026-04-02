@@ -104,13 +104,26 @@ def transcribe(request):
     model, model_name = get_model()
     language = request.get("language")
     max_vtt_bytes = int(request.get("maxVttBytes") or 20000)
+    profile = request.get("profile") or "quality"
+    if profile not in {"fast", "quality", "long_form"}:
+        profile = "quality"
+
+    if profile == "fast":
+        beam_size = 1
+        condition_on_previous_text = False
+    elif profile == "long_form":
+        beam_size = 5
+        condition_on_previous_text = True
+    else:
+        beam_size = 5
+        condition_on_previous_text = True
 
     raw_segments, info = model.transcribe(
         request["filePath"],
         language=language,
         vad_filter=True,
-        beam_size=5,
-        condition_on_previous_text=True,
+        beam_size=beam_size,
+        condition_on_previous_text=condition_on_previous_text,
       )
 
     segments = normalize_segments(list(raw_segments))
@@ -124,6 +137,7 @@ def transcribe(request):
         "languageProbability": getattr(info, "language_probability", None),
         "durationSeconds": getattr(info, "duration", None),
         "model": model_name,
+        "profile": profile,
         "segments": fitted_segments,
     }
 

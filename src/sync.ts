@@ -16,7 +16,6 @@ import { atpCall, atpMutate } from './lib/atproto/client';
 import { resolveEmbed, resolveFacets, extractClusterSignals } from './lib/resolver/atproto';
 import { extractRecordDisplayText } from './lib/atproto/recordContent';
 import { z } from 'zod';
-import { AppBskyFeedDefs } from '@atproto/api';
 import { embeddingPipeline } from './intelligence/embeddingPipeline';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 import { extractMediaSignalsFromJson } from './lib/media/extractMediaSignals';
@@ -43,6 +42,7 @@ const FeedViewPostSchema = z.object({
       embed: z.any().optional(),
       facets: z.any().optional(),
     }).passthrough(),
+    embed: z.any().optional(),
   }),
   reply: z.object({
     root: z.object({ uri: z.string() }).passthrough().optional(),
@@ -101,20 +101,56 @@ export class PaperSync {
           const sanitizedContent = textsToEmbed[i] ?? '';
 
           const facets = resolveFacets(post.record.facets);
-          const embed = resolveEmbed(post.record.embed);
-          const signals = extractClusterSignals(sanitizedContent, facets, embed, []);
-          const embedJson = JSON.stringify({ ...post.record.embed, _signals: signals });
+          const previewEmbed = resolveEmbed((post as { embed?: unknown }).embed ?? post.record.embed);
+          const signals = extractClusterSignals(sanitizedContent, facets, previewEmbed, []);
+          const rawEmbed = post.record.embed && typeof post.record.embed === 'object'
+            ? post.record.embed
+            : {};
+          const embedJson = JSON.stringify({
+            ...rawEmbed,
+            _signals: signals,
+            ...(previewEmbed ? { _preview: previewEmbed } : {}),
+          });
           const mediaSignals = extractMediaSignalsFromJson(embedJson);
 
           await trx.query(
-            `INSERT INTO posts (id, author_did, content, created_at, embedding, embed, has_images, has_video, has_link, image_alt_text)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             ON CONFLICT (id) DO NOTHING`,
+            `INSERT INTO posts (
+               id,
+               uri,
+               author_did,
+               content,
+               created_at,
+               reply_to,
+               reply_root,
+               embedding,
+               embed,
+               has_images,
+               has_video,
+               has_link,
+               image_alt_text
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             ON CONFLICT (id) DO UPDATE SET
+               uri = COALESCE(posts.uri, EXCLUDED.uri),
+               author_did = EXCLUDED.author_did,
+               content = EXCLUDED.content,
+               created_at = EXCLUDED.created_at,
+               reply_to = COALESCE(EXCLUDED.reply_to, posts.reply_to),
+               reply_root = COALESCE(EXCLUDED.reply_root, posts.reply_root),
+               embedding = COALESCE(EXCLUDED.embedding, posts.embedding),
+               embed = COALESCE(EXCLUDED.embed, posts.embed),
+               has_images = EXCLUDED.has_images,
+               has_video = EXCLUDED.has_video,
+               has_link = EXCLUDED.has_link,
+               image_alt_text = COALESCE(NULLIF(EXCLUDED.image_alt_text, ''), posts.image_alt_text)`,
             [
               post.cid,
+              post.uri,
               post.author.did,
               sanitizedContent,
               post.record.createdAt || post.record.publishedAt || new Date().toISOString(),
+              reply?.parent?.uri ?? null,
+              reply?.root?.uri ?? null,
               embedding.length ? `[${embedding.join(',')}]` : null,
               embedJson,
               mediaSignals.hasImages ? 1 : 0,
@@ -158,13 +194,30 @@ export class PaperSync {
     };
 
     await pg.query(
-      `INSERT INTO posts (id, author_did, content, created_at, embedding, embed, has_images, has_video, has_link, image_alt_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      `INSERT INTO posts (
+         id,
+         uri,
+         author_did,
+         content,
+         created_at,
+         reply_to,
+         reply_root,
+         embedding,
+         embed,
+         has_images,
+         has_video,
+         has_link,
+         image_alt_text
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         response.cid,
+        response.uri,
         this.agent.session?.did ?? '',
         sanitizedText,
         new Date().toISOString(),
+        null,
+        null,
         embedding.length ? `[${embedding.join(',')}]` : null,
         null, // embed
         mediaSignals.hasImages ? 1 : 0,

@@ -5,7 +5,120 @@
 import type { MediaAnalysisRequest, WriterMediaFinding, MediaAnalysisResult } from './llmContracts';
 import type { ThreadNode } from '../lib/resolver/atproto';
 import type { ContributionScores } from './interpolatorTypes';
+import { sanitizeUrlForProcessing } from '../lib/safety/externalUrl';
 import { computeMultimodalScore, type MultimodalSignals } from './routing';
+
+interface MediaSelectionOptions {
+  nearbyTextByUri?: Record<string, string | undefined>;
+  candidateEntities?: string[];
+  factualHints?: string[];
+}
+
+function sanitizeContextText(value: string | undefined, maxLen: number): string {
+  return (value ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
+function pushUniqueCaseInsensitive(target: string[], value: string, maxItems: number): void {
+  const normalized = sanitizeContextText(value, 120);
+  if (!normalized) return;
+  if (target.some((entry) => entry.toLowerCase() === normalized.toLowerCase())) return;
+  if (target.length >= maxItems) return;
+  target.push(normalized);
+}
+
+function extractPrimaryMedia(node: ThreadNode): { url: string; alt?: string } | null {
+  if (node.embed?.kind === 'images') {
+    const image = node.embed.images?.[0];
+    if (image?.url) {
+      return {
+        url: image.url,
+        ...(image.alt ? { alt: image.alt } : {}),
+      };
+    }
+  }
+
+  if (node.embed?.kind === 'recordWithMedia') {
+    const image = node.embed.mediaImages?.[0];
+    if (image?.url) {
+      return {
+        url: image.url,
+        ...(image.alt ? { alt: image.alt } : {}),
+      };
+    }
+  }
+
+  return null;
+}
+
+function translatedNearbyText(
+  node: ThreadNode,
+  nearbyTextByUri: Record<string, string | undefined> | undefined,
+): string {
+  const translated = nearbyTextByUri?.[node.uri];
+  return sanitizeContextText(translated ?? node.text, 300);
+}
+
+export function deriveMediaCandidateEntities(
+  root: ThreadNode,
+  replies: ThreadNode[],
+  scores: Record<string, ContributionScores>,
+): string[] {
+  const entities: string[] = [];
+  const seededReplies = [...replies]
+    .sort((left, right) => (
+      (scores[right.uri]?.finalInfluenceScore ?? scores[right.uri]?.usefulnessScore ?? 0)
+      - (scores[left.uri]?.finalInfluenceScore ?? scores[left.uri]?.usefulnessScore ?? 0)
+    ))
+    .slice(0, 3);
+
+  for (const text of [root.text, ...seededReplies.map((reply) => reply.text)]) {
+    const matches = text.match(/[A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+){0,3}/g) ?? [];
+    for (const match of matches) {
+      pushUniqueCaseInsensitive(entities, match, 8);
+      if (entities.length >= 8) return entities;
+    }
+  }
+
+  return entities;
+}
+
+export function deriveMediaFactualHints(
+  replies: ThreadNode[],
+  scores: Record<string, ContributionScores>,
+): string[] {
+  const hints: string[] = [];
+
+  const sourcedReplies = [...replies]
+    .filter((reply) => {
+      const score = scores[reply.uri];
+      if (!score) return false;
+      return (
+        score.role === 'source_bringer'
+        || score.role === 'rule_source'
+        || score.sourceSupport >= 0.55
+        || score.evidenceSignals.some((signal) => signal.kind === 'citation')
+        || ['well-supported', 'source-backed-clarification', 'partially-supported'].includes(
+          score.factual?.factualState ?? '',
+        )
+      );
+    })
+    .sort((left, right) => (
+      (scores[right.uri]?.finalInfluenceScore ?? scores[right.uri]?.usefulnessScore ?? 0)
+      - (scores[left.uri]?.finalInfluenceScore ?? scores[left.uri]?.usefulnessScore ?? 0)
+    ))
+    .slice(0, 4);
+
+  for (const reply of sourcedReplies) {
+    pushUniqueCaseInsensitive(hints, reply.text, 5);
+    if (hints.length >= 5) break;
+  }
+
+  return hints;
+}
 
 // ─── detectMediaSignals ───────────────────────────────────────────────────
 // Compute multimodal routing signals from the resolved thread.
@@ -63,44 +176,59 @@ export function selectMediaForAnalysis(
   root: ThreadNode,
   replies: ThreadNode[],
   scores: Record<string, ContributionScores>,
+  options: MediaSelectionOptions = {},
 ): MediaAnalysisRequest[] {
   const requests: MediaAnalysisRequest[] = [];
-
-  const candidateEntities = root.text
-    .match(/[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g)
-    ?.slice(0, 8) ?? [];
+  const seenUrls = new Set<string>();
+  const candidateEntities = (options.candidateEntities?.length ? options.candidateEntities : deriveMediaCandidateEntities(root, replies, scores))
+    .map((value) => sanitizeContextText(value, 80))
+    .filter(Boolean)
+    .slice(0, 8);
+  const factualHints = (options.factualHints?.length ? options.factualHints : deriveMediaFactualHints(replies, scores))
+    .map((value) => sanitizeContextText(value, 120))
+    .filter(Boolean)
+    .slice(0, 5);
 
   // Root media
-  const rootImg = root.embed?.images?.[0];
-  if (rootImg?.url) {
+  const rootMedia = extractPrimaryMedia(root);
+  const rootMediaUrl = rootMedia?.url ? sanitizeUrlForProcessing(rootMedia.url) : null;
+  if (rootMediaUrl) {
     const req: MediaAnalysisRequest = {
-      threadId,
-      mediaUrl: rootImg.url,
-      nearbyText: root.text.slice(0, 300),
+      threadId: sanitizeContextText(threadId, 300),
+      mediaUrl: rootMediaUrl,
+      nearbyText: translatedNearbyText(root, options.nearbyTextByUri),
       candidateEntities,
-      factualHints: [],
+      factualHints,
     };
-    if (rootImg.alt) req.mediaAlt = rootImg.alt;
+    if (rootMedia?.alt) req.mediaAlt = sanitizeContextText(rootMedia.alt, 300);
     requests.push(req);
+    seenUrls.add(rootMediaUrl);
   }
 
   // Highest-impact reply with media (if different from root)
   if (requests.length < 2) {
     const replyWithMedia = [...replies]
-      .filter(r => r.embed?.images?.[0]?.url)
-      .sort((a, b) => (scores[b.uri]?.finalInfluenceScore ?? 0) - (scores[a.uri]?.finalInfluenceScore ?? 0))[0];
-    if (replyWithMedia) {
-      const img = replyWithMedia.embed!.images![0];
-      if (!img?.url) return requests;
+      .filter((reply) => extractPrimaryMedia(reply)?.url)
+      .sort((a, b) => (
+        (scores[b.uri]?.finalInfluenceScore ?? scores[b.uri]?.usefulnessScore ?? 0)
+        - (scores[a.uri]?.finalInfluenceScore ?? scores[a.uri]?.usefulnessScore ?? 0)
+      ));
+
+    for (const reply of replyWithMedia) {
+      const media = extractPrimaryMedia(reply);
+      const mediaUrl = media?.url ? sanitizeUrlForProcessing(media.url) : null;
+      if (!mediaUrl || seenUrls.has(mediaUrl)) continue;
+
       const req: MediaAnalysisRequest = {
-        threadId,
-        mediaUrl: img.url,
-        nearbyText: replyWithMedia.text.slice(0, 300),
+        threadId: sanitizeContextText(threadId, 300),
+        mediaUrl,
+        nearbyText: translatedNearbyText(reply, options.nearbyTextByUri),
         candidateEntities,
-        factualHints: [],
+        factualHints,
       };
-      if (img.alt) req.mediaAlt = img.alt;
+      if (media?.alt) req.mediaAlt = sanitizeContextText(media.alt, 300);
       requests.push(req);
+      break;
     }
   }
 

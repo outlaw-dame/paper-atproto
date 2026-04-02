@@ -47,13 +47,24 @@ interface ModerationState {
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = 'glimpse-moderation-v1';
 
+export function pruneExpiredTimedMutes(timedMutes: Record<string, number>, now = Date.now()): Record<string, number> {
+  const pruned: Record<string, number> = {};
+  for (const [did, expiry] of Object.entries(timedMutes)) {
+    if (!Number.isFinite(expiry)) continue;
+    if (expiry === 0 || expiry > now) {
+      pruned[did] = expiry;
+    }
+  }
+  return pruned;
+}
+
 function loadStorage(): Pick<ModerationState, 'timedMutes' | 'blockRkeys'> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
-        timedMutes: parsed.timedMutes ?? {},
+        timedMutes: pruneExpiredTimedMutes((parsed.timedMutes ?? {}) as Record<string, number>),
         blockRkeys: parsed.blockRkeys ?? {},
       };
     }

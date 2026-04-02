@@ -3,87 +3,74 @@ import { z } from 'zod';
 import { resolvePremiumAiEntitlements } from '../entitlements/resolveAiEntitlements.js';
 import { writePremiumDeepInterpolator } from '../ai/providerRouter.js';
 import type { PremiumInterpolatorRequest } from '../ai/providers/geminiConversation.provider.js';
+import { AppError, UnauthorizedError, ValidationError } from '../lib/errors.js';
+import {
+  appendVaryHeader,
+  assertTrustedBrowserOrigin,
+} from '../lib/originPolicy.js';
 import {
   filterPremiumDeepInterpolatorResponse,
   logSafetyFlag,
 } from '../services/safetyFilters.js';
+import {
+  PremiumDeepInterpolatorResponseSchema,
+  PremiumInterpolatorSchema,
+} from '../llm/schemas.js';
+import {
+  enforceNoToolsAuthorized,
+  finalizeLlmOutput,
+  prepareLlmInput,
+} from '../llm/policyGateway.js';
 
 export const premiumAiRouter = new Hono();
 
-const ConfidenceSchema = z.object({
-  surfaceConfidence: z.number().min(0).max(1),
-  entityConfidence: z.number().min(0).max(1),
-  interpretiveConfidence: z.number().min(0).max(1),
-});
+function applySecurityHeaders(c: any): void {
+  c.header('Cache-Control', 'no-store, private');
+  c.header('Pragma', 'no-cache');
+  c.header('X-Content-Type-Options', 'nosniff');
+  appendVaryHeader(c, 'Origin');
+  appendVaryHeader(c, 'X-Glympse-User-Did');
+}
 
-const WriterEntitySchema = z.object({
-  id: z.string(),
-  label: z.string().max(120),
-  type: z.string(),
-  confidence: z.number().min(0).max(1),
-  impact: z.number().min(0).max(1),
-});
-
-const WriterCommentSchema = z.object({
-  uri: z.string(),
-  handle: z.string().max(100),
-  displayName: z.string().max(120).optional(),
-  text: z.string().max(300),
-  impactScore: z.number().min(0).max(1),
-  role: z.string().optional(),
-  liked: z.number().int().optional(),
-  replied: z.number().int().optional(),
-});
-
-const WriterContributorSchema = z.object({
-  did: z.string().optional(),
-  handle: z.string().max(100),
-  role: z.string(),
-  impactScore: z.number().min(0).max(1),
-  stanceSummary: z.string().max(200),
-});
-
-const PremiumInterpolatorSchema = z.object({
-  actorDid: z.string().min(1).max(200),
-  threadId: z.string().max(300),
-  summaryMode: z.enum(['normal', 'descriptive_fallback', 'minimal_fallback']),
-  confidence: ConfidenceSchema,
-  visibleReplyCount: z.number().int().min(0).max(5000).optional(),
-  rootPost: z.object({
-    uri: z.string(),
-    handle: z.string().max(100),
-    displayName: z.string().max(120).optional(),
-    text: z.string().max(600),
-    createdAt: z.string(),
-  }),
-  selectedComments: z.array(WriterCommentSchema).max(12),
-  topContributors: z.array(WriterContributorSchema).max(6),
-  safeEntities: z.array(WriterEntitySchema).max(10),
-  factualHighlights: z.array(z.string().max(200)).max(6),
-  whatChangedSignals: z.array(z.string().max(150)).max(8),
-  interpretiveBrief: z.object({
-    summaryMode: z.enum(['normal', 'descriptive_fallback', 'minimal_fallback']),
-    baseSummary: z.string().max(400).optional(),
-    dominantTone: z.string().max(80).optional(),
-    conversationPhase: z.string().max(80).optional(),
-    supports: z.array(z.string().max(160)).max(6),
-    limits: z.array(z.string().max(160)).max(6),
-  }),
-});
-
-function actorDidFromRequest(c: any): string | undefined {
+function actorDidFromRequest(c: any, required: true): string;
+function actorDidFromRequest(c: any, required?: false): string | undefined;
+function actorDidFromRequest(c: any, required = false): string | undefined {
   const value = c.req.header('X-Glympse-User-Did');
   const normalized = typeof value === 'string' ? value.trim() : '';
-  return normalized || undefined;
+  if (!normalized) {
+    if (required) throw new UnauthorizedError('Missing X-Glympse-User-Did header');
+    return undefined;
+  }
+  if (!/^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/.test(normalized)) {
+    throw new UnauthorizedError('Invalid DID header format');
+  }
+  return normalized;
 }
+
+function validationIssues(error: ValidationError): unknown {
+  return (error.details as { issues?: unknown } | undefined)?.issues;
+}
+
+premiumAiRouter.use('*', async (c, next) => {
+  try {
+    await next();
+  } finally {
+    applySecurityHeaders(c);
+  }
+});
 
 premiumAiRouter.get('/entitlements', (c) => {
   const actorDid = actorDidFromRequest(c);
+  if (actorDid) {
+    assertTrustedBrowserOrigin(c, 'Premium AI entitlements');
+  }
   return c.json(resolvePremiumAiEntitlements(actorDid));
 });
 
 premiumAiRouter.post('/interpolator/deep', async (c) => {
-  const actorDid = actorDidFromRequest(c);
+  const actorDid = actorDidFromRequest(c, true);
+  const requestId = c.req.header('X-Request-Id') || crypto.randomUUID();
+  assertTrustedBrowserOrigin(c, 'Premium AI deep interpolator');
   const entitlements = resolvePremiumAiEntitlements(actorDid);
 
   if (!entitlements.capabilities.includes('deep_interpolator')) {
@@ -97,38 +84,67 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const parsed = PremiumInterpolatorSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  let prepared: { data: z.infer<typeof PremiumInterpolatorSchema> };
+  try {
+    prepared = prepareLlmInput(PremiumInterpolatorSchema, body, {
+      task: 'premiumDeep',
+      requestId,
+    });
+    enforceNoToolsAuthorized({
+      task: 'premiumDeep',
+      requestId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
   }
 
-  if (actorDid && parsed.data.actorDid !== actorDid) {
+  if (actorDid && prepared.data.actorDid !== actorDid) {
     return c.json({ error: 'Request actor mismatch' }, 400);
   }
 
   try {
-    const { visibleReplyCount, ...rest } = parsed.data;
+    const { visibleReplyCount, ...rest } = prepared.data;
     const request: PremiumInterpolatorRequest = {
       ...rest,
-      actorDid: actorDid ?? parsed.data.actorDid,
+      actorDid,
       ...(typeof visibleReplyCount === 'number'
         ? { visibleReplyCount }
         : {}),
     };
     const result = await writePremiumDeepInterpolator(request);
-    const { filtered, safetyMetadata } = filterPremiumDeepInterpolatorResponse({ ...result });
-    logSafetyFlag('[premium-ai/interpolator/deep]', safetyMetadata);
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      PremiumDeepInterpolatorResponseSchema,
+      result,
+      {
+        task: 'premiumDeep',
+        requestId,
+      },
+      {
+        filter: (value) => filterPremiumDeepInterpolatorResponse({ ...value }) as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[premium-ai/interpolator/deep]', safety);
 
-    if (!safetyMetadata.passed || typeof filtered.summary !== 'string' || !filtered.summary.trim()) {
+    if (!safety.passed || typeof filtered.summary !== 'string' || !filtered.summary.trim()) {
       throw Object.assign(new Error('Premium AI output failed safety validation'), { status: 503 });
     }
 
     return c.json({
       ...filtered,
       safety: {
-        flagged: safetyMetadata.flagged,
-        severity: safetyMetadata.severity,
-        categories: safetyMetadata.categories,
+        flagged: safety.flagged,
+        severity: safety.severity,
+        categories: safety.categories,
       },
     });
   } catch (error: unknown) {
@@ -141,4 +157,14 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
     console.error('[premium-ai/interpolator/deep]', message);
     return c.json({ error: 'Premium AI failed' }, safeStatus);
   }
+});
+
+premiumAiRouter.onError((error, c) => {
+  if (error instanceof AppError) {
+    return c.json({ error: error.message, code: error.code }, error.status as any);
+  }
+
+  const message = error instanceof Error ? error.message : 'Premium AI failed';
+  console.error('[premium-ai]', message);
+  return c.json({ error: 'Premium AI failed' }, 500);
 });

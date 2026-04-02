@@ -365,11 +365,17 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
   ) {
     const quotedPost = mapPostViewToMockPost((embed as any).record.record as AppBskyFeedDefs.PostView);
     let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+    let quotedPostWithMedia = quotedPost;
     if (AppBskyEmbedExternal.isView((embed as any).media)) {
       const ext = (embed as any).media.external;
       externalLink = { url: ext.uri, title: ext.title, description: ext.description, thumb: ext.thumb, domain: extractDomain(ext.uri) };
+    } else if (AppBskyEmbedVideo.isView((embed as any).media) && !quotedPost.embed) {
+      quotedPostWithMedia = {
+        ...quotedPost,
+        embed: mapVideoViewToEmbed((embed as any).media, rawVideoEmbed, post.author.did),
+      };
     }
-    embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
+    embedData = { type: 'quote' as const, post: quotedPostWithMedia, ...(externalLink ? { externalLink } : {}) };
   } else if (
     AppBskyEmbedRecordWithMedia.isView(embed) &&
     AppBskyEmbedRecord.isView((embed as any).record) &&
@@ -377,6 +383,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
   ) {
     const quotedPost = mapQuotedRecordToMockPost((embed as any).record.record as AppBskyEmbedRecord.ViewRecord);
     let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+    let quotedPostWithMedia = quotedPost;
     if (AppBskyEmbedExternal.isView((embed as any).media)) {
       const ext = (embed as any).media.external;
       externalLink = {
@@ -386,8 +393,13 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
         thumb: ext.thumb,
         domain: extractDomain(ext.uri),
       };
+    } else if (AppBskyEmbedVideo.isView((embed as any).media) && !quotedPost.embed) {
+      quotedPostWithMedia = {
+        ...quotedPost,
+        embed: mapVideoViewToEmbed((embed as any).media, rawVideoEmbed, post.author.did),
+      };
     }
-    embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
+    embedData = { type: 'quote' as const, post: quotedPostWithMedia, ...(externalLink ? { externalLink } : {}) };
   }
 
   const author: MockPost['author'] = {

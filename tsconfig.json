@@ -41,5 +41,7 @@
     "moduleDetection": "force",
     "skipLibCheck": true,
   },
-  "exclude": ["node_modules", "server"]
+  // functions/ uses @cloudflare/workers-types which conflicts with the DOM lib.
+  // Type-check it separately via `pnpm typecheck:cf` (functions/tsconfig.json).
+  "exclude": ["node_modules", "server", "functions"]
 }
