@@ -464,8 +464,16 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
   // Set context-specific chips
   mockPost.chips = deriveChips(item);
 
-  // Map Reply Context
-  if (item.reply) {
+  const recordReply = (item.post.record as any)?.reply;
+  const hasAuthoritativeReplyRef = Boolean(
+    typeof recordReply?.parent?.uri === 'string'
+    || typeof recordReply?.root?.uri === 'string',
+  );
+
+  // Map reply/thread context only when the current post record itself confirms
+  // it is a reply. This avoids false "Earlier reply" cards on original posts
+  // when feed payloads include incidental context.
+  if (item.reply && hasAuthoritativeReplyRef) {
     const currentUri = item.post.uri;
     // Map Parent (Immediate Reply)
     const parent = item.reply.parent;
