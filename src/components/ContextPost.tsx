@@ -30,10 +30,10 @@ export const ContextPost = ({
   const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quoteEmbed?.post.sensitiveMedia?.isSensitive);
   const authorActor = post.author.did || post.author.handle;
   const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
-  const contextLabel = type === 'thread' ? 'Thread root' : 'Reply target';
-  const contextAssistiveLabel = type === 'thread'
-    ? 'Thread root context'
-    : 'Reply target for post below';
+  const isReplyContext = type === 'reply';
+  const contextAssistiveLabel = isReplyContext
+    ? 'Reply target for post below'
+    : 'Thread root context';
   const externalEmbed = post.embed?.type === 'external' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
@@ -187,11 +187,11 @@ export const ContextPost = ({
             letterSpacing: '0.04em',
             fontWeight: 800,
             textTransform: 'uppercase',
-            color: 'var(--blue)',
-            background: 'rgba(0, 122, 255, 0.12)',
-            border: '1px solid rgba(0, 122, 255, 0.18)',
+            color: isReplyContext ? 'rgb(0, 128, 120)' : 'var(--blue)',
+            background: isReplyContext ? 'rgba(0, 128, 120, 0.12)' : 'rgba(0, 122, 255, 0.12)',
+            border: isReplyContext ? '1px solid rgba(0, 128, 120, 0.2)' : '1px solid rgba(0, 122, 255, 0.18)',
           }}>
-            {type === 'thread' ? (
+            {!isReplyContext ? (
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M8 6v8a4 4 0 004 4h5" />
                 <circle cx="8" cy="6" r="2" />
@@ -199,7 +199,16 @@ export const ContextPost = ({
                 <path d="M12 10h5a4 4 0 014 4" />
               </svg>
             ) : (
-              contextLabel
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 4v7a4 4 0 01-4 4H8" />
+                  <path d="M12 19l-4-4 4-4" />
+                </svg>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ opacity: 0.72 }}>
+                  <path d="M12 5v10" />
+                  <path d="M8 12l4 4 4-4" />
+                </svg>
+              </>
             )}
           </span>
           {secondaryLabel && (
