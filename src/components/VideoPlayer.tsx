@@ -47,6 +47,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const likelySourceSupport = getLikelySourceSupport(capabilities, sourceKind);
   const likelyUnsupportedReason = getLikelyUnsupportedReason(capabilities, sourceKind);
   const sourceSupportWarning = playbackError ?? likelyUnsupportedReason;
+  const shouldAttemptInlinePlayback = likelySourceSupport !== false;
   const capabilityRows = [
     capabilities.hls,
     capabilities.mp4,
@@ -57,7 +58,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     capabilities.webmVp9Opus,
     capabilities.webmVp8Vorbis,
   ];
-  const shouldShowCapabilityPanel = showCapabilities || playbackError !== null;
+  const shouldShowCapabilityPanel = showCapabilities;
 
   // Is the floating mini-player currently showing this video?
   const isInMiniPlayer = miniEntry?.url === url && miniEntry?.postId === (postId ?? url);
@@ -164,7 +165,6 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const handlePlaybackError = () => {
     const generic = 'This browser could not play the current video source.';
     setPlaybackError(likelyUnsupportedReason ?? generic);
-    setShowCapabilities(true);
     setIsPlaying(false);
   };
 
@@ -198,11 +198,9 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
             <div>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, letterSpacing: '0.02em' }}>Playback support</p>
+              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, letterSpacing: '0.02em' }}>Video formats</p>
               <p style={{ margin: '4px 0 0', fontSize: 11, color: 'rgba(255,255,255,0.74)' }}>
-                Current source: {describeSourceKind(sourceKind)}
-                {likelySourceSupport === true ? ' · likely supported' : ''}
-                {likelySourceSupport === false ? ' · likely unsupported' : ''}
+                Source: {describeSourceKind(sourceKind)}
               </p>
             </div>
             <button
@@ -289,8 +287,69 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         </div>
       )}
 
+      {/* Graceful fallback for unsupported/failed inline playback */}
+      {!isInMiniPlayer && (!shouldAttemptInlinePlayback || playbackError) && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 12,
+            background: 'linear-gradient(180deg, rgba(0,0,0,0.58) 0%, rgba(0,0,0,0.76) 100%)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            padding: '16px 18px',
+          }}
+        >
+          <p style={{ margin: 0, color: '#fff', fontSize: 13, fontWeight: 700, textAlign: 'center' }}>
+            Inline playback is unavailable on this source
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                textDecoration: 'none',
+                border: '1px solid rgba(255,255,255,0.3)',
+                background: 'rgba(255,255,255,0.16)',
+                color: '#fff',
+                borderRadius: 999,
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Open video
+            </a>
+            <button
+              type="button"
+              onClick={() => setShowCapabilities((prev) => !prev)}
+              style={{
+                border: '1px solid rgba(255,255,255,0.2)',
+                background: 'rgba(255,255,255,0.08)',
+                color: 'rgba(255,255,255,0.9)',
+                borderRadius: 999,
+                padding: '6px 10px',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+            >
+              Details
+            </button>
+          </div>
+          {sourceSupportWarning && (
+            <p style={{ margin: 0, color: 'rgba(255,255,255,0.75)', fontSize: 11, textAlign: 'center' }}>
+              {sourceSupportWarning}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Play button (not playing, not in mini-player) */}
-      {!isInMiniPlayer && (
+      {!isInMiniPlayer && shouldAttemptInlinePlayback && !playbackError && (
         <>
           <video
             ref={videoRef}
