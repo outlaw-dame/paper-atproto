@@ -187,13 +187,22 @@ export function shouldRunInterpolatorWriter(
   const hasSourceSignal = session.interpretation.interpolator?.sourceSupportPresent ?? false;
   const hasFactualSignal = session.interpretation.interpolator?.factualSignalPresent ?? false;
 
-  if (replyCount >= 2) {
+  if (replyCount >= 4) {
+    return { shouldRun: true };
+  }
+  if (replyCount >= 3 && (surfaceConfidence >= 0.5 || interpretiveConfidence >= 0.42)) {
+    return { shouldRun: true };
+  }
+  if (replyCount >= 2 && (hasSourceSignal || hasFactualSignal)) {
     return { shouldRun: true };
   }
   if (hasSourceSignal || hasFactualSignal) {
     return { shouldRun: true };
   }
-  if (surfaceConfidence >= 0.55 || interpretiveConfidence >= 0.5) {
+  if (replyCount >= 2 && (surfaceConfidence >= 0.68 || interpretiveConfidence >= 0.6)) {
+    return { shouldRun: true };
+  }
+  if (surfaceConfidence >= 0.72 || interpretiveConfidence >= 0.66) {
     return { shouldRun: true };
   }
 

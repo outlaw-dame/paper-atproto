@@ -29,12 +29,28 @@ export interface WriterRequest {
     impactScore: number; role?: string; liked?: number; replied?: number;
   }>;
   topContributors: Array<{
-    did?: string; handle: string; role: string; impactScore: number; stanceSummary: string;
+    did?: string;
+    handle: string;
+    role: string;
+    impactScore: number;
+    stanceSummary: string;
+    stanceExcerpt?: string;
+    resonance?: 'high' | 'moderate' | 'emerging';
+    agreementSignal?: string;
   }>;
   safeEntities: Array<{ id: string; label: string; type: string; confidence: number; impact: number }>;
   factualHighlights: string[];
   whatChangedSignals: string[];
   mediaFindings?: Array<{ mediaType: string; summary: string; confidence: number; extractedText?: string; cautionFlags?: string[] }>;
+  threadSignalSummary?: {
+    newAnglesCount: number;
+    clarificationsCount: number;
+    sourceBackedCount: number;
+    factualSignalPresent: boolean;
+    evidencePresent: boolean;
+  };
+  interpretiveExplanation?: string;
+  entityThemes?: string[];
 }
 
 export interface WriterResponse {
@@ -67,14 +83,20 @@ STYLE
 - Summarization only; no advice/instructions.
 - Avoid raw URLs and "with a link" phrasing.
 - If sexual content appears in source text, keep neutral and clinical wording.
+- Use CONFIDENCE and CONTRIBUTOR DETAILS to calibrate how strong the interpretation can be.
+- Prefer a direct subject-action summary over vague framing about "the thread" or "the discussion".
 
 CORE CONTENT RULES
-- Lead collapsedSummary with thread substance (claim/question/announcement), not participant names.
+- Lead collapsedSummary with thread substance (claim/question/announcement), but weave named contributors naturally when their points materially shape the thread.
 - CONTRIBUTORS are participants, not the subject.
 - If no replies, summarize only the root post.
 - If visible replies are substantial, include what replies are doing.
 - Mention entities only if present in VERIFIED ENTITIES.
 - contributorBlurbs must describe specific acts from REPLIES (e.g., cited source, counterpoint, question), never generic role labels.
+- If CONTRIBUTOR DETAILS show distinct stances, make the tension concrete instead of saying replies are mixed.
+- Use CONTRIBUTOR DETAILS to attribute specific points only when grounded by stance excerpt / agreement signals.
+- If FACTUAL HIGHLIGHTS are sparse, do not overstate certainty.
+- If ENTITY THEMES are present, use them to frame the topic (e.g., "Policy revision" tells you what the thread is really about). Do not invent themes not listed.
 
 MODE RULES
 - normal:
@@ -250,9 +272,10 @@ function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
   }
   const r = raw as Record<string, unknown>;
 
-  // collapsedSummary — sanitise, enforce hard 600-char ceiling, reject garble.
+  // collapsedSummary — sanitise, enforce mode-specific length caps, reject garble.
+  const modeLengthCap = mode === 'minimal_fallback' ? 240 : mode === 'descriptive_fallback' ? 220 : 500;
   const rawCollapsed = typeof r.collapsedSummary === 'string'
-    ? sanitizeText(r.collapsedSummary).slice(0, 600)
+    ? sanitizeText(r.collapsedSummary).slice(0, modeLengthCap)
     : '';
   const collapsedSummary = looksGarbled(rawCollapsed) ? '' : rawCollapsed;
 
@@ -265,30 +288,34 @@ function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
   const expandedSummary =
     rawExpanded !== null && !looksGarbled(rawExpanded) ? rawExpanded : null;
 
-  // whatChanged — sanitise each item, drop any that are garbled or too long.
-  const whatChanged: string[] = Array.isArray(r.whatChanged)
-    ? (r.whatChanged as unknown[])
-        .filter(s => typeof s === 'string')
-        .map(s => sanitizeText(s as string).slice(0, 120))
-        .filter(s => s.length >= 6 && !looksGarbled(s))
-        .slice(0, 6)
-    : [];
-
-  // contributorBlurbs — validate shape, sanitise text, drop garbled blurbs.
-  const contributorBlurbs: Array<{ handle: string; blurb: string }> =
-    Array.isArray(r.contributorBlurbs)
-      ? (r.contributorBlurbs as unknown[])
-          .filter(b => typeof b === 'object' && b !== null && 'handle' in b && 'blurb' in b)
-          .map(b => {
-            const entry = b as Record<string, unknown>;
-            return {
-              handle: sanitizeText(String(entry.handle)).slice(0, 100),
-              blurb: sanitizeText(String(entry.blurb)).slice(0, 300),
-            };
-          })
-          .filter(b => b.handle.length > 0 && b.blurb.length >= 10 && !looksGarbled(b.blurb))
-          .slice(0, 5)
+  // whatChanged — minimal_fallback must always be []; otherwise sanitise.
+  const whatChanged: string[] = mode === 'minimal_fallback'
+    ? []
+    : Array.isArray(r.whatChanged)
+      ? (r.whatChanged as unknown[])
+          .filter(s => typeof s === 'string')
+          .map(s => sanitizeText(s as string).slice(0, 120))
+          .filter(s => s.length >= 6 && !looksGarbled(s))
+          .slice(0, 6)
       : [];
+
+  // contributorBlurbs — minimal_fallback must always be []; otherwise validate shape.
+  const contributorBlurbs: Array<{ handle: string; blurb: string }> =
+    mode === 'minimal_fallback'
+      ? []
+      : Array.isArray(r.contributorBlurbs)
+        ? (r.contributorBlurbs as unknown[])
+            .filter(b => typeof b === 'object' && b !== null && 'handle' in b && 'blurb' in b)
+            .map(b => {
+              const entry = b as Record<string, unknown>;
+              return {
+                handle: sanitizeText(String(entry.handle)).slice(0, 100),
+                blurb: sanitizeText(String(entry.blurb)).slice(0, 300),
+              };
+            })
+            .filter(b => b.handle.length > 0 && b.blurb.length >= 10 && !looksGarbled(b.blurb))
+            .slice(0, 5)
+        : [];
 
   return {
     collapsedSummary,
@@ -314,10 +341,37 @@ const RETRY_OPTIONS: RetryOptions = {
 // Plain text outperforms raw JSON for 4B models: no opaque URIs, no noisy
 // decimal fields, clear section labels that map directly to the prompt.
 
+const MODE_CONSTRAINTS: Record<SummaryMode, string> = {
+  normal: 'collapsedSummary: 1-3 sentences, max 500 chars. expandedSummary: only include if it adds new information not in collapsedSummary, 3-5 sentences max. contributorBlurbs: up to 5.',
+  descriptive_fallback: 'collapsedSummary: HARD MAX 220 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
+  minimal_fallback: 'collapsedSummary: EXACTLY 2 sentences, HARD MAX 240 chars. Sentence 1: root post substance. Sentence 2: observable reply activity. whatChanged MUST be []. contributorBlurbs MUST be [].',
+};
+
 function buildUserMessage(request: WriterRequest): string {
   const lines: string[] = [];
 
   lines.push(`MODE: ${request.summaryMode}`);
+  lines.push(`RESPONSE CONSTRAINTS: ${MODE_CONSTRAINTS[request.summaryMode]}`);
+  lines.push(
+    `CONFIDENCE: surface=${request.confidence.surfaceConfidence.toFixed(2)} entity=${request.confidence.entityConfidence.toFixed(2)} interpretive=${request.confidence.interpretiveConfidence.toFixed(2)}`,
+  );
+
+  if (request.interpretiveExplanation) {
+    lines.push(`INTERPRETATION CONTEXT: ${normalizePromptText(request.interpretiveExplanation, 200)}`);
+  }
+
+  if (request.threadSignalSummary) {
+    const s = request.threadSignalSummary;
+    const parts: string[] = [
+      `new_angles=${s.newAnglesCount}`,
+      `clarifications=${s.clarificationsCount}`,
+      `source_backed=${s.sourceBackedCount}`,
+      `factual=${s.factualSignalPresent ? 'yes' : 'no'}`,
+      `evidence=${s.evidencePresent ? 'yes' : 'no'}`,
+    ];
+    lines.push(`THREAD SIGNAL SUMMARY: ${parts.join(' ')}`);
+  }
+
   if (typeof request.visibleReplyCount === 'number') {
     lines.push(`VISIBLE REPLIES: ${request.visibleReplyCount}`);
   }
@@ -340,6 +394,21 @@ function buildUserMessage(request: WriterRequest): string {
     // Label makes it explicit these are participants, not the topic.
     const handles = request.topContributors.map(c => normalizeHandle(c.handle)).join(', ');
     lines.push(`CONTRIBUTORS: ${handles}`);
+    lines.push('CONTRIBUTOR DETAILS:');
+    request.topContributors.forEach((contributor) => {
+      const resonance = contributor.resonance
+        ? ` resonance:${normalizePromptText(contributor.resonance, 20)}`
+        : '';
+      const stanceExcerpt = contributor.stanceExcerpt
+        ? ` | point: ${normalizePromptText(contributor.stanceExcerpt, 180)}`
+        : '';
+      const agreementSignal = contributor.agreementSignal
+        ? ` | agreement: ${normalizePromptText(contributor.agreementSignal, 90)}`
+        : '';
+      lines.push(
+        `- @${normalizeHandle(contributor.handle)} [role:${normalizePromptText(contributor.role, 40)} impact:${contributor.impactScore.toFixed(2)}${resonance}]: ${normalizePromptText(contributor.stanceSummary, 160)}${stanceExcerpt}${agreementSignal}`,
+      );
+    });
   }
 
   if (request.safeEntities.length > 0) {
@@ -348,6 +417,12 @@ function buildUserMessage(request: WriterRequest): string {
     request.safeEntities.forEach((e) => lines.push(
       `- ${normalizePromptText(e.label, 120)} [${normalizePromptText(e.type, 40)}]`,
     ));
+  }
+
+  if (request.entityThemes && request.entityThemes.length > 0) {
+    lines.push('');
+    lines.push('ENTITY THEMES:');
+    request.entityThemes.forEach((theme) => lines.push(`- ${normalizePromptText(theme, 80)}`));
   }
 
   if (request.whatChangedSignals.length > 0) {

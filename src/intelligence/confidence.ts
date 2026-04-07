@@ -10,6 +10,11 @@
 
 import type { ConfidenceState } from './llmContracts';
 import type { InterpolatorState, ContributionScores } from './interpolatorTypes';
+import type { ChangeReason } from './changeDetection';
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
 
 // ─── Interpretive confidence ──────────────────────────────────────────────
 
@@ -80,24 +85,106 @@ export function computeEntityConfidence(state: InterpolatorState): number {
  */
 export function computeConfidenceState(
   state: InterpolatorState,
-  _scores: Record<string, ContributionScores>,
+  scores: Record<string, ContributionScores>,
 ): ConfidenceState {
   const surfaceConfidence = computeSurfaceConfidence(state);
   const entityConfidence = computeEntityConfidence(state);
+  const scoreList = Object.values(scores);
 
-  const replyCount = Object.keys(state.replyScores).length;
+  const replyCount = scoreList.length;
   const highImpactContributors = state.topContributors.filter(
     c => c.avgUsefulnessScore >= 0.60,
   ).length;
+  const distinctContributorRoles = new Set(
+    state.topContributors
+      .map((contributor) => contributor.dominantRole)
+      .filter(Boolean),
+  ).size;
+  const sourceBackedCount = scoreList.filter(
+    (score) => score.sourceSupport >= 0.5 || (score.factual?.factualConfidence ?? 0) >= 0.55,
+  ).length;
+  const verifiedCount = scoreList.filter((score) => score.factual !== null).length;
+  const highSignalCount = scoreList.filter(
+    (score) => score.finalInfluenceScore >= 0.58 || score.clarificationValue >= 0.55,
+  ).length;
+  const sourceBackedRatio = replyCount > 0 ? sourceBackedCount / replyCount : 0;
+  const verifiedRatio = replyCount > 0 ? verifiedCount / replyCount : 0;
+  const highSignalRatio = replyCount > 0 ? highSignalCount / replyCount : 0;
+  const themeConfidence = clamp01(
+    0.18
+      + (state.factualSignalPresent ? 0.20 : 0)
+      + Math.min(0.18, state.newAnglesAdded.length * 0.05)
+      + Math.min(0.12, state.clarificationsAdded.length * 0.04)
+      + sourceBackedRatio * 0.20
+      + verifiedRatio * 0.12,
+  );
+  const contributorConfidence = clamp01(
+    Math.min(1, highImpactContributors / 3) * 0.7
+      + Math.min(1, distinctContributorRoles / 4) * 0.3,
+  );
+  const evidenceConfidence = clamp01(
+    0.12
+      + sourceBackedRatio * 0.38
+      + verifiedRatio * 0.30
+      + highSignalRatio * 0.20,
+  );
+  const signalDensity = clamp01(
+    Math.min(1, replyCount / 10) * 0.55 + highSignalRatio * 0.45,
+  );
 
   const interpretiveConfidence = computeInterpretiveConfidence({
-    themeConfidence: state.factualSignalPresent ? 0.70 : 0.40,
-    contributorConfidence: Math.min(1, highImpactContributors / 3),
+    themeConfidence,
+    contributorConfidence,
     entityConfidence,
-    evidenceConfidence: state.evidencePresent ? 0.70 : 0.20,
-    signalDensity: Math.min(1, replyCount / 10),
+    evidenceConfidence,
+    signalDensity,
     repetitionLevel: state.repetitionLevel,
   });
+
+  return { surfaceConfidence, entityConfidence, interpretiveConfidence };
+}
+
+// ─── Change-reason confidence boosts ─────────────────────────────────────
+// Applies structured change-reason signals to lift confidence before routing.
+// Keeps boosts small (≤ 0.08 per reason) to avoid over-promoting low-signal threads.
+// This bridges the gap between rich change-detection data and the routing decision.
+
+export function applyChangeReasonBoosts(
+  base: ConfidenceState,
+  changeReasons: ChangeReason[],
+): ConfidenceState {
+  if (changeReasons.length === 0) return base;
+
+  let { surfaceConfidence, entityConfidence, interpretiveConfidence } = base;
+
+  for (const reason of changeReasons) {
+    switch (reason) {
+      case 'source_backed_clarification':
+        // A verifiable, cited clarification lifts both interpretive depth and entity trust
+        interpretiveConfidence = clamp01(interpretiveConfidence + 0.08);
+        entityConfidence = clamp01(entityConfidence + 0.04);
+        break;
+      case 'factual_highlight_added':
+        interpretiveConfidence = clamp01(interpretiveConfidence + 0.06);
+        break;
+      case 'new_angle_introduced':
+      case 'new_stance_appeared':
+        // New perspectives widen interpretive range
+        interpretiveConfidence = clamp01(interpretiveConfidence + 0.05);
+        break;
+      case 'central_entity_changed':
+        // Entity landscape shift — new canonical entity confirmed
+        entityConfidence = clamp01(entityConfidence + 0.06);
+        break;
+      case 'major_contributor_entered':
+        // High-impact contributor raises contributor confidence component
+        interpretiveConfidence = clamp01(interpretiveConfidence + 0.04);
+        break;
+      // heat_shift and thread_direction_reversed don't lift interpretive confidence
+      default:
+        break;
+    }
+  }
 
   return { surfaceConfidence, entityConfidence, interpretiveConfidence };
 }

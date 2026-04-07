@@ -945,8 +945,9 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const [viewerBlockedOverride, setViewerBlockedOverride] = useState<boolean | null>(null);
   const [mlFeaturedHashtags, setMlFeaturedHashtags] = useState<FeaturedHashtag[] | null>(null);
   const sessionDid = session?.did ?? '';
+  const emptyBookmarkedUris = useMemo<string[]>(() => [], []);
   const bookmarkedUris = useBookmarksStore((state) => (
-    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []) : []
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? emptyBookmarkedUris) : emptyBookmarkedUris
   ));
 
   // Derive profile fields early so they are safe to use in memo/effect hooks below.

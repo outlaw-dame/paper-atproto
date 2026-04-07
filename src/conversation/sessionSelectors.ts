@@ -32,6 +32,9 @@ import type { SummaryMode } from '../intelligence/llmContracts';
 import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore';
 import type { DeepInterpolatorResult, PremiumAiEntitlements } from '../intelligence/premiumContracts';
 
+const EMPTY_MEDIA_FINDINGS: [] = [];
+const EMPTY_AI_DIAGNOSTICS = createSessionAiDiagnostics();
+
 export function useConversationSession(sessionId: string) {
   return useConversationSessionStore((state) => state.byId[sessionId] ?? null);
 }
@@ -124,12 +127,12 @@ export function useConversationInterpolatedState(sessionId: string) {
       return {
         interpolator: session.interpretation.interpolator,
         writerResult: session.interpretation.writerResult,
-        mediaFindings: session.interpretation.mediaFindings ?? [],
+        mediaFindings: session.interpretation.mediaFindings ?? EMPTY_MEDIA_FINDINGS,
         summaryMode: session.interpretation.summaryMode,
         confidence: session.interpretation.confidence,
         threadState: session.interpretation.threadState,
         interpretiveExplanation: session.interpretation.interpretiveExplanation,
-        aiDiagnostics: session.interpretation.aiDiagnostics ?? createSessionAiDiagnostics(),
+        aiDiagnostics: session.interpretation.aiDiagnostics ?? EMPTY_AI_DIAGNOSTICS,
         premium: session.interpretation.premium,
         rootVerification: session.evidence.rootVerification,
         scoresByUri: session.interpretation.scoresByUri,
@@ -148,7 +151,7 @@ export function useConversationInterpolatedState(sessionId: string) {
 
 export function useConversationAiDiagnostics(sessionId: string) {
   return useConversationSessionStore((state) => (
-    state.byId[sessionId]?.interpretation.aiDiagnostics ?? createSessionAiDiagnostics()
+    state.byId[sessionId]?.interpretation.aiDiagnostics ?? EMPTY_AI_DIAGNOSTICS
   ));
 }
 
@@ -296,7 +299,7 @@ export function selectConversationAiDiagnostics(
   sessionId: string,
 ) {
   return useConversationSessionStore.getState().byId[sessionId]?.interpretation.aiDiagnostics
-    ?? createSessionAiDiagnostics();
+    ?? EMPTY_AI_DIAGNOSTICS;
 }
 
 export function selectPremiumEntitlements(

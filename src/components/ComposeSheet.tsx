@@ -1285,9 +1285,19 @@ export default function ComposeSheet({ onClose }: Props) {
   const mp4ConversionHelp = useMemo(() => getMp4ConversionHelpLink(), []);
   const linkPreviewRequestIdRef = useRef(0);
   const mentalHealthGuidanceDraftRef = useRef<string | null>(null);
+  const bulkAltProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remaining = MAX - text.length;
   const hasDraftContent = text.trim().length > 0 || mediaItems.length > 0 || selectedAudio !== null;
   const canPost = hasDraftContent && remaining >= 0 && !posting;
+
+  useEffect(() => {
+    return () => {
+      if (bulkAltProgressTimerRef.current) {
+        clearTimeout(bulkAltProgressTimerRef.current);
+        bulkAltProgressTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleHashtagClick = useCallback((tag: string) => {
     const normalized = tag.replace(/^#/, '').trim();
@@ -2324,7 +2334,13 @@ export default function ComposeSheet({ onClose }: Props) {
       }
     } finally {
       setIsGeneratingBulkAlt(false);
-      setTimeout(() => setBulkAltProgress(null), 1200);
+      if (bulkAltProgressTimerRef.current) {
+        clearTimeout(bulkAltProgressTimerRef.current);
+      }
+      bulkAltProgressTimerRef.current = setTimeout(() => {
+        setBulkAltProgress(null);
+        bulkAltProgressTimerRef.current = null;
+      }, 1200);
     }
   }, [isGeneratingBulkAlt, mediaItems]);
 

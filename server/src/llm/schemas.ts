@@ -33,6 +33,9 @@ export const WriterContributorSchema = z.object({
   role: z.string(),
   impactScore: z.number().min(0).max(1),
   stanceSummary: z.string().max(200),
+  stanceExcerpt: z.string().max(220).optional(),
+  resonance: z.enum(['high', 'moderate', 'emerging']).optional(),
+  agreementSignal: z.string().max(120).optional(),
 });
 
 export const ThreadStateSchema = z.object({
@@ -59,6 +62,14 @@ export const ThreadStateSchema = z.object({
     extractedText: z.string().max(500).optional(),
     cautionFlags: z.array(z.string()).optional(),
   })).max(3).optional(),
+  threadSignalSummary: z.object({
+    newAnglesCount: z.number().int().min(0).max(50),
+    clarificationsCount: z.number().int().min(0).max(50),
+    sourceBackedCount: z.number().int().min(0).max(50),
+    factualSignalPresent: z.boolean(),
+    evidencePresent: z.boolean(),
+  }).optional(),
+  interpretiveExplanation: z.string().max(240).optional(),
 });
 
 export const WriterResponseSchema = z.object({

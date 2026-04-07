@@ -37,4 +37,3 @@ export * from './verification/index';
 //   import { … } from '../intelligence/heuristics';
 //   import { … } from '../intelligence/fusion';
 //   import { … } from '../intelligence/multimodal';
-//   import { … } from '../intelligence/writer';

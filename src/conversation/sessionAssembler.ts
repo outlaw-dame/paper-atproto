@@ -56,6 +56,11 @@ import {
   markConversationModelSkipped,
   shouldRunInterpolatorWriter,
 } from './modelExecution';
+import {
+  recordInterpolatorGateDecision,
+  recordInterpolatorModeDecision,
+  recordInterpolatorStageTiming,
+} from '../perf/interpolatorTelemetry';
 import { detectMentalHealthCrisis } from '../lib/sentiment';
 import type {
   AtUri,
@@ -99,6 +104,12 @@ function sanitizeErrorMessage(err: unknown): string {
   const sanitized = raw.replace(/[\u0000-\u001F\u007F]+/g, ' ').trim();
   if (!sanitized) return 'Unexpected error while hydrating conversation session.';
   return sanitized.slice(0, 220);
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
 }
 
 function flattenThreadReplies(replies: ThreadNode[]): ThreadNode[] {
@@ -556,7 +567,9 @@ export async function hydrateConversationSession(
     return;
   }
 
+  const hydrateStartedAt = nowMs();
   try {
+    const threadFetchStartedAt = nowMs();
     const response = await atpCall(
       () => agent.getPostThread({ uri: rootUri, depth: 6 }),
       {
@@ -564,6 +577,7 @@ export async function hydrateConversationSession(
         ...(signal ? { signal } : {}),
       },
     );
+    recordInterpolatorStageTiming('hydrate.fetch_thread', nowMs() - threadFetchStartedAt);
 
     const envelope = asThreadPostEnvelope(response);
     const threadData = envelope.data?.thread;
@@ -576,6 +590,7 @@ export async function hydrateConversationSession(
     const allReplies = flattenThreadReplies(rootNode.replies ?? []);
     const graph = buildSessionGraph(rootNode);
 
+    const pipelineStartedAt = nowMs();
     const pipeline = await runVerifiedThreadPipeline({
       input: {
         rootUri,
@@ -588,6 +603,7 @@ export async function hydrateConversationSession(
       cache,
       ...(signal ? { signal } : {}),
     });
+    recordInterpolatorStageTiming('hydrate.verified_pipeline', nowMs() - pipelineStartedAt);
 
     store.updateSession(sessionId, (current) => ({
       ...current,
@@ -706,7 +722,13 @@ export async function hydrateConversationSession(
       return;
     }
 
+    recordInterpolatorModeDecision(
+      nextSession.interpretation.summaryMode ?? pipeline.summaryMode,
+      nextSession.interpretation.confidence ?? pipeline.confidence,
+    );
+
     const writerGate = shouldRunInterpolatorWriter(nextSession, allReplies.length);
+    recordInterpolatorGateDecision(writerGate.shouldRun);
     if (!writerGate.shouldRun) {
       store.updateSession(sessionId, (current) => (
         markConversationModelSkipped(current, 'writer', {
@@ -742,6 +764,7 @@ export async function hydrateConversationSession(
     let mediaFindings: WriterMediaFinding[] = [];
 
     try {
+      const translationStartedAt = nowMs();
       const translationOutput = await translateWriterInput({
         rootPost: {
           id: rootNode.uri,
@@ -764,6 +787,7 @@ export async function hydrateConversationSession(
         targetLang: translationPolicy.userLanguage,
         mode: translationPolicy.localOnlyMode ? 'local_private' : 'server_default',
       });
+      recordInterpolatorStageTiming('hydrate.translation', nowMs() - translationStartedAt);
 
       const translationById = buildTranslationMap({
         rootUri,
@@ -827,11 +851,13 @@ export async function hydrateConversationSession(
             : markConversationModelDiscarded(current, 'multimodal')
         ));
 
+        const multimodalStartedAt = nowMs();
         const mediaOutcome = await executeThreadMediaAnalysis({
           threadId: rootUri,
           requests: mediaPlan.requests,
           ...(signal ? { signal } : {}),
         });
+        recordInterpolatorStageTiming('hydrate.multimodal', nowMs() - multimodalStartedAt);
 
         mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
         store.updateSession(sessionId, (current) => {
@@ -897,7 +923,9 @@ export async function hydrateConversationSession(
         },
       );
 
+      const writerStartedAt = nowMs();
       const writerResult = await callInterpolatorWriter(writerInput, signal);
+      recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
       filteredWriterResult = redactWriterResultByUserRules(writerResult);
       store.updateSession(sessionId, (current) => {
         if (!matchesConversationModelSourceToken(current, modelSourceToken)) {
@@ -975,7 +1003,9 @@ export async function hydrateConversationSession(
     }));
 
     try {
+      const premiumEntitlementsStartedAt = nowMs();
       const entitlements = await getPremiumAiEntitlements(actorDid, signal);
+      recordInterpolatorStageTiming('hydrate.premium_entitlements', nowMs() - premiumEntitlementsStartedAt);
       store.updateSession(sessionId, (current) => ({
         ...current,
         interpretation: {
@@ -1032,7 +1062,9 @@ export async function hydrateConversationSession(
         }),
       );
 
+      const deepInterpolatorStartedAt = nowMs();
       const deepInterpolator = await callPremiumDeepInterpolator(premiumInput, signal);
+      recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
       const sourceComputedAt = currentSession.interpretation.lastComputedAt;
 
       store.updateSession(sessionId, (current) => ({
@@ -1094,5 +1126,7 @@ export async function hydrateConversationSession(
       return;
     }
     setSessionError(sessionId, sanitizeErrorMessage(err));
+  } finally {
+    recordInterpolatorStageTiming('hydrate.total', nowMs() - hydrateStartedAt);
   }
 }

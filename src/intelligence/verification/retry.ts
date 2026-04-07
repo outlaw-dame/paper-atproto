@@ -12,9 +12,13 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new VerificationError('Aborted', { code: 'ABORTED', retryable: false }));
 
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
     const onAbort = () => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       reject(new VerificationError('Aborted', { code: 'ABORTED', retryable: false }));
     };
     signal?.addEventListener('abort', onAbort, { once: true });

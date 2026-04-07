@@ -202,6 +202,7 @@ async function withTimeout<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   let timeoutId: number | undefined;
+  let onAbort: (() => void) | undefined;
 
   const timeoutPromise = new Promise<T>((_, reject) => {
     timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -213,9 +214,10 @@ async function withTimeout<T>(
       reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
       return;
     }
-    signal.addEventListener('abort', () => {
+    onAbort = () => {
       reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-    }, { once: true });
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 
   try {
@@ -223,6 +225,9 @@ async function withTimeout<T>(
   } finally {
     if (typeof timeoutId === 'number') {
       window.clearTimeout(timeoutId);
+    }
+    if (signal && onAbort) {
+      signal.removeEventListener('abort', onAbort);
     }
   }
 }

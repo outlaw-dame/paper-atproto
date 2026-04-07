@@ -20,6 +20,7 @@ import { atpCall } from '../lib/atproto/client';
 import type { MockPost, ChipType } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
 import {
+  isAtUri,
   extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
 } from '../lib/resolver/atproto';
@@ -87,6 +88,7 @@ import ProfileCardTrigger from './ProfileCardTrigger';
 import type { ProfileCardData } from '../types/profileCard';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 import { Markdown } from './Markdown';
+import { recordInterpolatorStageTiming } from '../perf/interpolatorTelemetry';
 
 interface Props {
   entry: StoryEntry;
@@ -175,14 +177,41 @@ function ThreadModerationNotice({
   );
 }
 
-function RichText({ text, facets, baseColor, onHashtag }: { text: string; facets?: ResolvedFacet[]; baseColor: string; onHashtag?: (tag: string) => void }) {
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function RichText({
+  text,
+  facets,
+  baseColor,
+  onHashtag,
+}: {
+  text: string;
+  facets?: ResolvedFacet[];
+  baseColor: string;
+  onHashtag?: (tag: string) => void;
+}) {
   const navigateToProfile = useProfileNavigation();
   if (!facets?.length) {
     const parts = text.split(/(@[\w.]+|#\w+|https?:\/\/\S+)/g);
     return (
       <span>
         {parts.map((p, i) => {
-          if (p.startsWith('@')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{p}</button>;
+          if (p.startsWith('@')) {
+            return (
+              <button
+                key={i}
+                className="interactive-link-button"
+                onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }}
+                style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                {p}
+              </button>
+            );
+          }
           if (p.startsWith('#')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); onHashtag?.(p.slice(1)); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: onHashtag ? 'pointer' : 'default', padding: 0 }}>{p}</button>;
           if (p.startsWith('http')) {
             try { return <a key={i} href={p} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{new URL(p).hostname.replace(/^www\./, '')}</a>; }
@@ -275,8 +304,11 @@ function PromptHeroCard({
   const [repostCount, setRepostCount] = useState(post.repostCount);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const sessionDid = useSessionStore((state) => state.session?.did ?? '');
+  const emptyBookmarkedUris = useMemo<string[]>(() => [], []);
   const bookmarked = useBookmarksStore((state) => (
-    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []).includes(post.id) : false
+    sessionDid
+      ? (state.bookmarksByDid[sessionDid] ?? emptyBookmarkedUris).includes(post.id)
+      : false
   ));
   const addBookmark = useBookmarksStore((state) => state.addBookmark);
   const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
@@ -972,6 +1004,7 @@ const GENERIC_ENTITY_LABELS = new Set([
 type SummaryRenderOptions = {
   summaryEntities?: SummaryEntityCandidate[];
   onEntityTap?: (entity: WriterEntity) => void;
+  onMentionTap?: (actor: string) => void;
 };
 
 type SummaryEntityCandidate = {
@@ -1169,6 +1202,7 @@ function renderPlainSummarySegment(
 
 function renderSummaryText(text: string, options: SummaryRenderOptions = {}): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
+  const { onMentionTap } = options;
   let cursor = 0;
 
   for (const match of text.matchAll(SUMMARY_TOKEN_RE)) {
@@ -1187,18 +1221,19 @@ function renderSummaryText(text: string, options: SummaryRenderOptions = {}): Re
     const { core, suffix } = splitSummaryTokenSuffix(token);
 
     if (core.startsWith('@')) {
-      const handle = core.slice(1);
       nodes.push(
-        <a
+        <button
           key={`mention-${index}`}
-          href={`https://bsky.app/profile/${handle}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ fontWeight: 600, color: accent.blue500, textDecoration: 'none' }}
-          onClick={(e) => e.stopPropagation()}
+          type="button"
+          className="interactive-link-button"
+          style={{ color: accent.blue500, font: 'inherit', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onMentionTap?.(core);
+          }}
         >
           {core}
-        </a>,
+        </button>,
       );
     } else if (core.startsWith('#')) {
       const tag = core.slice(1);
@@ -1298,6 +1333,8 @@ function InterpolatorCard({
   onEntityTap?: (entity: WriterEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const firstCardReadyByRootRef = React.useRef<Record<string, boolean>>({});
+  const navigateToProfile = useProfileNavigation();
   // Use writer summary if available, otherwise fall back to heuristic
   const displaySummary = writerSummary || summaryText;
   // Only show "emerging" when there is genuinely nothing to display —
@@ -1327,10 +1364,20 @@ function InterpolatorCard({
   const summaryRenderOptions = useMemo<SummaryRenderOptions>(
     () => ({
       summaryEntities,
+      onMentionTap: (actor: string) => {
+        void navigateToProfile(actor);
+      },
       ...(onEntityTap ? { onEntityTap } : {}),
     }),
-    [summaryEntities, onEntityTap],
+    [summaryEntities, onEntityTap, navigateToProfile],
   );
+
+  useEffect(() => {
+    if (!displaySummary.trim()) return;
+    if (firstCardReadyByRootRef.current[rootUri]) return;
+    firstCardReadyByRootRef.current[rootUri] = true;
+    recordInterpolatorStageTiming('ui.interpolator_card_ready', 0);
+  }, [displaySummary, rootUri]);
 
   return (
     <motion.div
@@ -1785,7 +1832,17 @@ function InterpolatorCard({
                       }}>{label.slice(1, 2).toUpperCase()}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary }}>{label}</span>
+                          <button
+                            type="button"
+                            className="interactive-link-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void navigateToProfile(label);
+                            }}
+                            style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                          >
+                            {label}
+                          </button>
                           {!blurb && (
                             <span style={{
                               padding: '2px 8px', borderRadius: radius.full,
@@ -2022,8 +2079,11 @@ function ContributionCard({
   const [translating, setTranslating] = useState(false);
   const [showAllReplies, setShowAllReplies] = useState(false);
   const sessionDid = useSessionStore((state) => state.session?.did ?? '');
+  const emptyBookmarkedUris = useMemo<string[]>(() => [], []);
   const bookmarked = useBookmarksStore((state) => (
-    sessionDid ? (state.bookmarksByDid[sessionDid] ?? []).includes(node.uri) : false
+    sessionDid
+      ? (state.bookmarksByDid[sessionDid] ?? emptyBookmarkedUris).includes(node.uri)
+      : false
   ));
   const addBookmark = useBookmarksStore((state) => state.addBookmark);
   const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
@@ -2885,7 +2945,49 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 }
 
 // ─── Main component ────────────────────────────────────────────────────────
-export default function StoryMode({ entry, onClose }: Props) {
+export default function StoryMode(props: Props) {
+  if (props.entry.type === 'post' && !isAtUri(props.entry.id)) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 24 }}
+        transition={transitions.storyEntry}
+        style={{
+          position: 'fixed', inset: 0,
+          background: disc.bgBase,
+          display: 'flex', flexDirection: 'column',
+          zIndex: 200,
+        }}
+      >
+        <HostBar onClose={props.onClose} />
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 20px',
+          textAlign: 'center',
+        }}>
+          <div>
+            <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textPrimary, fontWeight: 700 }}>
+              This thread could not be opened.
+            </p>
+            <p style={{ margin: '8px 0 0', fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+              The post link is invalid or incomplete.
+            </p>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  return <StoryModeContent {...props} />;
+}
+
+function StoryModeContent({ entry, onClose }: Props) {
+  const storyViewStartedAtRef = React.useRef(nowMs());
+  const uiReadyRecordedByRootRef = React.useRef<Record<string, boolean>>({});
   const agent = useSessionStore((state) => state.agent);
   const session = useSessionStore((state) => state.session);
   const profile = useSessionStore((state) => state.profile);
@@ -2907,6 +3009,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const [activeEntity, setActiveEntity] = useState<WriterEntity | null>(null);
 
   useEffect(() => {
+    storyViewStartedAtRef.current = nowMs();
     if (!session?.did || !agent) return;
     // Fetch the viewer's follows once, quietly — used only for name bolding
     atpCall(() => agent.getFollows({ actor: session.did, limit: 100 }))
@@ -2916,8 +3019,27 @@ export default function StoryMode({ entry, onClose }: Props) {
       })
       .catch(() => {}); // non-critical, fail silently
   }, [agent, session?.did]);
+
+  useEffect(() => {
+    storyViewStartedAtRef.current = nowMs();
+  }, [entry.id]);
   const loading = conversationMeta?.status === 'loading';
   const error = conversationMeta?.error ?? null;
+  useEffect(() => {
+    if (uiReadyRecordedByRootRef.current[entry.id]) return;
+    const writerSummary = interpolatedState?.writerResult?.collapsedSummary?.trim() ?? '';
+    const heuristicSummary = threadVm?.interpolator?.summaryText?.trim() ?? '';
+    if (!writerSummary && !heuristicSummary) return;
+    if (conversationMeta?.status !== 'ready') return;
+
+    uiReadyRecordedByRootRef.current[entry.id] = true;
+    recordInterpolatorStageTiming('ui.story_interpolator_ready', nowMs() - storyViewStartedAtRef.current);
+  }, [
+    conversationMeta?.status,
+    entry.id,
+    interpolatedState?.writerResult?.collapsedSummary,
+    threadVm?.interpolator?.summaryText,
+  ]);
   const rootPost = useMemo(() => {
     if (!threadVm?.hero?.rootNode) return null;
 

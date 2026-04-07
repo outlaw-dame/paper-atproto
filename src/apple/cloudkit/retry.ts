@@ -31,26 +31,55 @@ const BREAKER_CLOSE_SUCCESSES = 2;
 
 let _breaker: BreakerStatus = { state: 'closed', consecutiveFailures: 0 };
 let _halfOpenSuccesses = 0;
+let _halfOpenProbeInFlight = false;
 
-function isBreakerOpen(): boolean {
-  if (_breaker.state === 'closed') return false;
-  if (_breaker.state === 'open') {
-    const elapsed = Date.now() - (_breaker.openedAt ?? 0);
-    if (elapsed >= BREAKER_HALF_OPEN_DELAY_MS) {
-      _breaker.state = 'half-open';
-      _halfOpenSuccesses = 0;
-      return false;
-    }
-    return true;
-  }
-  // half-open: allow one probe
-  return false;
+function moveToOpenState(): void {
+  _breaker = {
+    state: 'open',
+    consecutiveFailures: Math.max(1, _breaker.consecutiveFailures),
+    openedAt: Date.now(),
+    ...(Number.isFinite(_breaker.lastSuccessAt) ? { lastSuccessAt: _breaker.lastSuccessAt } : {}),
+  };
+  _halfOpenSuccesses = 0;
+  _halfOpenProbeInFlight = false;
 }
 
-function recordSuccess() {
+function allowRequestThroughBreaker(): { allowed: boolean; halfOpenProbe: boolean } {
+  if (_breaker.state === 'closed') {
+    return { allowed: true, halfOpenProbe: false };
+  }
+
+  if (_breaker.state === 'open') {
+    const elapsed = Date.now() - (_breaker.openedAt ?? 0);
+    if (elapsed < BREAKER_HALF_OPEN_DELAY_MS) {
+      return { allowed: false, halfOpenProbe: false };
+    }
+
+    _breaker.state = 'half-open';
+    _halfOpenSuccesses = 0;
+    _halfOpenProbeInFlight = false;
+  }
+
+  if (_breaker.state === 'half-open') {
+    if (_halfOpenProbeInFlight) {
+      return { allowed: false, halfOpenProbe: false };
+    }
+    _halfOpenProbeInFlight = true;
+    return { allowed: true, halfOpenProbe: true };
+  }
+
+  return { allowed: false, halfOpenProbe: false };
+}
+
+function recordSuccess(halfOpenProbe: boolean) {
+  if (halfOpenProbe) {
+    _halfOpenProbeInFlight = false;
+  }
+
   if (_breaker.state === 'half-open') {
     _halfOpenSuccesses++;
     if (_halfOpenSuccesses >= BREAKER_CLOSE_SUCCESSES) {
+      _halfOpenProbeInFlight = false;
       _breaker = { state: 'closed', consecutiveFailures: 0, lastSuccessAt: Date.now() };
     }
   } else {
@@ -59,13 +88,23 @@ function recordSuccess() {
   }
 }
 
-function recordFailure() {
+function recordFailure(halfOpenProbe: boolean) {
+  if (halfOpenProbe) {
+    _halfOpenProbeInFlight = false;
+  }
+
+  if (_breaker.state === 'half-open') {
+    _breaker.consecutiveFailures = Math.max(1, _breaker.consecutiveFailures + 1);
+    moveToOpenState();
+    return;
+  }
+
   _breaker.consecutiveFailures++;
   if (
     _breaker.state === 'closed' &&
     _breaker.consecutiveFailures >= BREAKER_OPEN_THRESHOLD
   ) {
-    _breaker = { state: 'open', consecutiveFailures: _breaker.consecutiveFailures, openedAt: Date.now() };
+    moveToOpenState();
   }
 }
 
@@ -75,7 +114,8 @@ export async function retryWithFullJitter<T>(
   fn: () => Promise<T>,
   policy: RetryPolicy = DEFAULT_POLICY
 ): Promise<T> {
-  if (isBreakerOpen()) {
+  const breakerGate = allowRequestThroughBreaker();
+  if (!breakerGate.allowed) {
     throw new Error('CloudKit circuit breaker open');
   }
 
@@ -83,18 +123,19 @@ export async function retryWithFullJitter<T>(
   for (let attempt = 0; attempt < policy.maxAttempts; attempt++) {
     try {
       const result = await fn();
-      recordSuccess();
+      recordSuccess(breakerGate.halfOpenProbe);
       return result;
     } catch (err) {
       lastErr = err;
       if (!isRetryableCloudKitError(err)) {
-        recordFailure();
+        recordFailure(breakerGate.halfOpenProbe);
         throw err;
       }
-      recordFailure();
       if (attempt < policy.maxAttempts - 1) {
         const ceiling = Math.min(policy.baseDelayMs * Math.pow(2, attempt), policy.maxDelayMs);
         await delay(Math.floor(Math.random() * ceiling));
+      } else {
+        recordFailure(breakerGate.halfOpenProbe);
       }
     }
   }
@@ -108,4 +149,10 @@ function delay(ms: number): Promise<void> {
 
 export function getBreakerState(): BreakerState {
   return _breaker.state;
+}
+
+export function resetBreakerForTests(): void {
+  _breaker = { state: 'closed', consecutiveFailures: 0 };
+  _halfOpenSuccesses = 0;
+  _halfOpenProbeInFlight = false;
 }

@@ -13,9 +13,11 @@ vi.mock('../lib/abortSignals', async () => {
 });
 
 import {
+  callInterpolatorWriter,
   callComposerGuidanceWriter,
   callMediaAnalyzer,
 } from './modelClient';
+import type { ThreadStateForWriter } from './llmContracts';
 
 describe('modelClient retry policy', () => {
   beforeEach(() => {
@@ -87,5 +89,73 @@ describe('modelClient retry policy', () => {
     expect(result.mediaType).toBe('document');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back when model output echoes a long root-post phrase', async () => {
+    const writerInput: ThreadStateForWriter = {
+      threadId: 'thread-echo',
+      summaryMode: 'descriptive_fallback',
+      confidence: {
+        surfaceConfidence: 0.68,
+        entityConfidence: 0.63,
+        interpretiveConfidence: 0.55,
+      },
+      visibleReplyCount: 5,
+      rootPost: {
+        uri: 'at://did:plc:author/app.bsky.feed.post/root',
+        handle: 'author.test',
+        text: 'City officials quietly rewrote the emergency housing policy overnight without public notice and residents are asking for source documents.',
+        createdAt: '2026-04-07T00:00:00.000Z',
+      },
+      selectedComments: [
+        {
+          uri: 'at://did:plc:r1/app.bsky.feed.post/1',
+          handle: 'reply.one',
+          text: 'One reply cites the archived policy PDF and points to deleted language.',
+          impactScore: 0.78,
+          role: 'source_bringer',
+        },
+        {
+          uri: 'at://did:plc:r2/app.bsky.feed.post/2',
+          handle: 'reply.two',
+          text: 'Another asks why no public hearing happened before the change.',
+          impactScore: 0.66,
+          role: 'clarifying',
+        },
+        {
+          uri: 'at://did:plc:r3/app.bsky.feed.post/3',
+          handle: 'reply.three',
+          text: 'A third commenter disputes whether the revision happened overnight.',
+          impactScore: 0.61,
+          role: 'useful_counterpoint',
+        },
+      ],
+      topContributors: [],
+      safeEntities: [{ id: 'housing-policy', label: 'Emergency housing policy', type: 'topic', confidence: 0.91, impact: 0.82 }],
+      factualHighlights: ['Replies reference archived policy language and meeting records.'],
+      whatChangedSignals: ['source cited: archived policy text', 'clarification: timeline challenged'],
+    };
+
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        collapsedSummary: 'City officials quietly rewrote the emergency housing policy overnight without public notice and residents are asking for source documents.',
+        whatChanged: ['source cited: archived policy text'],
+        contributorBlurbs: [{ handle: 'reply.one', blurb: 'Cites archived language.' }],
+        abstained: false,
+        mode: 'descriptive_fallback',
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      }));
+
+    const result = await callInterpolatorWriter(writerInput);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.abstained).toBe(false);
+    expect(result.collapsedSummary.toLowerCase()).toContain('@author.test');
+    expect(result.collapsedSummary.toLowerCase()).not.toContain('quietly rewrote the emergency housing policy overnight without public notice');
   });
 });

@@ -7,6 +7,20 @@ import {
 } from './db/runtime';
 import * as schema from './schema';
 
+const PAPER_DB_CLOSE_TIMEOUT_MS = 5_000;
+
+async function closeClientSafely(client: PaperDbClient | null | undefined): Promise<void> {
+  if (!client) return;
+
+  const closePromise = client.close().catch(() => {});
+  await Promise.race([
+    closePromise,
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, PAPER_DB_CLOSE_TIMEOUT_MS);
+    }),
+  ]);
+}
+
 /**
  * Database utility using PGlite and Drizzle ORM.
  * Prefers a worker-backed IndexedDB runtime in capable browsers and falls back
@@ -18,6 +32,7 @@ export class PaperDB {
   private db: any = null;
   private runtimeInfo: PaperDbRuntimeInfo | null = null;
   private initPromise: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
 
   private requirePG(): PaperDbClient {
     if (!this.pg) {
@@ -36,6 +51,10 @@ export class PaperDB {
   }
 
   private async initialize(): Promise<void> {
+    if (this.closePromise) {
+      await this.closePromise;
+    }
+
     const { client, runtime } = await createPaperDbClient();
     const db = drizzle(client as unknown as PGlite, { schema });
 
@@ -121,7 +140,9 @@ export class PaperDB {
       await client.exec(`
       CREATE OR REPLACE FUNCTION posts_search_vector_update() RETURNS trigger AS $$
       BEGIN
-        new.search_vector := to_tsvector('english', new.content);
+        new.search_vector :=
+          setweight(to_tsvector('english', coalesce(new.content, '')), 'D') ||
+          setweight(to_tsvector('english', coalesce(new.image_alt_text, '')), 'B');
         RETURN new;
       END
       $$ LANGUAGE plpgsql;
@@ -134,7 +155,9 @@ export class PaperDB {
       -- Trigger for feed_items
       CREATE OR REPLACE FUNCTION feed_items_search_vector_update() RETURNS trigger AS $$
       BEGIN
-        new.search_vector := to_tsvector('english', coalesce(new.title, '') || ' ' || coalesce(new.content, ''));
+        new.search_vector :=
+          setweight(to_tsvector('english', coalesce(new.title, '')), 'A') ||
+          setweight(to_tsvector('english', coalesce(new.content, '')), 'D');
         RETURN new;
       END
       $$ LANGUAGE plpgsql;
@@ -143,6 +166,19 @@ export class PaperDB {
       CREATE TRIGGER trg_feed_items_search_vector_update
       BEFORE INSERT OR UPDATE ON feed_items
       FOR EACH ROW EXECUTE FUNCTION feed_items_search_vector_update();
+
+      -- Backfill existing rows so FTS works for data inserted before triggers.
+      UPDATE posts
+      SET search_vector =
+        setweight(to_tsvector('english', coalesce(content, '')), 'D') ||
+        setweight(to_tsvector('english', coalesce(image_alt_text, '')), 'B')
+      WHERE search_vector IS NULL;
+
+      UPDATE feed_items
+      SET search_vector =
+        setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(content, '')), 'D')
+      WHERE search_vector IS NULL;
     `);
 
       this.pg = client;
@@ -152,7 +188,7 @@ export class PaperDB {
       this.pg = null;
       this.db = null;
       this.runtimeInfo = null;
-      await client.close().catch(() => {});
+      await closeClientSafely(client);
       throw error;
     }
   }
@@ -198,17 +234,28 @@ export class PaperDB {
   }
 
   async close() {
-    const pendingInit = this.initPromise;
-    if (pendingInit) {
-      await pendingInit.catch(() => {});
+    if (this.closePromise) {
+      await this.closePromise;
+      return;
     }
 
-    const client = this.pg;
-    this.pg = null;
-    this.db = null;
-    this.runtimeInfo = null;
-    this.initPromise = null;
-    await client?.close().catch(() => {});
+    this.closePromise = (async () => {
+      const pendingInit = this.initPromise;
+      if (pendingInit) {
+        await pendingInit.catch(() => {});
+      }
+
+      const client = this.pg;
+      this.pg = null;
+      this.db = null;
+      this.runtimeInfo = null;
+      this.initPromise = null;
+      await closeClientSafely(client);
+    })().finally(() => {
+      this.closePromise = null;
+    });
+
+    await this.closePromise;
   }
 }
 

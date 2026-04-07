@@ -24,6 +24,7 @@ export const ContextPost = ({
 }) => {
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((state) => state.openExploreSearch);
+  const openStory = useUiStore((state) => state.openStory);
   const sensitivePolicy = useSensitiveMediaStore((s) => s.policy);
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quoteEmbed?.post.sensitiveMedia?.isSensitive);
@@ -69,6 +70,17 @@ export const ContextPost = ({
     const normalized = tag.replace(/^#/, '').trim();
     if (!normalized) return;
     openExploreSearch(normalized);
+  };
+
+  const handleOpenQuotedPost = (event: React.SyntheticEvent) => {
+    event.stopPropagation();
+    const quotedId = quoteEmbed?.post.id;
+    if (!quotedId) return;
+    openStory({
+      type: 'post',
+      id: quotedId,
+      title: quoteEmbed?.post.content?.slice(0, 80) || 'Quoted post',
+    });
   };
 
   return (
@@ -280,13 +292,26 @@ export const ContextPost = ({
         )}
 
         {quoteEmbed && (
-          <div style={{
+          <div
+            style={{
             marginTop: post.content.trim().length > 0 ? 10 : 0,
             border: '1px solid var(--quote-border)',
             borderRadius: 12,
             background: 'var(--quote-surface)',
             padding: '10px 12px',
-          }}>
+            cursor: quoteEmbed.post.id ? 'pointer' : 'default',
+            }}
+            role={quoteEmbed.post.id ? 'button' : undefined}
+            tabIndex={quoteEmbed.post.id ? 0 : undefined}
+            aria-label={quoteEmbed.post.id ? 'Open quoted post' : undefined}
+            onClick={quoteEmbed.post.id ? handleOpenQuotedPost : undefined}
+            onKeyDown={quoteEmbed.post.id ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleOpenQuotedPost(e);
+              }
+            } : undefined}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
               <span style={{
                 display: 'inline-flex',

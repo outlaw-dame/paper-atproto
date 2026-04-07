@@ -4,21 +4,31 @@
 //
 // Embeddings are generated via the inference worker (off main thread).
 // This module no longer imports from @xenova/transformers directly.
+// Recovery: Implements exponential backoff, circuit breaker, and connection health monitoring.
 
 import { paperDB } from './db';
 import { embeddingPipeline, sanitizeForEmbedding } from './intelligence/embeddingPipeline';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
+import { recordHybridSearchTimeoutFallback } from './perf/searchTelemetry';
 import {
   extractMediaSignalsFromJson,
   getMediaBoostFactor,
   type MediaSignals,
 } from './lib/media/extractMediaSignals';
+import { resolveHybridSearchRuntimeConfig } from './search/runtime';
+import { BackoffTimer, SEARCH_BACKOFF_CONFIG } from './lib/backoffStrategy';
+import { CircuitBreaker, DB_CIRCUIT_BREAKER_CONFIG, ConnectionHealthMonitor } from './lib/circuitBreaker';
 
 interface SearchOptions {
   policyVersion?: string;
   moderationProfileHash?: string;
   disableCache?: boolean;
   queryHasVisualIntent?: boolean; // NEW: for media-aware ranking
+  semanticDistanceCutoff?: number | null;
+  rrfWeight?: number;
+  lexicalWeight?: number;
+  semanticWeight?: number;
+  confidenceWeight?: number;
 }
 
 interface CachedVector {
@@ -26,10 +36,30 @@ interface CachedVector {
   expiresAt: number;
 }
 
-const QUERY_EMBED_CACHE_TTL_MS = 60_000;
-const QUERY_EMBED_CACHE_MAX = 128;
+const QUERY_EMBED_CACHE_TTL_MS_LEGACY = 60_000;
+const QUERY_EMBED_CACHE_MAX_LEGACY = 128;
 const DEFAULT_SEARCH_LIMIT = 20;
 const MAX_SEARCH_LIMIT = 50;
+
+class HybridSearchTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HybridSearchTimeoutError';
+  }
+}
+
+interface HybridSearchRuntimeOptions {
+  queryTimeoutMs?: number;
+  timeoutRetryDelayMs?: number;
+  semanticDistanceCutoff?: number | null;
+}
+
+type FusionWeights = {
+  rrfWeight: number;
+  lexicalWeight: number;
+  semanticWeight: number;
+  confidenceWeight: number;
+};
 
 function normalizeSearchLimit(limit: number): number {
   if (!Number.isFinite(limit)) return DEFAULT_SEARCH_LIMIT;
@@ -46,6 +76,15 @@ function isEfSearchSettingError(error: unknown): boolean {
   const message = error.message.toLowerCase();
   return message.includes('hnsw.ef_search')
     || message.includes('unrecognized configuration parameter');
+}
+
+function isQueryTimeoutError(error: unknown): boolean {
+  return error instanceof HybridSearchTimeoutError;
+}
+
+function sleep(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizePolicyVersion(raw: string | undefined): string {
@@ -139,7 +178,7 @@ function deriveRowMediaSignals(row: any): MediaSignals {
   };
 }
 
-function fusedConfidence(row: any, options?: SearchOptions): number {
+function fusedConfidence(row: any, options: SearchOptions | undefined, weights: FusionWeights): number {
   const rrf = Number(row?.rrf_score ?? 0);
   const fts = Number(row?.fts_rank_raw ?? 0);
   const semanticDistance = Number(row?.semantic_distance ?? 1.2);
@@ -151,7 +190,11 @@ function fusedConfidence(row: any, options?: SearchOptions): number {
     : 0;
   const rrfSignal = Math.min(1, Math.max(0, rrf * 30));
 
-  let blended = 0.45 * rrfSignal + 0.3 * lexicalSignal + 0.25 * semanticSignal;
+  let blended = (
+    weights.rrfWeight * rrfSignal
+    + weights.lexicalWeight * lexicalSignal
+    + weights.semanticWeight * semanticSignal
+  );
   
   // Apply media boost if query has visual intent and post has images
   const visualIntent = options?.queryHasVisualIntent ?? false;
@@ -163,23 +206,113 @@ function fusedConfidence(row: any, options?: SearchOptions): number {
 }
 
 function postProcessRows(rows: any[], options?: SearchOptions): any[] {
+  const fusionWeights: FusionWeights = {
+    rrfWeight: Number(options?.rrfWeight ?? 0.45),
+    lexicalWeight: Number(options?.lexicalWeight ?? 0.30),
+    semanticWeight: Number(options?.semanticWeight ?? 0.25),
+    confidenceWeight: Number(options?.confidenceWeight ?? 0.15),
+  };
+
+  const semanticDistanceCutoff = (
+    Number.isFinite(options?.semanticDistanceCutoff)
+      ? Math.max(0, Number(options?.semanticDistanceCutoff))
+      : null
+  );
+
   return rows
+    .filter((row) => {
+      if (semanticDistanceCutoff === null) return true;
+      const semanticMatched = Number(row?.semantic_matched ?? 0) === 1;
+      if (!semanticMatched) return true;
+      const semanticDistance = Number(row?.semantic_distance ?? Number.POSITIVE_INFINITY);
+      return semanticDistance <= semanticDistanceCutoff;
+    })
     .map((row) => {
-      const confidence = fusedConfidence(row, options);
+      const confidence = fusedConfidence(row, options, fusionWeights);
       return {
         ...row,
         confidence_score: confidence,
-        fused_score: Number(row?.rrf_score ?? 0) + confidence * 0.15,
+        fused_score: Number(row?.rrf_score ?? 0) + confidence * fusionWeights.confidenceWeight,
       };
     })
     .sort((a, b) => Number(b.fused_score ?? 0) - Number(a.fused_score ?? 0));
 }
 
 export class HybridSearch {
+  private readonly resolvedRuntimeConfig: ReturnType<typeof resolveHybridSearchRuntimeConfig>;
+  private readonly backoffTimer: BackoffTimer;
+  private readonly circuitBreaker: CircuitBreaker;
+  private readonly healthMonitor: ConnectionHealthMonitor;
+
+  constructor(private readonly runtimeOptions: HybridSearchRuntimeOptions = {}) {
+    this.resolvedRuntimeConfig = resolveHybridSearchRuntimeConfig();
+    this.backoffTimer = new BackoffTimer(SEARCH_BACKOFF_CONFIG);
+    this.circuitBreaker = new CircuitBreaker(DB_CIRCUIT_BREAKER_CONFIG);
+    this.healthMonitor = new ConnectionHealthMonitor(
+      () => this.performConnectionHealthCheck(),
+      (healthy) => this.onConnectionHealthChange(healthy),
+      30_000, // Check every 30 seconds
+    );
+  }
+
+  private get queryTimeoutMs(): number {
+    const configured = this.runtimeOptions.queryTimeoutMs;
+    if (!Number.isFinite(configured) || configured === undefined) {
+      return this.resolvedRuntimeConfig.queryTimeoutMs;
+    }
+    return Math.max(0, Math.trunc(configured));
+  }
+
+  private get timeoutRetryDelayMs(): number {
+    const configured = this.runtimeOptions.timeoutRetryDelayMs;
+    if (!Number.isFinite(configured) || configured === undefined) {
+      return this.resolvedRuntimeConfig.timeoutRetryDelayMs;
+    }
+    return Math.max(0, Math.trunc(configured));
+  }
+
+  private get semanticDistanceCutoff(): number | null {
+    const configured = this.runtimeOptions.semanticDistanceCutoff;
+    if (Number.isFinite(configured)) {
+      return Math.max(0, Number(configured));
+    }
+    return this.resolvedRuntimeConfig.semanticDistanceCutoff;
+  }
+
+  private get semanticCandidateMultiplier(): number {
+    return this.resolvedRuntimeConfig.semanticCandidateMultiplier;
+  }
+
+  private get feedSemanticCandidateMultiplier(): number {
+    return this.resolvedRuntimeConfig.feedSemanticCandidateMultiplier;
+  }
+
+  private async withQueryTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+    if (this.queryTimeoutMs <= 0) return promise;
+
+    return await new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new HybridSearchTimeoutError(message));
+      }, this.queryTimeoutMs);
+
+      promise.then(
+        (value) => {
+          clearTimeout(timeoutId);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        },
+      );
+    });
+  }
+
   private queryVectorCache = new Map<string, CachedVector>();
 
   private evictCacheIfNeeded(): void {
-    if (this.queryVectorCache.size <= QUERY_EMBED_CACHE_MAX) return;
+    const maxCacheSize = this.resolvedRuntimeConfig.queryEmbedCacheMax;
+    if (this.queryVectorCache.size <= maxCacheSize) return;
     // Delete the first (least-recently-used) key. Because Map preserves insertion
     // order and we delete-then-reinsert on every cache hit, the first key is always
     // the LRU entry.
@@ -197,6 +330,8 @@ export class HybridSearch {
   private async getQueryEmbedding(query: string, options: SearchOptions = {}): Promise<number[]> {
     const key = this.cacheKeyForQuery(query, options);
     const now = Date.now();
+    const cacheTtlMs = this.resolvedRuntimeConfig.queryEmbedCacheTtlMs;
+
     if (!options.disableCache) {
       const cached = this.queryVectorCache.get(key);
       if (cached && cached.expiresAt > now) {
@@ -210,7 +345,7 @@ export class HybridSearch {
     const embedding = await this.generateEmbedding(query, { mode: 'query' });
     if (!options.disableCache && embedding.length > 0) {
       this.queryVectorCache.delete(key); // remove stale entry if present
-      this.queryVectorCache.set(key, { value: embedding, expiresAt: now + QUERY_EMBED_CACHE_TTL_MS });
+      this.queryVectorCache.set(key, { value: embedding, expiresAt: now + cacheTtlMs });
       this.evictCacheIfNeeded();
     }
     return embedding;
@@ -225,24 +360,113 @@ export class HybridSearch {
     return vector;
   }
 
+  /**
+   * Perform health check on database connection.
+   * Returns true if connection is healthy, false otherwise.
+   */
+  private async performConnectionHealthCheck(): Promise<boolean> {
+    try {
+      const pg = paperDB.getPG();
+      // Simple query to check connection viability
+      const result = await Promise.race([
+        pg.query('SELECT 1'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Health check timeout')), this.queryTimeoutMs / 2)
+        ),
+      ]);
+      return true;
+    } catch (error) {
+      console.debug('[HybridSearch] Connection health check failed:', error instanceof Error ? error.message : 'Unknown error');
+      return false;
+    }
+  }
+
+  /**
+   * Callback when connection health status changes.
+   */
+  private onConnectionHealthChange(healthy: boolean): void {
+    if (!healthy) {
+      console.warn('[HybridSearch] Database connection degraded; circuit breaker may activate');
+    } else {
+      console.debug('[HybridSearch] Database connection restored');
+    }
+  }
+
+  /**
+   * Start health monitoring for the database connection.
+   */
+  startHealthMonitoring(): void {
+    this.healthMonitor.start();
+  }
+
+  /**
+   * Stop health monitoring.
+   */
+  stopHealthMonitoring(): void {
+    this.healthMonitor.stop();
+  }
+
+  /**
+   * Get current circuit breaker metrics for debugging.
+   */
+  getCircuitBreakerMetrics() {
+    return this.circuitBreaker.getMetrics();
+  }
+
+  /**
+   * Reset circuit breaker (for testing or manual recovery).
+   */
+  resetCircuitBreaker(): void {
+    this.circuitBreaker.reset();
+  }
+
   private async executeSemanticQuery(
     sql: string,
     params: unknown[],
     semanticCandidateCount: number,
+    scope: 'search' | 'searchAll' | 'searchFeedItems',
   ) {
     const pg = paperDB.getPG();
     const efSearch = clampHnswEfSearch(semanticCandidateCount);
 
     try {
-      return await pg.transaction(async (trx) => {
-        await trx.query(`SET LOCAL hnsw.ef_search = ${efSearch}`);
-        return trx.query(sql, params);
-      });
+      return await this.circuitBreaker.execute(
+        () => this.withQueryTimeout(
+          pg.transaction(async (trx) => {
+            await trx.query(`SET LOCAL hnsw.ef_search = ${efSearch}`);
+            return trx.query(sql, params);
+          }),
+          `Hybrid search transaction timed out after ${this.queryTimeoutMs}ms`,
+        ),
+        `[HybridSearch] ${scope} semantic query execution`,
+      );
     } catch (error) {
       // Older pgvector builds or future transport changes should not break search
       // if per-query ef_search tuning is unavailable.
-      if (!isEfSearchSettingError(error)) throw error;
-      return pg.query(sql, params);
+      if (isEfSearchSettingError(error)) {
+        return await this.withQueryTimeout(
+          pg.query(sql, params),
+          `Hybrid search fallback query timed out after ${this.queryTimeoutMs}ms`,
+        );
+      }
+
+      // If transaction execution timed out, retry once with exponential backoff.
+      // This avoids failing hard on transient worker stalls.
+      if (isQueryTimeoutError(error)) {
+        recordHybridSearchTimeoutFallback({
+          scope,
+          retryDelayMs: this.timeoutRetryDelayMs,
+          timeoutMs: this.queryTimeoutMs,
+        });
+        // Use exponential backoff with small delay for search workload
+        await sleep(50 + Math.random() * 100);
+        return await this.withQueryTimeout(
+          pg.query(sql, params),
+          `Hybrid search retry timed out after ${this.queryTimeoutMs}ms`,
+        );
+      }
+
+      throw error;
     }
   }
 
@@ -255,19 +479,28 @@ export class HybridSearch {
     const resolvedOptions: SearchOptions = {
       ...options,
       queryHasVisualIntent: options.queryHasVisualIntent ?? queryHasVisualIntent(query),
+      semanticDistanceCutoff: options.semanticDistanceCutoff ?? this.semanticDistanceCutoff,
+      rrfWeight: this.resolvedRuntimeConfig.rrfWeight,
+      lexicalWeight: this.resolvedRuntimeConfig.lexicalWeight,
+      semanticWeight: this.resolvedRuntimeConfig.semanticWeight,
+      confidenceWeight: this.resolvedRuntimeConfig.confidenceWeight,
     };
     const queryEmbedding = await this.getQueryEmbedding(query, resolvedOptions);
     const vectorStr = `[${queryEmbedding.join(',')}]`;
     const k = 60;
-    const semanticCandidateLimit = resolvedLimit * 2;
+    const semanticCandidateLimit = resolvedLimit * this.semanticCandidateMultiplier;
 
     const sql = `
-      WITH fts_results AS (
+      WITH query_terms AS (
+        SELECT websearch_to_tsquery('english', $1) AS q
+      ),
+      fts_results AS (
         SELECT id,
-               ts_rank_cd(search_vector, plainto_tsquery('english', $1)) AS fts_rank_raw,
-               ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', $1)) DESC) as rank
+               ts_rank_cd(search_vector, query_terms.q, 32) AS fts_rank_raw,
+               ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, query_terms.q, 32) DESC) as rank
         FROM posts
-        WHERE search_vector @@ plainto_tsquery('english', $1)
+        CROSS JOIN query_terms
+        WHERE search_vector @@ query_terms.q
         LIMIT $2 * 2
       ),
       semantic_results AS (
@@ -287,6 +520,7 @@ export class HybridSearch {
         p.image_alt_text,
         COALESCE(f.fts_rank_raw, 0.0) AS fts_rank_raw,
         COALESCE(s.semantic_distance, 1.2) AS semantic_distance,
+        CASE WHEN s.id IS NOT NULL THEN 1 ELSE 0 END AS semantic_matched,
         COALESCE(1.0 / ($4 + f.rank), 0.0) + COALESCE(1.0 / ($4 + s.rank), 0.0) as rrf_score
       FROM posts p
       LEFT JOIN fts_results f ON p.id = f.id
@@ -300,6 +534,7 @@ export class HybridSearch {
       sql,
       [query, resolvedLimit, vectorStr, k],
       semanticCandidateLimit,
+      'search',
     );
     return {
       ...result,
@@ -315,26 +550,36 @@ export class HybridSearch {
     const resolvedOptions: SearchOptions = {
       ...options,
       queryHasVisualIntent: options.queryHasVisualIntent ?? queryHasVisualIntent(query),
+      semanticDistanceCutoff: options.semanticDistanceCutoff ?? this.semanticDistanceCutoff,
+      rrfWeight: this.resolvedRuntimeConfig.rrfWeight,
+      lexicalWeight: this.resolvedRuntimeConfig.lexicalWeight,
+      semanticWeight: this.resolvedRuntimeConfig.semanticWeight,
+      confidenceWeight: this.resolvedRuntimeConfig.confidenceWeight,
     };
     const queryEmbedding = await this.getQueryEmbedding(query, resolvedOptions);
     const vectorStr = `[${queryEmbedding.join(',')}]`;
     const k = 60;
-    const semanticCandidateLimit = resolvedLimit * 2;
+    const semanticCandidateLimit = resolvedLimit * this.semanticCandidateMultiplier;
 
     // Use indexed search_vector columns from each table rather than recomputing
     // to_tsvector inline. Ranks are computed globally across the merged union so
     // that RRF denominators are comparable between posts and feed_items.
     const sql = `
-      WITH fts_candidates AS (
+          WITH query_terms AS (
+       SELECT websearch_to_tsquery('english', $1) AS q
+          ),
+          fts_candidates AS (
         SELECT id, 'post' AS type,
-               ts_rank_cd(search_vector, plainto_tsquery('english', $1)) AS fts_rank_raw
+         ts_rank_cd(search_vector, query_terms.q, 32) AS fts_rank_raw
         FROM posts
-        WHERE search_vector @@ plainto_tsquery('english', $1)
+       CROSS JOIN query_terms
+       WHERE search_vector @@ query_terms.q
         UNION ALL
         SELECT id, 'feed_item' AS type,
-               ts_rank_cd(search_vector, plainto_tsquery('english', $1)) AS fts_rank_raw
+         ts_rank_cd(search_vector, query_terms.q, 32) AS fts_rank_raw
         FROM feed_items
-        WHERE search_vector @@ plainto_tsquery('english', $1)
+       CROSS JOIN query_terms
+       WHERE search_vector @@ query_terms.q
       ),
       fts_results AS (
         SELECT id, type, fts_rank_raw,
@@ -384,6 +629,7 @@ export class HybridSearch {
         fi.chapters_url,
         COALESCE(f.fts_rank_raw, 0.0) AS fts_rank_raw,
         COALESCE(s.semantic_distance, 1.2) AS semantic_distance,
+        CASE WHEN s.id IS NOT NULL THEN 1 ELSE 0 END AS semantic_matched,
         COALESCE(1.0 / ($4 + f.rank), 0.0) + COALESCE(1.0 / ($4 + s.rank), 0.0) AS rrf_score
       FROM fts_results f
       FULL OUTER JOIN semantic_results s ON f.id = s.id AND f.type = s.type
@@ -397,6 +643,7 @@ export class HybridSearch {
       sql,
       [query, resolvedLimit, vectorStr, k],
       semanticCandidateLimit,
+      'searchAll',
     );
     return {
       ...result,
@@ -412,21 +659,30 @@ export class HybridSearch {
     const resolvedOptions: SearchOptions = {
       ...options,
       queryHasVisualIntent: options.queryHasVisualIntent ?? queryHasVisualIntent(query),
+      semanticDistanceCutoff: options.semanticDistanceCutoff ?? this.semanticDistanceCutoff,
+      rrfWeight: this.resolvedRuntimeConfig.rrfWeight,
+      lexicalWeight: this.resolvedRuntimeConfig.lexicalWeight,
+      semanticWeight: this.resolvedRuntimeConfig.semanticWeight,
+      confidenceWeight: this.resolvedRuntimeConfig.confidenceWeight,
     };
     const queryEmbedding = await this.getQueryEmbedding(query, resolvedOptions);
     const vectorStr = `[${queryEmbedding.join(',')}]`;
     const k = 60;
-    const semanticCandidateLimit = resolvedLimit * 3;
+    const semanticCandidateLimit = resolvedLimit * this.feedSemanticCandidateMultiplier;
 
     const sql = `
-      WITH fts_results AS (
+      WITH query_terms AS (
+        SELECT websearch_to_tsquery('english', $1) AS q
+      ),
+      fts_results AS (
         SELECT fi.id,
-               ts_rank_cd(fi.search_vector, plainto_tsquery('english', $1)) AS fts_rank_raw,
+               ts_rank_cd(fi.search_vector, query_terms.q, 32) AS fts_rank_raw,
                ROW_NUMBER() OVER (
-          ORDER BY ts_rank_cd(fi.search_vector, plainto_tsquery('english', $1)) DESC
+          ORDER BY ts_rank_cd(fi.search_vector, query_terms.q, 32) DESC
         ) as rank
         FROM feed_items fi
-        WHERE fi.search_vector @@ plainto_tsquery('english', $1)
+        CROSS JOIN query_terms
+        WHERE fi.search_vector @@ query_terms.q
         LIMIT $2 * 3
       ),
       semantic_results AS (
@@ -455,6 +711,7 @@ export class HybridSearch {
         f.type AS feed_type,
         COALESCE(fr.fts_rank_raw, 0.0) AS fts_rank_raw,
         COALESCE(sr.semantic_distance, 1.2) AS semantic_distance,
+        CASE WHEN sr.id IS NOT NULL THEN 1 ELSE 0 END AS semantic_matched,
         COALESCE(1.0 / ($4 + fr.rank), 0.0) + COALESCE(1.0 / ($4 + sr.rank), 0.0) as rrf_score
       FROM feed_items fi
       LEFT JOIN feeds f ON fi.feed_id = f.id
@@ -469,6 +726,7 @@ export class HybridSearch {
       sql,
       [query, resolvedLimit, vectorStr, k],
       semanticCandidateLimit,
+      'searchFeedItems',
     );
     return {
       ...result,

@@ -1220,11 +1220,37 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
         const quotedVideoEmbed = quotedPost.embed?.type === 'video' ? quotedPost.embed : null;
         const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quotedPost.sensitiveMedia?.isSensitive);
+        const quotedStoryTitle = quotedPost.content.slice(0, 80);
+
+        const openQuotedPost = (event: React.MouseEvent | React.KeyboardEvent) => {
+          event.stopPropagation();
+          onOpenStory({ id: quotedPost.id, type: 'post', title: quotedStoryTitle });
+        };
+
         return (
         <div style={{
           border: '1px solid var(--quote-border)', borderRadius: 12,
           padding: '10px 12px', marginTop: 8, background: 'var(--quote-surface)'
         }}>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={openQuotedPost}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              openQuotedPost(event);
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+          >
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
             <span style={{
               display: 'inline-flex',
@@ -1410,6 +1436,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               )}
             </div>
           )}
+          </div>
         </div>
         );
       })()}

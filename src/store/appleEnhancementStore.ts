@@ -15,10 +15,12 @@ interface AppleEnhancementState {
   cloudKitSyncState: CloudKitSyncState;
   cloudKitLastSyncAt: string | null;
   cloudKitErrorMessage: string | null;
+  cloudKitRetryAttempt: number;
 
   setAvailability: (a: AppleEnhancementAvailability) => void;
   setCloudKitEnabled: (value: boolean) => void;
   setCloudKitSyncState: (state: CloudKitSyncState, errorMessage?: string) => void;
+  setCloudKitRetryAttempt: (attempt: number) => void;
   recordCloudKitSync: () => void;
 }
 
@@ -30,14 +32,22 @@ export const useAppleEnhancementStore = create<AppleEnhancementState>()(
       cloudKitSyncState: 'idle',
       cloudKitLastSyncAt: null,
       cloudKitErrorMessage: null,
+      cloudKitRetryAttempt: 0,
 
       setAvailability: (a) => set({ availability: a }),
       setCloudKitEnabled: (value) =>
-        set({ cloudKitEnabled: value, cloudKitSyncState: value ? 'idle' : 'unavailable' }),
+        set({ cloudKitEnabled: value, cloudKitSyncState: value ? 'idle' : 'unavailable', cloudKitRetryAttempt: 0 }),
       setCloudKitSyncState: (state, errorMessage) =>
         set({ cloudKitSyncState: state, cloudKitErrorMessage: errorMessage ?? null }),
+      setCloudKitRetryAttempt: (attempt) =>
+        set({ cloudKitRetryAttempt: Math.max(0, Math.floor(attempt)) }),
       recordCloudKitSync: () =>
-        set({ cloudKitLastSyncAt: new Date().toISOString(), cloudKitSyncState: 'idle', cloudKitErrorMessage: null }),
+        set({
+          cloudKitLastSyncAt: new Date().toISOString(),
+          cloudKitSyncState: 'idle',
+          cloudKitErrorMessage: null,
+          cloudKitRetryAttempt: 0,
+        }),
     }),
     {
       name: 'glimpse-apple-enhancement-v1',

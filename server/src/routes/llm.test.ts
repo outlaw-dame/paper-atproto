@@ -4,7 +4,7 @@ const { envMock } = vi.hoisted(() => ({
   envMock: {
     LLM_ENABLED: true,
     NODE_ENV: 'test',
-    AI_SESSION_TELEMETRY_ADMIN_SECRET: undefined,
+    AI_SESSION_TELEMETRY_ADMIN_SECRET: undefined as string | undefined,
   },
 }));
 

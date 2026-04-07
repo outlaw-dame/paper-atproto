@@ -18,6 +18,9 @@ import type {
 import { getConfiguredApiBaseUrl, resolveApiUrl } from '../lib/apiBase';
 import { composeAbortSignals, sleepWithAbort } from '../lib/abortSignals';
 import { sanitizeUrlForProcessing } from '../lib/safety/externalUrl';
+import {
+  recordInterpolatorWriterOutcome,
+} from '../perf/interpolatorTelemetry';
 import type {
   DeepInterpolatorResult,
   PremiumAiEntitlements,
@@ -360,48 +363,146 @@ function describeReplyBehavior(input: ThreadStateForWriter): string {
   return `${subject} ${joinBehaviorPhrases(phrases.slice(0, 3))}.`;
 }
 
-function inferRootVerb(text: string): string {
+/**
+ * Describes what a specific reply is DOING based on its algorithmic role tag.
+ * Used in descriptive_fallback to produce synthesis rather than direct quotation.
+ */
+function describeReplyRoleAction(role?: string): string {
+  const r = (role ?? '').toLowerCase();
+  if (r === 'source_bringer' || r === 'rule_source') return 'provides a source for the claim';
+  if (r === 'clarifying' || r === 'clarifier') return 'clarifies a key point';
+  if (r === 'useful_counterpoint' || r === 'counterpoint') return 'offers a counterpoint';
+  if (r === 'new_information' || r === 'context-setter') return 'adds relevant context';
+  if (r === 'provocative' || r === 'emotional-reaction') return 'responds with a strong reaction';
+  if (r === 'direct_response') return 'responds directly to the post';
+  if (r === 'story_worthy') return 'shapes the direction of the thread';
+  return 'joins the discussion';
+}
+
+function normalizeTopicLabel(value: string): string {
+  return value
+    .replace(/[@#][\w.-]+/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+function rootTopicHint(input: ThreadStateForWriter): string | null {
+  const entityTheme = input.entityThemes?.find((theme) => theme.trim().length >= 3);
+  if (entityTheme) return normalizeTopicLabel(entityTheme);
+
+  const entityLabels = input.safeEntities
+    .map((entity) => normalizeTopicLabel(entity.label))
+    .filter((label) => label.length >= 3)
+    .slice(0, 2);
+  if (entityLabels.length > 0) {
+    return entityLabels.join(' and ');
+  }
+
+  const factualLead = sentenceLead(input.factualHighlights[0] ?? '', 120);
+  if (factualLead) return normalizeTopicLabel(factualLead);
+
+  return null;
+}
+
+function buildRootParaphraseSentence(input: ThreadStateForWriter): string {
+  const { handle, text } = input.rootPost;
+  const topicHint = rootTopicHint(input);
   const lower = text.toLowerCase().trimStart();
+
   if (/^(what|why|how|when|where|who|which|is|are|do|does|can|could|would|should|did|has|have)\b/.test(lower)) {
-    return 'asks';
+    return ensureSentence(
+      sanitizeSafeSummaryText(
+        topicHint
+          ? `@${handle} opens a question-driven post about ${topicHint}`
+          : `@${handle} opens a question-driven post that sets up the thread`,
+      ),
+    );
   }
-  if (/^i\b/.test(lower)) {
-    return 'reflects that';
-  }
+
   if (/\b(announcing|launching|releasing|introducing|excited to announce|proud to announce)\b/.test(lower)) {
-    return 'announces that';
+    return ensureSentence(
+      sanitizeSafeSummaryText(
+        topicHint
+          ? `@${handle} announces an update about ${topicHint}`
+          : `@${handle} announces an update that draws immediate responses`,
+      ),
+    );
   }
+
   if (/\b(but |however |actually |in fact |that'?s wrong|you'?re wrong|this is (wrong|false)|disagree)\b/.test(lower)) {
-    return 'argues that';
+    return ensureSentence(
+      sanitizeSafeSummaryText(
+        topicHint
+          ? `@${handle} challenges a claim around ${topicHint}`
+          : `@${handle} challenges a claim and pushes the thread into debate`,
+      ),
+    );
   }
-  return 'writes that';
+
+  return ensureSentence(
+    sanitizeSafeSummaryText(
+      topicHint
+        ? `@${handle} makes a claim about ${topicHint}`
+        : `@${handle} makes a claim that sets the thread's direction`,
+    ),
+  );
+}
+
+function normalizedWordSequence(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function hasVerbatimWordSpan(summary: string, rootText: string, minWords = 8): boolean {
+  const summaryTokens = normalizedWordSequence(summary);
+  const rootTokens = normalizedWordSequence(rootText);
+  if (summaryTokens.length < minWords || rootTokens.length < minWords) return false;
+
+  const summarySlices = new Set<string>();
+  for (let i = 0; i <= summaryTokens.length - minWords; i += 1) {
+    summarySlices.add(summaryTokens.slice(i, i + minWords).join(' '));
+  }
+
+  for (let i = 0; i <= rootTokens.length - minWords; i += 1) {
+    const rootSlice = rootTokens.slice(i, i + minWords).join(' ');
+    if (summarySlices.has(rootSlice)) return true;
+  }
+
+  return false;
 }
 
 function deterministicWriterFallback(input: ThreadStateForWriter): InterpolatorWriteResult {
-  const { handle, text } = input.rootPost;
+  const { handle } = input.rootPost;
   const visibleReplyCount = input.visibleReplyCount ?? input.selectedComments.length;
 
-  // Attributed root characterization — "@handle reflects that [content]"
-  // This avoids raw text copy while keeping actual substance.
-  const verb = inferRootVerb(text);
-  const rootExcerpt = truncateAtWordBoundary(text.trim().replace(/\s+/g, ' '), 170);
-  const rootLower = rootExcerpt.charAt(0).toLowerCase() + rootExcerpt.slice(1);
-  const rootSentence = ensureSentence(
-    sanitizeSafeSummaryText(`@${handle} ${verb} ${rootLower}`),
-  );
+  // Root sentence is intentionally paraphrased to avoid echoing the author's
+  // exact wording when the model output is unreliable.
+  const rootSentence = buildRootParaphraseSentence(input);
 
   // Reply engagement line
   const replyLine = visibleReplyCount > 0 ? describeReplyBehavior(input) : '';
 
-  // Most-notable reply: use actual text, not a role label
+  // Most-notable reply: synthesize from role for descriptive_fallback (avoids verbatim copy),
+  // use actual text excerpt for normal mode, omit entirely for minimal_fallback.
   const topReply = input.selectedComments
     .filter((c) => c.impactScore >= 0.35 && c.text.trim().length >= 30 && c.handle !== handle)
     .sort((a, b) => b.impactScore - a.impactScore)[0];
-  const notableSentence = (topReply && input.summaryMode !== 'minimal_fallback')
-    ? ensureSentence(sanitizeSafeSummaryText(
-        `@${topReply.handle} adds: ${truncateAtWordBoundary(topReply.text.trim(), 130)}`,
-      ))
-    : '';
+  let notableSentence = '';
+  if (topReply && input.summaryMode === 'descriptive_fallback') {
+    // Role-based synthesis: describes what the reply IS DOING, not what it says verbatim.
+    const roleAction = describeReplyRoleAction(topReply.role);
+    notableSentence = ensureSentence(sanitizeSafeSummaryText(`@${topReply.handle} ${roleAction}`));
+  } else if (topReply && input.summaryMode !== 'minimal_fallback') {
+    notableSentence = ensureSentence(sanitizeSafeSummaryText(
+      `@${topReply.handle} adds: ${truncateAtWordBoundary(topReply.text.trim(), 130)}`,
+    ));
+  }
 
   const maxLen = input.summaryMode === 'minimal_fallback' ? 240 : 420;
   const collapsedSummary = sanitizeSafeSummaryText(
@@ -560,6 +661,10 @@ function shouldPreferDeterministicFallback(
   if (!summary) return false;
   if (input.selectedComments.length < 3 && input.whatChangedSignals.length < 2) return false;
   const hasReplyGrounding = hasReplyGroundingSignal(result);
+
+  if (hasVerbatimWordSpan(summary, input.rootPost.text, 8)) {
+    return true;
+  }
 
   if (GENERIC_REPLY_ACTIVITY_RE.test(summary)) return true;
   if (hasReplyGrounding) return false;
@@ -767,6 +872,7 @@ export async function callInterpolatorWriter(
 ): Promise<InterpolatorWriteResult> {
   try {
     interpolatorTelemetry.attempted += 1;
+
     const result = await fetchWithRetry<InterpolatorWriteResult>(
       '/api/llm/write/interpolator',
       input,
@@ -781,6 +887,7 @@ export async function callInterpolatorWriter(
       interpolatorTelemetry.abstained += 1;
       const fallback = deterministicWriterFallback(input);
       logInterpolatorTelemetry('abstained-response-fallback');
+      recordInterpolatorWriterOutcome(input.summaryMode, 'fallback');
       return fallback;
     }
 
@@ -788,11 +895,13 @@ export async function callInterpolatorWriter(
       interpolatorTelemetry.abstained += 1;
       const fallback = deterministicWriterFallback(input);
       logInterpolatorTelemetry('root-only-response-fallback');
+      recordInterpolatorWriterOutcome(input.summaryMode, 'fallback');
       return fallback;
     }
 
     interpolatorTelemetry.succeeded += 1;
     logInterpolatorTelemetry('success');
+    recordInterpolatorWriterOutcome(input.summaryMode, 'model');
 
     // Sanitize the LLM result through the same content safety pass that the
     // deterministic fallback uses (profanity, out-of-scope advice, explicit sexual).
@@ -816,6 +925,7 @@ export async function callInterpolatorWriter(
     interpolatorTelemetry.failed += 1;
     const fallback = deterministicWriterFallback(input);
     logInterpolatorTelemetry('failure-fallback');
+    recordInterpolatorWriterOutcome(input.summaryMode, 'fallback');
     return fallback;
   }
 }

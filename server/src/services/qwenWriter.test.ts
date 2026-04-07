@@ -63,6 +63,9 @@ describe('qwenWriter', () => {
           role: 'source_bringer',
           impactScore: 0.7,
           stanceSummary: 'added context',
+          stanceExcerpt: 'pointed to prior tournament examples that matched this pattern',
+          resonance: 'moderate',
+          agreementSignal: 'drew visible agreement from other participants',
         },
       ],
       safeEntities: [
@@ -90,5 +93,8 @@ describe('qwenWriter', () => {
     expect(userPrompt).not.toContain('\u0000');
     expect(userPrompt).not.toContain('<script>');
     expect(userPrompt).toContain('A reply comment');
+    expect(userPrompt).toContain('point: pointed to prior tournament examples that matched this pattern');
+    expect(userPrompt).toContain('agreement: drew visible agreement from other participants');
+    expect(userPrompt).toContain('resonance:moderate');
   });
 });

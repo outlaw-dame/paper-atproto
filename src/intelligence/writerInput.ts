@@ -9,6 +9,7 @@ import type {
   WriterContributor,
   WriterEntity,
   WriterMediaFinding,
+  WriterThreadSignalSummary,
   ConfidenceState,
   SummaryMode,
 } from './llmContracts';
@@ -30,6 +31,24 @@ import {
   filterByStanceDiversity,
   type EntityInfo,
 } from './algorithms';
+
+// ─── Writer Input Diagnostics ─────────────────────────────────────────────
+// Tracks algorithmic contributor selection failures so callers can surface
+// fallback rates without relying solely on console.error scanning.
+
+type WriterInputTelemetry = {
+  algorithmicSelectionFallbacks: number;
+  stanceFallbacks: number;
+};
+
+const _writerInputTelemetry: WriterInputTelemetry = {
+  algorithmicSelectionFallbacks: 0,
+  stanceFallbacks: 0,
+};
+
+export function getWriterInputTelemetry(): WriterInputTelemetry {
+  return { ..._writerInputTelemetry };
+}
 
 function toSafeErrorMeta(error: unknown): { name: string; message: string } {
   if (error instanceof Error) {
@@ -88,6 +107,115 @@ function mapRoleToStance(role: ContributionRole): string {
   return map[role] ?? 'contributing to the discussion';
 }
 
+type ContributorPointSignals = {
+  stanceExcerpt?: string;
+  resonance?: WriterContributor['resonance'];
+  agreementSignal?: string;
+};
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeStanceExcerpt(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/^[@#]\S+\s*/g, '')
+    .trim()
+    .slice(0, 180);
+}
+
+function buildContributorPointSignals(
+  replies: ThreadNode[],
+  scores: Record<string, ContributionScores>,
+): Record<string, ContributorPointSignals> {
+  const signalsByDid: Record<string, ContributorPointSignals> = {};
+
+  type WorkingSignal = {
+    did: string;
+    bestExcerpt: string;
+    bestReplyQuality: number;
+    highestImpact: number;
+    totalLikes: number;
+    totalReplies: number;
+    replyCount: number;
+  };
+
+  const workingByDid: Record<string, WorkingSignal> = {};
+
+  for (const reply of replies) {
+    const did = reply.authorDid;
+    if (!did) continue;
+
+    const score = scores[reply.uri];
+    const impact = clamp01(score?.finalInfluenceScore ?? score?.usefulnessScore ?? 0);
+    const likeCount = Math.max(0, reply.likeCount ?? 0);
+    const replyCount = Math.max(0, reply.replyCount ?? 0);
+
+    const engagement = clamp01((likeCount / 24) + (replyCount / 8));
+    const replyQuality = clamp01((impact * 0.72) + (engagement * 0.28));
+    const excerpt = normalizeStanceExcerpt(reply.text);
+
+    const existing = workingByDid[did] ?? {
+      did,
+      bestExcerpt: '',
+      bestReplyQuality: -1,
+      highestImpact: 0,
+      totalLikes: 0,
+      totalReplies: 0,
+      replyCount: 0,
+    };
+
+    existing.totalLikes += likeCount;
+    existing.totalReplies += replyCount;
+    existing.replyCount += 1;
+    existing.highestImpact = Math.max(existing.highestImpact, impact);
+
+    if (excerpt && replyQuality >= existing.bestReplyQuality) {
+      existing.bestReplyQuality = replyQuality;
+      existing.bestExcerpt = excerpt;
+    }
+
+    workingByDid[did] = existing;
+  }
+
+  for (const [did, signal] of Object.entries(workingByDid)) {
+    const avgLikes = signal.totalLikes / Math.max(1, signal.replyCount);
+    const avgReplies = signal.totalReplies / Math.max(1, signal.replyCount);
+    const engagementNorm = clamp01((avgLikes / 14) + (avgReplies / 5));
+    const resonanceScore = clamp01((signal.highestImpact * 0.68) + (engagementNorm * 0.32));
+
+    const resonance: WriterContributor['resonance'] = resonanceScore >= 0.74
+      ? 'high'
+      : resonanceScore >= 0.52
+        ? 'moderate'
+        : 'emerging';
+
+    const strongAgreement = avgLikes >= 8 || avgReplies >= 2;
+    const moderateAgreement = avgLikes >= 4 || avgReplies >= 1;
+    const agreementSignal = strongAgreement
+      ? 'resonated strongly with other participants'
+      : moderateAgreement
+        ? 'drew visible agreement from other participants'
+        : undefined;
+
+    signalsByDid[did] = {
+      ...(signal.bestExcerpt ? { stanceExcerpt: signal.bestExcerpt } : {}),
+      ...(resonance ? { resonance } : {}),
+      ...(agreementSignal ? { agreementSignal } : {}),
+    };
+  }
+
+  return signalsByDid;
+}
+
+function buildStanceSummary(role: ContributionRole, excerpt?: string): string {
+  if (excerpt && excerpt.length > 0) {
+    return `main point: ${excerpt}`.slice(0, 200);
+  }
+  return mapRoleToStance(role).slice(0, 200);
+}
+
 function normalizeSignalExcerpt(value: string, maxLen = 88): string {
   return value
     .replace(/\s+/g, ' ')
@@ -106,6 +234,60 @@ function pushSignal(target: string[], prefix: string, rawText: string): void {
 
 function toSafeEntityId(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 64) || 'entity';
+}
+
+// ─── buildInterpretiveExplanation ─────────────────────────────────────────
+// Derives a short, human-readable context string from confidence values and
+// structural thread signals. The writer uses this to calibrate how strong an
+// interpretation to make, without needing to parse floating-point thresholds.
+// Pure function — no I/O. Never throws.
+
+function buildInterpretiveExplanation(
+  confidence: ConfidenceState,
+  signals: WriterThreadSignalSummary,
+): string {
+  const parts: string[] = [];
+
+  const { surfaceConfidence, interpretiveConfidence, entityConfidence } = confidence;
+
+  // Surface clarity label
+  if (surfaceConfidence >= 0.70) parts.push('high-clarity thread');
+  else if (surfaceConfidence >= 0.45) parts.push('moderate-clarity thread');
+  else parts.push('low-clarity thread');
+
+  // Source signal
+  if (signals.sourceBackedCount >= 2) {
+    parts.push(`${signals.sourceBackedCount} source-backed replies`);
+  } else if (signals.factualSignalPresent) {
+    parts.push('factual signal present');
+  }
+
+  // Angle / clarification signal
+  if (signals.newAnglesCount >= 2) {
+    parts.push(`${signals.newAnglesCount} new angles`);
+  } else if (signals.clarificationsCount >= 1) {
+    parts.push(
+      `${signals.clarificationsCount} clarification${signals.clarificationsCount > 1 ? 's' : ''}`,
+    );
+  }
+
+  // Interpretive confidence label
+  if (interpretiveConfidence >= 0.65) {
+    parts.push('interpretation: high confidence');
+  } else if (interpretiveConfidence >= 0.40) {
+    parts.push('interpretation: medium confidence');
+  } else {
+    parts.push('interpretation: low confidence; hedge accordingly');
+  }
+
+  // Entity reliability label
+  if (entityConfidence >= 0.60) {
+    parts.push('entities: reliable');
+  } else if (entityConfidence < 0.35) {
+    parts.push('entities: uncertain; mention sparingly');
+  }
+
+  return parts.join('; ');
 }
 
 function sanitizeWriterMediaFindings(
@@ -198,11 +380,20 @@ export function buildThreadStateForWriter(
   const rawComments: WriterComment[] = replies.map(reply => {
     const score = scores[reply.uri];
     const translated = translationById?.[reply.uri]?.translatedText;
+
+    // Penalize replies where verification found low factual confidence.
+    // Only applies when factual evidence was actually computed (non-null factual).
+    // Low-confidence factual signal (< 0.40) reduces influence by 30% so these
+    // replies rank lower and are less likely to be included in the writer payload.
+    const factualConfidence = score?.factual?.factualConfidence ?? null;
+    const factualPenalty = (factualConfidence !== null && factualConfidence < 0.40) ? 0.70 : 1.0;
+    const rawImpact = score?.finalInfluenceScore ?? score?.usefulnessScore ?? 0;
+
     const base: WriterComment = {
       uri: reply.uri,
       handle: reply.authorHandle,
       text: (translated ?? reply.text).slice(0, 280),
-      impactScore: score?.finalInfluenceScore ?? score?.usefulnessScore ?? 0,
+      impactScore: rawImpact * factualPenalty,
     };
     if (reply.authorName != null) base.displayName = reply.authorName;
     if (score?.role) base.role = score.role;
@@ -221,6 +412,7 @@ export function buildThreadStateForWriter(
   // Fall back to the first topContributor handle only if not provided.
   const opHandle = rootAuthorHandle ?? state.topContributors[0]?.handle ?? '';
   const scoreByDid = buildScoresByDid(replies, scores);
+  const contributorPointSignals = buildContributorPointSignals(replies, scores);
 
   // Try algorithmic selection first; fall back to legacy if it fails
   let selectedContributorDids: string[];
@@ -244,15 +436,30 @@ export function buildThreadStateForWriter(
         const stanceClustering = clusterStanceCoverage(state.topContributors, scoreByDid);
         const stanceDiverseDids = filterByStanceDiversity(stanceClustering, maxContributors);
         if (stanceDiverseDids.length > 0) {
-          const merged = [
+          const merged = Array.from(new Set([
             ...stanceDiverseDids.filter((did) => selectedContributorDids.includes(did)),
             ...selectedContributorDids,
             ...stanceDiverseDids,
-          ];
-          selectedContributorDids = Array.from(new Set(merged)).slice(0, maxContributors);
+          ]));
+
+          // Remove contributors flagged as redundant within over-saturated stance
+          // clusters. Always keep at least 1 contributor even if all are suppressed.
+          const suppressedDids = new Set(
+            stanceClustering.suggestedSuppressions.map((s) => s.did),
+          );
+          const afterSuppression = merged.filter((did) => !suppressedDids.has(did));
+          selectedContributorDids = (afterSuppression.length > 0 ? afterSuppression : merged)
+            .slice(0, maxContributors);
           selectionMethod = 'algorithmic+stance';
         }
-      } catch {
+      } catch (stanceErr) {
+        _writerInputTelemetry.stanceFallbacks += 1;
+        if (import.meta.env.DEV) {
+          console.warn('[writerInput] stance_clustering_fallback', {
+            ...toSafeErrorMeta(stanceErr),
+            totalStanceFallbacks: _writerInputTelemetry.stanceFallbacks,
+          });
+        }
         // Keep baseline algorithmic selection when stance clustering is unavailable.
       }
     } else {
@@ -267,10 +474,12 @@ export function buildThreadStateForWriter(
       selectedContributorDids = legacy.map(c => c.contributor.did);
     }
   } catch (err) {
+    _writerInputTelemetry.algorithmicSelectionFallbacks += 1;
     console.error('[writerInput] contributor_selection_fallback', {
       ...toSafeErrorMeta(err),
       contributorCount: state.topContributors.length,
       replyCount: replies.length,
+      totalFallbacks: _writerInputTelemetry.algorithmicSelectionFallbacks,
     });
     // Fallback to legacy selection
     const legacy = selectContributors(
@@ -307,11 +516,16 @@ export function buildThreadStateForWriter(
   }
 
   const topContributors: WriterContributor[] = selectedContributors.map(({ contributor: c }) => {
+    const pointSignals = c.did ? contributorPointSignals[c.did] : undefined;
+    const excerpt = pointSignals?.stanceExcerpt;
     const contrib: WriterContributor = {
       handle: c.handle ?? c.did.slice(-8),
       role: mapRole(c.dominantRole),
       impactScore: c.avgUsefulnessScore,
-      stanceSummary: mapRoleToStance(c.dominantRole),
+      stanceSummary: buildStanceSummary(c.dominantRole, excerpt),
+      ...(excerpt ? { stanceExcerpt: excerpt } : {}),
+      ...(pointSignals?.resonance ? { resonance: pointSignals.resonance } : {}),
+      ...(pointSignals?.agreementSignal ? { agreementSignal: pointSignals.agreementSignal } : {}),
     };
     if (c.did) contrib.did = c.did;
     return contrib;
@@ -328,6 +542,7 @@ export function buildThreadStateForWriter(
     .sort((a, b) => b.mentionCount - a.mentionCount);
 
   let safeEntities: WriterEntity[] = [];
+  let entityThemes: string[] = [];
 
   try {
     const dedupedEntities = new Map<string, EntityInfo>();
@@ -392,6 +607,13 @@ export function buildThreadStateForWriter(
       confidence: entity.canonicalConfidence,
       impact: entity.centralityScore,
     }));
+
+    // Capture derived themes for the writer — these are human-readable topic frames
+    // derived from top central entities with inclusion reasons (e.g. "Policy revision",
+    // "AI (fact-checked)"). Stored in a closure variable consumed below.
+    if (centralityResult.themes.length > 0) {
+      entityThemes = centralityResult.themes;
+    }
   } catch (err) {
     console.warn('[writerInput] entity_centrality_fallback', {
       ...toSafeErrorMeta(err),
@@ -479,6 +701,23 @@ export function buildThreadStateForWriter(
   };
   const mediaFindings = sanitizeWriterMediaFindings(options?.mediaFindings);
 
+  // ── Thread signal summary ─────────────────────────────────────────────────
+  // Structural counts derived from pipeline state — never exposes user content.
+  const scoreList = Object.values(scores);
+  const sourceBackedCount = scoreList.filter(
+    (s) => s.sourceSupport >= 0.5 || (s.factual?.factualConfidence ?? 0) >= 0.55,
+  ).length;
+
+  const threadSignalSummary: WriterThreadSignalSummary = {
+    newAnglesCount: state.newAnglesAdded.length,
+    clarificationsCount: state.clarificationsAdded.length,
+    sourceBackedCount,
+    factualSignalPresent: state.factualSignalPresent,
+    evidencePresent: state.evidencePresent,
+  };
+
+  const interpretiveExplanation = buildInterpretiveExplanation(confidence, threadSignalSummary);
+
   return {
     threadId,
     summaryMode,
@@ -490,9 +729,10 @@ export function buildThreadStateForWriter(
     safeEntities,
     factualHighlights: factualHighlights.slice(0, 5),
     whatChangedSignals: whatChangedSignals.slice(0, 6),
-    ...(mediaFindings.length > 0
-      ? { mediaFindings }
-      : {}),
+    ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
+    threadSignalSummary,
+    interpretiveExplanation,
+    ...(entityThemes.length > 0 ? { entityThemes } : {}),
   };
 }
 

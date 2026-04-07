@@ -16,6 +16,13 @@ let _state: OfflineState = {
 
 const _listeners = new Set<(state: OfflineState) => void>();
 
+const OFFLINE_STATE_INIT_KEY = '__paperOfflineStateListenersInstalled__';
+
+function getGlobalScope(): Record<string, unknown> | null {
+  if (typeof globalThis === 'undefined') return null;
+  return globalThis as unknown as Record<string, unknown>;
+}
+
 function notify() {
   _listeners.forEach((fn) => fn({ ..._state }));
 }
@@ -26,12 +33,21 @@ function setState(partial: Partial<OfflineState>) {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => {
-    setState({ network: 'online', lastOnlineAt: new Date().toISOString() });
-  });
-  window.addEventListener('offline', () => {
-    setState({ network: 'offline', lastOfflineAt: new Date().toISOString() });
-  });
+  const globalScope = getGlobalScope();
+  const alreadyInstalled = globalScope?.[OFFLINE_STATE_INIT_KEY] === true;
+
+  if (!alreadyInstalled) {
+    window.addEventListener('online', () => {
+      setState({ network: 'online', lastOnlineAt: new Date().toISOString() });
+    });
+    window.addEventListener('offline', () => {
+      setState({ network: 'offline', lastOfflineAt: new Date().toISOString() });
+    });
+
+    if (globalScope) {
+      globalScope[OFFLINE_STATE_INIT_KEY] = true;
+    }
+  }
 }
 
 export function getOfflineState(): OfflineState {

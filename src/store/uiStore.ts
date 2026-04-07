@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { MockPost } from '../data/mockData';
+import { isAtUri } from '../lib/resolver/atproto';
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export type HomeFeedMode = 'Following' | 'Discover' | 'Feeds';
@@ -60,6 +61,7 @@ function sanitizeStoryEntry(value: unknown): StoryEntry | null {
   const type = candidate.type === 'post' || candidate.type === 'topic' ? candidate.type : null;
   const id = sanitizeBoundedString(candidate.id, MAX_STORY_ID_LENGTH);
   const title = sanitizeBoundedString(candidate.title, MAX_STORY_TITLE_LENGTH);
+  if (type === 'post' && id && !isAtUri(id)) return null;
   if (!type || !id || !title) return null;
   return { type, id, title };
 }
@@ -168,7 +170,19 @@ export const useUiStore = create<UiState>()(
       setComposeDraft: (text) => set({ composeDraft: text }),
       openPromptComposer: () => set({ showPromptComposer: true }),
       closePromptComposer: () => set({ showPromptComposer: false }),
-      openStory: (entry) => set({ story: entry }),
+      openStory: (entry) => set((state) => {
+        const sanitized = sanitizeStoryEntry(entry);
+        if (!sanitized) return state;
+        if (
+          state.story
+          && state.story.type === sanitized.type
+          && state.story.id === sanitized.id
+          && state.story.title === sanitized.title
+        ) {
+          return state;
+        }
+        return { story: sanitized };
+      }),
       closeStory: () => set({ story: null }),
       openSearchStory: (query) => set({ searchStoryQuery: query }),
       closeSearchStory: () => set({ searchStoryQuery: null }),

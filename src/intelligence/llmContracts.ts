@@ -51,6 +51,12 @@ export interface WriterContributor {
     | 'question-raiser';
   impactScore: number;
   stanceSummary: string;
+  /** Short excerpt from the contributor's strongest reply, used to ground specific points. */
+  stanceExcerpt?: string | undefined;
+  /** Lightweight crowd-response signal derived from impact + engagement. */
+  resonance?: 'high' | 'moderate' | 'emerging' | undefined;
+  /** Optional human-readable agreement cue for narrative synthesis. */
+  agreementSignal?: string | undefined;
 }
 
 export interface WriterEntity {
@@ -69,6 +75,24 @@ export interface WriterMediaFinding {
   cautionFlags?: string[] | undefined;
 }
 
+/**
+ * Compact structural summary of thread-quality signals.
+ * Passed to the writer to let it calibrate how strong an interpretation to make.
+ * All fields are counts or booleans — no user content.
+ */
+export interface WriterThreadSignalSummary {
+  /** Count of distinct new angles introduced in replies. */
+  newAnglesCount: number;
+  /** Count of distinct clarifications added by replies. */
+  clarificationsCount: number;
+  /** Count of replies that are source-backed (cited source or high factual confidence). */
+  sourceBackedCount: number;
+  /** True if any reply has factualContribution > 0.3. */
+  factualSignalPresent: boolean;
+  /** True if any non-speculative evidence signal is present in any reply. */
+  evidencePresent: boolean;
+}
+
 export interface ThreadStateForWriter {
   threadId: string;
   summaryMode: SummaryMode;
@@ -81,6 +105,13 @@ export interface ThreadStateForWriter {
   factualHighlights: string[];
   whatChangedSignals: string[];
   mediaFindings?: WriterMediaFinding[] | undefined;
+  /** Structural signal counts for writer calibration — never contains user content. */
+  threadSignalSummary?: WriterThreadSignalSummary | undefined;
+  /** Short natural-language interpretation context derived from confidence values. */
+  interpretiveExplanation?: string | undefined;
+  /** Derived theme names from top central entities (e.g. "Policy revision", "AI (fact-checked)").
+   *  Gives the writer concrete topic framing beyond raw entity labels. */
+  entityThemes?: string[] | undefined;
 }
 
 // ─── Interpolator writer result ───────────────────────────────────────────

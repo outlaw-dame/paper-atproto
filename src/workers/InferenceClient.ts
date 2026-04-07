@@ -30,6 +30,39 @@ class InferenceClient {
   private idCounter = 0;
   private readyCallbacks: (() => void)[] = [];
   private _status: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  private onWorkerMessage = (event: MessageEvent) => {
+    const { id, type, result, error } = event.data;
+
+    if (id === '__system__') {
+      if (type === 'ready') {
+        this._status = 'ready';
+        this.readyCallbacks.forEach((callback) => callback());
+        this.readyCallbacks = [];
+      } else if (type === 'error') {
+        this._status = 'error';
+      }
+      return;
+    }
+
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+
+    if (error) {
+      pending.reject(new Error(error));
+    } else {
+      pending.resolve(result);
+    }
+  };
+
+  private onWorkerError = (err: ErrorEvent) => {
+    this._status = 'error';
+    for (const [, req] of this.pending) {
+      req.reject(new Error(`Worker crashed: ${err.message}`));
+    }
+    this.pending.clear();
+    this.worker = null;
+  };
 
   get status() { return this._status; }
 
@@ -58,39 +91,8 @@ class InferenceClient {
       { type: 'module' },
     );
 
-    this.worker.addEventListener('message', (event) => {
-      const { id, type, result, error } = event.data;
-
-      if (id === '__system__') {
-        if (type === 'ready') {
-          this._status = 'ready';
-          this.readyCallbacks.forEach((callback) => callback());
-          this.readyCallbacks = [];
-        } else if (type === 'error') {
-          this._status = 'error';
-        }
-        return;
-      }
-
-      const pending = this.pending.get(id);
-      if (!pending) return;
-      this.pending.delete(id);
-
-      if (error) {
-        pending.reject(new Error(error));
-      } else {
-        pending.resolve(result);
-      }
-    });
-
-    this.worker.addEventListener('error', (err) => {
-      this._status = 'error';
-      for (const [, req] of this.pending) {
-        req.reject(new Error(`Worker crashed: ${err.message}`));
-      }
-      this.pending.clear();
-      this.worker = null;
-    });
+    this.worker.addEventListener('message', this.onWorkerMessage);
+    this.worker.addEventListener('error', this.onWorkerError);
 
     return this.worker;
   }
@@ -219,9 +221,19 @@ class InferenceClient {
   }
 
   terminate(): void {
-    this.worker?.terminate();
+    const worker = this.worker;
+    if (worker) {
+      worker.removeEventListener('message', this.onWorkerMessage);
+      worker.removeEventListener('error', this.onWorkerError);
+      worker.terminate();
+    }
     this.worker = null;
+
+    for (const [, req] of this.pending) {
+      req.reject(new Error('Inference worker terminated before request completion'));
+    }
     this.pending.clear();
+
     this._status = 'idle';
   }
 }

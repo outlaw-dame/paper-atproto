@@ -27,7 +27,7 @@ import { InMemoryVerificationCache, type VerificationCache } from './verificatio
 import { mergeVerificationIntoContributionScore } from './verification/mergeVerificationIntoScore';
 import { verifyEvidence } from './verification/verifyEvidence';
 import { withRetry } from './verification/retry';
-import { computeConfidenceState } from './confidence';
+import { computeConfidenceState, applyChangeReasonBoosts } from './confidence';
 import { chooseSummaryMode } from './routing';
 import { computeThreadChange, type ChangeReason } from './changeDetection';
 
@@ -235,7 +235,11 @@ export async function runVerifiedThreadPipeline(
 
   const changeResult = computeThreadChange(options.previous ?? null, interpolator, scores);
 
-  const confidence = computeConfidenceState(interpolator, scores);
+  // Apply structured change-reason boosts before routing so that evidence signals
+  // (e.g. source_backed_clarification, new_angle_introduced) can lift a borderline
+  // thread from descriptive_fallback into normal mode.
+  const rawConfidence = computeConfidenceState(interpolator, scores);
+  const confidence = applyChangeReasonBoosts(rawConfidence, changeResult.changeReasons);
   const summaryMode = chooseSummaryMode({
     surfaceConfidence: confidence.surfaceConfidence,
     interpretiveConfidence: confidence.interpretiveConfidence,
