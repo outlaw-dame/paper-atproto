@@ -186,11 +186,11 @@ export const ContextPost = ({
             letterSpacing: '0.04em',
             fontWeight: 800,
             textTransform: 'uppercase',
-            color: isReplyContext ? 'rgb(0, 118, 112)' : 'rgb(0, 112, 245)',
+            color: isReplyContext ? '#57F287' : 'rgb(0, 112, 245)',
             background: isReplyContext
-              ? 'linear-gradient(180deg, rgba(0, 128, 120, 0.14) 0%, rgba(0, 128, 120, 0.09) 100%)'
+              ? 'linear-gradient(180deg, rgba(87, 242, 135, 0.2) 0%, rgba(87, 242, 135, 0.12) 100%)'
               : 'linear-gradient(180deg, rgba(0, 122, 255, 0.14) 0%, rgba(0, 122, 255, 0.09) 100%)',
-            border: isReplyContext ? '1px solid rgba(0, 118, 112, 0.22)' : '1px solid rgba(0, 112, 245, 0.2)',
+            border: isReplyContext ? '1px solid rgba(87, 242, 135, 0.34)' : '1px solid rgba(0, 112, 245, 0.2)',
             boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.24)',
           }}>
             {!isReplyContext ? (

@@ -37,8 +37,12 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const [duration, setDuration] = useState(0);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [hlsMode, setHlsMode] = useState<'pending' | 'native' | 'hlsjs' | 'unsupported'>(() => (
+    detectVideoSourceKind(url) === 'hls' ? 'pending' : 'native'
+  ));
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const hlsInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const lastPersistAtRef = useRef(0);
   const { entry: miniEntry, activate } = useMiniPlayer();
   const mediaKey = `video:${postId ?? url}`;
@@ -47,7 +51,9 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const likelySourceSupport = getLikelySourceSupport(capabilities, sourceKind);
   const likelyUnsupportedReason = getLikelyUnsupportedReason(capabilities, sourceKind);
   const sourceSupportWarning = playbackError ?? likelyUnsupportedReason;
-  const shouldAttemptInlinePlayback = likelySourceSupport !== false;
+  const shouldAttemptInlinePlayback = sourceKind === 'hls'
+    ? hlsMode !== 'unsupported'
+    : likelySourceSupport !== false;
   const capabilityRows = [
     capabilities.hls,
     capabilities.mp4,
@@ -94,6 +100,81 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     if (!v) return;
     v.play().catch(() => setIsPlaying(false));
   }, [autoplay, isInMiniPlayer]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || isInMiniPlayer) return;
+
+    hlsInstanceRef.current?.destroy();
+    hlsInstanceRef.current = null;
+
+    if (sourceKind !== 'hls') {
+      setHlsMode('native');
+      return;
+    }
+
+    const nativeHls = typeof video.canPlayType === 'function'
+      && (video.canPlayType('application/vnd.apple.mpegurl') !== '' || video.canPlayType('application/x-mpegURL') !== '');
+
+    if (nativeHls) {
+      setHlsMode('native');
+      setPlaybackError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setHlsMode('pending');
+
+    void import('hls.js')
+      .then((module) => {
+        if (cancelled) return;
+        const Hls = module.default;
+        if (!Hls || typeof Hls.isSupported !== 'function' || !Hls.isSupported()) {
+          setHlsMode('unsupported');
+          setPlaybackError('This browser cannot play this HLS stream inline.');
+          return;
+        }
+
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+        });
+        hlsInstanceRef.current = hls;
+        setHlsMode('hlsjs');
+        setPlaybackError(null);
+
+        hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
+          if (!data?.fatal) return;
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+            return;
+          }
+          setPlaybackError('Unable to play this HLS stream inline.');
+          setHlsMode('unsupported');
+          hls.destroy();
+          hlsInstanceRef.current = null;
+        });
+
+        hls.attachMedia(video);
+        hls.loadSource(url);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHlsMode('unsupported');
+        setPlaybackError('Unable to initialize HLS playback in this browser.');
+      });
+
+    return () => {
+      cancelled = true;
+      hlsInstanceRef.current?.destroy();
+      hlsInstanceRef.current = null;
+    };
+  }, [isInMiniPlayer, sourceKind, url]);
 
   useEffect(() => {
     return () => {
@@ -353,7 +434,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         <>
           <video
             ref={videoRef}
-            src={url}
+            src={sourceKind === 'hls' ? (hlsMode === 'native' ? url : undefined) : url}
             autoPlay={autoplay}
             playsInline
             preload="metadata"
