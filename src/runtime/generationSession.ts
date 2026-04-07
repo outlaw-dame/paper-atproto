@@ -9,17 +9,13 @@ import {
  * Should be called early in app bootstrap before async transformers imports
  */
 export async function preConfigureOnnxRuntime(): Promise<void> {
-  try {
-    const transformers = await import('@xenova/transformers');
-    configureTransformersRuntime(transformers.env, false);
-    // Mark that ONNX has been pre-configured
-    console.debug('[ONNX] Runtime pre-configured successfully');
-  } catch (err) {
-    // Silently handle configuration failures - transformers may not be used
-    if (err instanceof Error) {
-      console.debug('[ONNX] Pre-configuration skipped:', err.message);
-    }
-  }
+  // Do not eagerly import transformers in the main thread during app bootstrap.
+  // Eager import can pull in ort-web before the runtime is fully ready and trigger
+  // registerBackend failures in some browsers/toolchains.
+  //
+  // Runtime config is applied lazily inside LocalGenerationSession.load(), right
+  // before pipeline construction, which is the safest point for browser startup.
+  return;
 }
 
 export interface GenerateTextRequest {

@@ -36,7 +36,7 @@ type RuntimeGlobals = {
 };
 
 type PaperDbClientOptions = Omit<PGliteOptions<PaperDbExtensions>, 'dataDir'>;
-type PaperDbWorkerOptions = PaperDbClientOptions & { dataDir: string };
+type PaperDbWorkerOptions = { dataDir: string; relaxedDurability?: boolean };
 
 type PaperDbRuntimeDeps = {
   env?: Partial<ImportMetaEnv>;
@@ -134,6 +134,13 @@ function buildClientOptions(relaxedDurability: boolean): PaperDbClientOptions {
   };
 }
 
+function buildWorkerClientOptions(dataDir: string, relaxedDurability: boolean): PaperDbWorkerOptions {
+  return {
+    dataDir,
+    ...(relaxedDurability ? { relaxedDurability: true } : {}),
+  };
+}
+
 function defaultCreateWorker(): MinimalWorker {
   return new Worker(
     new URL('../workers/pglite.worker.ts', import.meta.url),
@@ -199,6 +206,7 @@ export async function createPaperDbClient(
   const persistent = dataDir.startsWith('idb://');
   const relaxedDurability = persistent && isPaperDbRelaxedDurabilityEnabled(env);
   const clientOptions = buildClientOptions(relaxedDurability);
+  const workerClientOptions = buildWorkerClientOptions(dataDir, relaxedDurability);
   const createLocalClient = deps.createLocalClient ?? defaultCreateLocalClient;
   const createWorkerClient = deps.createWorkerClient ?? defaultCreateWorkerClient;
   const createWorker = deps.createWorker ?? defaultCreateWorker;
@@ -212,7 +220,7 @@ export async function createPaperDbClient(
     try {
       worker = createWorker();
       const client = await withTimeout(
-        createWorkerClient(worker, { dataDir, ...clientOptions }),
+        createWorkerClient(worker, workerClientOptions),
         workerInitTimeoutMs,
         `Worker backend startup timed out after ${workerInitTimeoutMs}ms`,
       );
