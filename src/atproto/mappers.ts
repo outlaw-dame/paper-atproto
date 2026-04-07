@@ -450,6 +450,14 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
 
 // ─── Feed Item Mapper ──────────────────────────────────────────────────────
 
+function hasRenderableContext(post: MockPost): boolean {
+  if (post.content.trim().length > 0) return true;
+  if ((post.media?.length ?? 0) > 0) return true;
+  if (post.embed) return true;
+  if (post.article) return true;
+  return false;
+}
+
 export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
   const mockPost = mapPostViewToMockPost(item.post);
   
@@ -464,9 +472,14 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
     if (AppBskyFeedDefs.isPostView(parent)) {
       // Guard against malformed/self-referential payloads that point a post to itself.
       if (parent.uri !== currentUri) {
-        mockPost.replyTo = mapPostViewToMockPost(parent);
-        // Parent is technically part of a thread context
-        mockPost.replyTo.chips = deriveChips(parent, true);
+        const mappedParent = mapPostViewToMockPost(parent);
+        // Skip non-renderable context rows (e.g. blocked/deleted/empty payload stubs)
+        // to avoid misleading "Earlier reply" chips without visible context.
+        if (hasRenderableContext(mappedParent)) {
+          mockPost.replyTo = mappedParent;
+          // Parent is technically part of a thread context
+          mockPost.replyTo.chips = deriveChips(parent, true);
+        }
       }
     }
 
@@ -478,8 +491,11 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
       // Only set root if it differs from parent/current post to avoid visual duplication
       // and false "thread start" context cards.
       if (root.uri !== (parent as any)?.uri && root.uri !== currentUri) {
-        mockPost.threadRoot = mapPostViewToMockPost(root);
-        mockPost.threadRoot.chips = deriveChips(root, true);
+        const mappedRoot = mapPostViewToMockPost(root);
+        if (hasRenderableContext(mappedRoot)) {
+          mockPost.threadRoot = mappedRoot;
+          mockPost.threadRoot.chips = deriveChips(root, true);
+        }
       }
     }
   }
