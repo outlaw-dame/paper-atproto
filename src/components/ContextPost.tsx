@@ -174,22 +174,24 @@ export const ContextPost = ({
         }}>
           <span
             aria-label={contextAssistiveLabel}
-            title={contextAssistiveLabel}
             style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: 5,
+            gap: 6,
             height: 22,
             borderRadius: 999,
-            padding: '0 10px',
+            padding: '0 9px',
             fontSize: 'var(--type-meta-sm-size)',
             lineHeight: 'var(--type-meta-sm-line)',
             letterSpacing: '0.04em',
             fontWeight: 800,
             textTransform: 'uppercase',
-            color: isReplyContext ? 'rgb(0, 128, 120)' : 'var(--blue)',
-            background: isReplyContext ? 'rgba(0, 128, 120, 0.12)' : 'rgba(0, 122, 255, 0.12)',
-            border: isReplyContext ? '1px solid rgba(0, 128, 120, 0.2)' : '1px solid rgba(0, 122, 255, 0.18)',
+            color: isReplyContext ? 'rgb(0, 118, 112)' : 'rgb(0, 112, 245)',
+            background: isReplyContext
+              ? 'linear-gradient(180deg, rgba(0, 128, 120, 0.14) 0%, rgba(0, 128, 120, 0.09) 100%)'
+              : 'linear-gradient(180deg, rgba(0, 122, 255, 0.14) 0%, rgba(0, 122, 255, 0.09) 100%)',
+            border: isReplyContext ? '1px solid rgba(0, 118, 112, 0.22)' : '1px solid rgba(0, 112, 245, 0.2)',
+            boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.24)',
           }}>
             {!isReplyContext ? (
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
