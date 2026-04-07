@@ -826,18 +826,23 @@ export default function HomeTab({ onOpenStory }: Props) {
                   });
                 };
 
+                const hasDistinctThreadRoot = !!post.threadRoot && post.threadRoot.id !== post.id;
+                const hasDistinctReplyParent = !!post.replyTo
+                  && post.replyTo.id !== post.id
+                  && post.replyTo.id !== post.threadRoot?.id;
+
                 // A reply-in-thread gets a subtle tinted background so it reads as
-                // a distinct unit from adjacent standalone posts
-                const isReply = !!(post.threadRoot ?? post.replyTo);
+                // a distinct unit from adjacent standalone posts.
+                const isReply = hasDistinctThreadRoot || hasDistinctReplyParent;
                 const timelineHint = timelineHintByPostId[post.id];
-                const replyingToHandle = !isReply
+                const replyingToHandle = isReply
                   ? (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)
                   : undefined;
                 return (
                 <div key={post.id} data-post-index={i} data-post-id={post.id}>
-                  {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
+                  {hasDistinctThreadRoot && <ContextPost post={post.threadRoot!} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
                   {/* Only show direct parent if it's not the same as the thread root */}
-                  {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" onClick={() => openContextTarget(post.replyTo)} />}
+                  {hasDistinctReplyParent && <ContextPost post={post.replyTo!} type="reply" onClick={() => openContextTarget(post.replyTo)} />}
                   <PostCard
                     post={post}
                     onOpenStory={onOpenStory}

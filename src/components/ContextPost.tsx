@@ -30,7 +30,7 @@ export const ContextPost = ({
   const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quoteEmbed?.post.sensitiveMedia?.isSensitive);
   const authorActor = post.author.did || post.author.handle;
   const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
-  const contextLabel = type === 'thread' ? 'Thread start' : 'Earlier reply';
+  const contextLabel = type === 'thread' ? 'Thread root' : 'Earlier reply';
   const externalEmbed = post.embed?.type === 'external' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
@@ -169,7 +169,10 @@ export const ContextPost = ({
           flexWrap: 'wrap',
           marginBottom: 10,
         }}>
-          <span style={{
+          <span
+            aria-label={contextLabel}
+            title={contextLabel}
+            style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 5,
@@ -185,7 +188,16 @@ export const ContextPost = ({
             background: 'rgba(0, 122, 255, 0.12)',
             border: '1px solid rgba(0, 122, 255, 0.18)',
           }}>
-            {contextLabel}
+            {type === 'thread' ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 6v8a4 4 0 004 4h5" />
+                <circle cx="8" cy="6" r="2" />
+                <circle cx="17" cy="18" r="2" />
+                <path d="M12 10h5a4 4 0 014 4" />
+              </svg>
+            ) : (
+              contextLabel
+            )}
           </span>
           {secondaryLabel && (
             <span style={{
@@ -212,24 +224,6 @@ export const ContextPost = ({
           }}>
             {formatTime(post.createdAt)}
           </span>
-          {onClick && (
-            <span style={{
-              marginLeft: 'auto',
-              fontSize: 'var(--type-meta-sm-size)',
-              color: 'var(--label-3)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexShrink: 0,
-              opacity: 0.8,
-            }}>
-              Open
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"/>
-                <polyline points="7 7 17 7 17 17"/>
-              </svg>
-            </span>
-          )}
         </div>
 
         <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>

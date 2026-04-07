@@ -458,12 +458,16 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
 
   // Map Reply Context
   if (item.reply) {
+    const currentUri = item.post.uri;
     // Map Parent (Immediate Reply)
     const parent = item.reply.parent;
     if (AppBskyFeedDefs.isPostView(parent)) {
-      mockPost.replyTo = mapPostViewToMockPost(parent);
-      // Parent is technically part of a thread context
-      mockPost.replyTo.chips = deriveChips(parent, true);
+      // Guard against malformed/self-referential payloads that point a post to itself.
+      if (parent.uri !== currentUri) {
+        mockPost.replyTo = mapPostViewToMockPost(parent);
+        // Parent is technically part of a thread context
+        mockPost.replyTo.chips = deriveChips(parent, true);
+      }
     }
 
     // Map Root (Thread Start)
@@ -471,8 +475,9 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
     // to avoid showing the same post twice in the UI stack.
     const root = item.reply.root;
     if (AppBskyFeedDefs.isPostView(root)) {
-      // Only set root if it differs from parent to avoid visual duplication
-      if (root.uri !== (parent as any)?.uri) {
+      // Only set root if it differs from parent/current post to avoid visual duplication
+      // and false "thread start" context cards.
+      if (root.uri !== (parent as any)?.uri && root.uri !== currentUri) {
         mockPost.threadRoot = mapPostViewToMockPost(root);
         mockPost.threadRoot.chips = deriveChips(root, true);
       }
