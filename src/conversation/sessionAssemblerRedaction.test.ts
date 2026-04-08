@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { redactWriterResultByUserRules } from './sessionAssembler';
+import {
+  redactPremiumInterpolatorInputByUserRules,
+  redactWriterResultByUserRules,
+} from './sessionAssembler';
 import type { InterpolatorWriteResult } from '../intelligence/llmContracts';
+import type { PremiumInterpolatorRequest } from '../intelligence/premiumContracts';
 import type { KeywordFilterRule } from '../lib/contentFilters/types';
 
 function makeRule(overrides: Partial<KeywordFilterRule>): KeywordFilterRule {
@@ -27,6 +31,70 @@ function makeWriterResult(): InterpolatorWriteResult {
     contributorBlurbs: [{ handle: 'alpha', blurb: 'alpha references term directly' }],
     abstained: false,
     mode: 'normal',
+  };
+}
+
+function makePremiumInput(): PremiumInterpolatorRequest {
+  return {
+    actorDid: 'did:plc:abc',
+    threadId: 'at://did:plc:root/app.bsky.feed.post/root',
+    summaryMode: 'normal',
+    confidence: {
+      surfaceConfidence: 0.72,
+      entityConfidence: 0.66,
+      interpretiveConfidence: 0.61,
+    },
+    rootPost: {
+      uri: 'at://did:plc:root/app.bsky.feed.post/root',
+      handle: 'author.test',
+      text: 'Root post includes term in the opening claim.',
+      createdAt: new Date().toISOString(),
+    },
+    selectedComments: [
+      {
+        uri: 'at://did:plc:reply/app.bsky.feed.post/1',
+        handle: 'reply.one',
+        text: 'Reply mentions term in a source-backed way.',
+        impactScore: 0.8,
+      },
+    ],
+    topContributors: [
+      {
+        handle: 'reply.one',
+        role: 'source-bringer',
+        impactScore: 0.8,
+        stanceSummary: 'main point: term appears in the memo',
+        stanceExcerpt: 'term appears in the memo',
+        agreementSignal: 'other replies agreed with the term framing',
+      },
+    ],
+    safeEntities: [
+      {
+        id: 'entity-1',
+        label: 'Term Policy',
+        type: 'topic',
+        confidence: 0.9,
+        impact: 0.8,
+      },
+    ],
+    factualHighlights: ['term appears in the archived memo'],
+    whatChangedSignals: ['source cited: term in memo'],
+    mediaFindings: [
+      {
+        mediaType: 'document',
+        summary: 'Screenshot repeats the term in a policy header.',
+        confidence: 0.82,
+        extractedText: 'term header',
+      },
+    ],
+    interpretiveExplanation: 'term is central but some context is still missing',
+    entityThemes: ['term policy revision'],
+    interpretiveBrief: {
+      summaryMode: 'normal',
+      baseSummary: 'Base summary contains term.',
+      supports: ['term is repeated in multiple replies'],
+      limits: ['term context is incomplete'],
+    },
   };
 }
 
@@ -65,5 +133,22 @@ describe('session assembler writer redaction', () => {
     expect(redacted.collapsedSummary).toContain('determine');
     expect(redacted.collapsedSummary).toContain('terms');
     expect(redacted.collapsedSummary).toContain('[filtered]');
+  });
+
+  it('redacts premium Gemini inputs across contributor, entity, and media fields', () => {
+    const input = makePremiumInput();
+    const rules = [makeRule({ phrase: 'term', wholeWord: false })];
+
+    const redacted = redactPremiumInterpolatorInputByUserRules(input, rules);
+
+    expect(redacted.rootPost.text).toContain('[filtered]');
+    expect(redacted.topContributors[0]?.stanceSummary ?? '').toContain('[filtered]');
+    expect(redacted.topContributors[0]?.stanceExcerpt ?? '').toContain('[filtered]');
+    expect(redacted.safeEntities[0]?.label ?? '').toContain('[filtered]');
+    expect(redacted.mediaFindings?.[0]?.summary ?? '').toContain('[filtered]');
+    expect(redacted.mediaFindings?.[0]?.extractedText ?? '').toContain('[filtered]');
+    expect(redacted.interpretiveExplanation ?? '').toContain('[filtered]');
+    expect(redacted.entityThemes?.[0] ?? '').toContain('[filtered]');
+    expect(redacted.interpretiveBrief.baseSummary ?? '').toContain('[filtered]');
   });
 });

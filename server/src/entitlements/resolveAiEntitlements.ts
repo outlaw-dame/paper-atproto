@@ -1,13 +1,17 @@
+import { isPremiumAiProviderOperational } from '../ai/premiumProviderHealth.js';
 import { env } from '../config/env.js';
 
 export type PremiumAiTier = 'free' | 'plus' | 'pro';
 export type PremiumAiCapability = 'deep_interpolator';
+export type PremiumAiProvider = 'gemini' | 'openai';
+export type PremiumAiProviderPreference = PremiumAiProvider | 'auto';
 
 export interface PremiumAiEntitlements {
   tier: PremiumAiTier;
   capabilities: PremiumAiCapability[];
   providerAvailable: boolean;
-  provider?: 'gemini';
+  availableProviders: PremiumAiProvider[];
+  provider?: PremiumAiProvider;
 }
 
 const CAPABILITIES_BY_TIER: Record<PremiumAiTier, PremiumAiCapability[]> = {
@@ -15,6 +19,8 @@ const CAPABILITIES_BY_TIER: Record<PremiumAiTier, PremiumAiCapability[]> = {
   plus: ['deep_interpolator'],
   pro: ['deep_interpolator'],
 };
+
+const PREMIUM_AI_PROVIDER_ORDER: PremiumAiProvider[] = ['gemini', 'openai'];
 
 function parseAllowlist(raw: string): Set<string> {
   return new Set(
@@ -25,10 +31,43 @@ function parseAllowlist(raw: string): Set<string> {
   );
 }
 
+function providerConfigured(provider: PremiumAiProvider): boolean {
+  if (!env.PREMIUM_AI_ENABLED) return false;
+  return provider === 'openai'
+    ? Boolean(env.OPENAI_API_KEY)
+    : Boolean(env.GEMINI_API_KEY);
+}
+
+export function getAvailablePremiumAiProviders(): PremiumAiProvider[] {
+  return PREMIUM_AI_PROVIDER_ORDER.filter(
+    (provider) => providerConfigured(provider) && isPremiumAiProviderOperational(provider),
+  );
+}
+
+export function resolveEffectivePremiumAiProvider(
+  preferredProvider: PremiumAiProviderPreference = 'auto',
+): PremiumAiProvider | undefined {
+  const availableProviders = getAvailablePremiumAiProviders();
+  if (availableProviders.length === 0) return undefined;
+
+  if (preferredProvider !== 'auto' && availableProviders.includes(preferredProvider)) {
+    return preferredProvider;
+  }
+
+  if (availableProviders.includes(env.PREMIUM_AI_PROVIDER)) {
+    return env.PREMIUM_AI_PROVIDER;
+  }
+
+  return availableProviders[0];
+}
+
 export function resolvePremiumAiEntitlements(
   actorDid?: string,
+  preferredProvider: PremiumAiProviderPreference = 'auto',
 ): PremiumAiEntitlements {
-  const providerAvailable = Boolean(env.PREMIUM_AI_ENABLED && env.GEMINI_API_KEY);
+  const availableProviders = getAvailablePremiumAiProviders();
+  const provider = resolveEffectivePremiumAiProvider(preferredProvider);
+  const providerAvailable = availableProviders.length > 0;
   const normalizedDid = actorDid?.trim();
   const allowlist = parseAllowlist(env.PREMIUM_AI_ALLOWLIST_DIDS);
 
@@ -45,6 +84,7 @@ export function resolvePremiumAiEntitlements(
     tier,
     capabilities,
     providerAvailable,
-    ...(providerAvailable ? { provider: 'gemini' as const } : {}),
+    availableProviders,
+    ...(provider ? { provider } : {}),
   };
 }

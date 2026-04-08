@@ -30,7 +30,7 @@ What you should see:
 - the session assembler orchestrates the full interpretation flow
 - the verified thread pipeline computes verification, confidence, and change
 - writer input consumes contributor, stance, entity, and comment-diversity logic
-- change detection is snapshot-based rather than timer-only
+- change detection is snapshot-based once a refresh happens, while Story mode freshness is still driven by bounded polling rather than live push
 
 ---
 

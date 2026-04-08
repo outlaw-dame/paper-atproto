@@ -1,7 +1,11 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { resolvePremiumAiEntitlements } from '../entitlements/resolveAiEntitlements.js';
+import {
+  resolvePremiumAiEntitlements,
+  type PremiumAiProviderPreference,
+} from '../entitlements/resolveAiEntitlements.js';
 import { writePremiumDeepInterpolator } from '../ai/providerRouter.js';
+import { ensurePremiumAiProviderReady } from '../ai/premiumProviderReadiness.js';
 import type { PremiumInterpolatorRequest } from '../ai/providers/geminiConversation.provider.js';
 import { AppError, UnauthorizedError, ValidationError } from '../lib/errors.js';
 import {
@@ -23,6 +27,7 @@ import {
 } from '../llm/policyGateway.js';
 
 export const premiumAiRouter = new Hono();
+const PremiumAiProviderPreferenceHeaderSchema = z.enum(['auto', 'gemini', 'openai']);
 
 function applySecurityHeaders(c: any): void {
   c.header('Cache-Control', 'no-store, private');
@@ -30,6 +35,7 @@ function applySecurityHeaders(c: any): void {
   c.header('X-Content-Type-Options', 'nosniff');
   appendVaryHeader(c, 'Origin');
   appendVaryHeader(c, 'X-Glympse-User-Did');
+  appendVaryHeader(c, 'X-Glympse-AI-Provider');
 }
 
 function actorDidFromRequest(c: any, required: true): string;
@@ -51,6 +57,19 @@ function validationIssues(error: ValidationError): unknown {
   return (error.details as { issues?: unknown } | undefined)?.issues;
 }
 
+function requestedProviderFromRequest(c: any): PremiumAiProviderPreference | undefined {
+  const rawValue = c.req.header('X-Glympse-AI-Provider');
+  if (typeof rawValue !== 'string' || rawValue.trim().length === 0) return undefined;
+
+  const parsed = PremiumAiProviderPreferenceHeaderSchema.safeParse(rawValue.trim().toLowerCase());
+  if (!parsed.success) {
+    throw new ValidationError('Invalid premium AI provider preference.', {
+      issues: parsed.error.issues,
+    });
+  }
+  return parsed.data;
+}
+
 premiumAiRouter.use('*', async (c, next) => {
   try {
     await next();
@@ -59,19 +78,23 @@ premiumAiRouter.use('*', async (c, next) => {
   }
 });
 
-premiumAiRouter.get('/entitlements', (c) => {
+premiumAiRouter.get('/entitlements', async (c) => {
   const actorDid = actorDidFromRequest(c);
+  const preferredProvider = requestedProviderFromRequest(c);
   if (actorDid) {
     assertTrustedBrowserOrigin(c, 'Premium AI entitlements');
   }
-  return c.json(resolvePremiumAiEntitlements(actorDid));
+  await ensurePremiumAiProviderReady(preferredProvider);
+  return c.json(resolvePremiumAiEntitlements(actorDid, preferredProvider));
 });
 
 premiumAiRouter.post('/interpolator/deep', async (c) => {
   const actorDid = actorDidFromRequest(c, true);
   const requestId = c.req.header('X-Request-Id') || crypto.randomUUID();
+  const preferredProvider = requestedProviderFromRequest(c);
   assertTrustedBrowserOrigin(c, 'Premium AI deep interpolator');
-  const entitlements = resolvePremiumAiEntitlements(actorDid);
+  await ensurePremiumAiProviderReady(preferredProvider);
+  const entitlements = resolvePremiumAiEntitlements(actorDid, preferredProvider);
 
   if (!entitlements.capabilities.includes('deep_interpolator')) {
     return c.json({ error: 'Premium deep interpolator is not available for this user' }, 403);
@@ -114,7 +137,10 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
         ? { visibleReplyCount }
         : {}),
     };
-    const result = await writePremiumDeepInterpolator(request);
+    const result = await writePremiumDeepInterpolator(
+      request,
+      preferredProvider ? { preferredProvider } : undefined,
+    );
     const { data: filtered, safetyMetadata } = finalizeLlmOutput(
       PremiumDeepInterpolatorResponseSchema,
       result,

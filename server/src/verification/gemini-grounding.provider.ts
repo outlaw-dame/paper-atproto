@@ -1,6 +1,11 @@
-import { GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
 import { env } from '../config/env.js';
+import {
+  createGoogleGenAIClient,
+  geminiThinkingConfig,
+  isGemini3Model,
+  resolveGeminiModel,
+} from '../lib/googleGenAi.js';
 import {
   finalizeLlmOutput,
   prepareLlmInput,
@@ -78,12 +83,11 @@ function classifySourceType(domain: string): SourceType {
 }
 
 export class GeminiGroundingProvider {
-  private readonly client: GoogleGenAI | null;
+  private readonly client = createGoogleGenAIClient();
   private readonly model: string;
 
-  constructor(apiKey = env.GEMINI_API_KEY, model = env.GEMINI_GROUNDING_MODEL) {
-    this.client = apiKey ? new GoogleGenAI({ apiKey }) : null;
-    this.model = model;
+  constructor(model = env.GEMINI_GROUNDING_MODEL) {
+    this.model = resolveGeminiModel('grounding', model);
   }
 
   async groundClaim(input: {
@@ -132,8 +136,13 @@ export class GeminiGroundingProvider {
             model: this.model,
             contents: prompt,
             config: {
-              temperature: 0.1,
               tools: [{ googleSearch: {} }],
+              ...(!isGemini3Model(this.model)
+                ? {
+                    temperature: 0.1,
+                  }
+                : {}),
+              ...geminiThinkingConfig(this.model, 'low'),
             },
           }),
           env.VERIFY_TIMEOUT_MS,

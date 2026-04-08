@@ -89,6 +89,7 @@ import type { ProfileCardData } from '../types/profileCard';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 import { Markdown } from './Markdown';
 import { recordInterpolatorStageTiming } from '../perf/interpolatorTelemetry';
+import { renderSummaryText as renderSummaryTextCore } from './storyModeSummaryText';
 
 interface Props {
   entry: StoryEntry;
@@ -1175,6 +1176,14 @@ function renderPlainSummarySegment(
         key={`${keyPrefix}-entity-${partIndex}`}
         type="button"
         className="interactive-link-button"
+        onMouseEnter={(e) => {
+          e.stopPropagation();
+          onEntityTap(match.candidate.entity);
+        }}
+        onFocus={(e) => {
+          e.stopPropagation();
+          onEntityTap(match.candidate.entity);
+        }}
         onClick={(e) => {
           e.stopPropagation();
           onEntityTap(match.candidate.entity);
@@ -1200,98 +1209,8 @@ function renderPlainSummarySegment(
   return nodes;
 }
 
-function renderSummaryText(text: string, options: SummaryRenderOptions = {}): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  const { onMentionTap } = options;
-  let cursor = 0;
-
-  for (const match of text.matchAll(SUMMARY_TOKEN_RE)) {
-    const index = match.index ?? 0;
-    const token = match[0];
-    if (!token) continue;
-
-    if (index > cursor) {
-      nodes.push(...renderPlainSummarySegment(
-        text.slice(cursor, index),
-        `plain-${cursor}`,
-        options,
-      ));
-    }
-
-    const { core, suffix } = splitSummaryTokenSuffix(token);
-
-    if (core.startsWith('@')) {
-      nodes.push(
-        <button
-          key={`mention-${index}`}
-          type="button"
-          className="interactive-link-button"
-          style={{ color: accent.blue500, font: 'inherit', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onMentionTap?.(core);
-          }}
-        >
-          {core}
-        </button>,
-      );
-    } else if (core.startsWith('#')) {
-      const tag = core.slice(1);
-      nodes.push(
-        <a
-          key={`tag-${index}`}
-          href={`https://bsky.app/search?q=%23${tag}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: accent.blue500, textDecoration: 'none', fontWeight: 600 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {core}
-        </a>,
-      );
-    } else {
-      const href = buildSummaryHref(core);
-      if (href) {
-        const label = (() => {
-          try {
-            return new URL(href).hostname.replace(/^www\./, '');
-          } catch {
-            return core;
-          }
-        })();
-        nodes.push(
-          <a
-            key={`url-${index}`}
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: accent.blue500, textDecoration: 'none', fontWeight: 600 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {label}
-          </a>,
-        );
-      } else {
-        nodes.push(core);
-      }
-    }
-
-    if (suffix) {
-      nodes.push(suffix);
-    }
-
-    cursor = index + token.length;
-  }
-
-  if (cursor < text.length) {
-    nodes.push(...renderPlainSummarySegment(
-      text.slice(cursor),
-      `plain-tail-${cursor}`,
-      options,
-    ));
-  }
-
-  return nodes.length > 0 ? nodes : [text];
+export function renderSummaryText(text: string, options: SummaryRenderOptions = {}): React.ReactNode[] {
+  return renderSummaryTextCore(text, options);
 }
 
 // ─── InterpolatorCard ─────────────────────────────────────────────────────
@@ -3129,7 +3048,9 @@ function StoryModeContent({ entry, onClose }: Props) {
     translationPolicy,
     providers: providersRef.current,
     cache: verificationCache.current,
-    pollIntervalMs: 60_000,
+    // Story mode is still bounded polling rather than live push, but keeping it
+    // tighter than a minute reduces the "stale thread" feel while the view is open.
+    pollIntervalMs: 30_000,
     onError: (error, phase) => {
       console.warn(
         phase === 'initial'

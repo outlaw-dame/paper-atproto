@@ -6,6 +6,8 @@ import {
   markConversationModelLoading,
   markConversationModelReady,
   markConversationModelSkipped,
+  shouldRunPremiumDeepInterpolator,
+  shouldReuseExistingModelOutputs,
   shouldRunInterpolatorWriter,
 } from './modelExecution';
 
@@ -167,6 +169,127 @@ describe('model execution policy', () => {
     expect(shouldRunInterpolatorWriter(createSession(), 3)).toEqual({
       shouldRun: true,
     });
+  });
+
+  it('runs the writer for modest threads when structural signals are present', () => {
+    const session = createSession({
+      interpretation: {
+        ...createSession().interpretation,
+        confidence: {
+          surfaceConfidence: 0.31,
+          entityConfidence: 0.22,
+          interpretiveConfidence: 0.25,
+        },
+        interpolator: {
+          ...createSession().interpretation.interpolator!,
+          clarificationsAdded: ['A reply challenges the timeline.'],
+          newAnglesAdded: ['Another reply adds a labor-cost explanation.'],
+          topContributors: [
+            {
+              did: 'did:plc:one',
+              handle: 'one.test',
+              totalReplies: 1,
+              avgUsefulnessScore: 0.62,
+              dominantRole: 'clarifying',
+              factualContributions: 0,
+            },
+            {
+              did: 'did:plc:two',
+              handle: 'two.test',
+              totalReplies: 1,
+              avgUsefulnessScore: 0.59,
+              dominantRole: 'new_information',
+              factualContributions: 0,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(shouldRunInterpolatorWriter(session, 2)).toEqual({
+      shouldRun: true,
+    });
+  });
+
+  it('runs the premium deep pass for smaller threads with structural signal', () => {
+    const session = createSession({
+      interpretation: {
+        ...createSession().interpretation,
+        confidence: {
+          surfaceConfidence: 0.34,
+          entityConfidence: 0.28,
+          interpretiveConfidence: 0.27,
+        },
+        interpolator: {
+          ...createSession().interpretation.interpolator!,
+          clarificationsAdded: ['A reply challenges the timeline.'],
+          newAnglesAdded: ['Another reply brings in a new angle.'],
+          topContributors: [
+            {
+              did: 'did:plc:one',
+              handle: 'one.test',
+              totalReplies: 1,
+              avgUsefulnessScore: 0.69,
+              dominantRole: 'clarifying',
+              factualContributions: 0,
+            },
+            {
+              did: 'did:plc:two',
+              handle: 'two.test',
+              totalReplies: 1,
+              avgUsefulnessScore: 0.64,
+              dominantRole: 'source_bringer',
+              factualContributions: 1,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(shouldRunPremiumDeepInterpolator(session, 2, {
+      tier: 'pro',
+      capabilities: ['deep_interpolator'],
+      providerAvailable: true,
+      provider: 'gemini',
+    })).toBe(true);
+  });
+
+  it('skips the premium deep pass when the user is not entitled', () => {
+    expect(shouldRunPremiumDeepInterpolator(createSession(), 6, {
+      tier: 'free',
+      capabilities: [],
+      providerAvailable: false,
+    })).toBe(false);
+  });
+});
+
+describe('model output reuse', () => {
+  it('reuses an existing writer result when the thread did not change meaningfully', () => {
+    const session = createSession({
+      interpretation: {
+        ...createSession().interpretation,
+        writerResult: {
+          collapsedSummary: 'Existing writer summary.',
+          whatChanged: [],
+          contributorBlurbs: [],
+          abstained: false,
+          mode: 'normal',
+        },
+      },
+    });
+
+    expect(shouldReuseExistingModelOutputs(session, false)).toBe(true);
+    expect(shouldReuseExistingModelOutputs(session, true)).toBe(false);
+  });
+
+  it('reuses a prior skipped writer decision for unchanged low-signal threads', () => {
+    const session = markConversationModelSkipped(createSession(), 'writer', {
+      reason: 'insufficient_signal',
+      sourceToken: 'source-token',
+      completedAt: '2026-03-31T00:00:01.000Z',
+    });
+
+    expect(shouldReuseExistingModelOutputs(session, false)).toBe(true);
   });
 });
 

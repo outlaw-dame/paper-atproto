@@ -3,6 +3,15 @@ import { browserModelManager } from '../runtime/modelManager';
 import type { RuntimeMode } from '../runtime/modelPolicy';
 import { useRuntimeStore } from '../runtime/runtimeStore';
 import { useSessionStore } from '../store/sessionStore';
+import {
+  deriveWriterDiagnosticsAlerts,
+  formatLatency,
+  formatRate,
+  humanizeIssueLabel,
+  topWriterEnhancerIssues,
+  type WriterDiagnosticsSnapshot,
+  WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS,
+} from './localAiRuntimeDiagnostics';
 
 type AiSessionTelemetrySnapshot = {
   routeErrors: number;
@@ -61,48 +70,6 @@ type AiSessionTelemetrySnapshot = {
   };
 };
 
-type WriterDiagnosticsSnapshot = {
-  startedAt: string;
-  lastUpdatedAt: string;
-  telemetryEvents: number;
-  clientOutcomes: {
-    model: number;
-    fallback: number;
-    total: number;
-    modelToFallbackRatio: number | null;
-    fallbackRate: number;
-  };
-  fallbackReasonDistribution: {
-    'abstained-response-fallback': number;
-    'root-only-response-fallback': number;
-    'failure-fallback': number;
-    totalFallbacks: number;
-  };
-  safetyFilter: {
-    runs: number;
-    mutated: number;
-    blocked: number;
-    mutationRate: number;
-    blockRate: number;
-  };
-};
-
-type WriterDiagnosticsAlert = {
-  severity: 'high' | 'medium';
-  message: string;
-};
-
-const WRITER_ALERT_THRESHOLDS = {
-  fallbackRateHigh: 0.45,
-  fallbackRateMedium: 0.25,
-  rootOnlyFallbackRateHigh: 0.30,
-  rootOnlyFallbackRateMedium: 0.15,
-  failureFallbackRateHigh: 0.15,
-  mutationRateHigh: 0.35,
-  mutationRateMedium: 0.20,
-  blockRateHigh: 0.05,
-} as const;
-
 function jitteredBackoffMs(attempt: number, baseMs = 250, maxMs = 1500): number {
   const exp = Math.min(maxMs, baseMs * 2 ** attempt);
   const jitter = exp * 0.25;
@@ -134,47 +101,6 @@ async function fetchWithRetry(input: RequestInfo, init: RequestInit, attempts = 
   throw lastError instanceof Error ? lastError : new Error('Request failed');
 }
 
-function formatRate(value: number): string {
-  return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
-}
-
-function deriveWriterDiagnosticsAlerts(snapshot: WriterDiagnosticsSnapshot): WriterDiagnosticsAlert[] {
-  const alerts: WriterDiagnosticsAlert[] = [];
-  const fallbackRate = snapshot.clientOutcomes.fallbackRate;
-  const totalFallbacks = Math.max(1, snapshot.fallbackReasonDistribution.totalFallbacks);
-  const rootOnlyRate = snapshot.fallbackReasonDistribution['root-only-response-fallback'] / totalFallbacks;
-  const failureRate = snapshot.fallbackReasonDistribution['failure-fallback'] / totalFallbacks;
-  const mutationRate = snapshot.safetyFilter.mutationRate;
-  const blockRate = snapshot.safetyFilter.blockRate;
-
-  if (fallbackRate >= WRITER_ALERT_THRESHOLDS.fallbackRateHigh) {
-    alerts.push({ severity: 'high', message: 'High fallback rate detected. Model outputs are being replaced too often.' });
-  } else if (fallbackRate >= WRITER_ALERT_THRESHOLDS.fallbackRateMedium) {
-    alerts.push({ severity: 'medium', message: 'Fallback rate is elevated. Review prompt quality and reply grounding.' });
-  }
-
-  if (rootOnlyRate >= WRITER_ALERT_THRESHOLDS.rootOnlyFallbackRateHigh) {
-    alerts.push({ severity: 'high', message: 'Root-only fallback is dominating fallback traffic. Replies may be under-utilized.' });
-  } else if (rootOnlyRate >= WRITER_ALERT_THRESHOLDS.rootOnlyFallbackRateMedium) {
-    alerts.push({ severity: 'medium', message: 'Root-only fallback is rising. Verify summary-reply grounding behavior.' });
-  }
-
-  if (failureRate >= WRITER_ALERT_THRESHOLDS.failureFallbackRateHigh) {
-    alerts.push({ severity: 'high', message: 'Provider failure fallback is elevated. Investigate upstream reliability and latency.' });
-  }
-
-  if (mutationRate >= WRITER_ALERT_THRESHOLDS.mutationRateHigh) {
-    alerts.push({ severity: 'high', message: 'Safety mutation rate is high. Writer outputs may be too close to safety boundaries.' });
-  } else if (mutationRate >= WRITER_ALERT_THRESHOLDS.mutationRateMedium) {
-    alerts.push({ severity: 'medium', message: 'Safety mutation rate is elevated. Monitor for readability degradation.' });
-  }
-
-  if (blockRate >= WRITER_ALERT_THRESHOLDS.blockRateHigh) {
-    alerts.push({ severity: 'high', message: 'Safety block rate is high. Some outputs are being fully suppressed.' });
-  }
-
-  return alerts;
-}
 
 const MODES: Array<{
   value: RuntimeMode;
@@ -222,6 +148,7 @@ export default function LocalAiRuntimeSection() {
   const [writerDiagnosticsResetting, setWriterDiagnosticsResetting] = React.useState(false);
   const [writerDiagnosticsError, setWriterDiagnosticsError] = React.useState<string | null>(null);
   const [writerDiagnosticsUpdatedAt, setWriterDiagnosticsUpdatedAt] = React.useState<number | null>(null);
+  const [writerDiagnosticsWatchEnabled, setWriterDiagnosticsWatchEnabled] = React.useState<boolean>(() => import.meta.env.DEV);
   const resolvedModelSpecs = React.useMemo(() => browserModelManager.getResolvedModelSpecs(), []);
 
   const hasReadyLocalMultimodal = React.useMemo(() => (
@@ -412,11 +339,61 @@ export default function LocalAiRuntimeSection() {
       return;
     }
 
+    if (writerDiagnosticsWatchEnabled) return;
+
     void refreshWriterDiagnostics();
-  }, [refreshWriterDiagnostics, supportsClientTelemetry]);
+  }, [refreshWriterDiagnostics, supportsClientTelemetry, writerDiagnosticsWatchEnabled]);
+
+  const refreshWriterDiagnosticsInWatchMode = React.useEffectEvent(async () => {
+    await refreshWriterDiagnostics();
+  });
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry || !writerDiagnosticsWatchEnabled) return undefined;
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const schedule = (delayMs: number) => {
+      timeoutId = window.setTimeout(() => {
+        if (cancelled) return;
+        void (async () => {
+          if (document.visibilityState === 'visible') {
+            await refreshWriterDiagnosticsInWatchMode();
+          }
+          if (!cancelled) {
+            schedule(WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS);
+          }
+        })();
+      }, delayMs);
+    };
+
+    const refreshOnVisibility = () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      void refreshWriterDiagnosticsInWatchMode();
+    };
+
+    void refreshWriterDiagnosticsInWatchMode();
+    schedule(WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS);
+    window.addEventListener('focus', refreshOnVisibility);
+    document.addEventListener('visibilitychange', refreshOnVisibility);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      window.removeEventListener('focus', refreshOnVisibility);
+      document.removeEventListener('visibilitychange', refreshOnVisibility);
+    };
+  }, [refreshWriterDiagnosticsInWatchMode, supportsClientTelemetry, writerDiagnosticsWatchEnabled]);
 
   const writerAlerts = React.useMemo(
     () => (writerDiagnostics ? deriveWriterDiagnosticsAlerts(writerDiagnostics) : []),
+    [writerDiagnostics],
+  );
+  const topEnhancerIssues = React.useMemo(
+    () => (writerDiagnostics ? topWriterEnhancerIssues(writerDiagnostics) : []),
     [writerDiagnostics],
   );
 
@@ -757,7 +734,26 @@ export default function LocalAiRuntimeSection() {
           <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
             Writer diagnostics
           </p>
-          <div style={{ display: 'inline-flex', gap: 6 }}>
+          <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                color: 'var(--label-3)',
+                cursor: supportsClientTelemetry ? 'pointer' : 'default',
+                opacity: supportsClientTelemetry ? 1 : 0.65,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={writerDiagnosticsWatchEnabled}
+                disabled={!supportsClientTelemetry}
+                onChange={(event) => setWriterDiagnosticsWatchEnabled(event.target.checked)}
+              />
+              Watch
+            </label>
             <button
               type="button"
               onClick={() => { void refreshWriterDiagnostics(); }}
@@ -812,6 +808,12 @@ export default function LocalAiRuntimeSection() {
         {writerDiagnostics && (
           <>
             <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Gemini reviewer: invocations <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.enhancer.invocations}</strong>
+              {' • '}reviews <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.enhancer.reviews}</strong>
+              {' • '}watch {writerDiagnosticsWatchEnabled ? `on (${WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS / 1000}s)` : 'off'}
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
               Outcomes: model <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.model}</strong>
               {' • '}fallback <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.fallback}</strong>
               {' • '}fallback rate <strong style={{ color: 'var(--label-1)' }}>{formatRate(writerDiagnostics.clientOutcomes.fallbackRate)}</strong>
@@ -830,6 +832,51 @@ export default function LocalAiRuntimeSection() {
               {' • '}mutated {writerDiagnostics.safetyFilter.mutated} ({formatRate(writerDiagnostics.safetyFilter.mutationRate)})
               {' • '}blocked {writerDiagnostics.safetyFilter.blocked} ({formatRate(writerDiagnostics.safetyFilter.blockRate)})
             </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Gemini decisions:
+              {' '}accept {writerDiagnostics.enhancer.decisionCounts.accept}
+              {' • '}replace {writerDiagnostics.enhancer.decisionCounts.replace}
+              {' • '}takeovers {writerDiagnostics.enhancer.appliedTakeovers.total}
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Takeover mix:
+              {' '}candidate {writerDiagnostics.enhancer.appliedTakeovers.candidate} ({formatRate(writerDiagnostics.enhancer.appliedTakeovers.candidateReplacementRate)})
+              {' • '}rescue {writerDiagnostics.enhancer.appliedTakeovers.rescue} ({formatRate(writerDiagnostics.enhancer.appliedTakeovers.rescueRate)})
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Gemini skips/failures:
+              {' '}skip {writerDiagnostics.enhancer.skips.total} ({formatRate(writerDiagnostics.enhancer.skips.skipRate)})
+              {' • '}failure {writerDiagnostics.enhancer.failures.total} ({formatRate(writerDiagnostics.enhancer.failures.failureRate)})
+              {' • '}timeout {writerDiagnostics.enhancer.failures.timeout}
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Replacement hygiene:
+              {' '}rejected {writerDiagnostics.enhancer.rejectedReplacements.total}
+              {' • '}invalid {writerDiagnostics.enhancer.rejectedReplacements['invalid-response']}
+              {' • '}abstained {writerDiagnostics.enhancer.rejectedReplacements['abstained-replacement']}
+            </p>
+
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+              Gemini latency:
+              {' '}avg <strong style={{ color: 'var(--label-1)' }}>{formatLatency(writerDiagnostics.enhancer.latencyMs.average)}</strong>
+              {' • '}max {formatLatency(writerDiagnostics.enhancer.latencyMs.max)}
+              {' • '}last {formatLatency(writerDiagnostics.enhancer.latencyMs.last)}
+            </p>
+
+            {topEnhancerIssues.length > 0 && (
+              <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                Top reviewer issues:
+                {' '}
+                {topEnhancerIssues.map(([label, count]) => `${humanizeIssueLabel(label)} ${count}`).join(' • ')}
+                {typeof writerDiagnostics.enhancer.issueDistribution.uniqueLabels === 'number'
+                  ? ` • unique ${writerDiagnostics.enhancer.issueDistribution.uniqueLabels}`
+                  : ''}
+              </p>
+            )}
 
             {writerAlerts.length > 0 && (
               <div style={{ display: 'grid', gap: 4 }}>

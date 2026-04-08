@@ -25,6 +25,32 @@ function sanitizeBadges(values: string[]): string[] {
   ).slice(0, 4);
 }
 
+function buildPremiumContextSignals(
+  context: ComposerContext,
+): string[] {
+  const premiumContext = context.summaries?.premiumContext;
+  if (!premiumContext) return [];
+
+  const signals: string[] = [];
+
+  const groundedContext = sanitizeWriterText(premiumContext.groundedContext, 120);
+  if (groundedContext) {
+    signals.push(`Deep context: ${groundedContext}`);
+  }
+
+  const perspectiveGap = sanitizeWriterText(premiumContext.perspectiveGaps[0], 100);
+  if (perspectiveGap) {
+    signals.push(`Missing context: ${perspectiveGap}`);
+  }
+
+  const followUpQuestion = sanitizeWriterText(premiumContext.followUpQuestions[0], 100);
+  if (followUpQuestion) {
+    signals.push(`Open question: ${followUpQuestion}`);
+  }
+
+  return uniqStrings(signals).slice(0, 3);
+}
+
 function buildRequest(
   context: ComposerContext,
   guidance: ComposerGuidanceResult,
@@ -47,7 +73,10 @@ function buildRequest(
     scores: guidance.scores,
     constructiveSignals: guidance.heuristics.constructiveSignals.slice(0, 4),
     supportiveSignals: guidance.heuristics.supportiveReplySignals.slice(0, 4),
-    parentSignals: guidance.heuristics.parentSignals.slice(0, 4),
+    parentSignals: uniqStrings([
+      ...guidance.heuristics.parentSignals,
+      ...buildPremiumContextSignals(context),
+    ]).slice(0, 4),
   };
 }
 

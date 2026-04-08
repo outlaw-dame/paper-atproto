@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   envMock,
   mockResolvePremiumAiEntitlements,
+  mockEnsurePremiumAiProviderReady,
   mockWritePremiumDeepInterpolator,
   mockFilterPremiumDeepInterpolatorResponse,
   mockLogSafetyFlag,
@@ -13,6 +14,7 @@ const {
     CORS_ALLOW_PRIVATE_NETWORK_IN_DEV: true,
   },
   mockResolvePremiumAiEntitlements: vi.fn(),
+  mockEnsurePremiumAiProviderReady: vi.fn(),
   mockWritePremiumDeepInterpolator: vi.fn(),
   mockFilterPremiumDeepInterpolatorResponse: vi.fn((value: unknown) => ({
     filtered: value,
@@ -32,6 +34,10 @@ vi.mock('../../server/src/config/env.js', () => ({
 
 vi.mock('../../server/src/entitlements/resolveAiEntitlements.js', () => ({
   resolvePremiumAiEntitlements: mockResolvePremiumAiEntitlements,
+}));
+
+vi.mock('../../server/src/ai/premiumProviderReadiness.js', () => ({
+  ensurePremiumAiProviderReady: mockEnsurePremiumAiProviderReady,
 }));
 
 vi.mock('../../server/src/ai/providerRouter.js', () => ({
@@ -83,13 +89,16 @@ describe('premiumAiRouter trust boundaries', () => {
     envMock.CORS_ALLOWED_ORIGINS = TRUSTED_ORIGIN;
     envMock.CORS_ALLOW_PRIVATE_NETWORK_IN_DEV = true;
     mockResolvePremiumAiEntitlements.mockReset();
+    mockEnsurePremiumAiProviderReady.mockReset();
     mockWritePremiumDeepInterpolator.mockReset();
     mockFilterPremiumDeepInterpolatorResponse.mockClear();
     mockLogSafetyFlag.mockClear();
+    mockEnsurePremiumAiProviderReady.mockResolvedValue(undefined);
     mockResolvePremiumAiEntitlements.mockReturnValue({
       tier: 'pro',
       capabilities: ['deep_interpolator'],
       providerAvailable: true,
+      availableProviders: ['gemini', 'openai'],
       provider: 'gemini',
     });
     mockWritePremiumDeepInterpolator.mockResolvedValue({
@@ -148,16 +157,38 @@ describe('premiumAiRouter trust boundaries', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(mockResolvePremiumAiEntitlements).toHaveBeenCalledWith(ACTOR_DID);
+    expect(mockEnsurePremiumAiProviderReady).toHaveBeenCalledWith(undefined);
+    expect(mockResolvePremiumAiEntitlements).toHaveBeenCalledWith(ACTOR_DID, undefined);
     expect(mockWritePremiumDeepInterpolator).toHaveBeenCalledWith(expect.objectContaining({
       actorDid: ACTOR_DID,
       threadId: 'at://did:plc:thread/app.bsky.feed.post/1',
-    }));
+    }), undefined);
     expect(response.headers.get('cache-control')).toBe('no-store, private');
     expect(response.headers.get('pragma')).toBe('no-cache');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     const vary = response.headers.get('vary')?.toLowerCase() ?? '';
     expect(vary).toContain('origin');
     expect(vary).toContain('x-glympse-user-did');
+    expect(vary).toContain('x-glympse-ai-provider');
+  });
+
+  it('propagates a trusted premium provider preference header to entitlements and provider routing', async () => {
+    const response = await premiumAiRouter.request('/interpolator/deep', {
+      method: 'POST',
+      headers: {
+        Origin: TRUSTED_ORIGIN,
+        'content-type': 'application/json',
+        'X-Glympse-User-Did': ACTOR_DID,
+        'X-Glympse-AI-Provider': 'openai',
+      },
+      body: JSON.stringify(makeRequestBody()),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockEnsurePremiumAiProviderReady).toHaveBeenCalledWith('openai');
+    expect(mockResolvePremiumAiEntitlements).toHaveBeenCalledWith(ACTOR_DID, 'openai');
+    expect(mockWritePremiumDeepInterpolator).toHaveBeenCalledWith(expect.objectContaining({
+      actorDid: ACTOR_DID,
+    }), { preferredProvider: 'openai' });
   });
 });

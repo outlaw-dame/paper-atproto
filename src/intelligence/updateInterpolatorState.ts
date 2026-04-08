@@ -37,6 +37,65 @@ function makeTrigger(
   };
 }
 
+function buildThreadStateSnapshot(
+  threadUri: string,
+  state: InterpolatorState,
+): ThreadStateSnapshot {
+  const contributorRoles = new Map<string, number>();
+  for (const contributor of state.topContributors.slice(0, 5)) {
+    contributorRoles.set(
+      contributor.dominantRole,
+      (contributorRoles.get(contributor.dominantRole) ?? 0) + 1,
+    );
+  }
+
+  const dominantStance = [...contributorRoles.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown';
+  const replyScoreList = Object.values(state.replyScores);
+  const sourceBackedClarity = replyScoreList.length > 0
+    ? replyScoreList.reduce((sum, score) => sum + (score.factualContribution ?? 0), 0) / replyScoreList.length
+    : 0;
+
+  const replyCount = replyScoreList.length;
+  const maturity: ThreadStateSnapshot['threadMaturity'] =
+    replyCount < 5 ? 'forming' : replyCount < 20 ? 'developing' : 'settled';
+
+  const topEntityIds = [...state.entityLandscape]
+    .sort((a, b) => b.mentionCount - a.mentionCount)
+    .slice(0, 5)
+    .map((entity) => entity.canonicalEntityId ?? entity.entityText.toLowerCase());
+
+  const averageContributorImpact = state.topContributors.length > 0
+    ? state.topContributors.reduce((sum, contributor) => sum + contributor.avgUsefulnessScore, 0) / state.topContributors.length
+    : 0;
+
+  return {
+    timestamp: new Date().toISOString(),
+    threadUri,
+    rootAuthorDid: state.topContributors[0]?.did ?? 'unknown',
+    replyCount,
+    topContributorDids: state.topContributors.slice(0, 5).map((contributor) => contributor.did),
+    dominantStance,
+    minorityStancesPresent: contributorRoles.size > 1,
+    hasFactualContent: state.factualSignalPresent,
+    sourceBackedClarity,
+    heat: Math.max(0, Math.min(1, state.heatLevel)),
+    threadMaturity: maturity,
+    topEntityIds,
+    entityCount: state.entityLandscape.length,
+    overallConfidence: Math.max(0, Math.min(1, averageContributorImpact)),
+  };
+}
+
+export function recordThreadSnapshot(
+  threadUri: string,
+  state: InterpolatorState,
+): void {
+  threadSnapshotCache.set(threadUri, {
+    snapshot: buildThreadStateSnapshot(threadUri, state),
+    timestamp: Date.now(),
+  });
+}
+
 // ─── detectTrigger ────────────────────────────────────────────────────────
 // Returns a trigger if an update is warranted, or null to skip.
 
@@ -120,7 +179,7 @@ export function detectMeaningfulChange(
   threadUri: string,
   currentState: InterpolatorState,
   newRepliesCount: number,
-  rateLimitThreshold: number = 60000, // 60 seconds
+  rateLimitThreshold: number = 30000, // 30 seconds
 ): { shouldUpdate: boolean; confidence: number; reasons: string[] } {
   try {
     // Check rate limiting first
@@ -131,53 +190,7 @@ export function detectMeaningfulChange(
       return { shouldUpdate: false, confidence: 0, reasons: ['rate_limited'] };
     }
 
-    const buildSnapshot = (state: InterpolatorState): ThreadStateSnapshot => {
-      const contributorRoles = new Map<string, number>();
-      for (const contributor of state.topContributors.slice(0, 5)) {
-        contributorRoles.set(
-          contributor.dominantRole,
-          (contributorRoles.get(contributor.dominantRole) ?? 0) + 1,
-        );
-      }
-
-      const dominantStance = [...contributorRoles.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown';
-      const replyScoreList = Object.values(state.replyScores);
-      const sourceBackedClarity = replyScoreList.length > 0
-        ? replyScoreList.reduce((sum, score) => sum + (score.factualContribution ?? 0), 0) / replyScoreList.length
-        : 0;
-
-      const replyCount = replyScoreList.length;
-      const maturity: ThreadStateSnapshot['threadMaturity'] =
-        replyCount < 5 ? 'forming' : replyCount < 20 ? 'developing' : 'settled';
-
-      const topEntityIds = [...state.entityLandscape]
-        .sort((a, b) => b.mentionCount - a.mentionCount)
-        .slice(0, 5)
-        .map((entity) => entity.canonicalEntityId ?? entity.entityText.toLowerCase());
-
-      const averageContributorImpact = state.topContributors.length > 0
-        ? state.topContributors.reduce((sum, contributor) => sum + contributor.avgUsefulnessScore, 0) / state.topContributors.length
-        : 0;
-
-      return {
-        timestamp: new Date().toISOString(),
-        threadUri,
-        rootAuthorDid: state.topContributors[0]?.did ?? 'unknown',
-        replyCount,
-        topContributorDids: state.topContributors.slice(0, 5).map((contributor) => contributor.did),
-        dominantStance,
-        minorityStancesPresent: contributorRoles.size > 1,
-        hasFactualContent: state.factualSignalPresent,
-        sourceBackedClarity,
-        heat: Math.max(0, Math.min(1, state.heatLevel)),
-        threadMaturity: maturity,
-        topEntityIds,
-        entityCount: state.entityLandscape.length,
-        overallConfidence: Math.max(0, Math.min(1, averageContributorImpact)),
-      };
-    };
-
-    const currentSnapshot = buildSnapshot(currentState);
+    const currentSnapshot = buildThreadStateSnapshot(threadUri, currentState);
     const delta = computeThreadChangeDelta(cached?.snapshot ?? null, currentSnapshot, {
       minChangeThreshold: 0.4,
       minHeatLevel: 0.25,
@@ -190,11 +203,6 @@ export function detectMeaningfulChange(
 
     const shouldUpdate = delta.shouldUpdate || (cached == null && newRepliesCount > 0);
     const confidence = Math.max(delta.confidence, Math.min(1, newRepliesCount / 6));
-
-    threadSnapshotCache.set(threadUri, {
-      snapshot: currentSnapshot,
-      timestamp: now,
-    });
 
     return {
       shouldUpdate,

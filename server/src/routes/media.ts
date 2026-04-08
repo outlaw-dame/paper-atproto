@@ -18,6 +18,8 @@ import {
 
 const MAX_VTT_BYTES = 20_000;
 const TRANSCRIPTION_REMOTE_MAX_REDIRECTS = 3;
+const MEDIA_PROXY_MAX_REDIRECTS = 4;
+const SAFE_MEDIA_HOST_TTL_MS = 10 * 60 * 1000;
 const REMOTE_TRANSCRIPTION_ACCEPT_HEADER = [
   'audio/*',
   'video/*',
@@ -25,6 +27,14 @@ const REMOTE_TRANSCRIPTION_ACCEPT_HEADER = [
   'application/ogg',
   'application/x-mpegurl',
   'application/vnd.apple.mpegurl',
+].join(', ');
+const MEDIA_PROXY_ACCEPT_HEADER = [
+  'application/vnd.apple.mpegurl',
+  'application/x-mpegurl',
+  'video/*',
+  'audio/*',
+  'application/octet-stream',
+  '*/*;q=0.8',
 ].join(', ');
 const SUPPORTED_REMOTE_MEDIA_CONTENT_TYPES = [
   'audio/',
@@ -34,6 +44,19 @@ const SUPPORTED_REMOTE_MEDIA_CONTENT_TYPES = [
   'application/x-mpegurl',
   'application/vnd.apple.mpegurl',
 ] as const;
+
+const PROXY_RESPONSE_HEADERS = [
+  'content-type',
+  'content-length',
+  'accept-ranges',
+  'content-range',
+  'cache-control',
+  'etag',
+  'last-modified',
+  'expires',
+] as const;
+
+const safeMediaHostCache = new Map<string, { safe: boolean; reason?: string; expiresAt: number }>();
 
 const RemoteTranscriptionSchema = z.object({
   url: z.string().url().max(2_000),
@@ -67,6 +90,88 @@ async function assertSafeRemoteMediaUrl(url: string): Promise<void> {
   throw new ValidationError(
     verdict.reason ?? 'Remote media URL blocked by Google Safe Browsing.',
   );
+}
+
+async function assertSafeRemoteMediaHost(url: URL): Promise<void> {
+  const host = url.hostname.toLowerCase();
+  const now = Date.now();
+  const cached = safeMediaHostCache.get(host);
+  if (cached && cached.expiresAt > now) {
+    if (cached.safe) return;
+    throw new ValidationError(cached.reason ?? 'Remote media host blocked by Google Safe Browsing.');
+  }
+
+  const verdict = await checkUrlAgainstSafeBrowsing(`${url.origin}/`);
+  const blocked = shouldBlockSafeBrowsingVerdict(verdict);
+  safeMediaHostCache.set(host, {
+    safe: !blocked,
+    reason: verdict.reason,
+    expiresAt: now + SAFE_MEDIA_HOST_TTL_MS,
+  });
+
+  if (blocked) {
+    throw new ValidationError(verdict.reason ?? 'Remote media host blocked by Google Safe Browsing.');
+  }
+}
+
+function looksLikeHlsManifest(contentType: string, url: URL): boolean {
+  if (contentType.includes('application/vnd.apple.mpegurl')) return true;
+  if (contentType.includes('application/x-mpegurl')) return true;
+  return url.pathname.toLowerCase().endsWith('.m3u8');
+}
+
+function toProxyUrl(targetUrl: string): string {
+  return `/api/media/proxy?url=${encodeURIComponent(targetUrl)}`;
+}
+
+function rewriteHlsManifest(content: string, baseUrl: URL): string {
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return line;
+      try {
+        const resolved = new URL(trimmed, baseUrl).toString();
+        return toProxyUrl(resolved);
+      } catch {
+        return line;
+      }
+    })
+    .join('\n');
+}
+
+async function fetchWithRedirects(
+  url: URL,
+  headers: Record<string, string>,
+  redirectCount = 0,
+): Promise<{ response: Response; finalUrl: URL }> {
+  const response = await fetch(url, {
+    redirect: 'manual',
+    headers,
+  });
+
+  if (!isRedirectStatus(response.status)) {
+    return { response, finalUrl: url };
+  }
+
+  if (redirectCount >= MEDIA_PROXY_MAX_REDIRECTS) {
+    throw new UpstreamError('Remote media redirect limit exceeded.', { url: url.toString() }, 502);
+  }
+
+  const location = response.headers.get('location');
+  if (!location) {
+    throw new UpstreamError('Remote media redirect missing location header.', { url: url.toString() }, 502);
+  }
+
+  const nextUrl = new URL(location, url);
+  const sanitizedNextUrl = sanitizeRemoteProcessingUrl(nextUrl.toString());
+  if (!sanitizedNextUrl) {
+    throw new ValidationError('Remote media redirect target is unsafe.');
+  }
+
+  const nextParsed = ensureHttpUrl(sanitizedNextUrl);
+  await assertSafeRemoteMediaHost(nextParsed);
+  return fetchWithRedirects(nextParsed, headers, redirectCount + 1);
 }
 
 function ensureSupportedRemoteMediaHeaders(response: Response): void {
@@ -202,6 +307,51 @@ async function downloadRemoteFile(
 }
 
 export const mediaRouter = new Hono();
+
+mediaRouter.get('/proxy', async (c) => {
+  const rawUrl = c.req.query('url');
+  if (!rawUrl) {
+    return c.json({ ok: false, error: 'Missing media URL.' }, 400);
+  }
+
+  const sanitizedUrl = sanitizeRemoteProcessingUrl(rawUrl);
+  if (!sanitizedUrl) {
+    return c.json({ ok: false, error: 'Only public http(s) media URLs are supported.' }, 400);
+  }
+
+  const parsedUrl = ensureHttpUrl(sanitizedUrl);
+  await assertSafeRemoteMediaHost(parsedUrl);
+
+  const requestHeaders: Record<string, string> = {
+    Accept: MEDIA_PROXY_ACCEPT_HEADER,
+  };
+  const rangeHeader = c.req.header('range');
+  if (rangeHeader) requestHeaders.Range = rangeHeader;
+
+  const { response, finalUrl } = await fetchWithRedirects(parsedUrl, requestHeaders);
+
+  if (!response.ok && response.status !== 206) {
+    throw new UpstreamError(`Unable to fetch remote media (${response.status}).`, { url: finalUrl.toString() }, 502);
+  }
+
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (looksLikeHlsManifest(contentType, finalUrl)) {
+    const manifest = await response.text();
+    const rewritten = rewriteHlsManifest(manifest, finalUrl);
+    c.header('Cache-Control', 'no-store');
+    c.header('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+    return c.body(rewritten, response.status as 200 | 206);
+  }
+
+  for (const headerName of PROXY_RESPONSE_HEADERS) {
+    const headerValue = response.headers.get(headerName);
+    if (headerValue) c.header(headerName, headerValue);
+  }
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Accel-Buffering', 'no');
+
+  return c.body(response.body, response.status as 200 | 206);
+});
 
 mediaRouter.post('/transcribe', async (c) => {
   const contentType = c.req.header('content-type') || '';

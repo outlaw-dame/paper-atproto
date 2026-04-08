@@ -104,6 +104,18 @@ Important nuance:
 
 These are the real architectural gaps that remain.
 
+### Discovery query understanding
+
+Still missing:
+
+- a deterministic classifier for search/discovery intent such as person, topic, source, story, or visual/media-heavy lookup
+- a selector that can change fusion weights and discovery surfaces based on that intent
+
+Impact:
+
+- discovery already has strong retrieval primitives
+- it still behaves more like a powerful search box than a fully Neeva-style discovery orchestrator
+
 ### Explanation generation
 
 Still missing:
@@ -173,6 +185,19 @@ The best description of the live decision pipeline is:
 4. remote writers summarize an already-structured state
 5. premium and multimodal lanes enrich, but do not replace, the core decision path
 
+The correct Neeva-style extension of that pipeline is:
+
+- query understanding improves retrieval and grouping before any answer-like presentation
+- explanation metadata makes ranking and grouping legible to the user
+- story clustering organizes discovery around developments, not just matching posts
+- generative text stays bounded to packaging already-selected evidence
+
+It should not become:
+
+- an opaque answer engine replacing deterministic ranking and verification
+- a heavy reranker inserted into every search by default
+- a discovery UI that implies hidden story clustering before that algorithm actually ships
+
 That is why the remaining work should prioritize **explanation and discovery**, not another round of disconnected model features.
 
 ---
@@ -184,16 +209,19 @@ Recommended next sequence:
 1. **Explanation generation**
    This closes the trust/cohesion gap fastest.
 
-2. **Context summarization selector**
-   This tightens composer quality without adding more model complexity.
+2. **Discovery query understanding**
+   This is the nearest clean application of the Neeva research because it improves how retrieval is routed without weakening the local-first architecture.
 
 3. **Story clustering for Explore**
    This brings discovery up to the quality of the thread pipeline.
 
-4. **Translation selection**
+4. **Context summarization selector**
+   This tightens composer quality without adding more model complexity.
+
+5. **Translation selection**
    This optimizes multilingual coverage after the core story logic is stronger.
 
-5. **Multimodal escalation**
+6. **Multimodal escalation**
    This should wait until visual-search telemetry justifies it.
 
 ---

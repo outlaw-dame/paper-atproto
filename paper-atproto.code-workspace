@@ -134,7 +134,18 @@
 			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=rest\\.slice\\(0,end\\);console\\.log\\(\"writer_system_prompt_chars\",body\\.length\\);'$/": {
 				"approve": true,
 				"matchCommandLine": true
-			}
+			},
+			"pgrep": true,
+			"/^cd server && pwd && npm run$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npm run build": true,
+			"npm install": true,
+			"npx @vscode/vsce": true,
+			"code": true,
+			"command": true,
+			"true": true
 		}
 	}
 }

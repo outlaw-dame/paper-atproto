@@ -309,7 +309,10 @@ llmRouter.post('/write/interpolator', async (c) => {
   }
 
   try {
-    const result = await withCircuitProtection(c, 'interpolator', () => runInterpolatorWriter(prepared.data as any));
+    const result = await withCircuitProtection(c, 'interpolator', () => runInterpolatorWriter({
+      ...(prepared.data as any),
+      requestId,
+    }));
     const filterResult = filterWriterResponse({ ...result });
     const wasMutated = JSON.stringify(filterResult.filtered) !== JSON.stringify(result);
     recordWriterSafetyFilterRun({
@@ -522,6 +525,7 @@ llmRouter.post('/write/search-story', async (c) => {
 
   const writerInput = {
     threadId: storyId,
+    requestId,
     summaryMode: storySummaryMode,
     confidence,
     rootPost: {

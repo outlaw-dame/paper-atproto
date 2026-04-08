@@ -12,6 +12,9 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_DELAY_MS = 350;
 const DEFAULT_MAX_DELAY_MS = 4_000;
 const DEFAULT_BATCH_TARGET_LIMIT = 8;
+const DEFAULT_EVENT_REFRESH_MIN_INTERVAL_MS = 10_000;
+
+export type ConversationHydrationPhase = 'initial' | 'poll' | 'event';
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -81,6 +84,15 @@ export async function hydrateConversationSessionWithRetry(
   }
 }
 
+export function shouldAllowEventDrivenHydrationRefresh(
+  lastStartedAtMs: number,
+  nowMs: number = Date.now(),
+  minIntervalMs: number = DEFAULT_EVENT_REFRESH_MIN_INTERVAL_MS,
+): boolean {
+  if (lastStartedAtMs <= 0) return true;
+  return (nowMs - lastStartedAtMs) >= Math.max(0, minIntervalMs);
+}
+
 export function useConversationHydration(
   params: HydrateConversationSessionParams & {
     enabled: boolean;
@@ -88,7 +100,11 @@ export function useConversationHydration(
     maxAttempts?: number;
     baseDelayMs?: number;
     maxDelayMs?: number;
-    onError?: (error: unknown, phase: 'initial' | 'poll') => void;
+    eventRefreshMinIntervalMs?: number;
+    refreshOnWindowFocus?: boolean;
+    refreshOnVisibility?: boolean;
+    refreshOnReconnect?: boolean;
+    onError?: (error: unknown, phase: ConversationHydrationPhase) => void;
   },
 ): void {
   const {
@@ -97,6 +113,10 @@ export function useConversationHydration(
     maxAttempts,
     baseDelayMs,
     maxDelayMs,
+    eventRefreshMinIntervalMs = DEFAULT_EVENT_REFRESH_MIN_INTERVAL_MS,
+    refreshOnWindowFocus = true,
+    refreshOnVisibility = true,
+    refreshOnReconnect = true,
     onError,
     ...hydrateParams
   } = params;
@@ -105,13 +125,34 @@ export function useConversationHydration(
   // triggering the effect on every render.
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const hydrationInFlightRef = useRef(false);
+  const lastStartedAtRef = useRef(0);
 
   useEffect(() => {
     if (!enabled) return undefined;
 
     const controller = new AbortController();
 
-    const run = async (phase: 'initial' | 'poll') => {
+    const run = async (
+      phase: ConversationHydrationPhase,
+      options?: { bypassThrottle?: boolean },
+    ) => {
+      if (hydrationInFlightRef.current) return;
+      if (
+        phase === 'event'
+        && !options?.bypassThrottle
+        && !shouldAllowEventDrivenHydrationRefresh(
+          lastStartedAtRef.current,
+          Date.now(),
+          eventRefreshMinIntervalMs,
+        )
+      ) {
+        return;
+      }
+
+      hydrationInFlightRef.current = true;
+      lastStartedAtRef.current = Date.now();
+
       try {
         await hydrateConversationSessionWithRetry({
           ...hydrateParams,
@@ -123,14 +164,44 @@ export function useConversationHydration(
       } catch (error) {
         if (isAbortError(error)) return;
         onErrorRef.current?.(error, phase);
+      } finally {
+        hydrationInFlightRef.current = false;
       }
     };
 
-    void run('initial');
+    void run('initial', { bypassThrottle: true });
+
+    const cleanupFns: Array<() => void> = [];
+
+    if (typeof window !== 'undefined' && refreshOnWindowFocus) {
+      const handleFocus = () => {
+        void run('event');
+      };
+      window.addEventListener('focus', handleFocus);
+      cleanupFns.push(() => window.removeEventListener('focus', handleFocus));
+    }
+
+    if (typeof document !== 'undefined' && refreshOnVisibility) {
+      const handleVisibilityChange = () => {
+        if (document.visibilityState !== 'visible') return;
+        void run('event');
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      cleanupFns.push(() => document.removeEventListener('visibilitychange', handleVisibilityChange));
+    }
+
+    if (typeof window !== 'undefined' && refreshOnReconnect) {
+      const handleOnline = () => {
+        void run('event', { bypassThrottle: true });
+      };
+      window.addEventListener('online', handleOnline);
+      cleanupFns.push(() => window.removeEventListener('online', handleOnline));
+    }
 
     if (!pollIntervalMs || pollIntervalMs <= 0) {
       return () => {
         controller.abort();
+        cleanupFns.forEach((cleanup) => cleanup());
       };
     }
 
@@ -141,6 +212,7 @@ export function useConversationHydration(
     return () => {
       controller.abort();
       clearInterval(pollHandle);
+      cleanupFns.forEach((cleanup) => cleanup());
     };
   }, [
     enabled,
@@ -148,6 +220,10 @@ export function useConversationHydration(
     maxAttempts,
     baseDelayMs,
     maxDelayMs,
+    eventRefreshMinIntervalMs,
+    refreshOnWindowFocus,
+    refreshOnVisibility,
+    refreshOnReconnect,
     hydrateParams.sessionId,
     hydrateParams.rootUri,
     hydrateParams.mode,

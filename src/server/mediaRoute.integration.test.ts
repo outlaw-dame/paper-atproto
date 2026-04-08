@@ -208,3 +208,75 @@ describe('mediaRouter /api/media/transcribe', () => {
     }));
   });
 });
+
+describe('mediaRouter /api/media/proxy', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    envMock.AI_SAFE_BROWSING_FAIL_CLOSED = false;
+    mockCheckUrlAgainstSafeBrowsing.mockReset();
+    mockCheckUrlAgainstSafeBrowsing.mockImplementation(async (url: string) => ({
+      url,
+      checked: true,
+      status: 'safe',
+      safe: true,
+      blocked: false,
+      threats: NO_THREATS,
+    }));
+  });
+
+  it('returns 400 when URL is missing', async () => {
+    const response = await mediaRouter.request('/proxy', { method: 'GET' });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ ok: false, error: 'Missing media URL.' });
+  });
+
+  it('rewrites HLS manifests to proxied segment URLs', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      '#EXTM3U\n#EXT-X-VERSION:3\nsegment0.ts\nhttps://cdn.example.com/segment1.ts\n',
+      {
+        status: 200,
+        headers: {
+          'content-type': 'application/vnd.apple.mpegurl',
+        },
+      },
+    ));
+
+    const response = await mediaRouter.request('/proxy?url=https%3A%2F%2Fvideo.example%2Fwatch%2Fplaylist.m3u8', {
+      method: 'GET',
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('/api/media/proxy?url=https%3A%2F%2Fvideo.example%2Fwatch%2Fsegment0.ts');
+    expect(body).toContain('/api/media/proxy?url=https%3A%2F%2Fcdn.example.com%2Fsegment1.ts');
+  });
+
+  it('forwards range requests when proxying media bytes', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      new Uint8Array([1, 2, 3]),
+      {
+        status: 206,
+        headers: {
+          'content-type': 'video/mp2t',
+          'accept-ranges': 'bytes',
+          'content-range': 'bytes 0-2/3',
+        },
+      },
+    ));
+
+    const response = await mediaRouter.request('/proxy?url=https%3A%2F%2Fvideo.example%2Fwatch%2Fsegment0.ts', {
+      method: 'GET',
+      headers: { range: 'bytes=0-2' },
+    });
+
+    expect(response.status).toBe(206);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Range: 'bytes=0-2',
+        }),
+      }),
+    );
+  });
+});

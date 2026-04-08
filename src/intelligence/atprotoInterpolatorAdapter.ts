@@ -26,6 +26,7 @@ import {
   detectTrigger,
   applyTriggerToState,
   detectMeaningfulChange,
+  recordThreadSnapshot,
 } from './updateInterpolatorState';
 
 // ─── emptyInterpolatorState ───────────────────────────────────────────────
@@ -97,7 +98,9 @@ export function runInterpolatorPipeline(input: InterpolatorInput): InterpolatorS
       triggeredAt: new Date().toISOString(),
     };
 
-    return applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+    const nextState = applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+    recordThreadSnapshot(rootUri, nextState);
+    return nextState;
   }
 
   // Step 3: Detect trigger
@@ -116,7 +119,9 @@ export function runInterpolatorPipeline(input: InterpolatorInput): InterpolatorS
     triggeredAt: new Date().toISOString(),
   };
 
-  return applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+  const nextState = applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+  recordThreadSnapshot(rootUri, nextState);
+  return nextState;
 }
 
 // ─── Phase 3: ATProto → ThreadPost adapter ────────────────────────────────

@@ -256,6 +256,7 @@ export type ConversationModelRunSkipReason =
   | 'interpolator_disabled'
   | 'minimal_fallback'
   | 'insufficient_signal'
+  | 'no_meaningful_change'
   | 'multimodal_not_needed'
   | 'no_media_candidates'
   | 'not_entitled'

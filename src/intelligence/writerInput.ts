@@ -216,6 +216,77 @@ function buildStanceSummary(role: ContributionRole, excerpt?: string): string {
   return mapRoleToStance(role).slice(0, 200);
 }
 
+function normalizeParticipantHandle(handle: string): string {
+  return handle.trim().replace(/^@+/, '').toLowerCase();
+}
+
+function shouldSurfaceContributorAsParticipantEntity(contributor: WriterContributor): boolean {
+  if (contributor.impactScore >= 0.62) return true;
+  return contributor.role === 'source-bringer'
+    || contributor.role === 'rule-source'
+    || contributor.role === 'counterpoint'
+    || contributor.role === 'clarifier';
+}
+
+function buildParticipantEntities(
+  rootHandle: string,
+  contributors: WriterContributor[],
+): WriterEntity[] {
+  const entities: WriterEntity[] = [];
+  const seen = new Set<string>();
+
+  const addParticipant = (handle: string, impact: number, confidence: number): void => {
+    const normalizedHandle = normalizeParticipantHandle(handle);
+    if (!normalizedHandle || seen.has(normalizedHandle)) return;
+    seen.add(normalizedHandle);
+    entities.push({
+      id: `person-${normalizedHandle.replace(/[^a-z0-9._-]/g, '-')}`,
+      label: `@${normalizedHandle}`,
+      type: 'person',
+      confidence: clamp01(confidence),
+      impact: clamp01(impact),
+    });
+  };
+
+  addParticipant(rootHandle, 0.92, 0.99);
+
+  contributors
+    .filter((contributor) => shouldSurfaceContributorAsParticipantEntity(contributor))
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .forEach((contributor) => {
+      addParticipant(
+        contributor.handle,
+        Math.max(0.48, contributor.impactScore),
+        contributor.resonance === 'high' ? 0.94 : 0.9,
+      );
+    });
+
+  return entities.slice(0, 3);
+}
+
+function mergeSafeEntities(
+  preferred: WriterEntity[],
+  existing: WriterEntity[],
+  maxEntities: number,
+): WriterEntity[] {
+  const merged = new Map<string, WriterEntity>();
+
+  for (const entity of [...preferred, ...existing]) {
+    const key = entity.label.trim().toLowerCase();
+    if (!key) continue;
+    const prior = merged.get(key);
+    if (
+      !prior
+      || entity.confidence > prior.confidence
+      || (entity.confidence === prior.confidence && entity.impact > prior.impact)
+    ) {
+      merged.set(key, entity);
+    }
+  }
+
+  return [...merged.values()].slice(0, maxEntities);
+}
+
 function normalizeSignalExcerpt(value: string, maxLen = 88): string {
   return value
     .replace(/\s+/g, ' ')
@@ -634,6 +705,12 @@ export function buildThreadStateForWriter(
         impact: Math.min(1, e.mentionCount / 10),
       }));
   }
+
+  const participantEntities = buildParticipantEntities(
+    rootAuthorHandle ?? opHandle,
+    topContributors,
+  );
+  safeEntities = mergeSafeEntities(participantEntities, safeEntities, 10);
 
   // ── Factual highlights ────────────────────────────────────────────────────
   const factualHighlights: string[] = [];

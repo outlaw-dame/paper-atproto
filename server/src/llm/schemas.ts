@@ -181,6 +181,22 @@ export const PremiumInterpolatorSchema = z.object({
   safeEntities: z.array(WriterEntitySchema).max(10),
   factualHighlights: z.array(z.string().max(200)).max(6),
   whatChangedSignals: z.array(z.string().max(150)).max(8),
+  mediaFindings: z.array(z.object({
+    mediaType: z.string(),
+    summary: z.string().max(300),
+    confidence: z.number(),
+    extractedText: z.string().max(500).optional(),
+    cautionFlags: z.array(z.string()).optional(),
+  })).max(3).optional(),
+  threadSignalSummary: z.object({
+    newAnglesCount: z.number().int().min(0).max(50),
+    clarificationsCount: z.number().int().min(0).max(50),
+    sourceBackedCount: z.number().int().min(0).max(50),
+    factualSignalPresent: z.boolean(),
+    evidencePresent: z.boolean(),
+  }).optional(),
+  interpretiveExplanation: z.string().max(240).optional(),
+  entityThemes: z.array(z.string().max(120)).max(8).optional(),
   interpretiveBrief: z.object({
     summaryMode: SummaryModeSchema,
     baseSummary: z.string().max(400).optional(),
@@ -197,6 +213,6 @@ export const PremiumDeepInterpolatorResponseSchema = z.object({
   perspectiveGaps: z.array(z.string().max(120)).max(3),
   followUpQuestions: z.array(z.string().max(120)).max(3),
   confidence: z.number().min(0).max(1),
-  provider: z.literal('gemini'),
+  provider: z.enum(['gemini', 'openai']),
   updatedAt: z.string(),
 });

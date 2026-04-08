@@ -1,0 +1,79 @@
+{
+  "name": "tab-share-agent-extension",
+  "displayName": "Tab Share With Agent",
+  "description": "Adds a tab icon to share the active tab context with an AI agent in chat.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:tabShareWithAgent.shareActiveTab",
+    "onCommand:tabShareWithAgent.shareSelection"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tabShareWithAgent.shareActiveTab",
+        "title": "Share Full File With Agent",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "tabShareWithAgent.shareSelection",
+        "title": "Share Selection With Agent",
+        "icon": "$(selection)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "tabShareWithAgent.shareActiveTab",
+          "group": "navigation@90",
+          "when": "resourceScheme == file || resourceScheme == untitled"
+        },
+        {
+          "command": "tabShareWithAgent.shareSelection",
+          "group": "navigation@91",
+          "when": "editorHasSelection && (resourceScheme == file || resourceScheme == untitled)"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "tabShareWithAgent.shareActiveTab"
+        },
+        {
+          "command": "tabShareWithAgent.shareSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Tab Share With Agent",
+      "properties": {
+        "tabShareWithAgent.maxContentChars": {
+          "type": "number",
+          "default": 12000,
+          "minimum": 500,
+          "description": "Maximum characters copied into a share prompt before truncation."
+        },
+        "tabShareWithAgent.autoOpenChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the Chat view after copying tab context."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -w -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.11",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.7.2"
+  }
+}

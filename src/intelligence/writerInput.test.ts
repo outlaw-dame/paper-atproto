@@ -192,4 +192,110 @@ describe('buildThreadStateForWriter', () => {
     expect(output.topContributors[0]?.resonance).toBe('high');
     expect(output.topContributors[0]?.agreementSignal).toBe('resonated strongly with other participants');
   });
+
+  it('adds the author and strong contributors as person entities', () => {
+    const state: InterpolatorState = {
+      rootUri: 'at://root',
+      summaryText: '',
+      salientClaims: [],
+      salientContributors: [],
+      clarificationsAdded: [],
+      newAnglesAdded: [],
+      repetitionLevel: 0,
+      heatLevel: 0,
+      sourceSupportPresent: false,
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      replyScores: {},
+      entityLandscape: [],
+      topContributors: [
+        {
+          did: 'did:plc:source',
+          handle: 'source.helper',
+          totalReplies: 1,
+          avgUsefulnessScore: 0.83,
+          dominantRole: 'source_bringer',
+          factualContributions: 1,
+        },
+        {
+          did: 'did:plc:reactor',
+          handle: 'just.reacting',
+          totalReplies: 1,
+          avgUsefulnessScore: 0.28,
+          dominantRole: 'direct_response',
+          factualContributions: 0,
+        },
+      ],
+      evidencePresent: true,
+      factualSignalPresent: true,
+      lastTrigger: null,
+      triggerHistory: [],
+    };
+
+    const replies = [
+      makeReply({
+        uri: 'at://reply/source',
+        text: 'Here is the internal memo that backs up the claim.',
+        authorDid: 'did:plc:source',
+        authorHandle: 'source.helper',
+        likeCount: 9,
+        replyCount: 2,
+      }),
+      makeReply({
+        uri: 'at://reply/reactor',
+        text: 'wow if true',
+        authorDid: 'did:plc:reactor',
+        authorHandle: 'just.reacting',
+      }),
+    ];
+
+    const output = buildThreadStateForWriter(
+      'thread-3',
+      'Root post about an internal memo leak.',
+      state,
+      {
+        'at://reply/source': {
+          uri: 'at://reply/source',
+          role: 'source_bringer',
+          finalInfluenceScore: 0.86,
+          clarificationValue: 0.44,
+          sourceSupport: 0.76,
+          visibleChips: [],
+          factual: null,
+          usefulnessScore: 0.82,
+          abuseScore: 0,
+          evidenceSignals: [],
+          entityImpacts: [],
+          scoredAt: new Date().toISOString(),
+        },
+        'at://reply/reactor': {
+          uri: 'at://reply/reactor',
+          role: 'direct_response',
+          finalInfluenceScore: 0.22,
+          clarificationValue: 0.1,
+          sourceSupport: 0.05,
+          visibleChips: [],
+          factual: null,
+          usefulnessScore: 0.22,
+          abuseScore: 0,
+          evidenceSignals: [],
+          entityImpacts: [],
+          scoredAt: new Date().toISOString(),
+        },
+      },
+      replies,
+      {
+        surfaceConfidence: 0.66,
+        entityConfidence: 0.54,
+        interpretiveConfidence: 0.49,
+      },
+      undefined,
+      'author.test',
+      { summaryMode: 'descriptive_fallback' },
+    );
+
+    expect(output.safeEntities.map((entity) => entity.label)).toContain('@author.test');
+    expect(output.safeEntities.map((entity) => entity.label)).toContain('@source.helper');
+    expect(output.safeEntities.map((entity) => entity.label)).not.toContain('@just.reacting');
+  });
 });

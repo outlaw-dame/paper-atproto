@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useMiniPlayer } from '../context/MiniPlayerContext';
 import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback';
+import { resolveApiUrl } from '../lib/apiBase';
 import {
   describeSourceKind,
   describeSupportLevel,
@@ -37,6 +38,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const [duration, setDuration] = useState(0);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [useProxyForNativeHls, setUseProxyForNativeHls] = useState(false);
   const [hlsMode, setHlsMode] = useState<'pending' | 'native' | 'hlsjs' | 'unsupported'>(() => (
     detectVideoSourceKind(url) === 'hls' ? 'pending' : 'native'
   ));
@@ -48,6 +50,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const mediaKey = `video:${postId ?? url}`;
   const [capabilities] = useState(() => getVideoPlaybackCapabilities());
   const sourceKind = detectVideoSourceKind(url);
+  const proxiedUrl = resolveApiUrl(`/api/media/proxy?url=${encodeURIComponent(url)}`);
   const likelySourceSupport = getLikelySourceSupport(capabilities, sourceKind);
   const likelyUnsupportedReason = getLikelyUnsupportedReason(capabilities, sourceKind);
   const sourceSupportWarning = playbackError ?? likelyUnsupportedReason;
@@ -100,6 +103,10 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     if (!v) return;
     v.play().catch(() => setIsPlaying(false));
   }, [autoplay, isInMiniPlayer]);
+
+  useEffect(() => {
+    setUseProxyForNativeHls(false);
+  }, [url]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -161,7 +168,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         });
 
         hls.attachMedia(video);
-        hls.loadSource(url);
+        hls.loadSource(proxiedUrl);
       })
       .catch(() => {
         if (cancelled) return;
@@ -174,7 +181,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
       hlsInstanceRef.current?.destroy();
       hlsInstanceRef.current = null;
     };
-  }, [isInMiniPlayer, sourceKind, url]);
+  }, [isInMiniPlayer, proxiedUrl, sourceKind, url]);
 
   useEffect(() => {
     return () => {
@@ -244,6 +251,11 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   };
 
   const handlePlaybackError = () => {
+    if (sourceKind === 'hls' && hlsMode === 'native' && !useProxyForNativeHls) {
+      setUseProxyForNativeHls(true);
+      setPlaybackError(null);
+      return;
+    }
     const generic = 'This browser could not play the current video source.';
     setPlaybackError(likelyUnsupportedReason ?? generic);
     setIsPlaying(false);
@@ -434,7 +446,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         <>
           <video
             ref={videoRef}
-            src={sourceKind === 'hls' ? (hlsMode === 'native' ? url : undefined) : url}
+            src={sourceKind === 'hls' ? (hlsMode === 'native' ? (useProxyForNativeHls ? proxiedUrl : url) : undefined) : url}
             autoPlay={autoplay}
             playsInline
             preload="metadata"

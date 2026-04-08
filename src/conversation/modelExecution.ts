@@ -4,6 +4,7 @@ import type {
   ConversationSession,
   SessionAiDiagnostics,
 } from './sessionTypes';
+import type { PremiumAiEntitlements } from '../intelligence/premiumContracts';
 
 type ConversationModelRunKind = 'writer' | 'multimodal' | 'premium';
 
@@ -184,19 +185,34 @@ export function shouldRunInterpolatorWriter(
   const confidence = session.interpretation.confidence;
   const surfaceConfidence = confidence?.surfaceConfidence ?? 0;
   const interpretiveConfidence = confidence?.interpretiveConfidence ?? 0;
+  const interpolator = session.interpretation.interpolator;
   const hasSourceSignal = session.interpretation.interpolator?.sourceSupportPresent ?? false;
   const hasFactualSignal = session.interpretation.interpolator?.factualSignalPresent ?? false;
+  const hasStructuralSignal = (interpolator?.clarificationsAdded.length ?? 0) > 0
+    || (interpolator?.newAnglesAdded.length ?? 0) > 0
+    || (interpolator?.topContributors.length ?? 0) >= 2
+    || (interpolator?.evidencePresent ?? false)
+    || (interpolator?.heatLevel ?? 0) >= 0.28;
 
   if (replyCount >= 4) {
     return { shouldRun: true };
   }
+  if (replyCount >= 2 && hasStructuralSignal) {
+    return { shouldRun: true };
+  }
   if (replyCount >= 3 && (surfaceConfidence >= 0.5 || interpretiveConfidence >= 0.42)) {
+    return { shouldRun: true };
+  }
+  if (replyCount >= 2 && (surfaceConfidence >= 0.34 || interpretiveConfidence >= 0.26)) {
     return { shouldRun: true };
   }
   if (replyCount >= 2 && (hasSourceSignal || hasFactualSignal)) {
     return { shouldRun: true };
   }
   if (hasSourceSignal || hasFactualSignal) {
+    return { shouldRun: true };
+  }
+  if (replyCount >= 1 && hasStructuralSignal && (surfaceConfidence >= 0.46 || interpretiveConfidence >= 0.34)) {
     return { shouldRun: true };
   }
   if (replyCount >= 2 && (surfaceConfidence >= 0.68 || interpretiveConfidence >= 0.6)) {
@@ -210,4 +226,47 @@ export function shouldRunInterpolatorWriter(
     shouldRun: false,
     reason: 'insufficient_signal',
   };
+}
+
+export function shouldReuseExistingModelOutputs(
+  session: ConversationSession,
+  didMeaningfullyChange: boolean,
+): boolean {
+  if (didMeaningfullyChange) return false;
+
+  const writerResult = session.interpretation.writerResult;
+  if (writerResult?.collapsedSummary?.trim()) {
+    return true;
+  }
+
+  return session.interpretation.aiDiagnostics?.writer.status === 'skipped';
+}
+
+export function shouldRunPremiumDeepInterpolator(
+  session: ConversationSession,
+  replyCount: number,
+  entitlements: PremiumAiEntitlements,
+): boolean {
+  if (!entitlements.providerAvailable) return false;
+  if (!entitlements.capabilities.includes('deep_interpolator')) return false;
+  if (session.interpretation.summaryMode === 'minimal_fallback') return false;
+
+  const confidence = session.interpretation.confidence;
+  const surfaceConfidence = confidence?.surfaceConfidence ?? 0;
+  const interpretiveConfidence = confidence?.interpretiveConfidence ?? 0;
+  const interpolator = session.interpretation.interpolator;
+  const hasSourceSignal = interpolator?.sourceSupportPresent ?? false;
+  const hasFactualSignal = interpolator?.factualSignalPresent ?? false;
+  const hasStructuralSignal = (interpolator?.clarificationsAdded.length ?? 0) > 0
+    || (interpolator?.newAnglesAdded.length ?? 0) > 0
+    || (interpolator?.topContributors.length ?? 0) >= 2
+    || (interpolator?.evidencePresent ?? false)
+    || (interpolator?.heatLevel ?? 0) >= 0.28;
+
+  if (replyCount >= 4) return true;
+  if (hasSourceSignal || hasFactualSignal) return true;
+  if (replyCount >= 2 && hasStructuralSignal) return true;
+  if (replyCount >= 3 && (surfaceConfidence >= 0.38 || interpretiveConfidence >= 0.3)) return true;
+
+  return surfaceConfidence >= 0.65 || interpretiveConfidence >= 0.55;
 }

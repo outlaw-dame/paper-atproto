@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ThreadNode } from '../lib/resolver/atproto';
 import { runInterpolatorPipeline } from './atprotoInterpolatorAdapter';
-import { clearThreadSnapshot } from './updateInterpolatorState';
+import {
+  clearThreadSnapshot,
+  detectMeaningfulChange,
+  getThreadSnapshotInfo,
+  recordThreadSnapshot,
+} from './updateInterpolatorState';
 
 function makeReply(params: {
   uri: string;
@@ -31,6 +36,7 @@ function makeReply(params: {
 
 describe('runInterpolatorPipeline', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     clearThreadSnapshot('at://thread/test');
   });
 
@@ -137,5 +143,26 @@ describe('runInterpolatorPipeline', () => {
     expect(updated).not.toBe(unchanged);
     expect(updated.version).toBe(unchanged.version + 1);
     expect(updated.lastTrigger?.kind).toBe('new_replies');
+  });
+
+  it('does not silently advance the cached snapshot when no visible update was accepted', () => {
+    const initial = runInterpolatorPipeline({
+      rootUri: 'at://thread/test',
+      rootText: 'Root post about a budget dispute.',
+      replies: [
+        makeReply({ uri: 'at://reply/1', text: 'This needs a clearer timeline.' }),
+        makeReply({ uri: 'at://reply/2', text: 'I want the numbers behind this claim.' }),
+      ],
+    });
+
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    recordThreadSnapshot('at://thread/test', initial);
+
+    vi.spyOn(Date, 'now').mockReturnValue(70_000);
+    const result = detectMeaningfulChange('at://thread/test', initial, 0);
+    const snapshotInfo = getThreadSnapshotInfo('at://thread/test');
+
+    expect(result.shouldUpdate).toBe(false);
+    expect(snapshotInfo?.age).toBe(69_000);
   });
 });

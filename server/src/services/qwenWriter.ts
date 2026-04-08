@@ -11,6 +11,16 @@ import type { RetryOptions } from '../lib/retry.js';
 import { env } from '../config/env.js';
 import { ensureSafetyInstructions } from '../lib/safeguards.js';
 import { ensureOllamaLocalUrlPolicy } from '../lib/ollama-policy.js';
+import { resolveGeminiModel } from '../lib/googleGenAi.js';
+import {
+  recordWriterEnhancerFailure,
+  recordWriterEnhancerInvocation,
+  recordWriterEnhancerRejectedReplacement,
+  recordWriterEnhancerReview,
+  recordWriterEnhancerTakeoverApplied,
+  type WriterEnhancerFailureClass,
+} from '../llm/writerDiagnostics.js';
+import { reviewInterpolatorWriter } from './geminiInterpolatorEnhancer.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 // These mirror src/intelligence/llmContracts.ts — kept local to avoid
@@ -20,6 +30,7 @@ export type SummaryMode = 'normal' | 'descriptive_fallback' | 'minimal_fallback'
 
 export interface WriterRequest {
   threadId: string;
+  requestId?: string;
   summaryMode: SummaryMode;
   confidence: { surfaceConfidence: number; entityConfidence: number; interpretiveConfidence: number };
   visibleReplyCount?: number;
@@ -88,6 +99,8 @@ STYLE
 
 CORE CONTENT RULES
 - Lead collapsedSummary with thread substance (claim/question/announcement), but weave named contributors naturally when their points materially shape the thread.
+- Name the root author when it helps anchor who is making the claim or framing the post.
+- When one or two contributors materially advance the thread, mention them by handle instead of flattening them into generic "replies".
 - CONTRIBUTORS are participants, not the subject.
 - If no replies, summarize only the root post.
 - If visible replies are substantial, include what replies are doing.
@@ -107,7 +120,7 @@ MODE RULES
 - descriptive_fallback:
   collapsedSummary in 2 parts: (1) characterize root post in your own words, (2) describe observable reply patterns.
   Do not copy or closely paraphrase the root opening words.
-  Keep collapsedSummary <= 220 chars.
+  Keep collapsedSummary <= 280 chars.
 
 - minimal_fallback:
   Exactly 2 sentences: concrete root-post substance + observable reply activity.
@@ -184,6 +197,28 @@ function extractJsonObject(raw: string): string {
   }
 
   return trimmed;
+}
+
+function truncateAtWordBoundary(value: string, maxLen: number): string {
+  const normalized = sanitizeText(value).replace(/\s+/g, ' ');
+  if (normalized.length <= maxLen) return normalized;
+  if (maxLen <= 3) return normalized.slice(0, maxLen);
+
+  const available = maxLen - 3;
+  const slice = normalized.slice(0, available);
+  const sentenceBoundary = Math.max(
+    slice.lastIndexOf('. '),
+    slice.lastIndexOf('! '),
+    slice.lastIndexOf('? '),
+  );
+  const lastSpace = slice.lastIndexOf(' ');
+  const base = sentenceBoundary >= Math.floor(available * 0.6)
+    ? slice.slice(0, sentenceBoundary + 1)
+    : lastSpace >= Math.floor(available * 0.55)
+      ? slice.slice(0, lastSpace)
+      : slice;
+  const truncated = base.trimEnd().replace(/[.!?]+$/u, '');
+  return `${truncated || slice.trimEnd()}...`;
 }
 
 async function callOllama(
@@ -273,9 +308,9 @@ function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
   const r = raw as Record<string, unknown>;
 
   // collapsedSummary — sanitise, enforce mode-specific length caps, reject garble.
-  const modeLengthCap = mode === 'minimal_fallback' ? 240 : mode === 'descriptive_fallback' ? 220 : 500;
+  const modeLengthCap = mode === 'minimal_fallback' ? 240 : mode === 'descriptive_fallback' ? 280 : 500;
   const rawCollapsed = typeof r.collapsedSummary === 'string'
-    ? sanitizeText(r.collapsedSummary).slice(0, modeLengthCap)
+    ? truncateAtWordBoundary(r.collapsedSummary, modeLengthCap)
     : '';
   const collapsedSummary = looksGarbled(rawCollapsed) ? '' : rawCollapsed;
 
@@ -283,7 +318,7 @@ function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
 
   // expandedSummary — same sanity checks; silently drop if garbled.
   const rawExpanded = typeof r.expandedSummary === 'string'
-    ? sanitizeText(r.expandedSummary).slice(0, 1200)
+    ? truncateAtWordBoundary(r.expandedSummary, 1200)
     : null;
   const expandedSummary =
     rawExpanded !== null && !looksGarbled(rawExpanded) ? rawExpanded : null;
@@ -343,7 +378,7 @@ const RETRY_OPTIONS: RetryOptions = {
 
 const MODE_CONSTRAINTS: Record<SummaryMode, string> = {
   normal: 'collapsedSummary: 1-3 sentences, max 500 chars. expandedSummary: only include if it adds new information not in collapsedSummary, 3-5 sentences max. contributorBlurbs: up to 5.',
-  descriptive_fallback: 'collapsedSummary: HARD MAX 220 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
+  descriptive_fallback: 'collapsedSummary: HARD MAX 280 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
   minimal_fallback: 'collapsedSummary: EXACTLY 2 sentences, HARD MAX 240 chars. Sentence 1: root post substance. Sentence 2: observable reply activity. whatChanged MUST be []. contributorBlurbs MUST be [].',
 };
 
@@ -456,29 +491,257 @@ function buildUserMessage(request: WriterRequest): string {
   return lines.join('\n');
 }
 
+type EnhancerFailureMetadata = {
+  failureClass: WriterEnhancerFailureClass;
+  message: string;
+  retryable: boolean;
+  status?: number;
+  code?: string;
+  retryAfterMs?: number;
+  preview?: string;
+  responseChars?: number;
+};
+
+function sanitizeFailureMessage(value: string, maxLen = 180): string {
+  return sanitizeText(value)
+    .replace(/https?:\/\/\S+/gi, '[url]')
+    .replace(/\bat:\/\/\S+/gi, '[uri]')
+    .replace(/\bdid:[a-z0-9:._-]+\b/gi, '[did]')
+    .replace(/@[a-z0-9._-]{2,}/gi, '[handle]')
+    .replace(/\s+/g, ' ')
+    .slice(0, maxLen)
+    .trim();
+}
+
+function formatWriterError(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message.trim();
+  }
+  return 'Unknown writer failure';
+}
+
+function parseRetryAfterHeader(value: string | null | undefined): number | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  const numericSeconds = Number(value);
+  if (Number.isFinite(numericSeconds) && numericSeconds >= 0) {
+    return Math.max(0, Math.floor(numericSeconds * 1000));
+  }
+  const targetTime = Date.parse(value);
+  if (!Number.isFinite(targetTime)) return null;
+  return Math.max(0, targetTime - Date.now());
+}
+
+function getHeaderValue(headers: unknown, name: string): string | null {
+  if (!headers || typeof headers !== 'object') return null;
+  if (headers instanceof Headers) {
+    return headers.get(name);
+  }
+
+  const record = headers as Record<string, unknown>;
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(record)) {
+    if (key.toLowerCase() !== target || typeof value !== 'string') continue;
+    return value;
+  }
+  return null;
+}
+
+function extractRetryAfterMs(error: unknown): number | undefined {
+  const directRetryAfterMs = (error as { retryAfterMs?: unknown })?.retryAfterMs;
+  if (typeof directRetryAfterMs === 'number' && Number.isFinite(directRetryAfterMs)) {
+    return Math.max(0, Math.floor(directRetryAfterMs));
+  }
+
+  const detailsRetryAfterMs = (error as { details?: { retryAfterMs?: unknown } })?.details?.retryAfterMs;
+  if (typeof detailsRetryAfterMs === 'number' && Number.isFinite(detailsRetryAfterMs)) {
+    return Math.max(0, Math.floor(detailsRetryAfterMs));
+  }
+
+  const retryAfterMsHeader = getHeaderValue((error as { headers?: unknown })?.headers, 'retry-after-ms')
+    ?? getHeaderValue((error as { cause?: { headers?: unknown } })?.cause?.headers, 'retry-after-ms');
+  if (retryAfterMsHeader) {
+    const parsed = Number(retryAfterMsHeader);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.floor(parsed));
+    }
+  }
+
+  const retryAfterHeader = getHeaderValue((error as { headers?: unknown })?.headers, 'retry-after')
+    ?? getHeaderValue((error as { cause?: { headers?: unknown } })?.cause?.headers, 'retry-after');
+  if (!retryAfterHeader) return undefined;
+  const parsed = parseRetryAfterHeader(retryAfterHeader);
+  if (typeof parsed !== 'number' || !Number.isFinite(parsed)) return undefined;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function classifyEnhancerFailure(error: unknown): WriterEnhancerFailureClass {
+  const message = formatWriterError(error).toLowerCase();
+  if (message.includes('timed out') || message.includes('timeout')) return 'timeout';
+  if (message.includes('invalid json')) return 'invalid_json';
+  if (message.includes('invalid decision')) return 'invalid_decision';
+  if (message.includes('empty output') || message.includes('empty response')) return 'empty_response';
+
+  const status = (error as { status?: unknown })?.status;
+  if (typeof status === 'number') {
+    if (status === 408 || status === 504) return 'timeout';
+    if (status === 429) return 'rate_limited';
+    if (status >= 500) return 'provider_5xx';
+    if (status >= 400) return 'provider_4xx';
+  }
+  return 'unknown';
+}
+
+function extractEnhancerFailureMetadata(error: unknown): EnhancerFailureMetadata {
+  const status = (error as { status?: unknown })?.status;
+  const rawCode = (error as { code?: unknown })?.code;
+  const rawPreview = (error as { preview?: unknown })?.preview;
+  const rawResponseChars = (error as { responseChars?: unknown })?.responseChars;
+  const explicitRetryable = (error as { retryable?: unknown })?.retryable === true;
+  const causeMessage = (error as { cause?: { message?: unknown } })?.cause?.message;
+  const baseMessage = formatWriterError(error);
+  const combinedMessage = typeof causeMessage === 'string' && causeMessage.trim().length > 0 && causeMessage !== baseMessage
+    ? `${baseMessage}: ${causeMessage}`
+    : baseMessage;
+  const retryAfterMs = extractRetryAfterMs(error);
+  const failureClass = classifyEnhancerFailure(error);
+
+  return {
+    failureClass,
+    message: sanitizeFailureMessage(combinedMessage),
+    retryable: explicitRetryable
+      || failureClass === 'timeout'
+      || failureClass === 'rate_limited'
+      || failureClass === 'provider_5xx'
+      || typeof retryAfterMs === 'number',
+    ...(typeof status === 'number' ? { status } : {}),
+    ...(typeof rawCode === 'string' && rawCode.trim().length > 0
+      ? { code: sanitizeFailureMessage(rawCode, 40) }
+      : {}),
+    ...(typeof retryAfterMs === 'number' ? { retryAfterMs } : {}),
+    ...(typeof rawPreview === 'string' && rawPreview.trim().length > 0
+      ? { preview: sanitizeFailureMessage(rawPreview, 220) }
+      : {}),
+    ...(typeof rawResponseChars === 'number' && Number.isFinite(rawResponseChars)
+      ? { responseChars: Math.max(0, Math.floor(rawResponseChars)) }
+      : {}),
+  };
+}
+
+async function getEnhancerReplacement(
+  request: WriterRequest,
+  params: {
+    candidate?: WriterResponse;
+    qwenFailure?: string;
+  },
+): Promise<WriterResponse | null> {
+  const source = params.candidate ? 'candidate' : 'qwen_failure';
+  const startedAt = Date.now();
+  const enhancerModel = resolveGeminiModel('interpolator-enhancer', env.GEMINI_INTERPOLATOR_ENHANCER_MODEL);
+  recordWriterEnhancerInvocation();
+
+  try {
+    const decision = await reviewInterpolatorWriter({
+      request,
+      ...params,
+    });
+    if (!decision) {
+      return null;
+    }
+
+    recordWriterEnhancerReview({
+      source,
+      decision: decision.decision,
+      latencyMs: Date.now() - startedAt,
+      issues: decision.issues,
+    });
+
+    if (decision.decision !== 'replace' || !decision.response) {
+      return null;
+    }
+
+    let replacement: WriterResponse;
+    try {
+      replacement = validateResponse(decision.response, request.summaryMode);
+    } catch {
+      recordWriterEnhancerRejectedReplacement('invalid-response');
+      return null;
+    }
+
+    if (replacement.abstained) {
+      recordWriterEnhancerRejectedReplacement('abstained-replacement');
+      return null;
+    }
+
+    recordWriterEnhancerTakeoverApplied(source);
+    return replacement;
+  } catch (error) {
+    const failure = extractEnhancerFailureMetadata(error);
+    recordWriterEnhancerFailure({
+      failureClass: failure.failureClass,
+      latencyMs: Date.now() - startedAt,
+      source,
+      model: enhancerModel,
+      message: failure.message,
+      retryable: failure.retryable,
+      ...(request.requestId ? { requestId: request.requestId } : {}),
+      ...(typeof failure.status === 'number' ? { status: failure.status } : {}),
+      ...(failure.code ? { code: failure.code } : {}),
+      ...(typeof failure.retryAfterMs === 'number' ? { retryAfterMs: failure.retryAfterMs } : {}),
+      ...(failure.preview ? { preview: failure.preview } : {}),
+      ...(typeof failure.responseChars === 'number' ? { responseChars: failure.responseChars } : {}),
+    });
+    console.warn('[llm/write/interpolator][gemini-enhancer]', {
+      requestId: request.requestId ?? 'unknown',
+      source,
+      model: enhancerModel,
+      failureClass: failure.failureClass,
+      retryable: failure.retryable,
+      ...(typeof failure.status === 'number' ? { status: failure.status } : {}),
+      ...(failure.code ? { code: failure.code } : {}),
+      ...(typeof failure.retryAfterMs === 'number' ? { retryAfterMs: failure.retryAfterMs } : {}),
+      ...(failure.preview ? { preview: failure.preview } : {}),
+      ...(typeof failure.responseChars === 'number' ? { responseChars: failure.responseChars } : {}),
+      message: failure.message,
+    });
+    return null;
+  }
+}
+
 export async function runInterpolatorWriter(request: WriterRequest): Promise<WriterResponse> {
   const model = env.QWEN_WRITER_MODEL;
 
   const userMessage = buildUserMessage(request);
 
-  const rawContent = await withRetry(
-    () => callOllama(
-      model,
-      [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
-      ],
-      env.LLM_TIMEOUT_MS,
-    ),
-    RETRY_OPTIONS,
-  );
-
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(extractJsonObject(rawContent));
-  } catch {
-    throw new Error('Writer returned invalid JSON');
-  }
+    const rawContent = await withRetry(
+      () => callOllama(
+        model,
+        [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: userMessage },
+        ],
+        env.LLM_TIMEOUT_MS,
+      ),
+      RETRY_OPTIONS,
+    );
 
-  return validateResponse(parsed, request.summaryMode);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(extractJsonObject(rawContent));
+    } catch {
+      throw new Error('Writer returned invalid JSON');
+    }
+
+    const candidate = validateResponse(parsed, request.summaryMode);
+    const replacement = await getEnhancerReplacement(request, { candidate });
+    return replacement ?? candidate;
+  } catch (error) {
+    const replacement = await getEnhancerReplacement(request, {
+      qwenFailure: formatWriterError(error),
+    });
+    if (replacement) {
+      return replacement;
+    }
+    throw error;
+  }
 }

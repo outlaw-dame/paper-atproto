@@ -164,11 +164,14 @@ describe('llm router hardening', () => {
       writer?: {
         clientOutcomes?: { fallback?: number };
         fallbackReasonDistribution?: { ['root-only-response-fallback']?: number };
+        enhancer?: { invocations?: number; reviews?: number };
       };
     };
 
     expect(diagnostics.writer?.clientOutcomes?.fallback).toBeGreaterThanOrEqual(1);
     expect(diagnostics.writer?.fallbackReasonDistribution?.['root-only-response-fallback']).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.writer?.enhancer?.invocations).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.writer?.enhancer?.reviews).toBeGreaterThanOrEqual(0);
   });
 
   it('blocks production diagnostics without admin secret', async () => {

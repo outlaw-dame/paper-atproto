@@ -4,7 +4,7 @@ const mockGenerateContent = vi.hoisted(() => vi.fn());
 
 const envMock = vi.hoisted(() => ({
   GEMINI_API_KEY: 'test-key',
-  GEMINI_GROUNDING_MODEL: 'gemini-2.5-flash',
+  GEMINI_GROUNDING_MODEL: 'gemini-3-flash-preview',
   VERIFY_GEMINI_GROUNDING_ENABLED: true,
   VERIFY_MAX_TEXT_CHARS: 1500,
   VERIFY_MAX_URLS: 8,
@@ -74,9 +74,13 @@ describe('GeminiGroundingProvider', () => {
     });
 
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-    const request = mockGenerateContent.mock.calls[0]?.[0] as { contents?: string };
+    const request = mockGenerateContent.mock.calls[0]?.[0] as {
+      contents?: string;
+      config?: { thinkingConfig?: { thinkingLevel?: string } };
+    };
     expect(request.contents).toContain('[redacted-secret]');
     expect(request.contents).not.toContain('sk-1234567890123456789012345');
+    expect(request.config?.thinkingConfig?.thinkingLevel).toBe('LOW');
     expect(result.summary).toContain('[redacted-secret]');
     expect(result.sources).toEqual([
       {

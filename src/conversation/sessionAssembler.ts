@@ -54,6 +54,8 @@ import {
   markConversationModelLoading,
   markConversationModelReady,
   markConversationModelSkipped,
+  shouldRunPremiumDeepInterpolator,
+  shouldReuseExistingModelOutputs,
   shouldRunInterpolatorWriter,
 } from './modelExecution';
 import {
@@ -74,7 +76,6 @@ import type {
 } from '../intelligence/llmContracts';
 import type {
   PremiumInterpolatorRequest,
-  PremiumAiEntitlements,
 } from '../intelligence/premiumContracts';
 import type { MockPost } from '../data/mockData';
 import type {
@@ -407,7 +408,7 @@ function redactTextByUserRules(
   return next;
 }
 
-function redactPremiumInterpolatorInputByUserRules(
+export function redactPremiumInterpolatorInputByUserRules(
   input: PremiumInterpolatorRequest,
   rules: KeywordFilterRule[] = useContentFilterStore.getState().rules,
 ): PremiumInterpolatorRequest {
@@ -417,12 +418,47 @@ function redactPremiumInterpolatorInputByUserRules(
       ...input.rootPost,
       text: redactTextByUserRules(input.rootPost.text, rules),
     },
+    topContributors: input.topContributors.map((contributor) => ({
+      ...contributor,
+      handle: redactTextByUserRules(contributor.handle, rules),
+      stanceSummary: redactTextByUserRules(contributor.stanceSummary, rules),
+      ...(contributor.stanceExcerpt
+        ? { stanceExcerpt: redactTextByUserRules(contributor.stanceExcerpt, rules) }
+        : {}),
+      ...(contributor.agreementSignal
+        ? { agreementSignal: redactTextByUserRules(contributor.agreementSignal, rules) }
+        : {}),
+    })),
+    safeEntities: input.safeEntities.map((entity) => ({
+      ...entity,
+      label: redactTextByUserRules(entity.label, rules),
+    })),
     selectedComments: input.selectedComments.map((comment) => ({
       ...comment,
       text: redactTextByUserRules(comment.text, rules),
     })),
     factualHighlights: input.factualHighlights.map((value) => redactTextByUserRules(value, rules)),
     whatChangedSignals: input.whatChangedSignals.map((value) => redactTextByUserRules(value, rules)),
+    ...(input.mediaFindings
+      ? {
+          mediaFindings: input.mediaFindings.map((finding) => ({
+            ...finding,
+            summary: redactTextByUserRules(finding.summary, rules),
+            ...(finding.extractedText
+              ? { extractedText: redactTextByUserRules(finding.extractedText, rules) }
+              : {}),
+            ...(finding.cautionFlags
+              ? { cautionFlags: finding.cautionFlags.map((value) => redactTextByUserRules(value, rules)) }
+              : {}),
+          })),
+        }
+      : {}),
+    ...(input.interpretiveExplanation
+      ? { interpretiveExplanation: redactTextByUserRules(input.interpretiveExplanation, rules) }
+      : {}),
+    ...(input.entityThemes
+      ? { entityThemes: input.entityThemes.map((value) => redactTextByUserRules(value, rules)) }
+      : {}),
     interpretiveBrief: {
       ...input.interpretiveBrief,
       ...(input.interpretiveBrief.baseSummary
@@ -432,26 +468,6 @@ function redactPremiumInterpolatorInputByUserRules(
       limits: input.interpretiveBrief.limits.map((value) => redactTextByUserRules(value, rules)),
     },
   };
-}
-
-function shouldRunPremiumDeepInterpolator(
-  session: ConversationSession,
-  replyCount: number,
-  entitlements: PremiumAiEntitlements,
-): boolean {
-  if (!entitlements.providerAvailable) return false;
-  if (!entitlements.capabilities.includes('deep_interpolator')) return false;
-  if (session.interpretation.summaryMode === 'minimal_fallback') return false;
-
-  const confidence = session.interpretation.confidence;
-  const surfaceConfidence = confidence?.surfaceConfidence ?? 0;
-  const interpretiveConfidence = confidence?.interpretiveConfidence ?? 0;
-  const hasSourceSignal = session.interpretation.interpolator?.sourceSupportPresent ?? false;
-  const hasFactualSignal = session.interpretation.interpolator?.factualSignalPresent ?? false;
-
-  if (replyCount >= 5) return true;
-  if (hasSourceSignal || hasFactualSignal) return true;
-  return surfaceConfidence >= 0.65 || interpretiveConfidence >= 0.55;
 }
 
 function buildPremiumInterpolatorRequest(params: {
@@ -605,50 +621,68 @@ export async function hydrateConversationSession(
     });
     recordInterpolatorStageTiming('hydrate.verified_pipeline', nowMs() - pipelineStartedAt);
 
-    store.updateSession(sessionId, (current) => ({
-      ...current,
-      graph,
-      interpretation: {
-        ...current.interpretation,
-        interpolator: pipeline.interpolator,
-        scoresByUri: pipeline.scores,
-        confidence: pipeline.confidence,
-        summaryMode: pipeline.summaryMode,
-        writerResult: null,
-        mediaFindings: [],
-        threadState: null,
-        interpretiveExplanation: null,
-        lastComputedAt: new Date().toISOString(),
-        premium: {
-          status: 'idle',
-          ...(current.interpretation.premium.entitlements
-            ? { entitlements: current.interpretation.premium.entitlements }
-            : {}),
+    store.updateSession(sessionId, (current) => {
+      const preserveExistingOutputs = !pipeline.didMeaningfullyChange;
+
+      return {
+        ...current,
+        graph,
+        interpretation: {
+          ...current.interpretation,
+          interpolator: pipeline.interpolator,
+          scoresByUri: pipeline.scores,
+          confidence: pipeline.confidence,
+          summaryMode: pipeline.summaryMode,
+          writerResult: preserveExistingOutputs
+            ? current.interpretation.writerResult
+            : null,
+          mediaFindings: preserveExistingOutputs
+            ? (current.interpretation.mediaFindings ?? [])
+            : [],
+          threadState: null,
+          interpretiveExplanation: null,
+          ...(
+            preserveExistingOutputs
+              ? (
+                  current.interpretation.lastComputedAt
+                    ? { lastComputedAt: current.interpretation.lastComputedAt }
+                    : {}
+                )
+              : { lastComputedAt: new Date().toISOString() }
+          ),
+          premium: preserveExistingOutputs
+            ? current.interpretation.premium
+            : {
+                status: 'idle',
+                ...(current.interpretation.premium.entitlements
+                  ? { entitlements: current.interpretation.premium.entitlements }
+                  : {}),
+              },
         },
-      },
-      evidence: {
-        verificationByUri: pipeline.verificationByPost,
-        rootVerification: pipeline.rootVerification,
-      },
-      entities: {
-        ...current.entities,
-        entityLandscape: pipeline.interpolator.entityLandscape ?? [],
-      },
-      contributors: {
-        contributors: pipeline.interpolator.topContributors ?? [],
-        topContributorDids: (pipeline.interpolator.topContributors ?? []).map((c) => c.did),
-      },
-      trajectory: {
-        ...current.trajectory,
-        heatLevel: pipeline.interpolator.heatLevel ?? 0,
-        repetitionLevel: pipeline.interpolator.repetitionLevel ?? 0,
-      },
-      meta: {
-        status: 'ready',
-        error: null,
-        lastHydratedAt: new Date().toISOString(),
-      },
-    }));
+        evidence: {
+          verificationByUri: pipeline.verificationByPost,
+          rootVerification: pipeline.rootVerification,
+        },
+        entities: {
+          ...current.entities,
+          entityLandscape: pipeline.interpolator.entityLandscape ?? [],
+        },
+        contributors: {
+          contributors: pipeline.interpolator.topContributors ?? [],
+          topContributorDids: (pipeline.interpolator.topContributors ?? []).map((c) => c.did),
+        },
+        trajectory: {
+          ...current.trajectory,
+          heatLevel: pipeline.interpolator.heatLevel ?? 0,
+          repetitionLevel: pipeline.interpolator.repetitionLevel ?? 0,
+        },
+        meta: {
+          status: 'ready',
+          error: null,
+          lastHydratedAt: new Date().toISOString(),
+        },
+      };
+    });
 
     let nextSession = store.getSession(sessionId);
     if (!nextSession) return;
@@ -726,6 +760,28 @@ export async function hydrateConversationSession(
       nextSession.interpretation.summaryMode ?? pipeline.summaryMode,
       nextSession.interpretation.confidence ?? pipeline.confidence,
     );
+
+    if (shouldReuseExistingModelOutputs(nextSession, pipeline.didMeaningfullyChange)) {
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped(current, 'writer', {
+          reason: 'no_meaningful_change',
+          sourceToken: modelSourceToken,
+        })
+      ));
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped(current, 'multimodal', {
+          reason: 'no_meaningful_change',
+          sourceToken: modelSourceToken,
+        })
+      ));
+      store.updateSession(sessionId, (current) => (
+        markConversationModelSkipped(current, 'premium', {
+          reason: 'no_meaningful_change',
+          sourceToken: modelSourceToken,
+        })
+      ));
+      return;
+    }
 
     const writerGate = shouldRunInterpolatorWriter(nextSession, allReplies.length);
     recordInterpolatorGateDecision(writerGate.shouldRun);
@@ -922,9 +978,22 @@ export async function hydrateConversationSession(
           ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
         },
       );
+      const preparedWriterInput = writerInput;
+
+      store.updateSession(sessionId, (current) => (
+        matchesConversationModelSourceToken(current, modelSourceToken)
+          ? {
+              ...current,
+              entities: {
+                ...current.entities,
+                writerEntities: preparedWriterInput.safeEntities,
+              },
+            }
+          : markConversationModelDiscarded(current, 'writer')
+      ));
 
       const writerStartedAt = nowMs();
-      const writerResult = await callInterpolatorWriter(writerInput, signal);
+      const writerResult = await callInterpolatorWriter(preparedWriterInput, signal);
       recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
       filteredWriterResult = redactWriterResultByUserRules(writerResult);
       store.updateSession(sessionId, (current) => {

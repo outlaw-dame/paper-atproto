@@ -192,7 +192,7 @@ function computeSessionReplyBehaviorCounts(
     if (
       role === 'new_information'
       || role === 'context_setter'
-      || /\b(new|another|additional|context)\b/.test(text)
+      || /\b(adds?|added|adding|context|background|timeline|details?|update)\b/.test(text)
     ) {
       counts.newInfo += 1;
     }
@@ -220,9 +220,32 @@ function joinBehaviorPhrases(phrases: string[]): string {
   return `${phrases.slice(0, -1).join(', ')}, and ${phrases[phrases.length - 1]!}`;
 }
 
+function toBehaviorContinuation(phrase: string): string {
+  switch (phrase) {
+    case 'ask for sourcing':
+      return 'asking for sourcing';
+    case 'add clarification':
+      return 'adding clarification';
+    case 'push back on the claim':
+      return 'pushing back on the claim';
+    case 'compare it to earlier incidents':
+      return 'comparing it to earlier incidents';
+    case 'add context':
+      return 'adding context';
+    case 'press for specifics':
+      return 'pressing for specifics';
+    case 'repeat the same point':
+      return 'repeating the same point';
+    case 'turn heated quickly':
+      return 'heating up quickly';
+    default:
+      return phrase;
+  }
+}
+
 function describeSessionReplyBehavior(counts: SessionReplyBehaviorCounts): string {
   if (counts.total === 0) {
-    return 'There are no visible replies yet.';
+    return 'There are no replies yet.';
   }
 
   const phrases: string[] = [];
@@ -237,13 +260,25 @@ function describeSessionReplyBehavior(counts: SessionReplyBehaviorCounts): strin
   if (phrases.length === 0 && counts.repetition > 0) phrases.push('repeat the same point');
   if (phrases.length === 0 && counts.escalation > 0) phrases.push('turn heated quickly');
 
+  const prioritizedPhrases = phrases.length > 1
+    ? phrases.filter((phrase) => phrase !== 'add context')
+    : phrases;
+
+  if (counts.total <= 4) {
+    const continuations = prioritizedPhrases.slice(0, 2).map(toBehaviorContinuation);
+    if (continuations.length === 0) {
+      return 'Replies add little beyond brief reaction.';
+    }
+    return `Replies add little beyond ${joinBehaviorPhrases(continuations)}.`;
+  }
+
   const subject = counts.total >= 8
     ? `Across ${counts.total} visible replies, the thread mostly`
     : counts.total === 1
-      ? 'The visible reply mostly'
-      : 'Visible replies mostly';
+      ? 'The reply mostly'
+      : 'Replies mostly';
 
-  return `${subject} ${joinBehaviorPhrases(phrases.slice(0, 3))}.`;
+  return `${subject} ${joinBehaviorPhrases(prioritizedPhrases.slice(0, 3))}.`;
 }
 
 function ensureSentence(value: string): string {

@@ -1,7 +1,12 @@
 import { withRetry } from '../lib/retry.js';
 import type { RetryOptions } from '../lib/retry.js';
-import { GoogleGenAI } from '@google/genai';
 import { env } from '../config/env.js';
+import {
+  createGoogleGenAIClient,
+  geminiThinkingConfig,
+  isGemini3Model,
+  resolveGeminiModel,
+} from '../lib/googleGenAi.js';
 import { detectHarmfulContent, ensureSafetyInstructions } from '../lib/safeguards.js';
 import { ensureOllamaLocalUrlPolicy } from '../lib/ollama-policy.js';
 
@@ -46,10 +51,6 @@ interface OllamaChatMessage {
 interface OllamaChatResponse {
   message: OllamaChatMessage;
   done: boolean;
-}
-
-interface ComposerProviderResponse {
-  text?: string;
 }
 
 type ComposerProvider = 'gemini' | 'qwen';
@@ -255,17 +256,23 @@ async function callGemini(
   userMessage: string,
   timeoutMs: number,
 ): Promise<string> {
-  const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY! });
+  const client = createGoogleGenAIClient();
+  if (!client) {
+    throw Object.assign(new Error('Gemini composer guidance is not configured'), { status: 503 });
+  }
+
+  const resolvedModel = resolveGeminiModel('composer', model);
 
   const response = await withTimeout(
     client.models.generateContent({
-      model,
+      model: resolvedModel,
       contents: `${SYSTEM_PROMPT}\n\n${userMessage}`,
       config: {
         responseMimeType: 'application/json',
-        ...GEMINI_OPTIONS,
+        ...(!isGemini3Model(resolvedModel) ? GEMINI_OPTIONS : {}),
+        ...geminiThinkingConfig(resolvedModel, 'low'),
       },
-    }) as Promise<ComposerProviderResponse>,
+    }),
     timeoutMs,
   );
 

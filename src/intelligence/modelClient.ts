@@ -21,9 +21,11 @@ import { sanitizeUrlForProcessing } from '../lib/safety/externalUrl';
 import {
   recordInterpolatorWriterOutcome,
 } from '../perf/interpolatorTelemetry';
+import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore';
 import type {
   DeepInterpolatorResult,
   PremiumAiEntitlements,
+  PremiumAiProviderPreference,
   PremiumAiSafetyMetadata,
   PremiumInterpolatorRequest,
 } from './premiumContracts';
@@ -154,6 +156,7 @@ const interpolatorTelemetry: InterpolatorTelemetrySnapshot = {
 
 const WRITER_OUTCOME_TELEMETRY_PATH = '/api/llm/telemetry/writer-outcome';
 const WRITER_OUTCOME_TELEMETRY_MAX_ATTEMPTS = 2;
+const PREMIUM_AI_PROVIDER_HEADER = 'X-Glympse-AI-Provider';
 
 function backoffWithJitterMs(attempt: number, baseMs = 200, maxMs = 1_500): number {
   const exp = Math.min(maxMs, baseMs * 2 ** attempt);
@@ -223,6 +226,13 @@ function truncateAtWordBoundary(value: string, maxLen: number): string {
     return `${slice.slice(0, lastSpace)}...`;
   }
   return `${slice}...`;
+}
+
+function normalizeSignalExcerpt(value: string, maxLen: number): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
 }
 
 function sanitizeSafeSummaryText(value: string): string {
@@ -303,7 +313,11 @@ function computeReplyBehaviorCounts(input: ThreadStateForWriter): ReplyBehaviorC
     ) {
       counts.disagreement += 1;
     }
-    if (role === 'new_information' || role === 'context-setter' || /\b(new|another|additional|context)\b/.test(text)) {
+    if (
+      role === 'new_information'
+      || role === 'context-setter'
+      || /\b(adds?|added|adding|context|background|timeline|details?|update)\b/.test(text)
+    ) {
       counts.newInfo += 1;
     }
     if (/\b(compare|comparison|similar|earlier|prior|before|pattern)\b/.test(text)) {
@@ -338,10 +352,113 @@ function joinBehaviorPhrases(phrases: string[]): string {
   return `${phrases.slice(0, -1).join(', ')}, and ${phrases[phrases.length - 1]!}`;
 }
 
+function toBehaviorContinuation(phrase: string): string {
+  switch (phrase) {
+    case 'ask for sourcing':
+      return 'asking for sourcing';
+    case 'add clarification':
+      return 'adding clarification';
+    case 'push back on the claim':
+      return 'pushing back on the claim';
+    case 'compare it to earlier incidents':
+      return 'comparing it to earlier incidents';
+    case 'add context':
+      return 'adding context';
+    case 'press for specifics':
+      return 'pressing for specifics';
+    case 'repeat the same point':
+      return 'repeating the same point';
+    case 'turn heated quickly':
+      return 'heating up quickly';
+    default:
+      return phrase;
+  }
+}
+
+type ParsedWhatChangedSignal = {
+  kind: string;
+  detail: string;
+};
+
+function parseWhatChangedSignal(signal: string): ParsedWhatChangedSignal | null {
+  const normalized = signal.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+
+  const separatorIndex = normalized.indexOf(':');
+  if (separatorIndex <= 0) {
+    return {
+      kind: 'signal',
+      detail: normalized,
+    };
+  }
+
+  const kind = normalized.slice(0, separatorIndex).trim().toLowerCase();
+  const detail = normalized.slice(separatorIndex + 1).trim();
+  if (!detail) return null;
+
+  return { kind, detail };
+}
+
+function buildSpecificReplyPhrases(input: ThreadStateForWriter): string[] {
+  const phrases: string[] = [];
+
+  for (const rawSignal of input.whatChangedSignals) {
+    const parsed = parseWhatChangedSignal(rawSignal);
+    if (!parsed) continue;
+
+    const detail = normalizeSignalExcerpt(parsed.detail, 72);
+    if (!detail) continue;
+
+    let phrase = '';
+    switch (parsed.kind) {
+      case 'source cited':
+        phrase = `bring in ${detail}`;
+        break;
+      case 'clarification':
+        phrase = `surface ${detail}`;
+        break;
+      case 'counterpoint':
+        phrase = `push back with ${detail}`;
+        break;
+      case 'new angle':
+      case 'new info':
+        phrase = `add ${detail}`;
+        break;
+      default:
+        phrase = detail;
+        break;
+    }
+
+    if (!phrase) continue;
+    if (phrases.some((existing) => existing.toLowerCase() === phrase.toLowerCase())) continue;
+    phrases.push(phrase);
+    if (phrases.length >= 3) break;
+  }
+
+  if (phrases.length > 0) {
+    return phrases;
+  }
+
+  const factualLead = sentenceLead(input.factualHighlights[0] ?? '', 88);
+  if (factualLead) {
+    return [`bring in ${normalizeSignalExcerpt(factualLead.toLowerCase(), 72)}`];
+  }
+
+  return [];
+}
+
 function describeReplyBehavior(input: ThreadStateForWriter): string {
   const counts = computeReplyBehaviorCounts(input);
   if (counts.total === 0) {
-    return 'Visible replies are still too sparse to characterize.';
+    return 'There are no replies yet.';
+  }
+
+  const specificPhrases = buildSpecificReplyPhrases(input);
+  if (specificPhrases.length > 0) {
+    const subject = counts.total >= 8
+      ? `Across ${counts.total} visible replies, people`
+      : 'Visible replies';
+    return `${subject} ${joinBehaviorPhrases(specificPhrases.slice(0, 3))}.`;
   }
 
   const phrases: string[] = [];
@@ -356,11 +473,23 @@ function describeReplyBehavior(input: ThreadStateForWriter): string {
   if (phrases.length === 0 && counts.repetition > 0) phrases.push('repeat the same point');
   if (phrases.length === 0 && counts.escalation > 0) phrases.push('turn heated quickly');
 
+  const prioritizedPhrases = phrases.length > 1
+    ? phrases.filter((phrase) => phrase !== 'add context')
+    : phrases;
+
+  if (counts.total <= 4) {
+    const continuations = prioritizedPhrases.slice(0, 2).map(toBehaviorContinuation);
+    if (continuations.length === 0) {
+      return 'Replies add little beyond brief reaction.';
+    }
+    return `Replies add little beyond ${joinBehaviorPhrases(continuations)}.`;
+  }
+
   const subject = counts.total >= 8
     ? `Across ${counts.total} visible replies, the thread mostly`
-    : 'Visible replies mostly';
+    : 'Replies mostly';
 
-  return `${subject} ${joinBehaviorPhrases(phrases.slice(0, 3))}.`;
+  return `${subject} ${joinBehaviorPhrases(prioritizedPhrases.slice(0, 3))}.`;
 }
 
 /**
@@ -377,6 +506,98 @@ function describeReplyRoleAction(role?: string): string {
   if (r === 'direct_response') return 'responds directly to the post';
   if (r === 'story_worthy') return 'shapes the direction of the thread';
   return 'joins the discussion';
+}
+
+function normalizedHandle(handle: string): string {
+  return handle.trim().replace(/^@+/, '').toLowerCase();
+}
+
+function formatHandle(handle: string): string {
+  const normalized = normalizedHandle(handle);
+  return normalized ? `@${normalized}` : '@unknown';
+}
+
+function contributorRoleAction(role?: string): string {
+  const normalized = (role ?? '').toLowerCase();
+  if (normalized === 'source-bringer' || normalized === 'source_bringer') return 'brings in sourcing';
+  if (normalized === 'rule-source' || normalized === 'rule_source') return 'cites an official source';
+  if (normalized === 'clarifier' || normalized === 'clarifying') return 'clarifies a key point';
+  if (normalized === 'counterpoint' || normalized === 'useful_counterpoint') return 'offers a counterpoint';
+  if (normalized === 'question-raiser') return 'presses for specifics';
+  if (normalized === 'emotional-reaction' || normalized === 'provocative') return 'reacts strongly';
+  if (normalized === 'op') return 'keeps shaping the thread';
+  return 'adds context';
+}
+
+function isStrongContributor(
+  contributor: ThreadStateForWriter['topContributors'][number],
+): boolean {
+  if (contributor.impactScore >= 0.62) return true;
+  return contributor.role === 'source-bringer'
+    || contributor.role === 'rule-source'
+    || contributor.role === 'clarifier'
+    || contributor.role === 'counterpoint';
+}
+
+type FallbackContributorMention = {
+  handle: string;
+  action: string;
+  impactScore: number;
+};
+
+function buildFallbackContributorMentions(
+  input: ThreadStateForWriter,
+): FallbackContributorMention[] {
+  const mentions: FallbackContributorMention[] = [];
+  const seen = new Set<string>();
+  const rootHandle = normalizedHandle(input.rootPost.handle);
+
+  const addMention = (handle: string, action: string, impactScore: number): void => {
+    const normalized = normalizedHandle(handle);
+    if (!normalized || normalized === rootHandle || seen.has(normalized)) return;
+    seen.add(normalized);
+    mentions.push({ handle: normalized, action, impactScore });
+  };
+
+  input.topContributors
+    .filter((contributor) => isStrongContributor(contributor))
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .forEach((contributor) => {
+      addMention(contributor.handle, contributorRoleAction(contributor.role), contributor.impactScore);
+    });
+
+  if (mentions.length >= 2) {
+    return mentions.slice(0, 2);
+  }
+
+  input.selectedComments
+    .filter((comment) => (
+      comment.handle !== input.rootPost.handle
+      && comment.impactScore >= 0.62
+    ))
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .forEach((comment) => {
+      addMention(comment.handle, describeReplyRoleAction(comment.role), comment.impactScore);
+    });
+
+  return mentions
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .slice(0, 2);
+}
+
+function formatContributorSentence(mentions: FallbackContributorMention[]): string {
+  if (mentions.length === 0) return '';
+
+  if (mentions.length === 1) {
+    const first = mentions[0]!;
+    return ensureSentence(`${formatHandle(first.handle)} ${first.action}`);
+  }
+
+  const first = mentions[0]!;
+  const second = mentions[1]!;
+  return ensureSentence(
+    `${formatHandle(first.handle)} ${first.action}, while ${formatHandle(second.handle)} ${second.action}`,
+  );
 }
 
 function normalizeTopicLabel(value: string): string {
@@ -487,6 +708,10 @@ function deterministicWriterFallback(input: ThreadStateForWriter): InterpolatorW
 
   // Reply engagement line
   const replyLine = visibleReplyCount > 0 ? describeReplyBehavior(input) : '';
+  const contributorMentions = buildFallbackContributorMentions(input);
+  const contributorSentence = input.summaryMode === 'minimal_fallback'
+    ? ''
+    : formatContributorSentence(contributorMentions);
 
   // Most-notable reply: synthesize from role for descriptive_fallback (avoids verbatim copy),
   // use actual text excerpt for normal mode, omit entirely for minimal_fallback.
@@ -494,11 +719,14 @@ function deterministicWriterFallback(input: ThreadStateForWriter): InterpolatorW
     .filter((c) => c.impactScore >= 0.35 && c.text.trim().length >= 30 && c.handle !== handle)
     .sort((a, b) => b.impactScore - a.impactScore)[0];
   let notableSentence = '';
-  if (topReply && input.summaryMode === 'descriptive_fallback') {
+  const topReplyAlreadyMentioned = contributorMentions.some(
+    (mention) => mention.handle === normalizedHandle(topReply?.handle ?? ''),
+  );
+  if (topReply && !topReplyAlreadyMentioned && input.summaryMode === 'descriptive_fallback') {
     // Role-based synthesis: describes what the reply IS DOING, not what it says verbatim.
     const roleAction = describeReplyRoleAction(topReply.role);
     notableSentence = ensureSentence(sanitizeSafeSummaryText(`@${topReply.handle} ${roleAction}`));
-  } else if (topReply && input.summaryMode !== 'minimal_fallback') {
+  } else if (topReply && !topReplyAlreadyMentioned && input.summaryMode !== 'minimal_fallback') {
     notableSentence = ensureSentence(sanitizeSafeSummaryText(
       `@${topReply.handle} adds: ${truncateAtWordBoundary(topReply.text.trim(), 130)}`,
     ));
@@ -507,7 +735,7 @@ function deterministicWriterFallback(input: ThreadStateForWriter): InterpolatorW
   const maxLen = input.summaryMode === 'minimal_fallback' ? 240 : 420;
   const collapsedSummary = sanitizeSafeSummaryText(
     truncateAtWordBoundary(
-      [rootSentence, replyLine, notableSentence].filter(Boolean).join(' '),
+      [rootSentence, replyLine, contributorSentence, notableSentence].filter(Boolean).join(' '),
       maxLen,
     ),
   );
@@ -653,6 +881,12 @@ function hasReplyGroundingSignal(result: InterpolatorWriteResult): boolean {
   return specificContributorBlurbs.length > 0;
 }
 
+function summaryMentionsHandle(summary: string, handle: string): boolean {
+  const normalized = normalizedHandle(handle);
+  if (!normalized) return false;
+  return summary.toLowerCase().includes(`@${normalized}`);
+}
+
 function shouldPreferDeterministicFallback(
   input: ThreadStateForWriter,
   result: InterpolatorWriteResult,
@@ -667,6 +901,15 @@ function shouldPreferDeterministicFallback(
   }
 
   if (GENERIC_REPLY_ACTIVITY_RE.test(summary)) return true;
+  if (input.summaryMode === 'descriptive_fallback') {
+    const strongMentions = buildFallbackContributorMentions(input);
+    const mentionsRoot = summaryMentionsHandle(summary, input.rootPost.handle);
+    const mentionsContributor = strongMentions.length === 0
+      || strongMentions.some((mention) => summaryMentionsHandle(summary, mention.handle));
+    if (!mentionsRoot || !mentionsContributor) {
+      return true;
+    }
+  }
   if (hasReplyGrounding) return false;
 
   if (sentenceCount(summary) <= 1 && tokenOverlapRatio(summary, input.rootPost.text) >= 0.88) {
@@ -849,7 +1092,7 @@ function sanitizeDeepInterpolatorResult(
     perspectiveGaps: sanitizeArray(value.perspectiveGaps, 3, 120),
     followUpQuestions: sanitizeArray(value.followUpQuestions, 3, 120),
     confidence: Math.max(0, Math.min(1, Number.isFinite(value.confidence) ? value.confidence : 0)),
-    provider: 'gemini',
+    provider: value.provider === 'openai' ? 'openai' : 'gemini',
     updatedAt: value.updatedAt,
     ...(value.sourceComputedAt ? { sourceComputedAt: value.sourceComputedAt } : {}),
     ...(safety ? { safety } : {}),
@@ -857,7 +1100,16 @@ function sanitizeDeepInterpolatorResult(
 }
 
 function premiumEntitlementCacheKey(actorDid: string): string {
-  return actorDid.trim().toLowerCase();
+  const preferredProvider = getPremiumAiProviderPreference();
+  return `${actorDid.trim().toLowerCase()}::${preferredProvider}`;
+}
+
+function getPremiumAiProviderPreference(): PremiumAiProviderPreference {
+  const preferredProvider = useInterpolatorSettingsStore.getState().premiumProviderPreference;
+  if (preferredProvider === 'gemini' || preferredProvider === 'openai') {
+    return preferredProvider;
+  }
+  return 'auto';
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────
@@ -985,9 +1237,11 @@ export async function getPremiumAiEntitlements(
       tier: 'free',
       capabilities: [],
       providerAvailable: false,
+      availableProviders: [],
     };
   }
 
+  const preferredProvider = getPremiumAiProviderPreference();
   const cacheKey = premiumEntitlementCacheKey(normalizedDid);
   const cached = premiumEntitlementCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
@@ -1004,6 +1258,7 @@ export async function getPremiumAiEntitlements(
       retryOnStatuses: [408, 429, 500, 502, 503, 504],
       headers: {
         'X-Glympse-User-Did': normalizedDid,
+        [PREMIUM_AI_PROVIDER_HEADER]: preferredProvider,
       },
     },
   );
@@ -1020,6 +1275,7 @@ export async function callPremiumDeepInterpolator(
   input: PremiumInterpolatorRequest,
   signal?: AbortSignal,
 ): Promise<DeepInterpolatorResult> {
+  const preferredProvider = getPremiumAiProviderPreference();
   const result = await fetchWithRetry<DeepInterpolatorResult>(
     '/api/premium-ai/interpolator/deep',
     input,
@@ -1029,6 +1285,7 @@ export async function callPremiumDeepInterpolator(
       retryOnStatuses: [408, 429, 500, 502, 503, 504],
       headers: {
         'X-Glympse-User-Did': input.actorDid,
+        [PREMIUM_AI_PROVIDER_HEADER]: preferredProvider,
       },
     },
   );

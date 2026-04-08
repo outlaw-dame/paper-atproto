@@ -50,6 +50,15 @@ export interface ComposerContext {
   threadContext?: ComposerThreadContext;
   replyContext?: ComposerReplyContext;
   hostedThread?: HostedThreadComposerMeta;
+  summaries?: {
+    premiumContext?: {
+      deepSummary?: string;
+      groundedContext?: string;
+      perspectiveGaps: string[];
+      followUpQuestions: string[];
+      confidence: number;
+    };
+  };
 }
 
 export interface ComposerGuidanceUi {

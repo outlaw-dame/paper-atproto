@@ -5,6 +5,8 @@ import type {
 } from './llmContracts';
 
 export type PremiumAiTier = 'free' | 'plus' | 'pro';
+export type PremiumAiProvider = 'gemini' | 'openai';
+export type PremiumAiProviderPreference = PremiumAiProvider | 'auto';
 
 export type PremiumAiCapability = 'deep_interpolator';
 
@@ -12,7 +14,8 @@ export interface PremiumAiEntitlements {
   tier: PremiumAiTier;
   capabilities: PremiumAiCapability[];
   providerAvailable: boolean;
-  provider?: 'gemini';
+  availableProviders?: PremiumAiProvider[] | undefined;
+  provider?: PremiumAiProvider;
 }
 
 export interface PremiumAiSafetyMetadata {
@@ -41,7 +44,7 @@ export interface DeepInterpolatorResult {
   perspectiveGaps: string[];
   followUpQuestions: string[];
   confidence: number;
-  provider: 'gemini';
+  provider: PremiumAiProvider;
   updatedAt: string;
   sourceComputedAt?: string | undefined;
   safety?: PremiumAiSafetyMetadata | undefined;

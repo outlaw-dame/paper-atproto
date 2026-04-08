@@ -62,6 +62,7 @@ Primary files:
 3. Verification candidates are selected and verified with retry and concurrency limits.
 4. Verification outcomes are merged back into the per-reply scores.
 5. Thread change, confidence, and summary mode are computed.
+6. Existing writer / multimodal / premium outputs are reused when the thread has not changed meaningfully, instead of rerunning remote model lanes on every refresh.
 
 Primary files:
 
@@ -147,6 +148,11 @@ AI sessions are a parallel control plane, not a separate interpretation engine:
 - Durable read proxies and telemetry exist for replay and observability.
 - Production telemetry is admin-protected and not exposed to the browser by default.
 
+Freshness note:
+
+- Story hydration is still a bounded polling system, not live push/streaming thread sync.
+- The client now only reruns writer, multimodal, and premium interpretation lanes when the thread meaningfully changed or a prior writer result is missing.
+
 Primary files:
 
 - `src/aiSessions/*`
@@ -173,6 +179,30 @@ Primary files:
 - `src/workers/inference.worker.ts`
 - `src/conversation/discovery/*`
 - `src/tabs/ExploreTab.tsx`
+
+### Where the Neeva-style ideas fit
+
+The Neeva influence belongs primarily in **discovery architecture**, not as a new authoritative model lane.
+
+What maps cleanly onto the current system:
+
+1. **Query understanding before ranking**
+	Search should increasingly classify whether the user is asking for a person, topic, source, live cluster, or media-heavy result set before weights and surfaces are chosen. The current local-first hooks already exist in `src/search.ts`, `src/conversation/discovery/exploreSearch.ts`, and `src/conversation/discovery/exploreDiscovery.ts`.
+
+2. **Evidence-packaged result presentation**
+	Neeva-style cards map directly to the shipped projection layer: session-backed synopsis text, best-source selection, related entities, domain extraction, and discovery cards already flow through `src/conversation/projections/storyProjection.ts`, `src/conversation/discovery/exploreProjection.ts`, and `src/tabs/ExploreTab.tsx`.
+
+3. **Story grouping over flat lists**
+	The strongest unshipped Neeva-aligned opportunity is first-class story clustering for Explore, so discovery feels like grouped developments around an event or topic instead of only ranked posts.
+
+4. **Explanation surfaces**
+	Neeva-style trust comes from showing why something surfaced. In this codebase that should become bounded explanation metadata for “why this story,” “why this source,” and “why this contributor,” produced by deterministic selectors rather than freeform model output.
+
+What does **not** map cleanly:
+
+- A search-answer engine replacing the verified thread pipeline
+- A heavy reranking stage as the default path for all queries
+- Remote generative summarization deciding truth before deterministic selection and verification
 
 ### Current limitation
 
@@ -303,6 +333,7 @@ Primary files:
 
 ### Planned
 
+- Query-understanding selectors for discovery/search intent
 - Story clustering for Explore
 - Explanation generation for user-visible algorithm reasons
 - Context summarization selector for tighter composer context packing
