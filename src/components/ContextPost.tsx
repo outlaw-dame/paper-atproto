@@ -27,7 +27,8 @@ export const ContextPost = ({
   const openStory = useUiStore((state) => state.openStory);
   const sensitivePolicy = useSensitiveMediaStore((s) => s.policy);
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
-  const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quoteEmbed?.post.sensitiveMedia?.isSensitive);
+  const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia
+    && (quoteEmbed?.post.sensitiveMedia?.action === 'blur' || quoteEmbed?.post.sensitiveMedia?.action === 'drop');
   const authorActor = post.author.did || post.author.handle;
   const authorInitial = (post.author.displayName || post.author.handle || '?').trim().charAt(0).toUpperCase() || '?';
   const isReplyContext = type === 'reply';

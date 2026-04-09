@@ -80,8 +80,18 @@ describe('projectExploreDiscoverView', () => {
       suggestedFeedCount: 0,
     }).liveClusters[0]?.count);
     expect(projection.domains).toEqual([
-      { domain: 'example.com', description: 'Example Story' },
-      { domain: 'video.example.com', description: 'Video Story' },
+      {
+        domain: 'example.com',
+        description: 'Example Story',
+        evidenceCount: 1,
+        reason: 'Referenced by a trending story',
+      },
+      {
+        domain: 'video.example.com',
+        description: 'Video Story',
+        evidenceCount: 1,
+        reason: 'Referenced by a trending story',
+      },
     ]);
     expect(projection.hasVisibleDiscoverContent).toBe(true);
   });

@@ -17,12 +17,12 @@ const PREMIUM_PROVIDER_OPTIONS: Array<{
   {
     value: 'gemini',
     label: 'Gemini 3',
-    description: 'Use Gemini 3 for premium deep thread synthesis when it is available.',
+    description: 'Use Gemini 3 for premium deep synthesis and the local enhancer when it is available.',
   },
   {
     value: 'openai',
     label: 'ChatGPT',
-    description: 'Use the ChatGPT API for premium deep thread synthesis when it is available.',
+    description: 'Use the ChatGPT API for premium deep synthesis and the local enhancer when it is available.',
   },
 ];
 
@@ -134,10 +134,10 @@ export default function InterpolatorSettingsSection() {
 
       <div style={{ marginTop: 10, borderTop: '1px solid var(--sep)', paddingTop: 10 }}>
         <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }}>
-          Premium Deep Analysis Provider
+          Remote AI Provider
         </p>
         <p style={{ margin: '3px 0 8px', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.4 }}>
-          Choose which remote model handles premium deep thread synthesis. The base Interpolator writer still stays on the fast local-first path.
+          Choose which remote model handles premium deep thread synthesis and the local enhancer takeover layer. The base Interpolator writer still stays on the fast local-first path.
         </p>
 
         <div style={{ display: 'grid', gap: 8 }}>
@@ -201,7 +201,7 @@ export default function InterpolatorSettingsSection() {
                 </p>
                 {preferredProviderUnavailable && (
                   <p style={{ margin: 0, fontSize: 11, color: '#9a6700', lineHeight: 1.35 }}>
-                    Your preferred provider is unavailable right now, so premium deep analysis will fall back automatically.
+                    Your preferred provider is unavailable right now, so deep analysis and the local enhancer will fall back automatically.
                   </p>
                 )}
               </>
@@ -212,7 +212,7 @@ export default function InterpolatorSettingsSection() {
             )
           ) : (
             <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }}>
-              Sign in to check whether Gemini 3 or ChatGPT is currently available for premium deep analysis.
+              Sign in to check whether Gemini 3 or ChatGPT is currently available for deep analysis and the local enhancer.
             </p>
           )}
         </div>

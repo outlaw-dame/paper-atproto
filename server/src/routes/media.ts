@@ -105,8 +105,8 @@ async function assertSafeRemoteMediaHost(url: URL): Promise<void> {
   const blocked = shouldBlockSafeBrowsingVerdict(verdict);
   safeMediaHostCache.set(host, {
     safe: !blocked,
-    reason: verdict.reason,
     expiresAt: now + SAFE_MEDIA_HOST_TTL_MS,
+    ...(verdict.reason ? { reason: verdict.reason } : {}),
   });
 
   if (blocked) {
@@ -349,8 +349,18 @@ mediaRouter.get('/proxy', async (c) => {
   }
   c.header('Cache-Control', 'no-store');
   c.header('X-Accel-Buffering', 'no');
+  const proxyHeaders = new Headers();
+  for (const headerName of PROXY_RESPONSE_HEADERS) {
+    const headerValue = response.headers.get(headerName);
+    if (headerValue) proxyHeaders.set(headerName, headerValue);
+  }
+  proxyHeaders.set('Cache-Control', 'no-store');
+  proxyHeaders.set('X-Accel-Buffering', 'no');
 
-  return c.body(response.body, response.status as 200 | 206);
+  return new Response(response.body ?? null, {
+    status: response.status,
+    headers: proxyHeaders,
+  });
 });
 
 mediaRouter.post('/transcribe', async (c) => {

@@ -128,7 +128,11 @@ describe('OpenAIConversationProvider', () => {
       };
     };
     expect(request.instructions).toContain('You are the Glympse Deep Interpolator.');
+    expect(request.instructions).toContain('Use the root author as the anchor when that makes the summary clearer.');
+    expect(request.instructions).toContain('When the root post makes a concrete claim, prefer naming the root author in the summary\'s first sentence.');
+    expect(request.instructions).toContain('Name up to two strongest contributors by handle when they materially add sourcing, clarification, or correction.');
     expect(request.input).toContain('CONTRIBUTOR DETAILS:');
+    expect(request.input).toContain('PRIORITY PARTICIPANTS TO NAME WHEN MATERIAL:');
     expect(request.input).toContain('MEDIA FINDINGS:');
     expect(request.input).toContain('THREAD SIGNAL SUMMARY:');
     expect(request.text?.format?.type).toBe('json_schema');

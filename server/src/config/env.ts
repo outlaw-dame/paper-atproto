@@ -11,6 +11,10 @@ const EnvSchema = z.object({
   LLM_MEDIA_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
   LLM_MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(8_000_000),
   LLM_MEDIA_MAX_REDIRECTS: z.coerce.number().int().min(0).max(10).default(3),
+  LLM_MEDIA_DIAGNOSTICS: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
   LLM_LOCAL_ONLY: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z.string().optional().transform((v) => v !== 'false').default('true'),
@@ -41,14 +45,21 @@ const EnvSchema = z.object({
     z.string().optional().transform((v) => v === 'true').default('false'),
   ),
   GEMINI_DEEP_INTERPOLATOR_MODEL: z.string().default('gemini-3-flash-preview'),
+  GEMINI_DEEP_INTERPOLATOR_FALLBACK_MODELS: z.string().default('gemini-2.5-flash'),
   OPENAI_DEEP_INTERPOLATOR_MODEL: z.string().default('gpt-5.4'),
   GEMINI_COMPOSER_MODEL: z.string().default('gemini-3-flash-preview'),
   GEMINI_INTERPOLATOR_ENHANCER_MODEL: z.string().default('gemini-3-flash-preview'),
+  GEMINI_INTERPOLATOR_ENHANCER_FALLBACK_MODELS: z.string().default('gemini-2.5-flash'),
+  OPENAI_INTERPOLATOR_ENHANCER_MODEL: z.string().default('gpt-5.4'),
   GEMINI_COMPOSER_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z.string().optional().transform((v) => v === 'true').default('false'),
   ),
   GEMINI_INTERPOLATOR_ENHANCER_ENABLED: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v !== 'false').default('true'),
+  ),
+  OPENAI_INTERPOLATOR_ENHANCER_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z.string().optional().transform((v) => v !== 'false').default('true'),
   ),

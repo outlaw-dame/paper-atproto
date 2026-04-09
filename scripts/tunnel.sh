@@ -19,6 +19,12 @@ CF_LOG="/tmp/cf-tunnel-active.log"
 VITE_PORT="${TUNNEL_PORT:-5180}"
 BACKEND_PORT="${BACKEND_PORT:-3011}"
 
+# Prevent inherited shell exports from overriding .env.local during Vite boot.
+unset VITE_ATPROTO_OAUTH_SCOPE
+unset VITE_ATPROTO_OAUTH_CLIENT_ID
+unset VITE_ATPROTO_OAUTH_METADATA_ORIGIN
+unset VITE_ATPROTO_OAUTH_REDIRECT_URIS
+
 # ── Cleanup helper ────────────────────────────────────────────────────────────
 PIDS=()
 cleanup() {
@@ -45,6 +51,14 @@ free_port() {
 }
 free_port "$VITE_PORT"
 free_port "$BACKEND_PORT"
+
+# ── Clear lingering quick tunnels from prior runs ───────────────────────────
+existing_tunnels=$(pgrep -f "cloudflared tunnel --url http://localhost:$VITE_PORT" 2>/dev/null || true)
+if [[ -n "$existing_tunnels" ]]; then
+  echo "[tunnel] stopping existing cloudflared processes: $existing_tunnels"
+  echo "$existing_tunnels" | xargs kill 2>/dev/null || true
+  sleep 0.5
+fi
 
 # ── Start backend ─────────────────────────────────────────────────────────────
 echo "[tunnel] starting backend on :$BACKEND_PORT"
@@ -137,6 +151,27 @@ VITE_ATPROTO_OAUTH_REDIRECT_URIS=${TUNNEL_URL}/
 VITE_OAUTH_DEBUG=1
 EOF
   echo "[tunnel] .env.local created with $TUNNEL_URL"
+fi
+
+# ── Auto-update public/oauth/client-metadata.json with the new tunnel URL ────
+METADATA_FILE="$ROOT/public/oauth/client-metadata.json"
+if [[ -f "$METADATA_FILE" ]]; then
+  cat > "$METADATA_FILE" <<EOF
+{
+  "\$schema": "https://atproto.com/specs/oauth-client-metadata#",
+  "client_id": "${TUNNEL_URL}/oauth/client-metadata.json",
+  "client_name": "Glimpse",
+  "client_uri": "${TUNNEL_URL}",
+  "redirect_uris": ["${TUNNEL_URL}/"],
+  "scope": "atproto transition:generic",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "dpop_bound_access_tokens": true
+}
+EOF
+  echo "[tunnel] client-metadata.json updated with $TUNNEL_URL"
 fi
 
 # Fully restart Vite so config/env-backed OAuth metadata picks up the new URL.

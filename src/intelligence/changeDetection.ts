@@ -13,7 +13,11 @@
 // + 0.15 * heat_delta
 // + 0.10 * repetition_delta
 
-import type { ThreadInterpolatorState, ContributionScores, AtUri } from './interpolatorTypes';
+import type {
+  ThreadInterpolatorState,
+  InterpolatorDecisionScore,
+  AtUri,
+} from './interpolatorTypes';
 import { computeThreadChangeDelta, type ThreadStateSnapshot } from './algorithms';
 
 // ─── Change reason types ──────────────────────────────────────────────────
@@ -40,106 +44,6 @@ function clamp(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
 
-// ─── Delta functions ──────────────────────────────────────────────────────
-
-function computeNewAngleDelta(
-  previous: ThreadInterpolatorState,
-  current: ThreadInterpolatorState,
-): number {
-  const prevAngles = new Set(previous.newAnglesAdded);
-  const newAngles = current.newAnglesAdded.filter(a => !prevAngles.has(a)).length;
-  return clamp(newAngles / 3);
-}
-
-function computeContributorShift(
-  previous: ThreadInterpolatorState,
-  current: ThreadInterpolatorState,
-): number {
-  const prevDids = new Set(previous.topContributors.map(c => c.did));
-  let entered = 0;
-  for (const c of current.topContributors) {
-    if (!prevDids.has(c.did)) entered += 1;
-  }
-  return clamp(entered / Math.max(1, current.topContributors.length));
-}
-
-function computeEntityShift(
-  previous: ThreadInterpolatorState,
-  current: ThreadInterpolatorState,
-): number {
-  const prevEntities = new Set(previous.entityLandscape.map(e => e.entityText.toLowerCase()));
-  const newEntities = current.entityLandscape.filter(
-    e => !prevEntities.has(e.entityText.toLowerCase()),
-  );
-  return clamp(newEntities.length / 4);
-}
-
-function computeFactualShift(
-  previous: ThreadInterpolatorState,
-  scores: Record<AtUri, ContributionScores>,
-): number {
-  const prevUris = new Set(Object.keys(previous.replyScores));
-  let newFactualCount = 0;
-  for (const [uri, score] of Object.entries(scores)) {
-    if (!prevUris.has(uri) && (score.finalInfluenceScore >= 0.55 || score.sourceSupport >= 0.50)) {
-      newFactualCount += 1;
-    }
-  }
-  return clamp(newFactualCount / 3);
-}
-
-function computeHeatDelta(
-  previous: ThreadInterpolatorState,
-  current: ThreadInterpolatorState,
-): number {
-  return clamp(Math.abs(current.heatLevel - previous.heatLevel) * 2);
-}
-
-function computeRepetitionDelta(
-  previous: ThreadInterpolatorState,
-  current: ThreadInterpolatorState,
-): number {
-  return clamp(Math.abs(current.repetitionLevel - previous.repetitionLevel) * 2);
-}
-
-// ─── Change reason derivation ─────────────────────────────────────────────
-
-function buildChangeReasons(
-  previous: ThreadInterpolatorState,
-  current: ThreadInterpolatorState,
-  scores: Record<AtUri, ContributionScores>,
-  newAngleDelta: number,
-  contributorShift: number,
-  entityShift: number,
-  factualShift: number,
-  heatDelta: number,
-): ChangeReason[] {
-  const reasons: ChangeReason[] = [];
-
-  if (newAngleDelta >= 0.35) {
-    const hasCounterpoint = Object.values(scores).some(s => s.role === 'useful_counterpoint');
-    reasons.push(hasCounterpoint ? 'thread_direction_reversed' : 'new_angle_introduced');
-  }
-
-  if (factualShift >= 0.35) {
-    const hasSourceBacked = Object.values(scores).some(
-      s => s.role === 'source_bringer' || s.role === 'rule_source',
-    );
-    reasons.push(hasSourceBacked ? 'source_backed_clarification' : 'factual_highlight_added');
-  }
-
-  if (contributorShift >= 0.40) reasons.push('major_contributor_entered');
-  if (entityShift >= 0.35) reasons.push('central_entity_changed');
-  if (heatDelta >= 0.25) reasons.push('heat_shift');
-
-  // Significant drop in repetition suggests a new distinct stance entered
-  if (current.repetitionLevel < previous.repetitionLevel - 0.20) {
-    reasons.push('new_stance_appeared');
-  }
-
-  return reasons;
-}
-
 // ─── computeThreadChange ──────────────────────────────────────────────────
 
 /**
@@ -153,7 +57,7 @@ function buildChangeReasons(
 export function computeThreadChange(
   previous: ThreadInterpolatorState | null,
   current: ThreadInterpolatorState,
-  scores: Record<AtUri, ContributionScores>,
+  scores: Record<AtUri, InterpolatorDecisionScore>,
 ): ThreadChangeResult {
   const toSnapshot = (state: ThreadInterpolatorState): ThreadStateSnapshot => {
     const topEntityIds = [...state.entityLandscape]

@@ -1,5 +1,13 @@
 import { env } from '../config/env.js';
 import { withRetry } from '../lib/retry.js';
+import {
+  createGoogleGenAIClient,
+  geminiThinkingConfig,
+  isGeminiModelFallbackEligibleError,
+  isGemini3Model,
+  resolveGeminiModelFallbackChain,
+  withGeminiModelFallback,
+} from '../lib/googleGenAi.js';
 import { createOpenAIClient, resolveOpenAiModel } from '../lib/openAi.js';
 import {
   isPremiumAiProviderOperational,
@@ -70,9 +78,64 @@ async function probeOpenAiReadiness(): Promise<void> {
   );
 }
 
+async function probeGeminiReadiness(): Promise<void> {
+  const client = createGoogleGenAIClient();
+  if (!client) return;
+
+  const models = resolveGeminiModelFallbackChain('deep-interpolator', env.GEMINI_DEEP_INTERPOLATOR_MODEL);
+
+  await withGeminiModelFallback(
+    models,
+    async (model) => withRetry(
+      async () => {
+        await withProbeTimeout(
+          client.models.generateContent({
+            model,
+            contents: 'Reply with the single word ok.',
+            config: {
+              maxOutputTokens: 16,
+              ...(!isGemini3Model(model)
+                ? {
+                    temperature: 0,
+                  }
+                : {}),
+              ...geminiThinkingConfig(model, 'minimal'),
+            },
+          }),
+          Math.min(env.PREMIUM_AI_TIMEOUT_MS, 12_000),
+        );
+      },
+      {
+        attempts: Math.min(env.PREMIUM_AI_RETRY_ATTEMPTS, 2),
+        baseDelayMs: 250,
+        maxDelayMs: 1500,
+        jitter: true,
+        shouldRetry: (error) => {
+          const status = (error as { status?: number })?.status;
+          const code = (error as { code?: string })?.code;
+          if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') {
+            return false;
+          }
+          return !status || [408, 425, 429, 500, 502, 503, 504].includes(status);
+        },
+      },
+    ),
+    (error) => {
+      const code = (error as { code?: string })?.code;
+      if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') {
+        return true;
+      }
+      return isGeminiModelFallbackEligibleError(error);
+    },
+  );
+}
+
 async function runReadinessProbe(provider: PremiumAiProviderName): Promise<void> {
-  if (provider !== 'openai') return;
-  await probeOpenAiReadiness();
+  if (provider === 'openai') {
+    await probeOpenAiReadiness();
+    return;
+  }
+  await probeGeminiReadiness();
 }
 
 export async function ensurePremiumAiProviderReady(

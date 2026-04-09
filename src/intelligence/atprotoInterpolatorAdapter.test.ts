@@ -159,7 +159,13 @@ describe('runInterpolatorPipeline', () => {
     recordThreadSnapshot('at://thread/test', initial);
 
     vi.spyOn(Date, 'now').mockReturnValue(70_000);
-    const result = detectMeaningfulChange('at://thread/test', initial, 0);
+    const result = detectMeaningfulChange(
+      'at://thread/test',
+      initial,
+      initial,
+      initial.replyScores,
+      0,
+    );
     const snapshotInfo = getThreadSnapshotInfo('at://thread/test');
 
     expect(result.shouldUpdate).toBe(false);

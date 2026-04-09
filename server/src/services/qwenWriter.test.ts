@@ -7,6 +7,7 @@ const { envMock, reviewInterpolatorWriterMock } = vi.hoisted(() => ({
     QWEN_WRITER_MODEL: 'qwen-test',
     LLM_TIMEOUT_MS: 5_000,
     GEMINI_INTERPOLATOR_ENHANCER_MODEL: 'gemini-3-flash-preview',
+    OPENAI_INTERPOLATOR_ENHANCER_MODEL: 'gpt-5.4',
   },
   reviewInterpolatorWriterMock: vi.fn(),
 }));
@@ -15,8 +16,9 @@ vi.mock('../config/env.js', () => ({
   env: envMock,
 }));
 
-vi.mock('./geminiInterpolatorEnhancer.js', () => ({
+vi.mock('./interpolatorEnhancer.js', () => ({
   reviewInterpolatorWriter: reviewInterpolatorWriterMock,
+  resolveInterpolatorEnhancerModel: vi.fn(() => 'gemini-3-flash-preview'),
 }));
 
 describe('qwenWriter', () => {
@@ -113,7 +115,7 @@ describe('qwenWriter', () => {
       candidate: expect.objectContaining({
         collapsedSummary: 'Thread summary.',
       }),
-    }));
+    }), undefined);
 
     const diagnostics = getWriterDiagnostics() as {
       enhancer?: {
@@ -129,7 +131,7 @@ describe('qwenWriter', () => {
     expect(diagnostics.enhancer?.appliedTakeovers?.total).toBe(0);
   });
 
-  it('lets Gemini replace a weak but valid Qwen result', async () => {
+  it('lets the remote enhancer replace a weak but valid Qwen result', async () => {
     const { getWriterDiagnostics, resetWriterDiagnostics } = await import('../llm/writerDiagnostics.js');
     resetWriterDiagnostics();
 
@@ -146,19 +148,23 @@ describe('qwenWriter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     reviewInterpolatorWriterMock.mockResolvedValueOnce({
-      decision: 'replace',
-      issues: ['generic-reply-pattern'],
-      response: {
-        collapsedSummary: '@author.test says Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies mostly compare the claim to earlier incidents.',
-        whatChanged: ['clarification: replies frame it as another security-model moment'],
-        contributorBlurbs: [
-          {
-            handle: 'reply.one',
-            blurb: 'compares the post to earlier security-model incidents rather than adding new reporting.',
-          },
-        ],
-        abstained: false,
-        mode: 'descriptive_fallback',
+      provider: 'gemini',
+      model: 'gemini-3-flash-preview',
+      decision: {
+        decision: 'replace',
+        issues: ['generic-reply-pattern'],
+        response: {
+          collapsedSummary: '@author.test says Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies mostly compare the claim to earlier incidents.',
+          whatChanged: ['clarification: replies frame it as another security-model moment'],
+          contributorBlurbs: [
+            {
+              handle: 'reply.one',
+              blurb: 'compares the post to earlier security-model incidents rather than adding new reporting.',
+            },
+          ],
+          abstained: false,
+          mode: 'descriptive_fallback',
+        },
       },
     });
 
@@ -206,6 +212,7 @@ describe('qwenWriter', () => {
         decisionCounts?: { replace?: number };
         appliedTakeovers?: { candidate?: number; total?: number };
         issueDistribution?: { ['generic-reply-pattern']?: number };
+        providers?: Record<string, { reviews?: number; appliedTakeovers?: { total?: number } }>;
       };
     };
     expect(diagnostics.enhancer?.invocations).toBe(1);
@@ -215,9 +222,11 @@ describe('qwenWriter', () => {
     expect(diagnostics.enhancer?.appliedTakeovers?.candidate).toBe(1);
     expect(diagnostics.enhancer?.appliedTakeovers?.total).toBe(1);
     expect(diagnostics.enhancer?.issueDistribution?.['generic-reply-pattern']).toBe(1);
+    expect(diagnostics.enhancer?.providers?.gemini?.reviews).toBe(1);
+    expect(diagnostics.enhancer?.providers?.gemini?.appliedTakeovers?.total).toBe(1);
   });
 
-  it('uses Gemini takeover when Qwen returns invalid JSON', async () => {
+  it('uses remote enhancer takeover when Qwen returns invalid JSON', async () => {
     const { getWriterDiagnostics, resetWriterDiagnostics } = await import('../llm/writerDiagnostics.js');
     resetWriterDiagnostics();
 
@@ -234,14 +243,18 @@ describe('qwenWriter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     reviewInterpolatorWriterMock.mockResolvedValueOnce({
-      decision: 'replace',
-      issues: ['base-writer-failed'],
-      response: {
-        collapsedSummary: '@author.test claims Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies add little beyond comparing it to earlier incidents.',
-        whatChanged: ['counterpoint: replies compare it to earlier incidents'],
-        contributorBlurbs: [],
-        abstained: false,
-        mode: 'descriptive_fallback',
+      provider: 'gemini',
+      model: 'gemini-3-flash-preview',
+      decision: {
+        decision: 'replace',
+        issues: ['base-writer-failed'],
+        response: {
+          collapsedSummary: '@author.test claims Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies add little beyond comparing it to earlier incidents.',
+          whatChanged: ['counterpoint: replies compare it to earlier incidents'],
+          contributorBlurbs: [],
+          abstained: false,
+          mode: 'descriptive_fallback',
+        },
       },
     });
 
@@ -274,7 +287,7 @@ describe('qwenWriter', () => {
     );
     expect(reviewInterpolatorWriterMock).toHaveBeenCalledWith(expect.objectContaining({
       qwenFailure: 'Writer returned invalid JSON',
-    }));
+    }), undefined);
 
     const diagnostics = getWriterDiagnostics() as {
       enhancer?: {
@@ -336,7 +349,7 @@ describe('qwenWriter', () => {
       whatChangedSignals: [],
     });
 
-    expect(result.collapsedSummary.length).toBeLessThanOrEqual(280);
+    expect(result.collapsedSummary.length).toBeLessThanOrEqual(300);
     expect(result.collapsedSummary.endsWith('...')).toBe(true);
     expect(result.collapsedSummary.endsWith('....')).toBe(false);
     expect(result.collapsedSummary.endsWith('source ci')).toBe(false);

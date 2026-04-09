@@ -9,11 +9,34 @@
 // All functions are pure and synchronous.
 
 import type { ConfidenceState } from './llmContracts';
-import type { InterpolatorState, ContributionScores } from './interpolatorTypes';
+import type { InterpolatorState, InterpolatorDecisionScore } from './interpolatorTypes';
 import type { ChangeReason } from './changeDetection';
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function getScoreInfluence(score: InterpolatorDecisionScore): number {
+  return score.finalInfluenceScore ?? score.usefulnessScore;
+}
+
+function getScoreSourceSupport(score: InterpolatorDecisionScore): number {
+  return score.sourceSupport ?? score.factualContribution ?? 0;
+}
+
+function getScoreClarificationValue(score: InterpolatorDecisionScore): number {
+  if (typeof score.clarificationValue === 'number') {
+    return score.clarificationValue;
+  }
+
+  if (score.role === 'clarifying') {
+    return Math.max(score.usefulnessScore, 0.6);
+  }
+
+  const citationStrength = score.evidenceSignals
+    .filter((signal) => signal.kind === 'citation')
+    .reduce((sum, signal) => sum + signal.confidence, 0);
+  return Math.min(1, citationStrength * 0.4);
 }
 
 // ─── Interpretive confidence ──────────────────────────────────────────────
@@ -85,7 +108,7 @@ export function computeEntityConfidence(state: InterpolatorState): number {
  */
 export function computeConfidenceState(
   state: InterpolatorState,
-  scores: Record<string, ContributionScores>,
+  scores: Record<string, InterpolatorDecisionScore>,
 ): ConfidenceState {
   const surfaceConfidence = computeSurfaceConfidence(state);
   const entityConfidence = computeEntityConfidence(state);
@@ -101,11 +124,11 @@ export function computeConfidenceState(
       .filter(Boolean),
   ).size;
   const sourceBackedCount = scoreList.filter(
-    (score) => score.sourceSupport >= 0.5 || (score.factual?.factualConfidence ?? 0) >= 0.55,
+    (score) => getScoreSourceSupport(score) >= 0.5 || (score.factual?.factualConfidence ?? 0) >= 0.55,
   ).length;
   const verifiedCount = scoreList.filter((score) => score.factual !== null).length;
   const highSignalCount = scoreList.filter(
-    (score) => score.finalInfluenceScore >= 0.58 || score.clarificationValue >= 0.55,
+    (score) => getScoreInfluence(score) >= 0.58 || getScoreClarificationValue(score) >= 0.55,
   ).length;
   const sourceBackedRatio = replyCount > 0 ? sourceBackedCount / replyCount : 0;
   const verifiedRatio = replyCount > 0 ? verifiedCount / replyCount : 0;
@@ -131,15 +154,21 @@ export function computeConfidenceState(
   const signalDensity = clamp01(
     Math.min(1, replyCount / 10) * 0.55 + highSignalRatio * 0.45,
   );
+  const sparseUnsupportedPenalty =
+    replyCount <= 2 && sourceBackedCount === 0 && !state.factualSignalPresent
+      ? 0.34
+      : 0;
 
-  const interpretiveConfidence = computeInterpretiveConfidence({
-    themeConfidence,
-    contributorConfidence,
-    entityConfidence,
-    evidenceConfidence,
-    signalDensity,
-    repetitionLevel: state.repetitionLevel,
-  });
+  const interpretiveConfidence = clamp01(
+    computeInterpretiveConfidence({
+      themeConfidence,
+      contributorConfidence,
+      entityConfidence,
+      evidenceConfidence,
+      signalDensity,
+      repetitionLevel: state.repetitionLevel,
+    }) - sparseUnsupportedPenalty,
+  );
 
   return { surfaceConfidence, entityConfidence, interpretiveConfidence };
 }

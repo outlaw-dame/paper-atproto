@@ -8,6 +8,11 @@ import { writePremiumDeepInterpolator } from '../ai/providerRouter.js';
 import { ensurePremiumAiProviderReady } from '../ai/premiumProviderReadiness.js';
 import type { PremiumInterpolatorRequest } from '../ai/providers/geminiConversation.provider.js';
 import { AppError, UnauthorizedError, ValidationError } from '../lib/errors.js';
+import { extractRetryAfterMs } from '../lib/retry.js';
+import {
+  PREMIUM_AI_PROVIDER_HEADER,
+  parsePremiumAiProviderPreferenceHeader,
+} from '../ai/providerPreference.js';
 import {
   appendVaryHeader,
   assertTrustedBrowserOrigin,
@@ -27,7 +32,25 @@ import {
 } from '../llm/policyGateway.js';
 
 export const premiumAiRouter = new Hono();
-const PremiumAiProviderPreferenceHeaderSchema = z.enum(['auto', 'gemini', 'openai']);
+
+function errorPayloadForPremiumRoute(status: number): { error: string; code: string } {
+  switch (status) {
+    case 429:
+      return { error: 'Premium AI rate-limited', code: 'PREMIUM_AI_RATE_LIMITED' };
+    case 504:
+    case 408:
+      return { error: 'Premium AI timed out', code: 'PREMIUM_AI_TIMEOUT' };
+    case 503:
+    case 502:
+      return { error: 'Premium AI unavailable', code: 'PREMIUM_AI_UNAVAILABLE' };
+    case 403:
+      return { error: 'Premium AI forbidden', code: 'PREMIUM_AI_FORBIDDEN' };
+    case 400:
+      return { error: 'Premium AI request invalid', code: 'PREMIUM_AI_BAD_REQUEST' };
+    default:
+      return { error: 'Premium AI failed', code: 'PREMIUM_AI_FAILED' };
+  }
+}
 
 function applySecurityHeaders(c: any): void {
   c.header('Cache-Control', 'no-store, private');
@@ -35,7 +58,7 @@ function applySecurityHeaders(c: any): void {
   c.header('X-Content-Type-Options', 'nosniff');
   appendVaryHeader(c, 'Origin');
   appendVaryHeader(c, 'X-Glympse-User-Did');
-  appendVaryHeader(c, 'X-Glympse-AI-Provider');
+  appendVaryHeader(c, PREMIUM_AI_PROVIDER_HEADER);
 }
 
 function actorDidFromRequest(c: any, required: true): string;
@@ -58,16 +81,7 @@ function validationIssues(error: ValidationError): unknown {
 }
 
 function requestedProviderFromRequest(c: any): PremiumAiProviderPreference | undefined {
-  const rawValue = c.req.header('X-Glympse-AI-Provider');
-  if (typeof rawValue !== 'string' || rawValue.trim().length === 0) return undefined;
-
-  const parsed = PremiumAiProviderPreferenceHeaderSchema.safeParse(rawValue.trim().toLowerCase());
-  if (!parsed.success) {
-    throw new ValidationError('Invalid premium AI provider preference.', {
-      issues: parsed.error.issues,
-    });
-  }
-  return parsed.data;
+  return parsePremiumAiProviderPreferenceHeader(c.req.header(PREMIUM_AI_PROVIDER_HEADER));
 }
 
 premiumAiRouter.use('*', async (c, next) => {
@@ -180,8 +194,12 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
       [400, 403, 408, 425, 429, 500, 502, 503, 504].includes(status)
         ? (status as 400 | 403 | 408 | 425 | 429 | 500 | 502 | 503 | 504)
         : 503;
+    const retryAfterMs = extractRetryAfterMs(error);
+    if ((safeStatus === 429 || safeStatus === 503 || safeStatus === 504) && typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
+      c.header('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+    }
     console.error('[premium-ai/interpolator/deep]', message);
-    return c.json({ error: 'Premium AI failed' }, safeStatus);
+    return c.json(errorPayloadForPremiumRoute(safeStatus), safeStatus);
   }
 });
 

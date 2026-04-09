@@ -51,7 +51,7 @@ function getHeaderValue(headers: unknown, name: string): string | null {
   return null;
 }
 
-function extractRetryAfterMs(error: unknown): number | null {
+export function extractRetryAfterMs(error: unknown): number | null {
   const directRetryAfterMs = (error as { retryAfterMs?: unknown })?.retryAfterMs;
   if (typeof directRetryAfterMs === 'number' && Number.isFinite(directRetryAfterMs)) {
     return Math.max(0, Math.floor(directRetryAfterMs));

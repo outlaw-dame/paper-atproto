@@ -1,4 +1,5 @@
 import { extractClusterSignals } from '../../lib/resolver/atproto';
+import { getExplicitContributionFeedback } from '../../intelligence/interpolatorTypes';
 import type { VerificationOutcome } from '../../intelligence/verification/types';
 import type {
   ConversationNode,
@@ -285,18 +286,20 @@ export function computeInterpretiveFactors(
   );
 
   const feedbackNodes = visibleContributions.filter((node) => {
-    return session.interpretation.scoresByUri[node.uri]?.userFeedback !== undefined;
+    return getExplicitContributionFeedback(session.interpretation.scoresByUri[node.uri]) !== undefined;
   });
   const userLabelSupport = feedbackNodes.length === 0
     ? 0.5
     : clamp01(
       0.55 * average(
-        feedbackNodes.map((node) => feedbackScore(session.interpretation.scoresByUri[node.uri]?.userFeedback)),
+        feedbackNodes.map((node) => feedbackScore(
+          getExplicitContributionFeedback(session.interpretation.scoresByUri[node.uri]),
+        )),
         0.5,
       )
       + 0.25 * average(
         feedbackNodes.map((node) => feedbackAlignment(
-          session.interpretation.scoresByUri[node.uri]?.userFeedback,
+          getExplicitContributionFeedback(session.interpretation.scoresByUri[node.uri]),
           node,
         )),
         0.5,

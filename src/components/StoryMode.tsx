@@ -25,6 +25,7 @@ import {
   type ThreadNode, type ResolvedFacet,
 } from '../lib/resolver/atproto';
 import {
+  getExplicitContributionFeedback,
   type ContributionRole,
   type ContributionScores,
   type ContributorImpact,
@@ -43,7 +44,7 @@ import { useTranslationStore } from '../store/translationStore';
 import { useUiStore } from '../store/uiStore';
 import { useBookmarksStore } from '../store/bookmarksStore';
 import { translationClient } from '../lib/i18n/client';
-import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
@@ -321,9 +322,11 @@ function PromptHeroCard({
   const navigateToProfile = useProfileNavigation();
   const detectedRootLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const hasRootTranslatableSignal = useMemo(() => hasTranslatableLanguageSignal(post.content), [post.content]);
   const shouldOfferTranslation = hasRenderableTranslation
-    || detectedRootLanguage.language === 'und'
-    || !isLikelySameLanguage(detectedRootLanguage.language, translationPolicy.userLanguage);
+    || (hasRootTranslatableSignal
+      && (detectedRootLanguage.language === 'und'
+        || !isLikelySameLanguage(detectedRootLanguage.language, translationPolicy.userLanguage)));
   const rootText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
 
   const handleHashtagClick = (tag: string) => {
@@ -1222,7 +1225,7 @@ function InterpolatorCard({
   clarifications, newAngles,
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
-  topContributors, entityLandscape, factualSignalPresent,
+  topContributors, entityLandscape, factualSignalPresent, basePerspectiveGaps,
   premium,
   onEntityTap,
 }: {
@@ -1248,6 +1251,7 @@ function InterpolatorCard({
   topContributors: ContributorImpact[];
   entityLandscape: EntityImpact[];
   factualSignalPresent: boolean;
+  basePerspectiveGaps: string[];
   premium: PremiumThreadProjection;
   onEntityTap?: (entity: WriterEntity) => void;
 }) {
@@ -1273,9 +1277,15 @@ function InterpolatorCard({
   const premiumSafetyFlagged = premium.deepInterpolator?.safety?.flagged === true;
   const premiumUpdatedAgo = formatRelativeTimestamp(premium.deepInterpolator?.updatedAt);
   const premiumSourceAgo = formatRelativeTimestamp(premium.deepInterpolator?.sourceComputedAt);
+  const premiumProviderLabel = premium.deepInterpolator?.provider === 'openai'
+    ? 'ChatGPT'
+    : premium.entitlements?.provider === 'openai'
+      ? 'ChatGPT'
+      : 'Gemini 3';
   const premiumConfidence = premium.deepInterpolator
     ? Math.round(Math.max(0, Math.min(1, premium.deepInterpolator.confidence)) * 100)
     : null;
+  const visibleBasePerspectiveGaps = premiumReady ? [] : basePerspectiveGaps.slice(0, 3);
   const summaryEntities = useMemo(
     () => collectSummaryEntityCandidates(safeEntities, entityLandscape),
     [safeEntities, entityLandscape],
@@ -1471,10 +1481,10 @@ function InterpolatorCard({
                       color: 'rgba(226, 235, 255, 0.72)',
                     }}>
                       {premiumReady
-                        ? `Gemini deep pass built from the base Interpolator${premiumSourceAgo ? ` ${premiumSourceAgo}` : ''}.`
+                        ? `${premiumProviderLabel} deep pass built from the base Interpolator${premiumSourceAgo ? ` ${premiumSourceAgo}` : ''}.`
                         : premiumLoading
-                          ? 'Gemini is preparing a deeper pass from the current base Interpolator state.'
-                          : 'Gemini is temporarily unavailable for the deep pass.'}
+                          ? `${premiumProviderLabel} is preparing a deeper pass from the current base Interpolator state.`
+                          : `${premiumProviderLabel} is temporarily unavailable for the deep pass.`}
                     </p>
                   </div>
                   {premiumReady && (
@@ -1487,7 +1497,7 @@ function InterpolatorCard({
                         color: '#D6E5FF',
                         fontSize: typeScale.metaSm[0],
                         fontWeight: 700,
-                      }}>Base + Gemini</span>
+                      }}>{`Base + ${premiumProviderLabel}`}</span>
                       {premiumConfidence !== null && (
                         <span style={{
                           padding: '3px 8px',
@@ -1660,6 +1670,20 @@ function InterpolatorCard({
                     ))}
                   </>
                 )}
+              </div>
+            )}
+
+            {visibleBasePerspectiveGaps.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Context to watch</p>
+                {visibleBasePerspectiveGaps.map((gap, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                    <span style={{ color: '#A7C9FF', fontSize: 13, flexShrink: 0 }}>•</span>
+                    <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                      {renderSummaryText(gap, summaryRenderOptions)}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -1984,11 +2008,13 @@ function ContributionCard({
   /** True if the reply author is also the root post author */
   isOp?: boolean;
   isFollowed?: boolean;
-  onFeedback: (uri: string, fb: ContributionScores['userFeedback']) => void;
+  onFeedback: (uri: string, fb?: ContributionScores['userFeedback']) => void;
   onQuoteComment?: (node: ThreadNode & { isOptimistic?: boolean }) => void;
   onReplyComment?: (node: ThreadNode & { isOptimistic?: boolean }) => void;
 }) {
-  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(score?.userFeedback);
+  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(
+    getExplicitContributionFeedback(score),
+  );
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(node.likeCount);
   const [reposted, setReposted] = useState(false);
@@ -2014,13 +2040,20 @@ function ContributionCard({
   const navigateToProfile = useProfileNavigation();
   const detectedReplyLanguage = useMemo(() => heuristicDetectLanguage(node.text), [node.text]);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(node.text, translation.translatedText);
+  const hasReplyTranslatableSignal = useMemo(() => hasTranslatableLanguageSignal(node.text), [node.text]);
   const shouldOfferTranslation = hasRenderableTranslation
-    || detectedReplyLanguage.language === 'und'
-    || !isLikelySameLanguage(detectedReplyLanguage.language, translationPolicy.userLanguage);
+    || (hasReplyTranslatableSignal
+      && (detectedReplyLanguage.language === 'und'
+        || !isLikelySameLanguage(detectedReplyLanguage.language, translationPolicy.userLanguage)));
+
+  React.useEffect(() => {
+    setFeedbackGiven(getExplicitContributionFeedback(score));
+  }, [score?.userFeedback, score?.userFeedbackSource]);
 
   const handleFeedback = (fb: ContributionScores['userFeedback']) => {
-    setFeedbackGiven(fb);
-    onFeedback(node.uri, fb);
+    const nextFeedback = feedbackGiven === fb ? undefined : fb;
+    setFeedbackGiven(nextFeedback);
+    onFeedback(node.uri, nextFeedback);
   };
 
   const handleLike = (e: React.MouseEvent) => {
@@ -2533,7 +2566,9 @@ function ContributionCard({
             return (
               <button
                 key={fb}
+                type="button"
                 onClick={() => handleFeedback(fb)}
+                aria-pressed={isActive}
                 style={{
                   height: 28, padding: '0 12px',
                   borderRadius: 14,
@@ -3048,9 +3083,12 @@ function StoryModeContent({ entry, onClose }: Props) {
     translationPolicy,
     providers: providersRef.current,
     cache: verificationCache.current,
-    // Story mode is still bounded polling rather than live push, but keeping it
-    // tighter than a minute reduces the "stale thread" feel while the view is open.
-    pollIntervalMs: 30_000,
+    mutationRevision: conversationSession?.mutations.revision ?? 0,
+    lastMutationAt: conversationSession?.mutations.lastMutationAt,
+    lastHydratedAt: conversationSession?.meta.lastHydratedAt,
+    // Remote thread watch now handles the fast path; keep a slow poll as a
+    // self-healing backstop in case the live invalidation stream drops.
+    pollIntervalMs: 180_000,
     onError: (error, phase) => {
       console.warn(
         phase === 'initial'
@@ -3061,7 +3099,7 @@ function StoryModeContent({ entry, onClose }: Props) {
     },
   });
 
-  const handleFeedback = useCallback((replyUri: string, fb: ContributionScores['userFeedback']) => {
+  const handleFeedback = useCallback((replyUri: string, fb?: ContributionScores['userFeedback']) => {
     actions.onUserFeedback(replyUri, fb);
   }, [actions]);
   const revealedWarnUris = conversationSession?.structure.revealedWarnUris ?? [];
@@ -3244,6 +3282,7 @@ function StoryModeContent({ entry, onClose }: Props) {
                     topContributors={threadVm?.interpolator?.topContributors ?? []}
                     entityLandscape={threadVm?.interpolator?.entityLandscape ?? []}
                     factualSignalPresent={threadVm?.interpolator?.factualSignalPresent ?? false}
+                    basePerspectiveGaps={threadVm?.interpolator?.perspectiveGaps ?? []}
                     premium={threadVm?.interpolator?.premium ?? { status: 'idle', isEntitled: false }}
                     onEntityTap={setActiveEntity}
                   />

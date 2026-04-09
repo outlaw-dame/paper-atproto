@@ -1,8 +1,9 @@
 type WriterClientOutcome = 'model' | 'fallback';
 type WriterEnhancerSource = 'candidate' | 'qwen_failure';
 type WriterEnhancerDecision = 'accept' | 'replace';
-type WriterEnhancerSkipReason = 'disabled' | 'unconfigured';
+type WriterEnhancerSkipReason = 'disabled' | 'unconfigured' | 'unavailable';
 type WriterEnhancerRejectedReason = 'invalid-response' | 'abstained-replacement';
+type WriterEnhancerProvider = 'gemini' | 'openai' | 'unknown';
 
 export type WriterEnhancerFailureClass =
   | 'timeout'
@@ -18,6 +19,7 @@ type WriterEnhancerFailureDetail = {
   at: string;
   source: WriterEnhancerSource;
   failureClass: WriterEnhancerFailureClass;
+  provider: WriterEnhancerProvider;
   model: string;
   message: string;
   retryable: boolean;
@@ -27,6 +29,24 @@ type WriterEnhancerFailureDetail = {
   retryAfterMs?: number;
   preview?: string;
   responseChars?: number;
+};
+
+type WriterEnhancerProviderState = {
+  reviews: number;
+  failures: number;
+  sourceCounts: Record<WriterEnhancerSource, number>;
+  decisionCounts: Record<WriterEnhancerDecision, number>;
+  appliedTakeovers: {
+    candidate: number;
+    rescue: number;
+  };
+  failureClassCounts: Record<WriterEnhancerFailureClass, number>;
+  latencyMs: {
+    total: number;
+    max: number;
+    last: number;
+  };
+  lastModel: string | null;
 };
 
 export type WriterClientReason =
@@ -66,6 +86,7 @@ type WriterDiagnosticsState = {
       max: number;
       last: number;
     };
+    providers: Record<WriterEnhancerProvider, WriterEnhancerProviderState>;
   };
 };
 
@@ -81,6 +102,41 @@ const ENHANCER_ISSUE_LABEL_ALIASES: Record<string, string> = {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function createInitialProviderState(): WriterEnhancerProviderState {
+  return {
+    reviews: 0,
+    failures: 0,
+    sourceCounts: {
+      candidate: 0,
+      qwen_failure: 0,
+    },
+    decisionCounts: {
+      accept: 0,
+      replace: 0,
+    },
+    appliedTakeovers: {
+      candidate: 0,
+      rescue: 0,
+    },
+    failureClassCounts: {
+      timeout: 0,
+      rate_limited: 0,
+      provider_5xx: 0,
+      provider_4xx: 0,
+      invalid_json: 0,
+      invalid_decision: 0,
+      empty_response: 0,
+      unknown: 0,
+    },
+    latencyMs: {
+      total: 0,
+      max: 0,
+      last: 0,
+    },
+    lastModel: null,
+  };
 }
 
 function createInitialState(): WriterDiagnosticsState {
@@ -109,6 +165,7 @@ function createInitialState(): WriterDiagnosticsState {
       skips: {
         disabled: 0,
         unconfigured: 0,
+        unavailable: 0,
       },
       sourceCounts: {
         candidate: 0,
@@ -144,6 +201,11 @@ function createInitialState(): WriterDiagnosticsState {
         max: 0,
         last: 0,
       },
+      providers: {
+        gemini: createInitialProviderState(),
+        openai: createInitialProviderState(),
+        unknown: createInitialProviderState(),
+      },
     },
   };
 }
@@ -176,6 +238,21 @@ function recordEnhancerLatency(latencyMs: number): void {
   state.enhancer.latencyMs.total += safeLatency;
   state.enhancer.latencyMs.last = safeLatency;
   state.enhancer.latencyMs.max = Math.max(state.enhancer.latencyMs.max, safeLatency);
+}
+
+function resolveEnhancerProvider(provider: string | undefined): WriterEnhancerProvider {
+  if (provider === 'gemini' || provider === 'openai') return provider;
+  return 'unknown';
+}
+
+function recordProviderEnhancerLatency(provider: WriterEnhancerProvider, latencyMs: number): void {
+  const providerState = state.enhancer.providers[provider];
+  const safeLatency = Number.isFinite(latencyMs)
+    ? Math.max(0, Math.floor(latencyMs))
+    : 0;
+  providerState.latencyMs.total += safeLatency;
+  providerState.latencyMs.last = safeLatency;
+  providerState.latencyMs.max = Math.max(providerState.latencyMs.max, safeLatency);
 }
 
 function recordEnhancerIssues(issues: string[]): void {
@@ -219,6 +296,8 @@ export function recordWriterEnhancerReview(params: {
   source: WriterEnhancerSource;
   decision: WriterEnhancerDecision;
   latencyMs: number;
+  provider?: string;
+  model: string;
   issues?: string[];
 }): void {
   state.telemetryEvents += 1;
@@ -227,19 +306,32 @@ export function recordWriterEnhancerReview(params: {
   state.enhancer.sourceCounts[params.source] += 1;
   state.enhancer.decisionCounts[params.decision] += 1;
   recordEnhancerLatency(params.latencyMs);
+  const provider = resolveEnhancerProvider(params.provider);
+  const providerState = state.enhancer.providers[provider];
+  providerState.reviews += 1;
+  providerState.sourceCounts[params.source] += 1;
+  providerState.decisionCounts[params.decision] += 1;
+  providerState.lastModel = params.model;
+  recordProviderEnhancerLatency(provider, params.latencyMs);
   if (params.issues?.length) {
     recordEnhancerIssues(params.issues);
   }
 }
 
-export function recordWriterEnhancerTakeoverApplied(source: WriterEnhancerSource): void {
+export function recordWriterEnhancerTakeoverApplied(
+  source: WriterEnhancerSource,
+  provider?: string,
+): void {
   state.telemetryEvents += 1;
   state.lastUpdatedAt = nowIso();
+  const providerState = state.enhancer.providers[resolveEnhancerProvider(provider)];
   if (source === 'candidate') {
     state.enhancer.appliedTakeovers.candidate += 1;
+    providerState.appliedTakeovers.candidate += 1;
     return;
   }
   state.enhancer.appliedTakeovers.rescue += 1;
+  providerState.appliedTakeovers.rescue += 1;
 }
 
 export function recordWriterEnhancerRejectedReplacement(
@@ -254,6 +346,7 @@ export function recordWriterEnhancerFailure(params: {
   failureClass: WriterEnhancerFailureClass;
   latencyMs: number;
   source: WriterEnhancerSource;
+  provider?: string;
   model: string;
   message: string;
   retryable: boolean;
@@ -268,10 +361,16 @@ export function recordWriterEnhancerFailure(params: {
   state.lastUpdatedAt = nowIso();
   state.enhancer.failures += 1;
   state.enhancer.failureClassCounts[params.failureClass] += 1;
+  const provider = resolveEnhancerProvider(params.provider);
+  const providerState = state.enhancer.providers[provider];
+  providerState.failures += 1;
+  providerState.failureClassCounts[params.failureClass] += 1;
+  providerState.lastModel = params.model;
   state.enhancer.lastFailure = {
     at: state.lastUpdatedAt,
     source: params.source,
     failureClass: params.failureClass,
+    provider,
     model: params.model,
     message: params.message,
     retryable: params.retryable,
@@ -283,6 +382,7 @@ export function recordWriterEnhancerFailure(params: {
     ...(typeof params.responseChars === 'number' ? { responseChars: params.responseChars } : {}),
   };
   recordEnhancerLatency(params.latencyMs);
+  recordProviderEnhancerLatency(provider, params.latencyMs);
 }
 
 export function recordWriterSafetyFilterRun(params: {
@@ -306,7 +406,46 @@ export function getWriterDiagnostics(): Record<string, unknown> {
   const enhancerFailureReviews = state.enhancer.sourceCounts.qwen_failure;
   const appliedTakeoversTotal = state.enhancer.appliedTakeovers.candidate + state.enhancer.appliedTakeovers.rescue;
   const rejectedReplacementsTotal = Object.values(state.enhancer.rejectedReplacements).reduce((sum, value) => sum + value, 0);
-  const enhancerSkipsTotal = state.enhancer.skips.disabled + state.enhancer.skips.unconfigured;
+  const enhancerSkipsTotal = state.enhancer.skips.disabled + state.enhancer.skips.unconfigured + state.enhancer.skips.unavailable;
+  const providerEntries = Object.entries(state.enhancer.providers).map(([provider, providerState]) => {
+    const providerAttempts = providerState.reviews + providerState.failures;
+    const providerTakeovers = providerState.appliedTakeovers.candidate + providerState.appliedTakeovers.rescue;
+
+    return [
+      provider,
+      {
+        reviews: providerState.reviews,
+        failures: providerState.failures,
+        sourceCounts: {
+          ...providerState.sourceCounts,
+        },
+        decisionCounts: {
+          ...providerState.decisionCounts,
+          total: providerState.decisionCounts.accept + providerState.decisionCounts.replace,
+        },
+        appliedTakeovers: {
+          candidate: providerState.appliedTakeovers.candidate,
+          rescue: providerState.appliedTakeovers.rescue,
+          total: providerTakeovers,
+          takeoverRate: safeRatio(providerTakeovers, providerState.reviews),
+          rescueRate: safeRatio(providerState.appliedTakeovers.rescue, providerState.sourceCounts.qwen_failure),
+        },
+        failuresByClass: {
+          ...providerState.failureClassCounts,
+        },
+        failureRate: safeRatio(providerState.failures, providerAttempts),
+        latencyMs: {
+          total: providerState.latencyMs.total,
+          max: providerState.latencyMs.max,
+          last: providerState.latencyMs.last,
+          average: providerAttempts > 0
+            ? Number((providerState.latencyMs.total / providerAttempts).toFixed(2))
+            : 0,
+        },
+        ...(providerState.lastModel ? { lastModel: providerState.lastModel } : {}),
+      },
+    ];
+  });
 
   return {
     startedAt: state.startedAt,
@@ -381,6 +520,7 @@ export function getWriterDiagnostics(): Record<string, unknown> {
           ? Number((state.enhancer.latencyMs.total / (enhancerReviews + state.enhancer.failures)).toFixed(2))
           : 0,
       },
+      providers: Object.fromEntries(providerEntries),
     },
   };
 }

@@ -44,12 +44,20 @@ import {
 } from '../llm/policyGateway.js';
 import { assertTrustedBrowserOrigin, appendVaryHeader } from '../lib/originPolicy.js';
 import {
+  PREMIUM_AI_PROVIDER_HEADER,
+  parsePremiumAiProviderPreferenceHeader,
+} from '../ai/providerPreference.js';
+import {
   getWriterDiagnostics,
   recordWriterClientOutcome,
   recordWriterSafetyFilterRun,
   resetWriterDiagnostics,
   type WriterClientReason,
 } from '../llm/writerDiagnostics.js';
+import {
+  getMultimodalDiagnostics,
+  resetMultimodalDiagnostics,
+} from '../llm/multimodalDiagnostics.js';
 
 type LlmRouterContext = {
   Variables: {
@@ -182,6 +190,10 @@ function validationIssues(error: ValidationError): unknown {
   return (error.details as { issues?: unknown } | undefined)?.issues;
 }
 
+function requestedProviderFromRequest(c: any) {
+  return parsePremiumAiProviderPreferenceHeader(c.req.header(PREMIUM_AI_PROVIDER_HEADER));
+}
+
 function assertDiagnosticsAccess(c: any): void {
   if (env.NODE_ENV !== 'production') return;
 
@@ -268,12 +280,16 @@ llmRouter.post('/telemetry/writer-outcome', async (c) => {
 llmRouter.get('/admin/diagnostics', (c) => {
   assertDiagnosticsAccess(c);
   applyDiagnosticsHeaders(c);
-  return c.json({ writer: getWriterDiagnostics() });
+  return c.json({
+    writer: getWriterDiagnostics(),
+    multimodal: getMultimodalDiagnostics(),
+  });
 });
 
 llmRouter.delete('/admin/diagnostics', (c) => {
   assertDiagnosticsAccess(c);
   resetWriterDiagnostics();
+  resetMultimodalDiagnostics();
   applyDiagnosticsHeaders(c);
   return c.body(null, 204);
 });
@@ -292,6 +308,7 @@ llmRouter.post('/write/interpolator', async (c) => {
 
   const requestId = requestIdFromContext(c);
   let prepared: { data: z.infer<typeof ThreadStateSchema> };
+  const preferredProvider = requestedProviderFromRequest(c);
   try {
     prepared = prepareLlmInput(ThreadStateSchema, body, {
       task: 'interpolator',
@@ -312,7 +329,11 @@ llmRouter.post('/write/interpolator', async (c) => {
     const result = await withCircuitProtection(c, 'interpolator', () => runInterpolatorWriter({
       ...(prepared.data as any),
       requestId,
-    }));
+    }, preferredProvider ? {
+      enhancer: {
+        preferredProvider,
+      },
+    } : undefined));
     const filterResult = filterWriterResponse({ ...result });
     const wasMutated = JSON.stringify(filterResult.filtered) !== JSON.stringify(result);
     recordWriterSafetyFilterRun({

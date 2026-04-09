@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildThreadStateForWriter } from './writerInput';
+import type { ConversationDeltaDecision } from './conversationDelta';
 import type { InterpolatorState } from './interpolatorTypes';
 import type { ThreadNode } from '../lib/resolver/atproto';
 
@@ -297,5 +298,232 @@ describe('buildThreadStateForWriter', () => {
     expect(output.safeEntities.map((entity) => entity.label)).toContain('@author.test');
     expect(output.safeEntities.map((entity) => entity.label)).toContain('@source.helper');
     expect(output.safeEntities.map((entity) => entity.label)).not.toContain('@just.reacting');
+  });
+
+  it('carries bounded perspective gaps into the writer contract', () => {
+    const state: InterpolatorState = {
+      rootUri: 'at://root',
+      summaryText: '',
+      salientClaims: [],
+      salientContributors: [],
+      clarificationsAdded: [],
+      newAnglesAdded: [],
+      repetitionLevel: 0,
+      heatLevel: 0,
+      sourceSupportPresent: false,
+      perspectiveGaps: [
+        '  No visible reply brings direct sourcing or verifiable evidence yet.  ',
+        'Only a narrow slice of participants is shaping the visible thread so far.',
+        'Only a narrow slice of participants is shaping the visible thread so far.',
+        'Visible replies add limited new context beyond the root claim so far.',
+      ],
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      replyScores: {},
+      entityLandscape: [],
+      topContributors: [],
+      evidencePresent: false,
+      factualSignalPresent: false,
+      lastTrigger: null,
+      triggerHistory: [],
+    };
+
+    const output = buildThreadStateForWriter(
+      'thread-4',
+      'Root post about a suspicious claim.',
+      state,
+      {},
+      [],
+      {
+        surfaceConfidence: 0.42,
+        entityConfidence: 0.35,
+        interpretiveConfidence: 0.22,
+      },
+      undefined,
+      'author.test',
+      { summaryMode: 'descriptive_fallback' },
+    );
+
+    expect(output.perspectiveGaps).toEqual([
+      'No visible reply brings direct sourcing or verifiable evidence yet.',
+      'Only a narrow slice of participants is shaping the visible thread so far.',
+      'Visible replies add limited new context beyond the root claim so far.',
+    ]);
+  });
+
+  it('falls back to canonical delta reasons when local what-changed heuristics stay thin', () => {
+    const state: InterpolatorState = {
+      rootUri: 'at://root',
+      summaryText: '',
+      salientClaims: [],
+      salientContributors: [],
+      clarificationsAdded: [],
+      newAnglesAdded: [],
+      repetitionLevel: 0,
+      heatLevel: 0,
+      sourceSupportPresent: false,
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      replyScores: {},
+      entityLandscape: [],
+      topContributors: [
+        {
+          did: 'did:plc:source',
+          handle: 'source.helper',
+          totalReplies: 1,
+          avgUsefulnessScore: 0.82,
+          dominantRole: 'source_bringer',
+          factualContributions: 1,
+        },
+      ],
+      evidencePresent: true,
+      factualSignalPresent: true,
+      lastTrigger: null,
+      triggerHistory: [],
+    };
+
+    const replies = [
+      makeReply({
+        uri: 'at://reply/source',
+        text: 'The memo header is attached in the reply above.',
+        authorDid: 'did:plc:source',
+        authorHandle: 'source.helper',
+        likeCount: 9,
+      }),
+    ];
+    const deltaDecision: ConversationDeltaDecision = {
+      didMeaningfullyChange: true,
+      changeMagnitude: 0.71,
+      changeReasons: ['source_backed_clarification'],
+      confidence: {
+        surfaceConfidence: 0.7,
+        entityConfidence: 0.6,
+        interpretiveConfidence: 0.62,
+      },
+      summaryMode: 'normal',
+      computedAt: '2026-04-08T12:00:00.000Z',
+    };
+
+    const output = buildThreadStateForWriter(
+      'thread-5',
+      'Root post about a memo leak.',
+      state,
+      {
+        'at://reply/source': {
+          uri: 'at://reply/source',
+          role: 'direct_response',
+          finalInfluenceScore: 0.48,
+          clarificationValue: 0.2,
+          sourceSupport: 0.1,
+          visibleChips: [],
+          factual: null,
+          usefulnessScore: 0.48,
+          abuseScore: 0,
+          evidenceSignals: [],
+          entityImpacts: [],
+          scoredAt: new Date().toISOString(),
+        },
+      },
+      replies,
+      {
+        surfaceConfidence: 0.7,
+        entityConfidence: 0.6,
+        interpretiveConfidence: 0.62,
+      },
+      undefined,
+      'author.test',
+      {
+        summaryMode: 'normal',
+        deltaDecision,
+      },
+    );
+
+    expect(output.whatChangedSignals).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('source cited:'),
+      ]),
+    );
+  });
+
+  it('preserves a source-gap factual highlight for descriptive threads without hard evidence', () => {
+    const state: InterpolatorState = {
+      rootUri: 'at://root',
+      summaryText: '',
+      salientClaims: [],
+      salientContributors: [],
+      clarificationsAdded: [
+        'Visible replies ask for a public order before accepting the claim.',
+      ],
+      newAnglesAdded: [],
+      repetitionLevel: 0,
+      heatLevel: 0,
+      sourceSupportPresent: false,
+      perspectiveGaps: [
+        'The visible thread still lacks direct sourcing or verifiable evidence for the claim.',
+      ],
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      replyScores: {},
+      entityLandscape: [],
+      topContributors: [
+        {
+          did: 'did:plc:skeptic',
+          handle: 'skeptic.one',
+          totalReplies: 1,
+          avgUsefulnessScore: 0.74,
+          dominantRole: 'clarifying',
+          factualContributions: 0,
+        },
+      ],
+      evidencePresent: false,
+      factualSignalPresent: false,
+      lastTrigger: null,
+      triggerHistory: [],
+    };
+
+    const replies = [
+      makeReply({
+        uri: 'at://reply/source-gap',
+        text: 'Do you have the order? I only see people quoting each other and asking for the notice.',
+        authorDid: 'did:plc:skeptic',
+        authorHandle: 'skeptic.one',
+        likeCount: 6,
+      }),
+    ];
+
+    const output = buildThreadStateForWriter(
+      'thread-source-gap',
+      'County is banning all night events starting tonight.',
+      state,
+      {
+        'at://reply/source-gap': {
+          uri: 'at://reply/source-gap',
+          role: 'clarifying',
+          finalInfluenceScore: 0.52,
+          clarificationValue: 0.66,
+          sourceSupport: 0.04,
+          visibleChips: [],
+          factual: null,
+          usefulnessScore: 0.58,
+          abuseScore: 0,
+          evidenceSignals: [],
+          entityImpacts: [],
+          scoredAt: new Date().toISOString(),
+        },
+      },
+      replies,
+      {
+        surfaceConfidence: 0.56,
+        entityConfidence: 0.63,
+        interpretiveConfidence: 0.34,
+      },
+      undefined,
+      'nightlife.watch',
+      { summaryMode: 'descriptive_fallback' },
+    );
+
+    expect(output.factualHighlights).toContain(
+      'The visible thread still lacks direct sourcing or verifiable evidence for the claim.',
+    );
   });
 });

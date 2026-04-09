@@ -44,6 +44,7 @@ import {
 import { applyInterpretiveConfidence } from './interpretive/interpretiveScoring';
 import { humanizeInterpretiveReason } from './interpretive/interpretiveExplanation';
 import { updateConversationContinuitySnapshots } from './continuitySnapshots';
+import { finalizeConversationDeltaDecision } from './deltaDecision';
 import {
   buildConversationModelSourceToken,
   matchesConversationModelSourceToken,
@@ -84,6 +85,8 @@ import type {
   ConversationSession,
   SessionTranslationState,
   MentalHealthCrisisCategory,
+  ThreadStateSignal,
+  InterpretiveConfidenceExplanation,
 } from './sessionTypes';
 import type { KeywordFilterRule } from '../lib/contentFilters/types';
 
@@ -470,34 +473,60 @@ export function redactPremiumInterpolatorInputByUserRules(
   };
 }
 
-function buildPremiumInterpolatorRequest(params: {
+export function buildPremiumInterpretiveBrief(params: {
+  writerInput: ThreadStateForWriter;
+  threadState?: ThreadStateSignal | null;
+  interpretiveExplanation?: InterpretiveConfidenceExplanation | null;
+  baseSummary?: string;
+}): PremiumInterpolatorRequest['interpretiveBrief'] {
+  const {
+    writerInput,
+    threadState,
+    interpretiveExplanation,
+    baseSummary,
+  } = params;
+
+  return {
+    summaryMode: writerInput.summaryMode,
+    ...(baseSummary ? { baseSummary } : {}),
+    ...(threadState?.dominantTone
+      ? { dominantTone: threadState.dominantTone }
+      : {}),
+    ...(threadState?.conversationPhase
+      ? { conversationPhase: threadState.conversationPhase }
+      : {}),
+    supports: interpretiveExplanation
+      ? interpretiveExplanation.boostedBy.slice(0, 4).map(humanizeInterpretiveReason)
+      : [],
+    limits: interpretiveExplanation
+      ? interpretiveExplanation.degradedBy.slice(0, 4).map(humanizeInterpretiveReason)
+      : [],
+  };
+}
+
+export function buildPremiumInterpolatorRequest(params: {
   actorDid: string;
   writerInput: ThreadStateForWriter;
-  session: ConversationSession;
+  threadState?: ThreadStateSignal | null;
+  interpretiveExplanation?: InterpretiveConfidenceExplanation | null;
   baseSummary?: string;
 }): PremiumInterpolatorRequest {
-  const { actorDid, writerInput, session, baseSummary } = params;
-  const explanation = session.interpretation.interpretiveExplanation;
-
+  const {
+    actorDid,
+    writerInput,
+    threadState,
+    interpretiveExplanation,
+    baseSummary,
+  } = params;
   return {
     actorDid,
     ...writerInput,
-    interpretiveBrief: {
-      summaryMode: writerInput.summaryMode,
-      ...(baseSummary ? { baseSummary } : {}),
-      ...(session.interpretation.threadState?.dominantTone
-        ? { dominantTone: session.interpretation.threadState.dominantTone }
-        : {}),
-      ...(session.interpretation.threadState?.conversationPhase
-        ? { conversationPhase: session.interpretation.threadState.conversationPhase }
-        : {}),
-      supports: explanation
-        ? explanation.boostedBy.slice(0, 4).map(humanizeInterpretiveReason)
-        : [],
-      limits: explanation
-        ? explanation.degradedBy.slice(0, 4).map(humanizeInterpretiveReason)
-        : [],
-    },
+    interpretiveBrief: buildPremiumInterpretiveBrief({
+      writerInput,
+      ...(threadState !== undefined ? { threadState } : {}),
+      ...(interpretiveExplanation !== undefined ? { interpretiveExplanation } : {}),
+      ...(baseSummary !== undefined ? { baseSummary } : {}),
+    }),
   };
 }
 
@@ -633,6 +662,7 @@ export async function hydrateConversationSession(
           scoresByUri: pipeline.scores,
           confidence: pipeline.confidence,
           summaryMode: pipeline.summaryMode,
+          deltaDecision: pipeline.deltaDecision,
           writerResult: preserveExistingOutputs
             ? current.interpretation.writerResult
             : null,
@@ -726,6 +756,7 @@ export async function hydrateConversationSession(
         threadState: deriveThreadStateSignal(nextSession),
       },
     };
+    nextSession = finalizeConversationDeltaDecision(nextSession, pipeline.deltaDecision);
     nextSession = assignDeferredReasons(nextSession, defaultAnchorLinearPolicy);
     nextSession = {
       ...nextSession,
@@ -757,8 +788,8 @@ export async function hydrateConversationSession(
     }
 
     recordInterpolatorModeDecision(
-      nextSession.interpretation.summaryMode ?? pipeline.summaryMode,
-      nextSession.interpretation.confidence ?? pipeline.confidence,
+      nextSession.interpretation.deltaDecision?.summaryMode ?? pipeline.deltaDecision.summaryMode,
+      nextSession.interpretation.deltaDecision?.confidence ?? pipeline.deltaDecision.confidence,
     );
 
     if (shouldReuseExistingModelOutputs(nextSession, pipeline.didMeaningfullyChange)) {
@@ -974,8 +1005,9 @@ export async function hydrateConversationSession(
         ),
         rootNode.authorHandle ?? undefined,
         {
-          summaryMode: nextSession.interpretation.summaryMode ?? pipeline.summaryMode,
+          summaryMode: nextSession.interpretation.deltaDecision?.summaryMode ?? nextSession.interpretation.summaryMode ?? pipeline.deltaDecision.summaryMode,
           ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
+          deltaDecision: nextSession.interpretation.deltaDecision ?? pipeline.deltaDecision,
         },
       );
       const preparedWriterInput = writerInput;
@@ -1126,7 +1158,8 @@ export async function hydrateConversationSession(
         buildPremiumInterpolatorRequest({
           actorDid,
           writerInput: writerInput!,
-          session: currentSession,
+          threadState: currentSession.interpretation.threadState,
+          interpretiveExplanation: currentSession.interpretation.interpretiveExplanation,
           ...(baseSummary ? { baseSummary } : {}),
         }),
       );

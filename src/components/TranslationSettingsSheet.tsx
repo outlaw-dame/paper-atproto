@@ -6,6 +6,7 @@ import AccountPrefsSection from './AccountPrefsSection';
 import LazyModuleBoundary from './LazyModuleBoundary';
 import { SettingsPageFallback } from './TranslationSettingsSheetFallback';
 import AppleSettingsSection from './AppleSettingsSection';
+import InterpolatorSettingsSection from './InterpolatorSettingsSection';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry';
 import {
@@ -38,6 +39,10 @@ const ModerationSettingsPage = lazyWithRetry(
 const FeedsSettingsPage = lazyWithRetry(
   () => import('./FeedsSettingsPage'),
   'FeedsSettingsPage',
+);
+const LocalAiRuntimeSection = lazyWithRetry(
+  () => import('./LocalAiRuntimeSection'),
+  'LocalAiRuntimeSection',
 );
 
 interface ComposeDebugSnapshot {
@@ -131,7 +136,7 @@ function ToggleRow({
       <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)' }}>{label}</span>
         {helper && (
-          <span style={{ fontSize: 12, lineHeight: 1.35, color: 'var(--label-3)' }}>{helper}</span>
+          <span style={{ fontSize: 12, lineHeight: 1.35, color: 'var(--label-2)' }}>{helper}</span>
         )}
       </span>
 
@@ -273,7 +278,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
             }}>
               <div>
                 <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>Settings</h3>
-                <p style={{ fontSize: 12, color: 'var(--label-3)' }}>
+                <p style={{ fontSize: 12, color: 'var(--label-1)' }}>
                   {page === 'translation'
                     ? 'Inline + automatic translation'
                     : page === 'moderation'
@@ -282,7 +287,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         ? 'Visual display preferences for profile and timeline surfaces'
                       : page === 'feeds'
                         ? 'Manage News, Podcasts, Videos, and other feed subscriptions'
-                      : 'Diagnostics and QA details for internal testing'}
+                      : 'Debug diagnostics, AI runtime controls, and QA details for internal testing'}
                 </p>
               </div>
               <button
@@ -319,7 +324,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'translation' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'translation' ? '#fff' : 'var(--label-2)',
+                    color: page === 'translation' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -336,7 +341,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'moderation' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'moderation' ? '#fff' : 'var(--label-2)',
+                    color: page === 'moderation' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -354,7 +359,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'appearance' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'appearance' ? '#fff' : 'var(--label-2)',
+                    color: page === 'appearance' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -372,7 +377,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'debug' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'debug' ? '#fff' : 'var(--label-2)',
+                    color: page === 'debug' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -390,7 +395,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'feeds' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'feeds' ? '#fff' : 'var(--label-2)',
+                    color: page === 'feeds' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -408,7 +413,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'location' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'location' ? '#fff' : 'var(--label-2)',
+                    color: page === 'location' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -421,7 +426,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
               {page === 'translation' && (
                 <>
                   <div style={{ marginBottom: 8 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--label-1)', marginBottom: 6 }}>
                       Translate to
                     </label>
                     <select
@@ -448,7 +453,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                   </div>
 
                   <div style={{ marginBottom: 8 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--label-1)', marginBottom: 6 }}>
                       Caption / transcription language
                     </label>
                     <select
@@ -473,7 +478,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         </option>
                       ))}
                     </select>
-                    <p style={{ marginTop: 6, fontSize: 11, color: 'var(--label-4)', lineHeight: 1.35 }}>
+                    <p style={{ marginTop: 6, fontSize: 11, color: 'var(--label-2)', lineHeight: 1.35 }}>
                       Used for both composer video captions and on-demand podcast/video transcript generation.
                     </p>
                   </div>
@@ -509,7 +514,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     touchLike={platform.prefersCoarsePointer || platform.isMobile}
                   />
 
-                  <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 10, lineHeight: 1.35 }}>
+                  <p style={{ fontSize: 11, color: 'var(--label-2)', marginTop: 10, lineHeight: 1.35 }}>
                     Note: translation may use external services depending on the selected mode and language pair.
                   </p>
 
@@ -665,6 +670,19 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
 
               {page === 'debug' && (
                 <>
+                  <InterpolatorSettingsSection />
+
+                  <LazyModuleBoundary
+                    resetKey="settings-debug-local-ai-runtime"
+                    fallback={<SettingsPageFallback label="Local AI runtime controls failed to load." />}
+                  >
+                    <React.Suspense fallback={<SettingsPageFallback label="Loading local AI runtime controls…" />}>
+                      <LocalAiRuntimeSection />
+                    </React.Suspense>
+                  </LazyModuleBoundary>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                       <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Compose sentiment (debug)</h4>

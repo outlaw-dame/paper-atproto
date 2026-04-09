@@ -4,11 +4,41 @@ import type { RuntimeMode } from '../runtime/modelPolicy';
 import { useRuntimeStore } from '../runtime/runtimeStore';
 import { useSessionStore } from '../store/sessionStore';
 import {
+  getInterpolatorMetricsSnapshot,
+  subscribeInterpolatorMetrics,
+  type InterpolatorMetricsSnapshot,
+} from '../perf/interpolatorTelemetry';
+import {
+  appendConversationOsHealthHistory,
+  clearConversationOsHealthHistory,
+  readConversationOsHealthHistory,
+  type ConversationOsHealthHistoryEntry,
+} from '../perf/conversationOsHealthHistory';
+import {
+  appendWriterEnhancerProviderHistory,
+  clearWriterEnhancerProviderHistory,
+  readWriterEnhancerProviderHistory,
+  type WriterEnhancerProviderHistoryEntry,
+} from '../perf/writerEnhancerProviderHistory';
+import type {
+  ConversationOsHumanReviewPack,
+  ConversationOsHumanReviewScore,
+  HumanReviewRating,
+} from '../evals/conversationOsHumanReview';
+import {
+  deriveConversationOsHealth,
+  deriveConversationOsTrendSummary,
+  deriveConversationDeltaAlerts,
+  deriveConversationWatchAlerts,
+  deriveWriterProviderTrendSummaries,
   deriveWriterDiagnosticsAlerts,
   formatLatency,
+  formatRelativeAge,
   formatRate,
   humanizeIssueLabel,
   topWriterEnhancerIssues,
+  type ConversationOsTrendSummary,
+  type WriterProviderTrendSummary,
   type WriterDiagnosticsSnapshot,
   WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS,
 } from './localAiRuntimeDiagnostics';
@@ -149,6 +179,23 @@ export default function LocalAiRuntimeSection() {
   const [writerDiagnosticsError, setWriterDiagnosticsError] = React.useState<string | null>(null);
   const [writerDiagnosticsUpdatedAt, setWriterDiagnosticsUpdatedAt] = React.useState<number | null>(null);
   const [writerDiagnosticsWatchEnabled, setWriterDiagnosticsWatchEnabled] = React.useState<boolean>(() => import.meta.env.DEV);
+  const [interpolatorMetrics, setInterpolatorMetrics] = React.useState<InterpolatorMetricsSnapshot | null>(
+    () => (supportsClientTelemetry ? getInterpolatorMetricsSnapshot() : null),
+  );
+  const [interpolatorMetricsUpdatedAt, setInterpolatorMetricsUpdatedAt] = React.useState<number | null>(
+    () => (supportsClientTelemetry ? Date.now() : null),
+  );
+  const [conversationOsHistory, setConversationOsHistory] = React.useState<ConversationOsHealthHistoryEntry[]>(
+    () => (supportsClientTelemetry ? readConversationOsHealthHistory() : []),
+  );
+  const [writerProviderHistory, setWriterProviderHistory] = React.useState<WriterEnhancerProviderHistoryEntry[]>(
+    () => (supportsClientTelemetry ? readWriterEnhancerProviderHistory() : []),
+  );
+  const [reviewPack, setReviewPack] = React.useState<ConversationOsHumanReviewPack | null>(null);
+  const [reviewScore, setReviewScore] = React.useState<ConversationOsHumanReviewScore | null>(null);
+  const [reviewPackLoading, setReviewPackLoading] = React.useState(false);
+  const [reviewPackError, setReviewPackError] = React.useState<string | null>(null);
+  const [reviewPackCopyState, setReviewPackCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
   const resolvedModelSpecs = React.useMemo(() => browserModelManager.getResolvedModelSpecs(), []);
 
   const hasReadyLocalMultimodal = React.useMemo(() => (
@@ -388,9 +435,242 @@ export default function LocalAiRuntimeSection() {
     };
   }, [refreshWriterDiagnosticsInWatchMode, supportsClientTelemetry, writerDiagnosticsWatchEnabled]);
 
+  React.useEffect(() => {
+    if (!supportsClientTelemetry) {
+      setInterpolatorMetrics(null);
+      setInterpolatorMetricsUpdatedAt(null);
+      setConversationOsHistory([]);
+      return undefined;
+    }
+
+    return subscribeInterpolatorMetrics((snapshot) => {
+      setInterpolatorMetrics(snapshot);
+      setInterpolatorMetricsUpdatedAt(Date.now());
+    });
+  }, [supportsClientTelemetry]);
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry || !interpolatorMetrics) return;
+    setConversationOsHistory(appendConversationOsHealthHistory(interpolatorMetrics));
+  }, [interpolatorMetrics, supportsClientTelemetry]);
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry || !writerDiagnostics) return;
+    setWriterProviderHistory(appendWriterEnhancerProviderHistory(writerDiagnostics));
+  }, [supportsClientTelemetry, writerDiagnostics]);
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry) {
+      setReviewPack(null);
+      setReviewScore(null);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { readStoredHumanReviewPack } = await import('../evals/conversationOsHumanReview');
+        if (cancelled) return;
+        setReviewPack(readStoredHumanReviewPack());
+      } catch {
+        if (!cancelled) {
+          setReviewPack(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supportsClientTelemetry]);
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry || !reviewPack) {
+      setReviewScore(null);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const reviewModule = await import('../evals/conversationOsHumanReview');
+      if (cancelled) return;
+      reviewModule.writeStoredHumanReviewPack(reviewPack);
+      setReviewScore(reviewModule.scoreHumanReviewPack(reviewPack));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reviewPack, supportsClientTelemetry]);
+
+  const clearConversationOsTrendHistory = React.useCallback(() => {
+    if (!supportsClientTelemetry) {
+      setConversationOsHistory([]);
+      setWriterProviderHistory([]);
+      return;
+    }
+    clearConversationOsHealthHistory();
+    clearWriterEnhancerProviderHistory();
+    setConversationOsHistory([]);
+    setWriterProviderHistory([]);
+  }, [supportsClientTelemetry]);
+
+  const generateReviewPack = React.useCallback(async () => {
+    if (!supportsClientTelemetry || reviewPackLoading) return;
+
+    setReviewPackLoading(true);
+    setReviewPackError(null);
+    setReviewPackCopyState('idle');
+
+    try {
+      const [{ buildConversationOsReport }, reviewModule] = await Promise.all([
+        import('../evals/conversationOsEval'),
+        import('../evals/conversationOsHumanReview'),
+      ]);
+      const report = await buildConversationOsReport();
+      const nextPack = reviewModule.createHumanReviewPack(report, {
+        reviewerId: reviewPack?.meta.reviewerId ?? '',
+      });
+      setReviewPack(nextPack);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to generate the Conversation OS human review pack.';
+      setReviewPackError(message);
+    } finally {
+      setReviewPackLoading(false);
+    }
+  }, [reviewPack, reviewPackLoading, supportsClientTelemetry]);
+
+  const clearReviewPack = React.useCallback(async () => {
+    setReviewPack(null);
+    setReviewScore(null);
+    setReviewPackCopyState('idle');
+    setReviewPackError(null);
+    if (!supportsClientTelemetry) return;
+
+    try {
+      const { clearStoredHumanReviewPack } = await import('../evals/conversationOsHumanReview');
+      clearStoredHumanReviewPack();
+    } catch {
+      // best-effort only
+    }
+  }, [supportsClientTelemetry]);
+
+  const copyReviewPack = React.useCallback(async () => {
+    if (!reviewPack || typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      setReviewPackCopyState('failed');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(`${JSON.stringify(reviewPack, null, 2)}\n`);
+      setReviewPackCopyState('copied');
+    } catch {
+      setReviewPackCopyState('failed');
+    }
+  }, [reviewPack]);
+
+  const updateReviewPack = React.useCallback((updater: (current: ConversationOsHumanReviewPack) => ConversationOsHumanReviewPack) => {
+    setReviewPack((current) => (current ? updater(current) : current));
+    setReviewPackCopyState('idle');
+  }, []);
+
+  const updateReviewerId = React.useCallback((reviewerId: string) => {
+    updateReviewPack((current) => ({
+      ...current,
+      meta: {
+        ...current.meta,
+        reviewerId: reviewerId.trim() || null,
+      },
+      reviews: current.reviews.map((review) => ({
+        ...review,
+        humanReview: {
+          ...review.humanReview,
+          reviewerId: reviewerId.trim() || null,
+        },
+      })),
+    }));
+  }, [updateReviewPack]);
+
+  const updateReviewNotes = React.useCallback((fixtureId: string, notes: string) => {
+    updateReviewPack((current) => ({
+      ...current,
+      reviews: current.reviews.map((review) => (
+        review.fixtureId === fixtureId
+          ? {
+              ...review,
+              humanReview: {
+                ...review.humanReview,
+                notes,
+                reviewedAt: new Date().toISOString(),
+              },
+            }
+          : review
+      )),
+    }));
+  }, [updateReviewPack]);
+
+  const updateReviewVerdict = React.useCallback((
+    fixtureId: string,
+    verdictId: string,
+    rating: HumanReviewRating,
+  ) => {
+    updateReviewPack((current) => ({
+      ...current,
+      reviews: current.reviews.map((review) => (
+        review.fixtureId === fixtureId
+          ? {
+              ...review,
+              humanReview: {
+                ...review.humanReview,
+                reviewedAt: new Date().toISOString(),
+                verdicts: review.humanReview.verdicts.map((verdict) => (
+                  verdict.id === verdictId
+                    ? {
+                        ...verdict,
+                        rating: verdict.rating === rating ? null : rating,
+                      }
+                    : verdict
+                )),
+              },
+            }
+          : review
+      )),
+    }));
+  }, [updateReviewPack]);
+
   const writerAlerts = React.useMemo(
     () => (writerDiagnostics ? deriveWriterDiagnosticsAlerts(writerDiagnostics) : []),
     [writerDiagnostics],
+  );
+  const deltaAlerts = React.useMemo(
+    () => (interpolatorMetrics ? deriveConversationDeltaAlerts(interpolatorMetrics.delta) : []),
+    [interpolatorMetrics],
+  );
+  const watchAlerts = React.useMemo(
+    () => (
+      interpolatorMetrics
+        ? deriveConversationWatchAlerts({
+            watch: interpolatorMetrics.watch,
+            hydration: interpolatorMetrics.hydration,
+          })
+        : []
+    ),
+    [interpolatorMetrics],
+  );
+  const conversationOsHealth = React.useMemo(
+    () => deriveConversationOsHealth({
+      writer: writerDiagnostics,
+      metrics: interpolatorMetrics,
+    }),
+    [interpolatorMetrics, writerDiagnostics],
+  );
+  const conversationOsTrend = React.useMemo<ConversationOsTrendSummary>(
+    () => deriveConversationOsTrendSummary(conversationOsHistory),
+    [conversationOsHistory],
+  );
+  const writerProviderTrends = React.useMemo<WriterProviderTrendSummary[]>(
+    () => deriveWriterProviderTrendSummaries(writerProviderHistory),
+    [writerProviderHistory],
   );
   const topEnhancerIssues = React.useMemo(
     () => (writerDiagnostics ? topWriterEnhancerIssues(writerDiagnostics) : []),
@@ -477,17 +757,26 @@ export default function LocalAiRuntimeSection() {
                 cursor: 'pointer',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--label-1)' }}>{mode.label}</span>
-                {selected && (
-                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--blue)' }}>
-                    Active
-                  </span>
-                )}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(92px, 112px) 1fr',
+                  columnGap: 12,
+                  alignItems: 'start',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--label-1)', lineHeight: 1.25 }}>{mode.label}</span>
+                  {selected && (
+                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--blue)' }}>
+                      Active
+                    </span>
+                  )}
+                </div>
+                <div style={{ margin: 0, fontSize: 12, color: 'var(--label-2)', lineHeight: 1.45 }}>
+                  {mode.description}
+                </div>
               </div>
-              <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.4 }}>
-                {mode.description}
-              </p>
             </button>
           );
         })}
@@ -796,6 +1085,27 @@ export default function LocalAiRuntimeSection() {
             >
               {writerDiagnosticsResetting ? 'Resetting…' : 'Reset'}
             </button>
+            <button
+              type="button"
+              onClick={clearConversationOsTrendHistory}
+              disabled={!supportsClientTelemetry}
+              style={{
+                appearance: 'none',
+                border: '1px solid var(--sep)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--label-1)',
+                borderRadius: 8,
+                minHeight: 28,
+                padding: '4px 8px',
+                font: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: !supportsClientTelemetry ? 'default' : 'pointer',
+                opacity: !supportsClientTelemetry ? 0.65 : 1,
+              }}
+            >
+              Clear trends
+            </button>
           </div>
         </div>
 
@@ -805,77 +1115,283 @@ export default function LocalAiRuntimeSection() {
           </p>
         )}
 
-        {writerDiagnostics && (
+        {(writerDiagnostics || interpolatorMetrics) && (
           <>
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Gemini reviewer: invocations <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.enhancer.invocations}</strong>
-              {' • '}reviews <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.enhancer.reviews}</strong>
-              {' • '}watch {writerDiagnosticsWatchEnabled ? `on (${WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS / 1000}s)` : 'off'}
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Outcomes: model <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.model}</strong>
-              {' • '}fallback <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.fallback}</strong>
-              {' • '}fallback rate <strong style={{ color: 'var(--label-1)' }}>{formatRate(writerDiagnostics.clientOutcomes.fallbackRate)}</strong>
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Fallback reasons:
-              {' '}abstained {writerDiagnostics.fallbackReasonDistribution['abstained-response-fallback']}
-              {' • '}root-only {writerDiagnostics.fallbackReasonDistribution['root-only-response-fallback']}
-              {' • '}failure {writerDiagnostics.fallbackReasonDistribution['failure-fallback']}
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Safety filter:
-              {' '}runs {writerDiagnostics.safetyFilter.runs}
-              {' • '}mutated {writerDiagnostics.safetyFilter.mutated} ({formatRate(writerDiagnostics.safetyFilter.mutationRate)})
-              {' • '}blocked {writerDiagnostics.safetyFilter.blocked} ({formatRate(writerDiagnostics.safetyFilter.blockRate)})
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Gemini decisions:
-              {' '}accept {writerDiagnostics.enhancer.decisionCounts.accept}
-              {' • '}replace {writerDiagnostics.enhancer.decisionCounts.replace}
-              {' • '}takeovers {writerDiagnostics.enhancer.appliedTakeovers.total}
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Takeover mix:
-              {' '}candidate {writerDiagnostics.enhancer.appliedTakeovers.candidate} ({formatRate(writerDiagnostics.enhancer.appliedTakeovers.candidateReplacementRate)})
-              {' • '}rescue {writerDiagnostics.enhancer.appliedTakeovers.rescue} ({formatRate(writerDiagnostics.enhancer.appliedTakeovers.rescueRate)})
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Gemini skips/failures:
-              {' '}skip {writerDiagnostics.enhancer.skips.total} ({formatRate(writerDiagnostics.enhancer.skips.skipRate)})
-              {' • '}failure {writerDiagnostics.enhancer.failures.total} ({formatRate(writerDiagnostics.enhancer.failures.failureRate)})
-              {' • '}timeout {writerDiagnostics.enhancer.failures.timeout}
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Replacement hygiene:
-              {' '}rejected {writerDiagnostics.enhancer.rejectedReplacements.total}
-              {' • '}invalid {writerDiagnostics.enhancer.rejectedReplacements['invalid-response']}
-              {' • '}abstained {writerDiagnostics.enhancer.rejectedReplacements['abstained-replacement']}
-            </p>
-
-            <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
-              Gemini latency:
-              {' '}avg <strong style={{ color: 'var(--label-1)' }}>{formatLatency(writerDiagnostics.enhancer.latencyMs.average)}</strong>
-              {' • '}max {formatLatency(writerDiagnostics.enhancer.latencyMs.max)}
-              {' • '}last {formatLatency(writerDiagnostics.enhancer.latencyMs.last)}
-            </p>
-
-            {topEnhancerIssues.length > 0 && (
-              <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
-                Top reviewer issues:
-                {' '}
-                {topEnhancerIssues.map(([label, count]) => `${humanizeIssueLabel(label)} ${count}`).join(' • ')}
-                {typeof writerDiagnostics.enhancer.issueDistribution.uniqueLabels === 'number'
-                  ? ` • unique ${writerDiagnostics.enhancer.issueDistribution.uniqueLabels}`
-                  : ''}
+            <div
+              style={{
+                border: '1px solid var(--sep)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                background: 'var(--fill-1)',
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                Conversation OS health
               </p>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 11,
+                  lineHeight: 1.45,
+                  color: conversationOsHealth.status === 'degraded'
+                    ? 'var(--red, #d14b4b)'
+                    : conversationOsHealth.status === 'watch'
+                      ? 'var(--yellow, #c58b16)'
+                      : 'var(--green, #228b5a)',
+                }}
+              >
+                {conversationOsHealth.headline}
+              </p>
+              {conversationOsHealth.details.map((detail) => (
+                <p key={detail} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                  {detail}
+                </p>
+              ))}
+            </div>
+
+            <div
+              style={{
+                border: '1px solid var(--sep)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                background: 'var(--fill-1)',
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                Recent trend
+              </p>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 11,
+                  lineHeight: 1.45,
+                  color: conversationOsTrend.status === 'degraded'
+                    ? 'var(--red, #d14b4b)'
+                    : conversationOsTrend.status === 'watch'
+                      ? 'var(--yellow, #c58b16)'
+                      : 'var(--green, #228b5a)',
+                }}
+              >
+                {conversationOsTrend.headline}
+              </p>
+              {conversationOsTrend.details.map((detail) => (
+                <p key={detail} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                  {detail}
+                </p>
+              ))}
+            </div>
+
+            <div
+              style={{
+                border: '1px solid var(--sep)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                background: 'var(--fill-1)',
+                display: 'grid',
+                gap: 8,
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                Reviewer provider drift
+              </p>
+              {writerProviderTrends.map((trend) => (
+                <div
+                  key={trend.provider}
+                  style={{
+                    border: '1px solid var(--sep)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    background: 'var(--surface, #fff)',
+                    display: 'grid',
+                    gap: 4,
+                  }}
+                >
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: trend.status === 'degraded'
+                        ? 'var(--red, #d14b4b)'
+                        : trend.status === 'watch'
+                          ? 'var(--yellow, #c58b16)'
+                          : 'var(--green, #228b5a)',
+                    }}
+                  >
+                    {trend.provider}: {trend.headline}
+                  </p>
+                  {trend.details.map((detail) => (
+                    <p key={`${trend.provider}-${detail}`} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                      {detail}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            {writerDiagnostics && (
+              <>
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Remote reviewer: invocations <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.enhancer.invocations}</strong>
+                  {' • '}reviews <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.enhancer.reviews}</strong>
+                  {' • '}watch {writerDiagnosticsWatchEnabled ? `on (${WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS / 1000}s)` : 'off'}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Outcomes: model <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.model}</strong>
+                  {' • '}fallback <strong style={{ color: 'var(--label-1)' }}>{writerDiagnostics.clientOutcomes.fallback}</strong>
+                  {' • '}fallback rate <strong style={{ color: 'var(--label-1)' }}>{formatRate(writerDiagnostics.clientOutcomes.fallbackRate)}</strong>
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Fallback reasons:
+                  {' '}abstained {writerDiagnostics.fallbackReasonDistribution['abstained-response-fallback']}
+                  {' • '}root-only {writerDiagnostics.fallbackReasonDistribution['root-only-response-fallback']}
+                  {' • '}failure {writerDiagnostics.fallbackReasonDistribution['failure-fallback']}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Safety filter:
+                  {' '}runs {writerDiagnostics.safetyFilter.runs}
+                  {' • '}mutated {writerDiagnostics.safetyFilter.mutated} ({formatRate(writerDiagnostics.safetyFilter.mutationRate)})
+                  {' • '}blocked {writerDiagnostics.safetyFilter.blocked} ({formatRate(writerDiagnostics.safetyFilter.blockRate)})
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Reviewer decisions:
+                  {' '}accept {writerDiagnostics.enhancer.decisionCounts.accept}
+                  {' • '}replace {writerDiagnostics.enhancer.decisionCounts.replace}
+                  {' • '}takeovers {writerDiagnostics.enhancer.appliedTakeovers.total}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Takeover mix:
+                  {' '}candidate {writerDiagnostics.enhancer.appliedTakeovers.candidate} ({formatRate(writerDiagnostics.enhancer.appliedTakeovers.candidateReplacementRate)})
+                  {' • '}rescue {writerDiagnostics.enhancer.appliedTakeovers.rescue} ({formatRate(writerDiagnostics.enhancer.appliedTakeovers.rescueRate)})
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Reviewer skips/failures:
+                  {' '}skip {writerDiagnostics.enhancer.skips.total} ({formatRate(writerDiagnostics.enhancer.skips.skipRate)})
+                  {' • '}failure {writerDiagnostics.enhancer.failures.total} ({formatRate(writerDiagnostics.enhancer.failures.failureRate)})
+                  {' • '}timeout {writerDiagnostics.enhancer.failures.timeout}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Replacement hygiene:
+                  {' '}rejected {writerDiagnostics.enhancer.rejectedReplacements.total}
+                  {' • '}invalid {writerDiagnostics.enhancer.rejectedReplacements['invalid-response']}
+                  {' • '}abstained {writerDiagnostics.enhancer.rejectedReplacements['abstained-replacement']}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Reviewer latency:
+                  {' '}avg <strong style={{ color: 'var(--label-1)' }}>{formatLatency(writerDiagnostics.enhancer.latencyMs.average)}</strong>
+                  {' • '}max {formatLatency(writerDiagnostics.enhancer.latencyMs.max)}
+                  {' • '}last {formatLatency(writerDiagnostics.enhancer.latencyMs.last)}
+                </p>
+
+                {Object.entries(writerDiagnostics.enhancer.providers)
+                  .filter(([, provider]) => provider.reviews > 0 || provider.failures > 0)
+                  .map(([provider, snapshot]) => (
+                    <p key={provider} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                      {provider}:
+                      {' '}reviews {snapshot.reviews}
+                      {' • '}failures {snapshot.failures} ({formatRate(snapshot.failureRate)})
+                      {' • '}takeovers {snapshot.appliedTakeovers.total} ({formatRate(snapshot.appliedTakeovers.takeoverRate)})
+                      {' • '}avg latency {formatLatency(snapshot.latencyMs.average)}
+                    </p>
+                  ))}
+
+                {topEnhancerIssues.length > 0 && (
+                  <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                    Top reviewer issues:
+                    {' '}
+                    {topEnhancerIssues.map(([label, count]) => `${humanizeIssueLabel(label)} ${count}`).join(' • ')}
+                    {typeof writerDiagnostics.enhancer.issueDistribution.uniqueLabels === 'number'
+                      ? ` • unique ${writerDiagnostics.enhancer.issueDistribution.uniqueLabels}`
+                      : ''}
+                  </p>
+                )}
+              </>
+            )}
+
+            {interpolatorMetrics && (
+              <>
+                <p style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                  Conversation delta
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Decisions: <strong style={{ color: 'var(--label-1)' }}>{interpolatorMetrics.delta.resolutionCount}</strong>
+                  {' • '}stored reuse <strong style={{ color: 'var(--label-1)' }}>{formatRate(interpolatorMetrics.delta.storedReuseRate)}</strong>
+                  {' • '}rebuild {formatRate(interpolatorMetrics.delta.rebuildRate)}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Self-heal {formatRate(interpolatorMetrics.delta.selfHealRate)}
+                  {' • '}summary fallback <strong style={{ color: 'var(--label-1)' }}>{interpolatorMetrics.delta.summaryFallbackCount}</strong>
+                  {' • '}watch {writerDiagnosticsWatchEnabled ? `live (${WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS / 1000}s)` : 'manual'}
+                </p>
+
+                <p style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                  Conversation substrate
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Modes:
+                  {' '}normal {interpolatorMetrics.modes.normal.count}
+                  {' • '}descriptive {interpolatorMetrics.modes.descriptive_fallback.count}
+                  {' • '}minimal {interpolatorMetrics.modes.minimal_fallback.count}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Gate:
+                  {' '}passed {interpolatorMetrics.gate.passed}
+                  {' • '}skipped {interpolatorMetrics.gate.skipped}
+                  {' • '}fallback {formatRate(interpolatorMetrics.overallFallbackRate)}
+                </p>
+
+                <p style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                  Live thread watch
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  State <strong style={{ color: 'var(--label-1)' }}>{interpolatorMetrics.watch.currentState}</strong>
+                  {' • '}connects {interpolatorMetrics.watch.connectionAttempts}
+                  {' • '}ready {interpolatorMetrics.watch.readyCount}
+                  {' • '}invalidations {interpolatorMetrics.watch.invalidationCount}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Degraded {interpolatorMetrics.watch.degradedCount}
+                  {' • '}reconnects {interpolatorMetrics.watch.reconnectCount}
+                  {' • '}last ready {formatRelativeAge(interpolatorMetrics.watch.lastReadyAt)}
+                  {' • '}last change {formatRelativeAge(interpolatorMetrics.watch.lastInvalidationAt)}
+                </p>
+
+                <p style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                  Hydration mix
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Attempts <strong style={{ color: 'var(--label-1)' }}>{interpolatorMetrics.hydration.totalAttempts}</strong>
+                  {' • '}success {formatRate(interpolatorMetrics.hydration.successRate)}
+                  {' • '}event share {formatRate(interpolatorMetrics.hydration.eventShare)}
+                  {' • '}poll share {formatRate(interpolatorMetrics.hydration.pollShare)}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  By phase:
+                  {' '}initial {interpolatorMetrics.hydration.phases.initial.attempts}
+                  {' • '}event {interpolatorMetrics.hydration.phases.event.attempts}
+                  {' • '}poll {interpolatorMetrics.hydration.phases.poll.attempts}
+                </p>
+              </>
             )}
 
             {writerAlerts.length > 0 && (
@@ -897,9 +1413,49 @@ export default function LocalAiRuntimeSection() {
               </div>
             )}
 
-            {writerDiagnosticsUpdatedAt && (
+            {deltaAlerts.length > 0 && (
+              <div style={{ display: 'grid', gap: 4 }}>
+                {deltaAlerts.map((alert) => (
+                  <p
+                    key={alert.message}
+                    style={{
+                      margin: 0,
+                      fontSize: 11,
+                      lineHeight: 1.4,
+                      color: alert.severity === 'high' ? 'var(--red, #d14b4b)' : 'var(--yellow, #c58b16)',
+                    }}
+                  >
+                    {alert.severity === 'high' ? 'Delta alert: ' : 'Delta watch: '}
+                    {alert.message}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {watchAlerts.length > 0 && (
+              <div style={{ display: 'grid', gap: 4 }}>
+                {watchAlerts.map((alert) => (
+                  <p
+                    key={alert.message}
+                    style={{
+                      margin: 0,
+                      fontSize: 11,
+                      lineHeight: 1.4,
+                      color: alert.severity === 'high' ? 'var(--red, #d14b4b)' : 'var(--yellow, #c58b16)',
+                    }}
+                  >
+                    {alert.severity === 'high' ? 'Watch alert: ' : 'Freshness watch: '}
+                    {alert.message}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {(writerDiagnosticsUpdatedAt || interpolatorMetricsUpdatedAt) && (
               <p style={{ margin: 0, fontSize: 11, color: 'var(--label-4)' }}>
-                Updated {new Date(writerDiagnosticsUpdatedAt).toLocaleTimeString()}.
+                Updated {new Date(
+                  Math.max(writerDiagnosticsUpdatedAt ?? 0, interpolatorMetricsUpdatedAt ?? 0),
+                ).toLocaleTimeString()}.
               </p>
             )}
           </>
@@ -908,6 +1464,269 @@ export default function LocalAiRuntimeSection() {
         {writerDiagnosticsError && (
           <p style={{ margin: 0, fontSize: 11, color: 'var(--red, #d14b4b)', lineHeight: 1.4 }}>
             {writerDiagnosticsError}
+          </p>
+        )}
+      </div>
+
+      <div
+        style={{
+          border: '1px solid var(--sep)',
+          borderRadius: 10,
+          padding: '10px 12px',
+          background: 'var(--surface, #fff)',
+          display: 'grid',
+          gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <div>
+            <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
+              Conversation OS human review
+            </p>
+            <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+              Generate the judged review pack in-app, score it here, and keep the operator edits local to this browser by default.
+            </p>
+          </div>
+          <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={() => { void generateReviewPack(); }}
+              disabled={!supportsClientTelemetry || reviewPackLoading}
+              style={{
+                appearance: 'none',
+                border: '1px solid var(--sep)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--label-1)',
+                borderRadius: 8,
+                minHeight: 28,
+                padding: '4px 8px',
+                font: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: (!supportsClientTelemetry || reviewPackLoading) ? 'default' : 'pointer',
+                opacity: (!supportsClientTelemetry || reviewPackLoading) ? 0.65 : 1,
+              }}
+            >
+              {reviewPackLoading ? 'Generating…' : reviewPack ? 'Regenerate pack' : 'Generate pack'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { void copyReviewPack(); }}
+              disabled={!reviewPack}
+              style={{
+                appearance: 'none',
+                border: '1px solid var(--sep)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--label-1)',
+                borderRadius: 8,
+                minHeight: 28,
+                padding: '4px 8px',
+                font: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: reviewPack ? 'pointer' : 'default',
+                opacity: reviewPack ? 1 : 0.65,
+              }}
+            >
+              {reviewPackCopyState === 'copied' ? 'Copied' : 'Copy JSON'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { void clearReviewPack(); }}
+              disabled={!reviewPack}
+              style={{
+                appearance: 'none',
+                border: '1px solid var(--sep)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--label-1)',
+                borderRadius: 8,
+                minHeight: 28,
+                padding: '4px 8px',
+                font: 'inherit',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: reviewPack ? 'pointer' : 'default',
+                opacity: reviewPack ? 1 : 0.65,
+              }}
+            >
+              Clear pack
+            </button>
+          </div>
+        </div>
+
+        {!supportsClientTelemetry && (
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+            This operator workflow is only enabled in local development.
+          </p>
+        )}
+
+        {reviewPack && (
+          <>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                Reviewer id
+              </span>
+              <input
+                type="text"
+                value={reviewPack.meta.reviewerId ?? ''}
+                onChange={(event) => updateReviewerId(event.target.value)}
+                placeholder="editor.handle"
+                style={{
+                  border: '1px solid var(--sep)',
+                  borderRadius: 8,
+                  minHeight: 34,
+                  padding: '6px 10px',
+                  font: 'inherit',
+                  fontSize: 12,
+                  background: 'var(--surface, #fff)',
+                  color: 'var(--label-1)',
+                }}
+              />
+            </label>
+
+            {reviewScore && (
+              <div
+                style={{
+                  border: '1px solid var(--sep)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  background: 'var(--fill-1)',
+                  display: 'grid',
+                  gap: 4,
+                }}
+              >
+                <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                  Review score
+                </p>
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Raw {reviewScore.overall.raw.score}/{reviewScore.overall.raw.total}
+                  {' • '}weighted {reviewScore.overall.weighted.score}/{reviewScore.overall.weighted.total}
+                  {' • '}completion {formatRate(reviewScore.overall.completionRate)}
+                </p>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gap: 10 }}>
+              {reviewPack.reviews.map((review) => {
+                const scoredReview = reviewScore?.reviews.find((entry) => entry.fixtureId === review.fixtureId) ?? null;
+                return (
+                  <div
+                    key={review.fixtureId}
+                    style={{
+                      border: '1px solid var(--sep)',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      background: 'var(--fill-1)',
+                      display: 'grid',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>
+                        {review.description}
+                      </p>
+                      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                        Automated score {review.automatedEvaluation.raw.passed}/{review.automatedEvaluation.raw.total}
+                        {' • '}weighted {review.automatedEvaluation.weighted.passed}/{review.automatedEvaluation.weighted.total}
+                        {scoredReview
+                          ? ` • reviewer ${scoredReview.raw.score}/${scoredReview.raw.total}`
+                          : ''}
+                      </p>
+                      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                        Projection: {review.systemProjection.summaryMode}
+                        {' • '}contributors {review.systemProjection.surfacedContributors.map((entry) => `@${entry.handle}`).join(', ') || 'none'}
+                      </p>
+                      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                        What changed: {review.systemProjection.whatChanged.join(' • ') || 'none'}
+                      </p>
+                      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                        Context to watch: {review.systemProjection.contextToWatch.join(' • ') || 'none'}
+                      </p>
+                    </div>
+
+                    <label style={{ display: 'grid', gap: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                        Review notes
+                      </span>
+                      <textarea
+                        value={review.humanReview.notes}
+                        onChange={(event) => updateReviewNotes(review.fixtureId, event.target.value)}
+                        rows={3}
+                        style={{
+                          border: '1px solid var(--sep)',
+                          borderRadius: 8,
+                          padding: '8px 10px',
+                          font: 'inherit',
+                          fontSize: 12,
+                          resize: 'vertical',
+                          background: 'var(--surface, #fff)',
+                          color: 'var(--label-1)',
+                        }}
+                      />
+                    </label>
+
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {review.humanReview.verdicts.map((verdict) => (
+                        <div
+                          key={`${review.fixtureId}-${verdict.id}`}
+                          style={{
+                            border: '1px solid var(--sep)',
+                            borderRadius: 8,
+                            padding: '8px 10px',
+                            background: 'var(--surface, #fff)',
+                            display: 'grid',
+                            gap: 6,
+                          }}
+                        >
+                          <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                            {verdict.description}
+                          </p>
+                          <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+                            {(['pass', 'partial', 'fail'] as const).map((rating) => {
+                              const selected = verdict.rating === rating;
+                              return (
+                                <button
+                                  key={rating}
+                                  type="button"
+                                  onClick={() => updateReviewVerdict(review.fixtureId, verdict.id, rating)}
+                                  style={{
+                                    appearance: 'none',
+                                    border: selected ? '1px solid color-mix(in srgb, var(--blue) 50%, var(--sep))' : '1px solid var(--sep)',
+                                    background: selected ? 'color-mix(in srgb, var(--blue) 10%, var(--fill-1))' : 'var(--surface, #fff)',
+                                    color: 'var(--label-1)',
+                                    borderRadius: 999,
+                                    minHeight: 28,
+                                    padding: '4px 10px',
+                                    font: 'inherit',
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  {rating}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {reviewPackCopyState === 'failed' && (
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--red, #d14b4b)', lineHeight: 1.4 }}>
+            Copying the review pack failed in this browser. You can still inspect and score it here.
+          </p>
+        )}
+
+        {reviewPackError && (
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--red, #d14b4b)', lineHeight: 1.4 }}>
+            {reviewPackError}
           </p>
         )}
       </div>

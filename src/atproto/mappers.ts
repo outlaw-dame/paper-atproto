@@ -255,7 +255,13 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
 
   const sensitiveResult = detectSensitiveMedia(mapped as MockPost);
   if (sensitiveResult.isSensitive) {
-    mapped.sensitiveMedia = { isSensitive: true, reasons: sensitiveResult.reasons };
+    mapped.sensitiveMedia = {
+      isSensitive: true,
+      reasons: sensitiveResult.reasons,
+      action: sensitiveResult.action,
+      allowReveal: sensitiveResult.allowReveal,
+      ...(sensitiveResult.rationale ? { rationale: sensitiveResult.rationale } : {}),
+    };
   }
 
   return mapped;
@@ -442,6 +448,9 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     mapped.sensitiveMedia = {
       isSensitive: true,
       reasons: sensitiveMedia.reasons,
+      action: sensitiveMedia.action,
+      allowReveal: sensitiveMedia.allowReveal,
+      ...(sensitiveMedia.rationale ? { rationale: sensitiveMedia.rationale } : {}),
     };
   }
 

@@ -9,6 +9,7 @@ import { safetyRouter } from './routes/safety.js';
 import { pushRouter } from './routes/push.js';
 import { premiumAiRouter } from './routes/premiumAi.js';
 import { aiSessionsRouter } from './routes/aiSessions.js';
+import { conversationWatchRouter } from './routes/conversationWatch.js';
 import { simpleRateLimit, tokenBucketRateLimit } from './lib/rate-limit.js';
 import { AppError, RateLimitError } from './lib/errors.js';
 import { compressionMiddleware } from './lib/compression.js';
@@ -50,6 +51,7 @@ app.use('/api/podcastindex/*', simpleRateLimit({ windowMs: 60_000, max: 60 }));
 app.use('/api/safety/*', simpleRateLimit({ windowMs: 60_000, max: 120 }));
 app.use('/api/premium-ai/*', simpleRateLimit({ windowMs: 60_000, max: 10 }));
 app.use('/api/ai/sessions/*', simpleRateLimit({ windowMs: 60_000, max: 90 }));
+app.use('/api/conversation/watch', tokenBucketRateLimit({ refillWindowMs: 60_000, refillTokens: 18, burstCapacity: 6 }));
 // Push subscription endpoint: 30 writes/min per IP — enough for normal churn,
 // tight enough to prevent endpoint flooding.
 app.use('/api/push/*', simpleRateLimit({ windowMs: 60_000, max: 30 }));
@@ -62,6 +64,7 @@ app.route('/api/podcastindex', podcastIndexRouter);
 app.route('/api/safety', safetyRouter);
 app.route('/api/premium-ai', premiumAiRouter);
 app.route('/api/ai/sessions', aiSessionsRouter);
+app.route('/api/conversation', conversationWatchRouter);
 app.route('/api/push/subscription', pushRouter);
 
 app.onError((error, c) => {

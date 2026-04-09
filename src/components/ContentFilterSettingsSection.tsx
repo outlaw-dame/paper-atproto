@@ -78,7 +78,15 @@ function sortableCreatedAt(value: string | undefined): number {
 }
 
 export default function ContentFilterSettingsSection() {
-  const { rules, addRule, removeRule, toggleRule, updateRule } = useContentFilterStore();
+  const {
+    rules,
+    excludeFollowingFromFilters,
+    addRule,
+    removeRule,
+    toggleRule,
+    updateRule,
+    setExcludeFollowingFromFilters,
+  } = useContentFilterStore();
   const filteredCountByRuleId = useContentFilterMetricsStore((state) => state.filteredCountByRuleId);
   const resetFilterCounts = useContentFilterMetricsStore((state) => state.resetCounts);
   const { session } = useSessionStore();
@@ -330,6 +338,14 @@ export default function ContentFilterSettingsSection() {
       <p style={{ fontSize: 11, color: 'var(--label-4)', lineHeight: 1.35, marginBottom: 10 }}>
         Explore + Search context includes Discovery and Search Story surfaces.
       </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, color: 'var(--label-2)' }}>
+        <input
+          type="checkbox"
+          checked={excludeFollowingFromFilters}
+          onChange={(e) => setExcludeFollowingFromFilters(e.target.checked)}
+        />
+        Exclude people you follow (skip keyword filters for followed accounts)
+      </label>
       {syncStatus && (
         <p style={{ fontSize: 11, color: 'var(--green)', fontWeight: 600, marginBottom: 8 }}>{syncStatus}</p>
       )}

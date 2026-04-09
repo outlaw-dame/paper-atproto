@@ -20,12 +20,40 @@ What it has now:
 
 What still creates the “close but disconnected” feeling:
 
-- there is no user-visible explanation layer for why the system chose a given summary or contributor
-- discovery/search is not yet powered by full story clustering
+- explanation exists in parts, but not yet as a complete user-visible reasoning layer for summary, contributor, and cluster selection
+- discovery/search is intent-aware now, but not yet powered by full story clustering
 - composer context is still richer than before, but not yet packed by a dedicated context-summarization selector
 - local browser multimodal remains staged while remote multimodal is authoritative
+- discovery still needs to preserve glanceable utility so it does not repeat Neeva Gist's over-orchestrated failure mode
 
-The practical gap is now **cohesion, explanation, and discovery depth**, not the total absence of deterministic decision-making.
+The practical gap is now **cohesion, explanation depth, story grouping, and utility-preserving presentation**, not the total absence of deterministic decision-making.
+
+---
+
+## Neeva Gist Reading
+
+Neeva Gist matters here because it validated a product instinct we share: mobile discovery can be more effective when results are packaged as compact narrative units instead of flat lists. It also represented a strategic mobile pivot around an early generative-AI UX problem: too much output was either a wall of text or a bespoke image, with very little high-quality narrative packaging in between. Its strongest contribution was a story-card metaphor that made search feel navigable and visually legible.
+
+More specifically, the parts worth retaining are:
+
+1. an Instagram-like visual card language for mobile browsing
+2. concise AI synopses instead of long-form answer blobs
+3. multimedia integration when visuals materially help understanding
+4. tap-based drift between related ideas rather than hard query resets
+5. snackable consumption that still preserves evidence and source access
+6. a privacy-first product stance rather than ad-optimized ranking
+
+Its main failure mode was equally important: the experience became too directive for quick, utilitarian lookups. The immersive flow created novelty, but it also added friction when a user only needed a fast answer or source check.
+
+For this repo, the correct lesson is:
+
+1. keep the **story packaging**
+2. keep the **source visibility**
+3. keep the **media-aware presentation**
+4. reject the **mandatory immersive flow**
+5. reject any architecture where generative packaging outruns deterministic selection
+
+That is why the right adaptation is not “copy Gist.” It is “use Gist to sharpen an ATProto-native discovery system that is faster, more legible, and more truthful about evidence.”
 
 ---
 
@@ -104,40 +132,48 @@ Important nuance:
 
 These are the real architectural gaps that remain.
 
-### Discovery query understanding
+### Discovery story clustering
 
 Still missing:
 
-- a deterministic classifier for search/discovery intent such as person, topic, source, story, or visual/media-heavy lookup
-- a selector that can change fusion weights and discovery surfaces based on that intent
+- a first-class story clustering algorithm for search/discovery results
+- event/development grouping that turns result sets into coherent developments instead of ranked isolated posts
+- a cluster selector that can balance topic centrality, source density, participant diversity, and freshness
 
 Impact:
 
-- discovery already has strong retrieval primitives
-- it still behaves more like a powerful search box than a fully Neeva-style discovery orchestrator
+- discovery now has deterministic intent routing and surface adaptation
+- it still behaves more like a strong search box with better packaging than a full story-native discovery orchestrator
 
 ### Explanation generation
 
-Still missing:
+Partially shipped:
 
-- machine-readable “why this contributor” explanations
-- user-visible “why this summary” reasoning
-
-Impact:
-
-- the system makes better decisions than it used to, but still does not explain them well
-
-### Discovery-native story clustering
+- intent labels in search/discovery
+- source/domain evidence reasons
+- explanation chips on surfaced stories
 
 Still missing:
 
-- a first-class story clustering algorithm for Explore/discovery
-- deeper alignment between entity centrality, stance structure, and surfaced story groups
+- machine-readable “why this contributor” explanations across thread interpretation
+- user-visible “why this summary” reasoning across the canonical conversation layer
+- explanation of why a group of posts forms one story cluster instead of another
 
 Impact:
 
-- thread interpretation feels coherent
-- discovery still feels less graph-native than the thread pipeline
+- the system is more legible than before, but still stops short of a full trust/explanation layer
+
+### Discovery utility balance
+
+Still missing:
+
+- a formal policy for when discovery should stay glanceable versus when it should expand into deeper story packaging
+- stronger repetition controls so adjacent cards or summaries do not restate the same fact pattern
+- explicit separation between quick lookup surfaces and deeper exploratory surfaces
+
+Impact:
+
+- this is the main product guardrail that keeps the system from inheriting Gist's biggest usability weakness
 
 ### Context summarization selector
 
@@ -191,6 +227,7 @@ The correct Neeva-style extension of that pipeline is:
 - explanation metadata makes ranking and grouping legible to the user
 - story clustering organizes discovery around developments, not just matching posts
 - generative text stays bounded to packaging already-selected evidence
+- fast-path discovery stays available for users who want a quick source or post lookup rather than a guided story flow
 
 It should not become:
 
@@ -206,14 +243,14 @@ That is why the remaining work should prioritize **explanation and discovery**, 
 
 Recommended next sequence:
 
-1. **Explanation generation**
-   This closes the trust/cohesion gap fastest.
+1. **Story clustering for Explore**
+   This is now the clearest missing Neeva-aligned layer.
 
-2. **Discovery query understanding**
-   This is the nearest clean application of the Neeva research because it improves how retrieval is routed without weakening the local-first architecture.
+2. **Deeper explanation generation**
+   This closes the trust/cohesion gap and prevents story packaging from feeling opaque.
 
-3. **Story clustering for Explore**
-   This brings discovery up to the quality of the thread pipeline.
+3. **Discovery utility-balance policy**
+   This prevents over-orchestrated flows and keeps quick lookups fast.
 
 4. **Context summarization selector**
    This tightens composer quality without adding more model complexity.

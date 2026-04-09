@@ -10,8 +10,8 @@
 |---|---|
 | **Deterministic first** | Resolver, thread shaping, heuristics, and ranking all execute before any remote model call. |
 | **Algorithms decide** | Models synthesize language; bounded algorithms decide contributor inclusion, entity ranking, stance balance, and meaningful change. |
-| **Remote models are advisory, not authoritative** | Server writers, multimodal analysis, and premium Gemini enrich an already-structured thread state instead of owning the primary truth. |
-| **Security and privacy by default** | Browser clients never call Ollama or Gemini directly; routes enforce origin checks, payload validation, sanitization, and least-privilege access. |
+| **Remote models are advisory, not authoritative** | Server writers, multimodal analysis, and premium Gemini/OpenAI enrichment operate on an already-structured thread state instead of owning the primary truth. |
+| **Security and privacy by default** | Browser clients never call Ollama, Gemini, or OpenAI directly; routes enforce origin checks, payload validation, sanitization, and least-privilege access. |
 | **Fail soft, fail bounded** | Verification, multimodal, translation, and writer calls all degrade to deterministic behavior when confidence, policy, or upstream availability is weak. |
 | **Local runtime stays explicit** | The worker classifier stack is always local; larger browser text generation is opt-in on capable devices; browser multimodal remains staged until safe. |
 
@@ -27,7 +27,7 @@ The app now has a single end-to-end interpretation architecture with six connect
 | **2. Decision layer** | Contributor selection, thread-change detection, entity centrality, stance coverage, comment diversity | `src/intelligence/algorithms/*`, `src/intelligence/redundancy.ts`, `src/intelligence/writerInput.ts`, `src/intelligence/updateInterpolatorState.ts` |
 | **3. Evidence enrichment** | Verification, translation, media gating, factual and confidence blending | `src/intelligence/threadPipeline.ts`, `src/intelligence/verification/*`, `src/lib/i18n/threadTranslation.ts`, `src/intelligence/mediaInput.ts` |
 | **4. Default model execution** | Server-side writer and multimodal analysis behind bounded contracts and safety filters | `src/intelligence/modelClient.ts`, `server/src/routes/llm.ts`, `server/src/services/qwenWriter.ts`, `server/src/services/qwenMultimodal.ts` |
-| **5. Premium deep interpretation** | Higher-depth Gemini interpolation for entitled users only | `server/src/routes/premiumAi.ts`, `server/src/ai/providerRouter.ts`, `server/src/ai/providers/geminiConversation.provider.ts` |
+| **5. Premium deep interpretation** | Higher-depth provider-routed Gemini/OpenAI interpolation for entitled users only | `server/src/routes/premiumAi.ts`, `server/src/ai/providerRouter.ts`, `server/src/ai/providers/geminiConversation.provider.ts`, `server/src/ai/providers/openAiConversation.provider.ts` |
 | **6. Session and transport plane** | Durable AI sessions, replay lanes, presence, message state, telemetry | `src/aiSessions/*`, `server/src/routes/aiSessions.ts`, `server/src/ai/sessions/*` |
 
 The older “dual pipeline” idea still exists, but only as two subflows inside this broader system:
@@ -130,7 +130,7 @@ Once the thread state is fully shaped:
 
 1. `buildThreadStateForWriter(...)` constructs a bounded writer payload.
 2. `callInterpolatorWriter(...)` requests the default thread summary writer.
-3. If the user is entitled and the thread warrants it, `callPremiumDeepInterpolator(...)` requests a Gemini-backed premium interpretation.
+3. If the user is entitled and the thread warrants it, `callPremiumDeepInterpolator(...)` requests a provider-routed premium interpretation through Gemini or OpenAI.
 
 Primary files:
 
@@ -150,8 +150,10 @@ AI sessions are a parallel control plane, not a separate interpretation engine:
 
 Freshness note:
 
-- Story hydration is still a bounded polling system, not live push/streaming thread sync.
+- Story hydration now uses a privacy-safe server watch stream (`/api/conversation/watch`) that emits minimal invalidation events for remote thread changes.
+- Slow polling remains in place as a self-healing backstop when the watch stream drops or reconnects.
 - The client now only reruns writer, multimodal, and premium interpretation lanes when the thread meaningfully changed or a prior writer result is missing.
+- Delta resolution and summary-projection fallback telemetry are now exposed in the local runtime diagnostics panel so drift and self-healing are visible during development.
 
 Primary files:
 
@@ -164,6 +166,42 @@ Primary files:
 ## Search and Discovery Flow
 
 Search remains local-first, but it now shares the same architectural values as thread interpretation.
+
+### Neeva Gist as a reference, not a template
+
+Neeva Gist is useful here because it made the same core bet we are making: mobile discovery should feel more like navigating an interpreted narrative than paging through flat result lists. It was also a strategic response to an early generative-AI mobile problem: experiences were collapsing either into walls of text or into one-off generated images, without a strong in-between format for browsing. Its strongest ideas were not "AI answers the web for you" in the abstract, but a more concrete package:
+
+- Instagram-like card/feed presentation instead of flat blue-link ranking
+- a strong first-card synopsis before deeper source exploration
+- multimedia-friendly presentation for queries where visuals matter
+- a tap-driven sense of guided story progression rather than unstructured result dumping
+- snackable, mobile-first chunks instead of article-length result framing
+- privacy-first packaging that still aimed to preserve trust and source visibility
+
+That said, Gist was built for whole-web search, while this app is explicitly bounded to ATProto graphs, user-connected feeds, thread structure, and the media already present in those networks. That difference matters architecturally.
+
+What we borrow from Gist:
+
+1. **Narrative packaging over flat lists**
+	Discovery should feel like "show me the development" rather than "show me ten isolated matches."
+
+2. **Progressive disclosure**
+	A user should be able to get a quick synopsis, then expand into underlying posts, contributors, domains, and media without losing the evidence trail. That is the useful part of Gist's "snackable" design, without inheriting its tendency to over-direct the session.
+
+3. **Media-aware presentation**
+	Visual and multimedia posts should receive different packaging when the query or story actually warrants it.
+
+4. **Trust through visible sourcing**
+	Story cards, source capsules, contributor chips, and explanation metadata should make the retrieval logic legible. In this repo that also aligns with the broader privacy posture: bounded server mediation, explicit source surfaces, and no ad/tracking-driven ranking incentives.
+
+What we explicitly do **not** copy from Gist:
+
+- forcing every query through an immersive story flow
+- making quick lookups slower or more theatrical than they need to be
+- allowing generative packaging to outrun deterministic selection
+- pretending whole-story cohesion exists before clustering and explanation layers are actually present
+
+The main Gist lesson is not "make search look like stories." It is that immersive packaging only works when it preserves utility. Our ATProto adaptation therefore favors **glanceability first, guided depth second**.
 
 ### Current shipped path
 
@@ -187,16 +225,16 @@ The Neeva influence belongs primarily in **discovery architecture**, not as a ne
 What maps cleanly onto the current system:
 
 1. **Query understanding before ranking**
-	Search should increasingly classify whether the user is asking for a person, topic, source, live cluster, or media-heavy result set before weights and surfaces are chosen. The current local-first hooks already exist in `src/search.ts`, `src/conversation/discovery/exploreSearch.ts`, and `src/conversation/discovery/exploreDiscovery.ts`.
+	Search now classifies whether the user is asking for a person, topic, source, feed, hashtag, or media-heavy result set before weights and surfaces are chosen. The current local-first hooks already exist in `src/search.ts`, `src/conversation/discovery/exploreSearch.ts`, `src/conversation/discovery/discoveryIntent.ts`, and `src/conversation/discovery/exploreDiscovery.ts`.
 
 2. **Evidence-packaged result presentation**
-	Neeva-style cards map directly to the shipped projection layer: session-backed synopsis text, best-source selection, related entities, domain extraction, and discovery cards already flow through `src/conversation/projections/storyProjection.ts`, `src/conversation/discovery/exploreProjection.ts`, and `src/tabs/ExploreTab.tsx`.
+	Neeva-style cards map directly to the shipped projection layer: session-backed synopsis text, best-source selection, related entities, domain extraction, intent labels, explanation chips, and discovery cards already flow through `src/conversation/projections/storyProjection.ts`, `src/conversation/discovery/exploreProjection.ts`, and `src/tabs/ExploreTab.tsx`.
 
 3. **Story grouping over flat lists**
 	The strongest unshipped Neeva-aligned opportunity is first-class story clustering for Explore, so discovery feels like grouped developments around an event or topic instead of only ranked posts.
 
 4. **Explanation surfaces**
-	Neeva-style trust comes from showing why something surfaced. In this codebase that should become bounded explanation metadata for “why this story,” “why this source,” and “why this contributor,” produced by deterministic selectors rather than freeform model output.
+	Neeva-style trust comes from showing why something surfaced. This is now partially shipped through bounded explanation metadata such as intent labels, story/source evidence reasons, and selection chips. The remaining work is deeper, user-facing explanation for “why this cluster,” “why this contributor,” and “why this summary,” still produced by deterministic selectors rather than freeform model output.
 
 What does **not** map cleanly:
 
@@ -206,7 +244,19 @@ What does **not** map cleanly:
 
 ### Current limitation
 
-Search is coherent and local-first, but it is not yet driven by the full future story-clustering algorithm described in the roadmap. That remains planned work rather than hidden behavior.
+Search is coherent, intent-aware, and local-first, but it is not yet driven by the full story-clustering algorithm described in the roadmap. That remains planned work rather than hidden behavior.
+
+### Product lesson taken directly from Gist
+
+Gist appears to have succeeded most on visually rich, exploratory, or hobby-like queries, and struggled on fast utilitarian lookups because the interface was too directive. That lesson transfers directly:
+
+- Explore should support **story mode** without making it the only mode.
+- Cards should summarize quickly, not force unnecessary interaction depth.
+- Swipeable or sequential presentation should remain an enhancement, not a requirement for understanding.
+- Repetition between cards or summaries is a quality failure, not a stylistic choice.
+- Discovery should feel useful first and impressive second.
+
+For this codebase, the right target is not "an ATProto version of Gist." The right target is **an ATProto-native conversation and discovery system that keeps Gist's packaging strengths while avoiding its utility failures.**
 
 ---
 
@@ -271,7 +321,7 @@ These are part of the architecture, not post-hoc add-ons.
 
 ### Browser / server boundaries
 
-- The browser never calls Ollama or Gemini directly.
+- The browser never calls Ollama, Gemini, or OpenAI directly.
 - All model traffic is proxied through Hono routes with schema validation.
 - Premium routes require DID headers and trusted origins.
 
@@ -327,15 +377,16 @@ Primary files:
 - Verified thread pipeline
 - Phase 1 decision algorithms integrated into real code paths
 - Comment-level redundancy suppression
+- Discovery intent routing for people / feed / source / hashtag / visual queries
+- Explore explanation metadata for why stories and sources surfaced
 - Remote multimodal gating and analysis
 - Premium deep interpolation entitlement lane
 - AI session transport with durable replay protections
 
 ### Planned
 
-- Query-understanding selectors for discovery/search intent
 - Story clustering for Explore
-- Explanation generation for user-visible algorithm reasons
+- Deeper explanation generation for user-visible algorithm reasons
 - Context summarization selector for tighter composer context packing
 - Translation selection algorithm
 - Multimodal escalation algorithm for search-time visual specialization

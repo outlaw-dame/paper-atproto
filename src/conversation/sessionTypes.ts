@@ -15,6 +15,7 @@ import type {
   WriterEntity,
   WriterMediaFinding,
 } from '../intelligence/llmContracts';
+import type { ConversationDeltaDecision } from '../intelligence/conversationDelta';
 import type {
   DeepInterpolatorResult,
   PremiumAiEntitlements,
@@ -162,6 +163,7 @@ export interface SessionInterpretationState {
   mediaFindings?: WriterMediaFinding[];
   confidence: ConfidenceState | null;
   summaryMode: SummaryMode | null;
+  deltaDecision?: ConversationDeltaDecision | null;
   threadState: ThreadStateSignal | null;
   interpretiveExplanation: InterpretiveConfidenceExplanation | null;
   lastComputedAt?: string;

@@ -55,6 +55,7 @@ export const ThreadStateSchema = z.object({
   safeEntities: z.array(WriterEntitySchema).max(10),
   factualHighlights: z.array(z.string().max(200)).max(6),
   whatChangedSignals: z.array(z.string().max(150)).max(8),
+  perspectiveGaps: z.array(z.string().max(120)).max(3).optional(),
   mediaFindings: z.array(z.object({
     mediaType: z.string(),
     summary: z.string().max(300),
@@ -70,6 +71,7 @@ export const ThreadStateSchema = z.object({
     evidencePresent: z.boolean(),
   }).optional(),
   interpretiveExplanation: z.string().max(240).optional(),
+  entityThemes: z.array(z.string().max(120)).max(8).optional(),
 });
 
 export const WriterResponseSchema = z.object({
@@ -93,6 +95,18 @@ export const MediaRequestSchema = z.object({
   factualHints: z.array(z.string().max(120)).max(5),
 });
 
+const MediaModerationActionSchema = z.enum(['none', 'warn', 'blur', 'drop']);
+const MediaModerationCategorySchema = z.enum([
+  'sexual-content',
+  'nudity',
+  'graphic-violence',
+  'extreme-graphic-violence',
+  'self-harm',
+  'hate-symbols',
+  'hate-speech',
+  'child-safety',
+]);
+
 export const MediaResponseSchema = z.object({
   mediaCentrality: z.number().min(0).max(1),
   mediaType: z.enum(['screenshot', 'chart', 'document', 'photo', 'meme', 'unknown']),
@@ -101,6 +115,13 @@ export const MediaResponseSchema = z.object({
   candidateEntities: z.array(z.string().max(80)).max(5),
   confidence: z.number().min(0).max(1),
   cautionFlags: z.array(z.string().max(40)).max(8),
+  moderation: z.object({
+    action: MediaModerationActionSchema,
+    categories: z.array(MediaModerationCategorySchema).max(4),
+    confidence: z.number().min(0).max(1),
+    allowReveal: z.boolean().optional(),
+    rationale: z.string().max(180).optional(),
+  }).optional(),
 });
 
 export const ExploreSynopsisSchema = z.object({
@@ -181,6 +202,7 @@ export const PremiumInterpolatorSchema = z.object({
   safeEntities: z.array(WriterEntitySchema).max(10),
   factualHighlights: z.array(z.string().max(200)).max(6),
   whatChangedSignals: z.array(z.string().max(150)).max(8),
+  perspectiveGaps: z.array(z.string().max(120)).max(3).optional(),
   mediaFindings: z.array(z.object({
     mediaType: z.string(),
     summary: z.string().max(300),

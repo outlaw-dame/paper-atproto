@@ -119,7 +119,7 @@ function createSession(): ConversationSession {
         salientClaims: [],
         salientContributors: [],
         clarificationsAdded: [],
-        newAnglesAdded: [],
+        newAnglesAdded: ['replies compare it to earlier incidents'],
         repetitionLevel: 0.1,
         heatLevel: 0.12,
         sourceSupportPresent: false,
@@ -142,6 +142,18 @@ function createSession(): ConversationSession {
         interpretiveConfidence: 0.22,
       },
       summaryMode: 'descriptive_fallback',
+      deltaDecision: {
+        didMeaningfullyChange: true,
+        changeMagnitude: 0.34,
+        changeReasons: ['new_angle_introduced'],
+        confidence: {
+          surfaceConfidence: 0.41,
+          entityConfidence: 0.35,
+          interpretiveConfidence: 0.22,
+        },
+        summaryMode: 'descriptive_fallback',
+        computedAt: '2026-04-07T00:03:00.000Z',
+      },
       threadState: null,
       interpretiveExplanation: null,
       premium: {
@@ -195,7 +207,29 @@ describe('buildInterpolatorSurfaceProjection', () => {
 
     const projection = buildInterpolatorSurfaceProjection(createSession());
 
-    expect(projection.summaryText).toContain('Replies add little beyond comparing it to earlier incidents.');
+    expect(projection.summaryText).toContain('Visible replies introduce a new angle.');
     expect(projection.summaryText).not.toContain('Visible replies mostly');
+  });
+
+  it('self-heals stale summary mode from current confidence when stored decision drifts', () => {
+    useInterpolatorSettingsStore.setState({ enabled: true });
+
+    const session = createSession();
+    session.interpretation.deltaDecision = {
+      didMeaningfullyChange: true,
+      changeMagnitude: 0.8,
+      changeReasons: ['source_backed_clarification'],
+      confidence: {
+        surfaceConfidence: 0.82,
+        entityConfidence: 0.4,
+        interpretiveConfidence: 0.8,
+      },
+      summaryMode: 'normal',
+      computedAt: '2026-04-07T00:01:00.000Z',
+    };
+
+    const projection = buildInterpolatorSurfaceProjection(session);
+
+    expect(projection.summaryMode).toBe('minimal_fallback');
   });
 });

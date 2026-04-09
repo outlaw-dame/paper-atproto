@@ -104,6 +104,7 @@ export interface ThreadStateForWriter {
   safeEntities: WriterEntity[];
   factualHighlights: string[];
   whatChangedSignals: string[];
+  perspectiveGaps?: string[] | undefined;
   mediaFindings?: WriterMediaFinding[] | undefined;
   /** Structural signal counts for writer calibration — never contains user content. */
   threadSignalSummary?: WriterThreadSignalSummary | undefined;
@@ -135,6 +136,26 @@ export interface MediaAnalysisRequest {
   factualHints: string[];
 }
 
+export type MediaModerationAction = 'none' | 'warn' | 'blur' | 'drop';
+
+export type MediaModerationCategory =
+  | 'sexual-content'
+  | 'nudity'
+  | 'graphic-violence'
+  | 'extreme-graphic-violence'
+  | 'self-harm'
+  | 'hate-symbols'
+  | 'hate-speech'
+  | 'child-safety';
+
+export interface MediaModerationRecommendation {
+  action: MediaModerationAction;
+  categories: MediaModerationCategory[];
+  confidence: number;
+  allowReveal?: boolean | undefined;
+  rationale?: string | undefined;
+}
+
 export interface MediaAnalysisResult {
   mediaCentrality: number;
   mediaType: 'screenshot' | 'chart' | 'document' | 'photo' | 'meme' | 'unknown';
@@ -143,6 +164,7 @@ export interface MediaAnalysisResult {
   candidateEntities: string[];
   confidence: number;
   cautionFlags: string[];
+  moderation?: MediaModerationRecommendation | undefined;
 }
 
 // ─── Explore synopsis ─────────────────────────────────────────────────────

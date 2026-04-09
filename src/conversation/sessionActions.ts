@@ -11,7 +11,7 @@ import {
 } from './sessionMutations';
 
 export function useConversationActions(sessionId: string) {
-  const onUserFeedback = useCallback((replyUri: AtUri, feedback: ContributionScores['userFeedback']) => {
+  const onUserFeedback = useCallback((replyUri: AtUri, feedback?: ContributionScores['userFeedback']) => {
     setConversationUserFeedback({
       sessionId,
       replyUri,

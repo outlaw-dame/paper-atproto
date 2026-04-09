@@ -3,6 +3,7 @@ import type {
   ConversationSession,
 } from './sessionTypes';
 import { readSessionMutationState } from './mutationLedger';
+import { resolveConversationDeltaDecision } from './deltaDecision';
 
 const MAX_CONTINUITY_SNAPSHOTS = 6;
 
@@ -59,6 +60,7 @@ export function buildContinuityLabel(
 export function buildConversationContinuitySnapshot(
   session: ConversationSession,
 ): ConversationContinuitySnapshot {
+  const deltaDecision = resolveConversationDeltaDecision(session);
   const writerWhatChanged = (session.interpretation.writerResult?.whatChanged ?? [])
     .map((entry) => normalizeContinuityText(entry))
     .filter((entry) => entry.length > 0)
@@ -79,8 +81,8 @@ export function buildConversationContinuitySnapshot(
 
   return {
     recordedAt,
-    ...(session.interpretation.summaryMode !== null
-      ? { summaryMode: session.interpretation.summaryMode }
+    ...(deltaDecision?.summaryMode !== undefined
+      ? { summaryMode: deltaDecision.summaryMode }
       : {}),
     direction: session.trajectory.direction,
     ...(session.interpretation.threadState?.dominantTone

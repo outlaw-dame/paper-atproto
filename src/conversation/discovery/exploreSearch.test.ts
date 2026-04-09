@@ -13,6 +13,7 @@ vi.mock('../../lib/podcastIndexClient', () => ({
 }));
 
 import {
+  buildExploreSearchPlan,
   mergeExploreSearchActorPage,
   mergeExploreSearchPostPage,
   resolveExploreSearchPage,
@@ -47,6 +48,17 @@ function makeActor(did: string, handle = 'tester.bsky.social'): AppBskyActorDefs
 }
 
 describe('exploreSearch helpers', () => {
+  it('builds intent-aware routing plans for people and feed queries', () => {
+    const peoplePlan = buildExploreSearchPlan('@alice.bsky.social', 'top');
+    expect(peoplePlan.intent.kind).toBe('people');
+    expect(peoplePlan.actorLimit).toBeGreaterThan(12);
+
+    const feedPlan = buildExploreSearchPlan('best podcast rss feed', 'top');
+    expect(feedPlan.intent.kind).toBe('feed');
+    expect(feedPlan.feedLimit).toBeGreaterThan(12);
+    expect(feedPlan.podcastLimit).toBeGreaterThan(8);
+  });
+
   it('sanitizes and bounds search queries before remote use', () => {
     expect(
       sanitizeExploreSearchQuery('  #topic\u0000\u0007   with   spaces  '),
@@ -226,6 +238,7 @@ describe('exploreSearch helpers', () => {
       posts: [],
       actors: [],
       feedItems: [],
+      intent: expect.objectContaining({ kind: 'general' }),
       postCursor: null,
       tagPostCursor: null,
       actorCursor: null,

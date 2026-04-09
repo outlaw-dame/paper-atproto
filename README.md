@@ -26,7 +26,7 @@ The app now runs as one connected AI system with layered execution rather than a
    Adds verification, translation, and multimodal gating only when the thread actually warrants it.
 
 4. **Model execution lanes**
-   Uses server-side writers and multimodal analysis for the default path, with premium Gemini interpolation for entitled users and explicit browser-runtime policies for larger local models.
+   Uses server-side writers and multimodal analysis for the default path, with premium provider-routed Gemini/OpenAI interpolation for entitled users and explicit browser-runtime policies for larger local models.
 
 5. **Session/control plane**
    Streams AI session state, presence, and replay lanes through protected `/api/ai/sessions/*` routes.

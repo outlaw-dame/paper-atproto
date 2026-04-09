@@ -41,7 +41,10 @@ vi.mock('../../server/src/services/safeBrowsing.js', () => ({
   }) => verdict.blocked || (envMock.AI_SAFE_BROWSING_FAIL_CLOSED && verdict.status === 'unknown'),
 }));
 
-import { runMediaAnalyzer } from '../../server/src/services/qwenMultimodal.js';
+import {
+  runMediaAnalyzer,
+  runMediaAnalyzerFromImageBase64,
+} from '../../server/src/services/qwenMultimodal.js';
 
 const baseRequest = {
   threadId: 'thread-1',
@@ -232,5 +235,82 @@ describe('runMediaAnalyzer hardening', () => {
     });
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0]).toBe('http://localhost:11434/api/chat');
+  });
+
+  it('can analyze a prepared image payload without refetching the media url', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      message: {
+        role: 'assistant',
+        content: JSON.stringify({
+          mediaCentrality: 0.74,
+          mediaType: 'screenshot',
+          extractedText: 'SETTINGS',
+          mediaSummary: 'A desktop settings screenshot with a notifications panel.',
+          candidateEntities: ['Settings', 'Notifications'],
+          confidence: 0.81,
+          cautionFlags: [],
+        }),
+      },
+      done: true,
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }));
+
+    const result = await runMediaAnalyzerFromImageBase64(baseRequest, Buffer.from([1, 2, 3, 4]).toString('base64'));
+
+    expect(result).toEqual({
+      mediaCentrality: 0.74,
+      mediaType: 'screenshot',
+      extractedText: 'SETTINGS',
+      mediaSummary: 'A desktop settings screenshot with a notifications panel.',
+      candidateEntities: ['Settings', 'Notifications'],
+      confidence: 0.81,
+      cautionFlags: [],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://localhost:11434/api/chat');
+    expect(mockCheckUrlAgainstSafeBrowsing).not.toHaveBeenCalled();
+  });
+
+  it('preserves severe multimodal moderation recommendations when category and confidence support them', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      message: {
+        role: 'assistant',
+        content: JSON.stringify({
+          mediaCentrality: 0.88,
+          mediaType: 'photo',
+          mediaSummary: 'A close-up image with severe exploitative content.',
+          candidateEntities: [],
+          confidence: 0.9,
+          cautionFlags: [],
+          moderation: {
+            action: 'drop',
+            categories: ['child-safety'],
+            confidence: 0.94,
+            allowReveal: false,
+            rationale: 'The image may depict exploitative content involving a child.',
+          },
+        }),
+      },
+      done: true,
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }));
+
+    const result = await runMediaAnalyzerFromImageBase64(baseRequest, Buffer.from([1, 2, 3, 4]).toString('base64'));
+
+    expect(result.moderation).toEqual({
+      action: 'drop',
+      categories: ['child-safety'],
+      confidence: 0.94,
+      allowReveal: false,
+      rationale: 'The image may depict exploitative content involving a child.',
+    });
   });
 });

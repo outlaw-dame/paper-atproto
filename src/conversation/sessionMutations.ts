@@ -1,4 +1,8 @@
-import type { AtUri, ContributionScores } from '../intelligence/interpolatorTypes';
+import {
+  applyContributionFeedbackSelection,
+  type AtUri,
+  type ContributionScores,
+} from '../intelligence/interpolatorTypes';
 import type { ThreadNode } from '../lib/resolver/atproto';
 import { useConversationSessionStore } from './sessionStore';
 import type { ConversationNode, SessionGraph } from './sessionTypes';
@@ -12,6 +16,11 @@ import {
 import { applyInterpretiveConfidence } from './interpretive/interpretiveScoring';
 import { updateConversationContinuitySnapshots } from './continuitySnapshots';
 import { appendConversationMutation } from './mutationLedger';
+import { finalizeConversationDeltaDecision } from './deltaDecision';
+import {
+  emitConversationHydrationInvalidation,
+  type ConversationHydrationInvalidationReason,
+} from './hydrationInvalidation';
 
 function adjustReplyCount(node: ConversationNode | undefined, delta: number): ConversationNode | undefined {
   if (!node) return undefined;
@@ -153,6 +162,7 @@ function recomputeSessionDerivedState(sessionId: string): void {
       lastComputedAt: recomputedAt,
     },
   };
+  next = finalizeConversationDeltaDecision(next, next.interpretation.deltaDecision ?? null);
   next = assignDeferredReasons(next, defaultAnchorLinearPolicy);
   next = {
     ...next,
@@ -166,10 +176,25 @@ function recomputeSessionDerivedState(sessionId: string): void {
   store.updateSession(sessionId, () => next);
 }
 
+function emitSessionHydrationInvalidation(
+  sessionId: string,
+  reason: ConversationHydrationInvalidationReason,
+): void {
+  const session = useConversationSessionStore.getState().getSession(sessionId);
+  if (!session) return;
+
+  emitConversationHydrationInvalidation({
+    sessionId,
+    rootUri: session.graph.rootUri,
+    reason,
+    revision: session.mutations.revision,
+  });
+}
+
 export function setConversationUserFeedback(params: {
   sessionId: string;
   replyUri: AtUri;
-  feedback: ContributionScores['userFeedback'];
+  feedback?: ContributionScores['userFeedback'];
 }): void {
   const { sessionId, replyUri, feedback } = params;
   const store = useConversationSessionStore.getState();
@@ -184,10 +209,7 @@ export function setConversationUserFeedback(params: {
         ...current.interpretation,
         scoresByUri: {
           ...current.interpretation.scoresByUri,
-          [replyUri]: {
-            ...existing,
-            ...(feedback !== undefined ? { userFeedback: feedback } : {}),
-          },
+          [replyUri]: applyContributionFeedbackSelection(existing, feedback),
         },
       },
     }, {
@@ -310,6 +332,7 @@ export function insertOptimisticReply(params: {
   });
 
   recomputeSessionDerivedState(sessionId);
+  emitSessionHydrationInvalidation(sessionId, 'optimistic_reply_inserted');
 }
 
 export function reconcileOptimisticReply(params: {
@@ -403,6 +426,7 @@ export function reconcileOptimisticReply(params: {
   });
 
   recomputeSessionDerivedState(sessionId);
+  emitSessionHydrationInvalidation(sessionId, 'optimistic_reply_reconciled');
 }
 
 export function rollbackOptimisticReply(params: {
@@ -452,4 +476,5 @@ export function rollbackOptimisticReply(params: {
   });
 
   recomputeSessionDerivedState(sessionId);
+  emitSessionHydrationInvalidation(sessionId, 'optimistic_reply_rolled_back');
 }

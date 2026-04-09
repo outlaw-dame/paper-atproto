@@ -91,6 +91,7 @@ export interface ThreadProjection {
     threadState: string;
     sourceSupportPresent: boolean;
     factualSignalPresent: boolean;
+    perspectiveGaps: string[];
     topContributors: any[];
     entityLandscape: any[];
     writerEntities: any[];
@@ -218,6 +219,7 @@ export function projectThreadView(
       threadState: session.interpretation.threadState?.dominantTone ?? 'forming',
       sourceSupportPresent: session.interpretation.interpolator?.sourceSupportPresent ?? false,
       factualSignalPresent: session.interpretation.interpolator?.factualSignalPresent ?? false,
+      perspectiveGaps: session.interpretation.interpolator?.perspectiveGaps ?? [],
       topContributors: session.contributors.contributors,
       entityLandscape: session.entities.entityLandscape,
       writerEntities: session.entities.writerEntities,

@@ -6,6 +6,7 @@ import { hasDisplayableRecordContent, mapFeedViewPost } from '../../atproto/mapp
 import { normalizeAtprotoSearchQuery } from '../../lib/searchQuery';
 import { hybridSearch } from '../../search';
 import { searchPodcastIndex } from '../../lib/podcastIndexClient';
+import { classifyDiscoveryIntent, type DiscoveryIntentKind } from './discoveryIntent';
 import {
   dedupeExploreSearchPosts,
   mapFeedRowToExploreFeedResult,
@@ -15,15 +16,39 @@ import {
   type ExploreFeedResult,
 } from '../../lib/exploreSearchResults';
 import { mergePeopleCandidates, searchSemanticPeople } from '../../lib/semanticPeople';
+import { recordDiscoveryIntentTelemetry, recordDiscoveryRetryTelemetry } from '../../perf/searchTelemetry';
 
 type ExploreSearchAgent = any;
 
 const DEFAULT_QUERY_MAX_CHARS = 160;
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+export interface ExploreSearchIntentSummary {
+  kind: DiscoveryIntentKind;
+  label: string;
+  confidence: number;
+  reasons: string[];
+  queryHasVisualIntent: boolean;
+}
+
+interface ExploreSearchPlan {
+  normalizedQuery: string;
+  isHashtagQuery: boolean;
+  postLimit: number;
+  tagPostLimit: number;
+  actorLimit: number;
+  semanticRowLimit: number;
+  semanticMaxProfiles: number;
+  feedLimit: number;
+  podcastLimit: number;
+  intent: ExploreSearchIntentSummary;
+}
 
 export interface ExploreSearchPage {
   posts: MockPost[];
   actors: AppBskyActorDefs.ProfileView[];
   feedItems: ExploreFeedResult[];
+  intent: ExploreSearchIntentSummary;
   postCursor: string | null;
   tagPostCursor: string | null;
   actorCursor: string | null;
@@ -41,6 +66,167 @@ export interface ExploreSearchState extends ExploreSearchPage {
   loadMoreActors: () => void;
 }
 
+function toIntentLabel(kind: DiscoveryIntentKind): string {
+  switch (kind) {
+    case 'hashtag':
+      return 'Hashtag focus';
+    case 'people':
+      return 'People focus';
+    case 'source':
+      return 'Source focus';
+    case 'feed':
+      return 'Feed focus';
+    case 'visual':
+      return 'Visual focus';
+    default:
+      return 'General discovery';
+  }
+}
+
+function summarizeIntent(query: string): ExploreSearchIntentSummary {
+  const intent = classifyDiscoveryIntent(query);
+  return {
+    kind: intent.kind,
+    label: toIntentLabel(intent.kind),
+    confidence: intent.confidence,
+    reasons: intent.reasons,
+    queryHasVisualIntent: intent.queryHasVisualIntent,
+  };
+}
+
+function defaultIntentSummary(): ExploreSearchIntentSummary {
+  return summarizeIntent('');
+}
+
+function classifyRetryReason(error: unknown): {
+  retryable: boolean;
+  statusCode: number | null;
+  reasonCategory: 'status' | 'network' | 'timeout' | 'temporary' | 'unknown';
+} {
+  const status = Number((error as any)?.status ?? (error as any)?.response?.status ?? NaN);
+  if (Number.isFinite(status) && (RETRYABLE_STATUS_CODES.has(status) || status >= 500)) {
+    return {
+      retryable: true,
+      statusCode: status,
+      reasonCategory: 'status',
+    };
+  }
+
+  const message = String((error as any)?.message ?? '').toLowerCase();
+  if (message.includes('network')) {
+    return {
+      retryable: true,
+      statusCode: Number.isFinite(status) ? status : null,
+      reasonCategory: 'network',
+    };
+  }
+  if (message.includes('timeout')) {
+    return {
+      retryable: true,
+      statusCode: Number.isFinite(status) ? status : null,
+      reasonCategory: 'timeout',
+    };
+  }
+  if (message.includes('temporar')) {
+    return {
+      retryable: true,
+      statusCode: Number.isFinite(status) ? status : null,
+      reasonCategory: 'temporary',
+    };
+  }
+
+  return {
+    retryable: false,
+    statusCode: Number.isFinite(status) ? status : null,
+    reasonCategory: 'unknown',
+  };
+}
+
+async function retryWithBackoff<T>(operation: () => Promise<T>, options: { operationName: string; maxAttempts?: number }): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? 3;
+  let attempt = 0;
+  let lastError: unknown = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const classification = classifyRetryReason(error);
+      const exhausted = attempt >= maxAttempts || !classification.retryable;
+      recordDiscoveryRetryTelemetry({
+        operation: options.operationName,
+        attempt,
+        maxAttempts,
+        statusCode: classification.statusCode,
+        reasonCategory: classification.reasonCategory,
+        exhausted,
+      });
+
+      if (exhausted) {
+        throw error;
+      }
+      const baseDelay = Math.min(900, 100 * (2 ** (attempt - 1)));
+      const jitter = Math.floor(Math.random() * 120);
+      await new Promise((resolve) => setTimeout(resolve, baseDelay + jitter));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Retry failed for unknown reason');
+}
+
+export function buildExploreSearchPlan(rawQuery: string, _searchSort: 'top' | 'latest'): ExploreSearchPlan {
+  const intent = summarizeIntent(rawQuery);
+  const normalizedQuery = normalizeAtprotoSearchQuery(rawQuery);
+  const isHashtagQuery = rawQuery.startsWith('#') || intent.kind === 'hashtag';
+
+  const basePlan: ExploreSearchPlan = {
+    normalizedQuery,
+    isHashtagQuery,
+    postLimit: 40,
+    tagPostLimit: 30,
+    actorLimit: 12,
+    semanticRowLimit: 36,
+    semanticMaxProfiles: 8,
+    feedLimit: 12,
+    podcastLimit: 8,
+    intent,
+  };
+
+  switch (intent.kind) {
+    case 'people':
+      return {
+        ...basePlan,
+        postLimit: 24,
+        actorLimit: 20,
+        semanticRowLimit: 48,
+        semanticMaxProfiles: 12,
+      };
+    case 'feed':
+      return {
+        ...basePlan,
+        postLimit: 20,
+        actorLimit: 8,
+        feedLimit: 18,
+        podcastLimit: 12,
+      };
+    case 'source':
+      return {
+        ...basePlan,
+        postLimit: 36,
+        feedLimit: 14,
+      };
+    case 'visual':
+      return {
+        ...basePlan,
+        postLimit: 44,
+      };
+    default:
+      return basePlan;
+  }
+}
+
 function emptyDidSet(): Set<string> {
   return new Set<string>();
 }
@@ -50,6 +236,7 @@ function emptyExploreSearchPage(): ExploreSearchPage {
     posts: [],
     actors: [],
     feedItems: [],
+    intent: defaultIntentSummary(),
     postCursor: null,
     tagPostCursor: null,
     actorCursor: null,
@@ -101,6 +288,7 @@ export function resolveExploreSearchPage(params: {
   podcastIndexFeeds?: unknown;
   searchSort: 'top' | 'latest';
   isHashtagQuery: boolean;
+  intentSummary?: ExploreSearchIntentSummary;
 }): ExploreSearchPage {
   const resolved = resolveExploreSearchResults({
     postsRes: params.postsRes,
@@ -131,6 +319,7 @@ export function resolveExploreSearchPage(params: {
     posts: dedupeExploreSearchPosts(resolved.posts),
     actors: blendedActors,
     feedItems: resolved.feedItems,
+    intent: params.intentSummary ?? defaultIntentSummary(),
     postCursor,
     tagPostCursor,
     actorCursor,
@@ -245,31 +434,45 @@ export function useExploreSearchResults(params: {
 
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
-    const normalizedQuery = normalizeAtprotoSearchQuery(sanitizedQuery);
-    const isHashtagQuery = sanitizedQuery.startsWith('#');
+    const plan = buildExploreSearchPlan(sanitizedQuery, searchSort);
+    recordDiscoveryIntentTelemetry(plan.intent.kind);
+    const normalizedQuery = plan.normalizedQuery;
+    const isHashtagQuery = plan.isHashtagQuery;
     let disposed = false;
 
     setLoading(true);
     setLoadingMorePosts(false);
     setLoadingMoreActors(false);
     void Promise.all([
-      atpCall(() => agent.app.bsky.feed.searchPosts({
+      retryWithBackoff(() => atpCall(() => agent.app.bsky.feed.searchPosts({
         q: normalizedQuery,
         sort: searchSort,
-        limit: 40,
-      })).catch(() => null),
+        limit: plan.postLimit,
+      })), { operationName: 'searchPosts' }).catch(() => null),
       isHashtagQuery
-        ? atpCall(() => (agent.app.bsky.feed as any).searchPosts({
+        ? retryWithBackoff(() => atpCall(() => (agent.app.bsky.feed as any).searchPosts({
           tag: normalizedQuery,
           sort: searchSort,
-          limit: 30,
-        })).catch(() => null)
+          limit: plan.tagPostLimit,
+        })), { operationName: 'searchPostsByTag' }).catch(() => null)
         : Promise.resolve(null),
-      hybridSearch.search(normalizedQuery, 20).catch(() => null),
-      atpCall(() => agent.searchActors({ q: normalizedQuery, limit: 12 })).catch(() => null),
-      searchSemanticPeople(agent, normalizedQuery, { rowLimit: 36, maxProfiles: 8 }).catch(() => []),
-      hybridSearch.searchFeedItems(normalizedQuery, 12).catch(() => null),
-      searchPodcastIndex(normalizedQuery, 8).catch(() => []),
+      hybridSearch.search(normalizedQuery, 20, {
+        queryHasVisualIntent: plan.intent.queryHasVisualIntent,
+      }).catch(() => null),
+      retryWithBackoff(() => atpCall(() => agent.searchActors({
+        q: normalizedQuery,
+        limit: plan.actorLimit,
+      })), { operationName: 'searchActors' }).catch(() => null),
+      retryWithBackoff(() => searchSemanticPeople(agent, normalizedQuery, {
+        rowLimit: plan.semanticRowLimit,
+        maxProfiles: plan.semanticMaxProfiles,
+      }), { operationName: 'semanticPeople' }).catch(() => []),
+      hybridSearch.searchFeedItems(normalizedQuery, plan.feedLimit, {
+        queryHasVisualIntent: plan.intent.queryHasVisualIntent,
+      }).catch(() => null),
+      retryWithBackoff(() => searchPodcastIndex(normalizedQuery, plan.podcastLimit), {
+        operationName: 'searchPodcastIndex',
+      }).catch(() => []),
     ])
       .then(([
         postsRes,
@@ -291,6 +494,7 @@ export function useExploreSearchResults(params: {
           podcastIndexFeeds,
           searchSort,
           isHashtagQuery,
+          intentSummary: plan.intent,
         }));
       })
       .catch(() => {
@@ -313,26 +517,27 @@ export function useExploreSearchResults(params: {
 
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
-    const normalizedQuery = normalizeAtprotoSearchQuery(sanitizedQuery);
-    const isHashtagQuery = sanitizedQuery.startsWith('#');
+    const plan = buildExploreSearchPlan(sanitizedQuery, searchSort);
+    const normalizedQuery = plan.normalizedQuery;
+    const isHashtagQuery = plan.isHashtagQuery;
     setLoadingMorePosts(true);
 
     void Promise.all([
       page.postCursor
-        ? atpCall(() => agent.app.bsky.feed.searchPosts({
+        ? retryWithBackoff(() => atpCall(() => agent.app.bsky.feed.searchPosts({
           q: normalizedQuery,
           sort: searchSort,
-          limit: 30,
+          limit: plan.tagPostLimit,
           cursor: page.postCursor,
-        })).catch(() => null)
+        })), { operationName: 'searchPostsPage' }).catch(() => null)
         : Promise.resolve(null),
       isHashtagQuery && page.tagPostCursor
-        ? atpCall(() => (agent.app.bsky.feed as any).searchPosts({
+        ? retryWithBackoff(() => atpCall(() => (agent.app.bsky.feed as any).searchPosts({
           tag: normalizedQuery,
           sort: searchSort,
-          limit: 20,
+          limit: Math.max(20, Math.trunc(plan.tagPostLimit / 2)),
           cursor: page.tagPostCursor,
-        })).catch(() => null)
+        })), { operationName: 'searchPostsByTagPage' }).catch(() => null)
         : Promise.resolve(null),
     ])
       .then(([postsRes, tagPostsRes]) => {
@@ -367,14 +572,15 @@ export function useExploreSearchResults(params: {
 
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
-    const normalizedQuery = normalizeAtprotoSearchQuery(sanitizedQuery);
+    const plan = buildExploreSearchPlan(sanitizedQuery, searchSort);
+    const normalizedQuery = plan.normalizedQuery;
     setLoadingMoreActors(true);
 
-    void atpCall(() => agent.searchActors({
+    void retryWithBackoff(() => atpCall(() => agent.searchActors({
       q: normalizedQuery,
-      limit: 12,
+      limit: plan.actorLimit,
       cursor: page.actorCursor,
-    }))
+    })), { operationName: 'searchActorsPage' })
       .then((actorsRes) => {
         if (requestVersion !== requestVersionRef.current) return;
         setPage((current) => mergeExploreSearchActorPage({
@@ -400,6 +606,7 @@ export function useExploreSearchResults(params: {
     loadingMoreActors,
     page.actorCursor,
     sanitizedQuery,
+    searchSort,
   ]);
 
   return {

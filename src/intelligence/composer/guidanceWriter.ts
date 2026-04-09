@@ -31,24 +31,70 @@ function buildPremiumContextSignals(
   const premiumContext = context.summaries?.premiumContext;
   if (!premiumContext) return [];
 
-  const signals: string[] = [];
-
   const groundedContext = sanitizeWriterText(premiumContext.groundedContext, 120);
-  if (groundedContext) {
-    signals.push(`Deep context: ${groundedContext}`);
-  }
-
   const perspectiveGap = sanitizeWriterText(premiumContext.perspectiveGaps[0], 100);
-  if (perspectiveGap) {
-    signals.push(`Missing context: ${perspectiveGap}`);
+  const followUpQuestion = sanitizeWriterText(premiumContext.followUpQuestions[0], 100);
+
+  const signals: string[] = [];
+  const contextParts: string[] = [];
+
+  if (groundedContext) {
+    contextParts.push(`Deep context: ${groundedContext}`);
   }
 
-  const followUpQuestion = sanitizeWriterText(premiumContext.followUpQuestions[0], 100);
+  if (perspectiveGap) {
+    contextParts.push(`Missing context: ${perspectiveGap}`);
+  }
+
+  if (contextParts.length > 0) {
+    signals.push(contextParts.join(' '));
+  }
+
   if (followUpQuestion) {
     signals.push(`Open question: ${followUpQuestion}`);
   }
 
-  return uniqStrings(signals).slice(0, 3);
+  return uniqStrings(signals).slice(0, 2);
+}
+
+function buildMediaContextSignals(
+  context: ComposerContext,
+): string[] {
+  const mediaContext = context.summaries?.mediaContext;
+  if (!mediaContext) return [];
+
+  const summary = sanitizeWriterText(mediaContext.summary, 120);
+  const caution = sanitizeWriterText(mediaContext.cautionFlags[0], 60);
+  if (!summary && !caution) return [];
+
+  const parts: string[] = [];
+  if (summary) {
+    parts.push(summary);
+  } else if (mediaContext.primaryKind) {
+    parts.push(`Key media appears to be a ${mediaContext.primaryKind}.`);
+  }
+  if (caution) {
+    parts.push(`Caution: ${caution}.`);
+  }
+
+  return [`Media context: ${parts.join(' ')}`];
+}
+
+function buildParentSignals(
+  context: ComposerContext,
+  guidance: ComposerGuidanceResult,
+): string[] {
+  const heuristicSignals = uniqStrings(
+    guidance.heuristics.parentSignals
+      .map((value) => sanitizeWriterText(value, 100))
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  return uniqStrings([
+    ...heuristicSignals,
+    ...buildMediaContextSignals(context),
+    ...buildPremiumContextSignals(context),
+  ]).slice(0, 4);
 }
 
 function buildRequest(
@@ -73,10 +119,7 @@ function buildRequest(
     scores: guidance.scores,
     constructiveSignals: guidance.heuristics.constructiveSignals.slice(0, 4),
     supportiveSignals: guidance.heuristics.supportiveReplySignals.slice(0, 4),
-    parentSignals: uniqStrings([
-      ...guidance.heuristics.parentSignals,
-      ...buildPremiumContextSignals(context),
-    ]).slice(0, 4),
+    parentSignals: buildParentSignals(context, guidance),
   };
 }
 

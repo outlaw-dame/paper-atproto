@@ -21,6 +21,7 @@ import { sanitizeUrlForProcessing } from '../lib/safety/externalUrl';
 import {
   recordInterpolatorWriterOutcome,
 } from '../perf/interpolatorTelemetry';
+import { inferenceClient } from '../workers/InferenceClient';
 import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore';
 import type {
   DeepInterpolatorResult,
@@ -29,6 +30,10 @@ import type {
   PremiumAiSafetyMetadata,
   PremiumInterpolatorRequest,
 } from './premiumContracts';
+import {
+  buildCaptionFallbackMediaAnalysis,
+  refineMediaAnalysisResult,
+} from './multimodal/mediaAnalysisRefinement';
 
 // ─── Config ───────────────────────────────────────────────────────────────
 const BASE_URL = getConfiguredApiBaseUrl(
@@ -1055,6 +1060,22 @@ function sanitizeMediaAnalysisResult(value: MediaAnalysisResult): MediaAnalysisR
   const extractedText = typeof raw.extractedText === 'string'
     ? sanitizeProcessingText(raw.extractedText, 500)
     : '';
+  const rawModeration = typeof raw.moderation === 'object' && raw.moderation !== null
+    ? raw.moderation as Record<string, unknown>
+    : null;
+  const moderationAction = rawModeration && ['none', 'warn', 'blur', 'drop'].includes(rawModeration.action as string)
+    ? rawModeration.action as NonNullable<MediaAnalysisResult['moderation']>['action']
+    : 'none';
+  const moderationCategories = sanitizeArray(rawModeration?.categories, 4, 40).filter((value) => (
+    ['sexual-content', 'nudity', 'graphic-violence', 'extreme-graphic-violence', 'self-harm', 'hate-symbols', 'hate-speech', 'child-safety'].includes(value)
+  )) as NonNullable<MediaAnalysisResult['moderation']>['categories'];
+  const moderationConfidence = Math.max(
+    0,
+    Math.min(1, Number.isFinite(rawModeration?.confidence) ? Number(rawModeration?.confidence) : 0),
+  );
+  const moderationRationale = typeof rawModeration?.rationale === 'string'
+    ? sanitizeSafeSummaryText(truncateAtWordBoundary(rawModeration.rationale, 180))
+    : '';
 
   return {
     mediaCentrality: Math.max(0, Math.min(1, Number.isFinite(raw.mediaCentrality) ? Number(raw.mediaCentrality) : 0)),
@@ -1063,8 +1084,73 @@ function sanitizeMediaAnalysisResult(value: MediaAnalysisResult): MediaAnalysisR
     candidateEntities: sanitizeArray(raw.candidateEntities, 5, 80),
     confidence: Math.max(0, Math.min(1, Number.isFinite(raw.confidence) ? Number(raw.confidence) : 0)),
     cautionFlags: sanitizeArray(raw.cautionFlags, 6, 80),
+    ...(moderationAction !== 'none' && moderationCategories.length > 0
+      ? {
+          moderation: {
+            action: moderationAction,
+            categories: moderationCategories,
+            confidence: moderationConfidence,
+            allowReveal: rawModeration?.allowReveal !== false,
+            ...(moderationRationale ? { rationale: moderationRationale } : {}),
+          },
+        }
+      : {}),
     ...(extractedText ? { extractedText } : {}),
   };
+}
+
+function createAbortError(): Error {
+  try {
+    return new DOMException('Aborted', 'AbortError');
+  } catch {
+    const error = new Error('Aborted');
+    error.name = 'AbortError';
+    return error;
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw createAbortError();
+}
+
+function shouldAttemptLocalMediaFallback(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return false;
+  }
+
+  const status = (error as ModelClientRequestError | undefined)?.status;
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return false;
+  }
+
+  return true;
+}
+
+async function tryLocalCaptionMediaFallback(
+  input: MediaAnalysisRequest,
+  signal?: AbortSignal,
+): Promise<MediaAnalysisResult | null> {
+  try {
+    throwIfAborted(signal);
+    const caption = await inferenceClient.captionImage(input.mediaUrl);
+    throwIfAborted(signal);
+
+    const normalizedCaption = sanitizeSafeSummaryText(
+      truncateAtWordBoundary(
+        typeof caption === 'string' ? caption : '',
+        240,
+      ),
+    );
+    if (!normalizedCaption) return null;
+
+    return buildCaptionFallbackMediaAnalysis(input, normalizedCaption);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
+    return null;
+  }
 }
 
 function sanitizeDeepInterpolatorResult(
@@ -1132,6 +1218,9 @@ export async function callInterpolatorWriter(
       {
         attempts: 2,
         retryOnStatuses: [408, 429, 500, 502, 503, 504],
+        headers: {
+          [PREMIUM_AI_PROVIDER_HEADER]: getPremiumAiProviderPreference(),
+        },
       },
     );
 
@@ -1190,12 +1279,29 @@ export async function callMediaAnalyzer(
   input: MediaAnalysisRequest,
   signal?: AbortSignal,
 ): Promise<MediaAnalysisResult> {
-  const result = await fetchWithRetry<MediaAnalysisResult>(
-    '/api/llm/analyze/media',
-    sanitizeMediaAnalysisRequest(input),
-    signal,
-  );
-  return sanitizeMediaAnalysisResult(result);
+  const request = sanitizeMediaAnalysisRequest(input);
+
+  try {
+    const result = await fetchWithRetry<MediaAnalysisResult>(
+      '/api/llm/analyze/media',
+      request,
+      signal,
+    );
+    return refineMediaAnalysisResult(request, sanitizeMediaAnalysisResult(result));
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
+
+    if (shouldAttemptLocalMediaFallback(error)) {
+      const localFallback = await tryLocalCaptionMediaFallback(request, signal);
+      if (localFallback) {
+        return localFallback;
+      }
+    }
+
+    throw error;
+  }
 }
 
 /**

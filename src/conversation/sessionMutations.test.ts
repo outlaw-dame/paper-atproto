@@ -5,7 +5,13 @@ import {
   insertOptimisticReply,
   reconcileOptimisticReply,
   rollbackOptimisticReply,
+  setConversationUserFeedback,
 } from './sessionMutations';
+import {
+  resetConversationHydrationInvalidationForTests,
+  subscribeConversationHydrationInvalidations,
+  type ConversationHydrationInvalidationEvent,
+} from './hydrationInvalidation';
 
 const ROOT_URI = 'at://did:plc:root/app.bsky.feed.post/root';
 const SESSION_ID = ROOT_URI;
@@ -110,7 +116,120 @@ function createSession(): ConversationSession {
   };
 }
 
+function seedReplyWithScore() {
+  const replyUri = 'at://did:plc:reply/app.bsky.feed.post/reply-1';
+  const reply = createNode({
+    uri: replyUri,
+    cid: 'cid-reply-1',
+    authorDid: 'did:plc:reply',
+    authorHandle: 'reply.test',
+    text: 'Reply text',
+    createdAt: '2026-03-30T12:01:00.000Z',
+    depth: 1,
+    branchDepth: 1,
+    siblingIndex: 0,
+    descendantCount: 0,
+    parentUri: ROOT_URI,
+    parentAuthorHandle: 'root.test',
+  });
+
+  useConversationSessionStore.setState({
+    byId: {
+      [SESSION_ID]: {
+        ...createSession(),
+        graph: {
+          rootUri: ROOT_URI,
+          nodesByUri: {
+            [ROOT_URI]: createNode({}),
+            [replyUri]: reply,
+          },
+          childUrisByParent: {
+            [ROOT_URI]: [replyUri],
+          },
+          parentUriByChild: {
+            [ROOT_URI]: undefined,
+            [replyUri]: ROOT_URI,
+          },
+          subtreeEndHints: {},
+        },
+        structure: {
+          focusedAnchorUri: ROOT_URI,
+          visibleUris: [ROOT_URI, replyUri],
+          deferredUris: [],
+          hiddenUris: [],
+          revealedWarnUris: [],
+          unresolvedChildCountsByUri: {},
+        },
+        interpretation: {
+          interpolator: null,
+          scoresByUri: {
+            [replyUri]: {
+              uri: replyUri,
+              role: 'clarifying',
+              finalInfluenceScore: 0.78,
+              clarificationValue: 0.82,
+              sourceSupport: 0.18,
+              visibleChips: [],
+              factual: null,
+              usefulnessScore: 0.78,
+              abuseScore: 0,
+              evidenceSignals: [],
+              entityImpacts: [],
+              scoredAt: '2026-03-30T12:01:00.000Z',
+              suggestedFeedback: ['clarifying'],
+            },
+          },
+          writerResult: null,
+          confidence: null,
+          summaryMode: null,
+          threadState: null,
+          interpretiveExplanation: null,
+          premium: {
+            status: 'idle',
+          },
+        },
+        evidence: {
+          verificationByUri: {},
+          rootVerification: null,
+        },
+        entities: {
+          writerEntities: [],
+          canonicalEntities: [],
+          entityLandscape: [],
+        },
+        contributors: {
+          contributors: [],
+          topContributorDids: [],
+        },
+        translations: {
+          byUri: {},
+        },
+        trajectory: {
+          direction: 'forming',
+          heatLevel: 0,
+          repetitionLevel: 0,
+          activityVelocity: 0,
+          turningPoints: [],
+          snapshots: [],
+        },
+        mutations: {
+          revision: 0,
+          recent: [],
+        },
+        meta: {
+          status: 'ready',
+          error: null,
+          lastHydratedAt: '2026-03-30T12:00:00.000Z',
+        },
+      },
+    },
+  });
+
+  return replyUri;
+}
+
 beforeEach(() => {
+  resetConversationHydrationInvalidationForTests();
   useConversationSessionStore.setState({
     byId: {
       [SESSION_ID]: createSession(),
@@ -121,6 +240,13 @@ beforeEach(() => {
 describe('session optimistic reply mutations', () => {
   it('inserts an optimistic reply into the session graph', () => {
     const optimisticUri = 'at://did:plc:alice/app.bsky.feed.post/optimistic-1';
+    const events: ConversationHydrationInvalidationEvent[] = [];
+    const unsubscribe = subscribeConversationHydrationInvalidations(
+      { sessionId: SESSION_ID },
+      (event) => {
+        events.push(event);
+      },
+    );
 
     insertOptimisticReply({
       sessionId: SESSION_ID,
@@ -153,6 +279,11 @@ describe('session optimistic reply mutations', () => {
     expect(updated.mutations.revision).toBe(1);
     expect(updated.mutations.recent.at(-1)?.kind).toBe('optimistic_reply_inserted');
     expect(updated.mutations.recent.at(-1)?.summary).toBe('A reply is being sent.');
+    expect(events.some((event) => (
+      event.reason === 'optimistic_reply_inserted'
+      && event.revision === 1
+    ))).toBe(true);
+    unsubscribe();
   });
 
   it('reconciles an optimistic reply with the persisted server uri', () => {
@@ -252,5 +383,50 @@ describe('session optimistic reply mutations', () => {
     expect(updated.mutations.revision).toBe(2);
     expect(updated.mutations.recent.at(-1)?.kind).toBe('optimistic_reply_rolled_back');
     expect(updated.mutations.recent.at(-1)?.summary).toBe('A pending reply failed to send.');
+  });
+});
+
+describe('session user feedback mutations', () => {
+  it('stores explicit user feedback with user provenance', () => {
+    const replyUri = seedReplyWithScore();
+
+    setConversationUserFeedback({
+      sessionId: SESSION_ID,
+      replyUri,
+      feedback: 'new_to_me',
+    });
+
+    const updated = useConversationSessionStore.getState().getSession(SESSION_ID)!;
+    expect(updated.interpretation.scoresByUri[replyUri]).toMatchObject({
+      userFeedback: 'new_to_me',
+      userFeedbackSource: 'user',
+      suggestedFeedback: ['clarifying'],
+    });
+    expect(updated.mutations.revision).toBe(1);
+    expect(updated.mutations.recent.at(-1)?.summary).toBe('Reply feedback updated: new_to_me.');
+  });
+
+  it('clears explicit user feedback without deleting independent suggestions', () => {
+    const replyUri = seedReplyWithScore();
+
+    setConversationUserFeedback({
+      sessionId: SESSION_ID,
+      replyUri,
+      feedback: 'clarifying',
+    });
+    setConversationUserFeedback({
+      sessionId: SESSION_ID,
+      replyUri,
+      feedback: undefined,
+    });
+
+    const updated = useConversationSessionStore.getState().getSession(SESSION_ID)!;
+    expect(updated.interpretation.scoresByUri[replyUri]).toMatchObject({
+      suggestedFeedback: ['clarifying'],
+    });
+    expect(updated.interpretation.scoresByUri[replyUri]?.userFeedback).toBeUndefined();
+    expect(updated.interpretation.scoresByUri[replyUri]?.userFeedbackSource).toBeUndefined();
+    expect(updated.mutations.revision).toBe(2);
+    expect(updated.mutations.recent.at(-1)?.summary).toBe('Reply feedback was updated.');
   });
 });

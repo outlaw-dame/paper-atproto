@@ -1,5 +1,6 @@
 import type { AtUri } from '../../intelligence/interpolatorTypes';
 import type { MockPost } from '../../data/mockData';
+import type { ComposerContext } from '../../intelligence/composer/types';
 import type { ConversationSession } from '../sessionTypes';
 import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
 import {
@@ -10,61 +11,6 @@ import {
 } from '../interpretive/interpretiveScoring';
 import type { DeepInterpolatorResult } from '../../intelligence/premiumContracts';
 
-export type ComposerContext = {
-  mode: 'post' | 'reply' | 'hosted_thread';
-  draftText: string;
-  directParent?: {
-    uri: string;
-    text: string;
-    authorHandle?: string;
-  };
-  threadContext?: {
-    rootText?: string;
-    ancestorTexts: string[];
-    branchTexts: string[];
-  };
-  replyContext?: {
-    siblingReplyTexts: string[];
-    selectedCommentTexts: string[];
-    totalReplyCount?: number;
-    totalCommentCount?: number;
-    totalThreadCount?: number;
-  };
-  hostedThread?: {
-    prompt: string;
-    description?: string;
-    source?: string;
-    topics: string[];
-    audience?: string;
-  };
-  summaries?: {
-    directParentSummary?: string;
-    threadSummary?: string;
-    replyContextSummary?: string;
-    conversationHeatSummary?: string;
-    epistemicSummary?: {
-      disagreementType: 'factual' | 'interpretive' | 'value-based';
-      missingContextHints: string[];
-      confidenceWarnings: string[];
-    };
-    premiumContext?: {
-      deepSummary?: string;
-      groundedContext?: string;
-      perspectiveGaps: string[];
-      followUpQuestions: string[];
-      confidence: number;
-    };
-  };
-  threadState?: {
-    dominantTone?: string;
-    conversationPhase?: string;
-    heatLevel?: number;
-    repetitionLevel?: number;
-    sourceSupportPresent?: boolean;
-    factualSignalPresent?: boolean;
-  };
-};
-
 const MAX_DRAFT_TEXT_CHARS = 1_200;
 const MAX_PARENT_TEXT_CHARS = 320;
 const MAX_THREAD_TEXT_CHARS = 260;
@@ -73,6 +19,12 @@ const MAX_HOSTED_PROMPT_CHARS = 320;
 const MAX_HOSTED_DESCRIPTION_CHARS = 320;
 const MAX_HOSTED_SOURCE_CHARS = 200;
 const MAX_HOSTED_TOPIC_CHARS = 48;
+const MAX_SUMMARY_TEXT_CHARS = 220;
+
+function clamp01(value: number | undefined): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.min(1, Number(value)));
+}
 
 function sanitizeComposerText(value: string, maxChars: number): string {
   const sanitized = value
@@ -152,6 +104,91 @@ function sanitizeComposerProjectionContext(context: ComposerContext): ComposerCo
               : {}),
           },
         }
+      : {}),
+    ...(context.summaries
+      ? {
+          summaries: {
+            ...(context.summaries.directParentSummary
+              ? { directParentSummary: sanitizeComposerText(context.summaries.directParentSummary, MAX_SUMMARY_TEXT_CHARS) }
+              : {}),
+            ...(context.summaries.threadSummary
+              ? { threadSummary: sanitizeComposerText(context.summaries.threadSummary, MAX_SUMMARY_TEXT_CHARS) }
+              : {}),
+            ...(context.summaries.replyContextSummary
+              ? { replyContextSummary: sanitizeComposerText(context.summaries.replyContextSummary, 180) }
+              : {}),
+            ...(context.summaries.conversationHeatSummary
+              ? { conversationHeatSummary: sanitizeComposerText(context.summaries.conversationHeatSummary, 140) }
+              : {}),
+            ...(context.summaries.epistemicSummary
+              ? {
+                  epistemicSummary: {
+                    disagreementType: context.summaries.epistemicSummary.disagreementType,
+                    missingContextHints: uniqComposerTexts(
+                      context.summaries.epistemicSummary.missingContextHints,
+                      3,
+                      120,
+                    ),
+                    confidenceWarnings: uniqComposerTexts(
+                      context.summaries.epistemicSummary.confidenceWarnings,
+                      3,
+                      120,
+                    ),
+                  },
+                }
+              : {}),
+            ...(context.summaries.premiumContext
+              ? {
+                  premiumContext: {
+                    ...(context.summaries.premiumContext.deepSummary
+                      ? { deepSummary: sanitizeComposerText(context.summaries.premiumContext.deepSummary, MAX_SUMMARY_TEXT_CHARS) }
+                      : {}),
+                    ...(context.summaries.premiumContext.groundedContext
+                      ? { groundedContext: sanitizeComposerText(context.summaries.premiumContext.groundedContext, 160) }
+                      : {}),
+                    perspectiveGaps: uniqComposerTexts(context.summaries.premiumContext.perspectiveGaps, 3, 120),
+                    followUpQuestions: uniqComposerTexts(context.summaries.premiumContext.followUpQuestions, 3, 120),
+                    confidence: clamp01(context.summaries.premiumContext.confidence) ?? 0,
+                  },
+                }
+              : {}),
+            ...(context.summaries.mediaContext
+              ? {
+                  mediaContext: {
+                    ...(context.summaries.mediaContext.summary
+                      ? { summary: sanitizeComposerText(context.summaries.mediaContext.summary, 180) }
+                      : {}),
+                    ...(context.summaries.mediaContext.primaryKind
+                      ? { primaryKind: context.summaries.mediaContext.primaryKind }
+                      : {}),
+                    cautionFlags: uniqComposerTexts(context.summaries.mediaContext.cautionFlags, 3, 80),
+                    confidence: clamp01(context.summaries.mediaContext.confidence) ?? 0,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(context.threadState
+      ? (() => {
+          const heatLevel = clamp01(context.threadState.heatLevel);
+          const repetitionLevel = clamp01(context.threadState.repetitionLevel);
+
+          return {
+            threadState: {
+              ...(context.threadState.dominantTone ? { dominantTone: context.threadState.dominantTone } : {}),
+              ...(context.threadState.conversationPhase ? { conversationPhase: context.threadState.conversationPhase } : {}),
+              ...(heatLevel !== undefined ? { heatLevel } : {}),
+              ...(repetitionLevel !== undefined ? { repetitionLevel } : {}),
+              ...(typeof context.threadState.sourceSupportPresent === 'boolean'
+                ? { sourceSupportPresent: context.threadState.sourceSupportPresent }
+                : {}),
+              ...(typeof context.threadState.factualSignalPresent === 'boolean'
+                ? { factualSignalPresent: context.threadState.factualSignalPresent }
+                : {}),
+            },
+          };
+        })()
       : {}),
   };
 }
@@ -259,6 +296,10 @@ export function projectComposerContext(params: {
     interpolatorSurface.writerSummary
     ?? interpolatorSurface.summaryText;
   const interpretiveExplanation = session.interpretation.interpretiveExplanation;
+  const basePerspectiveGaps = (session.interpretation.interpolator?.perspectiveGaps ?? [])
+    .map((gap) => sanitizeComposerText(gap, 120))
+    .filter((gap) => gap.length > 0)
+    .slice(0, 3);
 
   const directParentSummary = parent
     ? summarizeParentForComposer(parent.text)
@@ -267,6 +308,9 @@ export function projectComposerContext(params: {
   const replyContextSummary = buildReplyContextSummary(
     siblingTexts,
     selectedCommentTexts,
+  );
+  const mediaContext = projectMediaComposerContext(
+    session.interpretation.mediaFindings ?? [],
   );
 
   return sanitizeComposerProjectionContext({
@@ -303,15 +347,22 @@ export function projectComposerContext(params: {
         ? {
             epistemicSummary: {
               disagreementType: deriveDisagreementType(interpretiveExplanation),
-              missingContextHints: interpretiveExplanation.degradedBy
-                .filter((reason) => {
-                  return reason === 'missing_context'
-                    || reason === 'coverage_gap'
-                    || reason === 'narrow_perspective'
-                    || reason === 'shallow_thread';
-                })
-                .slice(0, 3)
-                .map(humanizeInterpretiveReason),
+              missingContextHints: uniqComposerTexts(
+                [
+                  ...interpretiveExplanation.degradedBy
+                    .filter((reason) => {
+                      return reason === 'missing_context'
+                        || reason === 'coverage_gap'
+                        || reason === 'narrow_perspective'
+                        || reason === 'shallow_thread';
+                    })
+                    .slice(0, 3)
+                    .map(humanizeInterpretiveReason),
+                  ...basePerspectiveGaps,
+                ],
+                3,
+                120,
+              ),
               confidenceWarnings: buildComposerWarnings(interpretiveExplanation),
             },
           }
@@ -323,6 +374,7 @@ export function projectComposerContext(params: {
             ),
           }
         : {}),
+      ...(mediaContext ? { mediaContext } : {}),
     },
     threadState: {
       ...(session.interpretation.threadState?.dominantTone
@@ -385,6 +437,37 @@ function projectPremiumComposerContext(
     perspectiveGaps: result.perspectiveGaps.slice(0, 3),
     followUpQuestions: result.followUpQuestions.slice(0, 3),
     confidence: result.confidence,
+  };
+}
+
+function projectMediaComposerContext(
+  findings: NonNullable<ConversationSession['interpretation']['mediaFindings']>,
+): NonNullable<NonNullable<ComposerContext['summaries']>['mediaContext']> | undefined {
+  const ranked = [...findings]
+    .filter((finding) => typeof finding?.summary === 'string' && finding.summary.trim().length > 0)
+    .sort((left, right) => {
+      const rightScore = (right.confidence ?? 0) + (right.extractedText ? 0.08 : 0);
+      const leftScore = (left.confidence ?? 0) + (left.extractedText ? 0.08 : 0);
+      return rightScore - leftScore;
+    });
+
+  const primary = ranked[0];
+  if (!primary) return undefined;
+
+  const summary = sanitizeComposerText(primary.summary, 150);
+  const extractedText = sanitizeComposerText(primary.extractedText ?? '', 100);
+
+  return {
+    ...(summary
+      ? {
+          summary: extractedText
+            ? `${summary} Visible text includes: ${extractedText}`
+            : summary,
+        }
+      : {}),
+    primaryKind: primary.mediaType,
+    cautionFlags: uniqComposerTexts(ranked.flatMap((finding) => finding.cautionFlags ?? []), 3, 80),
+    confidence: Math.max(0, Math.min(1, primary.confidence ?? 0)),
   };
 }
 

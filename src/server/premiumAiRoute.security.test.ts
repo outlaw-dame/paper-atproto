@@ -191,4 +191,34 @@ describe('premiumAiRouter trust boundaries', () => {
       actorDid: ACTOR_DID,
     }), { preferredProvider: 'openai' });
   });
+
+  it('returns sanitized provider outage codes and forwards retry-after headers', async () => {
+    mockWritePremiumDeepInterpolator.mockRejectedValueOnce(Object.assign(
+      new Error('provider temporarily unavailable'),
+      {
+        status: 429,
+        headers: {
+          'retry-after': '7',
+        },
+      },
+    ));
+
+    const response = await premiumAiRouter.request('/interpolator/deep', {
+      method: 'POST',
+      headers: {
+        Origin: TRUSTED_ORIGIN,
+        'content-type': 'application/json',
+        'X-Glympse-User-Did': ACTOR_DID,
+      },
+      body: JSON.stringify(makeRequestBody()),
+    });
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('7');
+    const payload = await response.json() as { error?: string; code?: string };
+    expect(payload).toEqual({
+      error: 'Premium AI rate-limited',
+      code: 'PREMIUM_AI_RATE_LIMITED',
+    });
+  });
 });

@@ -13,6 +13,7 @@ import type {
   ConfidenceState,
   SummaryMode,
 } from './llmContracts';
+import type { ConversationDeltaDecision } from './conversationDelta';
 import type { InterpolatorState, ContributionScores, ContributionRole } from './interpolatorTypes';
 import type { ThreadNode } from '../lib/resolver/atproto';
 import {
@@ -261,7 +262,7 @@ function buildParticipantEntities(
       );
     });
 
-  return entities.slice(0, 3);
+  return entities.slice(0, 4);
 }
 
 function mergeSafeEntities(
@@ -288,11 +289,18 @@ function mergeSafeEntities(
 }
 
 function normalizeSignalExcerpt(value: string, maxLen = 88): string {
-  return value
+  const normalized = value
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, maxLen)
     .trim();
+  if (normalized.length <= maxLen) return normalized;
+
+  const sliced = normalized.slice(0, maxLen).trimEnd();
+  const lastSpace = sliced.lastIndexOf(' ');
+  if (lastSpace >= Math.max(24, Math.floor(maxLen * 0.5))) {
+    return `${sliced.slice(0, lastSpace).trimEnd()}...`;
+  }
+  return `${sliced}...`;
 }
 
 function pushSignal(target: string[], prefix: string, rawText: string): void {
@@ -301,6 +309,137 @@ function pushSignal(target: string[], prefix: string, rawText: string): void {
   const signal = `${prefix}: ${excerpt}`;
   if (target.some((existing) => existing.toLowerCase() === signal.toLowerCase())) return;
   target.push(signal);
+}
+
+function hasSignalPrefix(target: string[], prefix: string): boolean {
+  const normalizedPrefix = prefix.trim().toLowerCase();
+  return target.some((value) => value.split(':')[0]?.trim().toLowerCase() === normalizedPrefix);
+}
+
+function buildTopicFallbackExcerpt(rootText: string): string {
+  return normalizeSignalExcerpt(rootText.replace(/[.!?…]+$/g, ''), 96) || 'the visible thread';
+}
+
+function buildSourceGapFactualHighlight(params: {
+  state: InterpolatorState;
+  rawComments: WriterComment[];
+  scores: Record<string, ContributionScores>;
+}): string | null {
+  const sourceGapPerspective = (params.state.perspectiveGaps ?? []).find((gap) => (
+    /\b(direct sourcing|verifiable evidence|public (?:order|notice|advisory|disclosure))\b/i.test(gap)
+  ));
+  if (sourceGapPerspective) {
+    return normalizeSignalExcerpt(sourceGapPerspective, 120) || null;
+  }
+
+  const sourceGapComment = [...params.rawComments]
+    .filter((comment) => {
+      const score = params.scores[comment.uri];
+      if (!score) return false;
+      if (score.role !== 'clarifying' && score.role !== 'useful_counterpoint') return false;
+      return /\b(do you have|asking for|no public|not confirmed|unless someone posts|people quoting each other)\b/i.test(comment.text);
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)[0];
+
+  if (!sourceGapComment) return null;
+
+  if (/\bno public (order|notice|advisory|disclosure)\b/i.test(sourceGapComment.text)) {
+    return 'Visible replies still do not surface a public order or advisory.';
+  }
+  return 'Visible replies are still asking for a direct source or public notice.';
+}
+
+function appendDeltaDecisionFallbackSignals(params: {
+  target: string[];
+  deltaDecision?: ConversationDeltaDecision | null | undefined;
+  rawComments: WriterComment[];
+  scores: Record<string, ContributionScores>;
+  state: InterpolatorState;
+  rootText: string;
+}): void {
+  const {
+    target,
+    deltaDecision,
+    rawComments,
+    scores,
+    state,
+    rootText,
+  } = params;
+  const reasons = deltaDecision?.changeReasons ?? [];
+  if (reasons.length === 0) return;
+
+  const bestSourceComment = [...rawComments]
+    .filter((comment) => {
+      const score = scores[comment.uri];
+      return Boolean(score) && (
+        score?.role === 'source_bringer'
+        || score?.role === 'rule_source'
+        || (score?.sourceSupport ?? 0) >= 0.5
+        || score?.evidenceSignals.some((signal) => signal.kind === 'citation')
+      );
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)[0];
+
+  const bestCounterpointComment = [...rawComments]
+    .filter((comment) => {
+      const score = scores[comment.uri];
+      return Boolean(score) && (
+        score?.role === 'useful_counterpoint'
+        || /\b(narrower than|not a full|not repealing|not confirmed|only mentions?|limited to|does not change|doesn't change)\b/i.test(comment.text)
+      );
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)[0];
+
+  const bestAngleComment = [...rawComments]
+    .filter((comment) => {
+      const score = scores[comment.uri];
+      return Boolean(score) && (
+        score?.role === 'new_information'
+        || score?.role === 'useful_counterpoint'
+        || score?.role === 'clarifying'
+      );
+    })
+    .sort((left, right) => right.impactScore - left.impactScore)[0];
+
+  if (
+    (reasons.includes('source_backed_clarification') || reasons.includes('factual_highlight_added'))
+    && !hasSignalPrefix(target, 'source cited')
+  ) {
+    pushSignal(
+      target,
+      'source cited',
+      bestSourceComment?.text
+        ?? state.clarificationsAdded[0]
+        ?? state.newAnglesAdded[0]
+        ?? `visible replies add sourcing around ${buildTopicFallbackExcerpt(rootText)}`,
+    );
+  }
+
+  if (
+    (reasons.includes('thread_direction_reversed') || reasons.includes('new_stance_appeared'))
+    && !hasSignalPrefix(target, 'counterpoint')
+  ) {
+    pushSignal(
+      target,
+      'counterpoint',
+      bestCounterpointComment?.text
+        ?? state.newAnglesAdded[0]
+        ?? `visible replies push back on the initial read of ${buildTopicFallbackExcerpt(rootText)}`,
+    );
+  }
+
+  if (
+    (reasons.includes('new_angle_introduced') || reasons.includes('major_contributor_entered') || reasons.includes('central_entity_changed'))
+    && !hasSignalPrefix(target, 'new angle')
+  ) {
+    pushSignal(
+      target,
+      'new angle',
+      bestAngleComment?.text
+        ?? state.newAnglesAdded[0]
+        ?? `the visible read of ${buildTopicFallbackExcerpt(rootText)} is shifting`,
+    );
+  }
 }
 
 function toSafeEntityId(text: string): string {
@@ -434,10 +573,19 @@ export function buildThreadStateForWriter(
   options?: {
     summaryMode?: SummaryMode;
     mediaFindings?: ThreadStateForWriter['mediaFindings'];
+    deltaDecision?: ConversationDeltaDecision | null;
   },
 ): ThreadStateForWriter {
-  const debugAlgorithmTelemetry = import.meta.env.DEV
-    || import.meta.env.VITE_DEBUG_ALGORITHM_COMPARISON === '1';
+  const debugEnv = typeof import.meta !== 'undefined'
+    ? (import.meta as ImportMeta & {
+        env?: {
+          DEV?: boolean;
+          VITE_DEBUG_ALGORITHM_COMPARISON?: string;
+        };
+      }).env
+    : undefined;
+  const debugAlgorithmTelemetry = debugEnv?.DEV === true
+    || debugEnv?.VITE_DEBUG_ALGORITHM_COMPARISON === '1';
 
   const summaryMode: SummaryMode = options?.summaryMode
     ?? chooseSummaryMode({
@@ -714,11 +862,44 @@ export function buildThreadStateForWriter(
 
   // ── Factual highlights ────────────────────────────────────────────────────
   const factualHighlights: string[] = [];
+  const seenFactualHighlights = new Set<string>();
+  const pushFactualHighlight = (rawText: string): void => {
+    const excerpt = normalizeSignalExcerpt(rawText, 120);
+    if (!excerpt) return;
+    const key = excerpt.toLowerCase();
+    if (seenFactualHighlights.has(key)) return;
+    seenFactualHighlights.add(key);
+    factualHighlights.push(excerpt);
+  };
   for (const [uri, score] of Object.entries(scores)) {
     const state_ = score.factual?.factualState;
     if (state_ === 'well-supported' || state_ === 'source-backed-clarification' || state_ === 'partially-supported') {
       const comment = rawComments.find(c => c.uri === uri);
-      if (comment) factualHighlights.push(comment.text.slice(0, 120));
+      if (comment) pushFactualHighlight(comment.text);
+    }
+  }
+  if (factualHighlights.length === 0) {
+    rawComments
+      .filter((comment) => {
+        const score = scores[comment.uri];
+        return Boolean(score) && (
+          score?.role === 'rule_source'
+          || score?.role === 'source_bringer'
+          || score?.role === 'useful_counterpoint'
+          || (score?.sourceSupport ?? 0) >= 0.5
+          || score?.evidenceSignals.some((signal) => signal.kind === 'citation' || signal.kind === 'data_point')
+        );
+      })
+      .sort((left, right) => right.impactScore - left.impactScore)
+      .slice(0, 3)
+      .forEach((comment) => {
+        pushFactualHighlight(comment.text);
+      });
+  }
+  if (factualHighlights.length === 0) {
+    const sourceGapHighlight = buildSourceGapFactualHighlight({ state, rawComments, scores });
+    if (sourceGapHighlight) {
+      pushFactualHighlight(sourceGapHighlight);
     }
   }
 
@@ -769,6 +950,15 @@ export function buildThreadStateForWriter(
       pushSignal(whatChangedSignals, 'new info', comment.text);
     });
 
+  appendDeltaDecisionFallbackSignals({
+    target: whatChangedSignals,
+    deltaDecision: options?.deltaDecision,
+    rawComments,
+    scores,
+    state,
+    rootText,
+  });
+
   // ── Root post ─────────────────────────────────────────────────────────────
   const rootPost = {
     uri: state.rootUri,
@@ -777,6 +967,13 @@ export function buildThreadStateForWriter(
     createdAt: state.updatedAt,
   };
   const mediaFindings = sanitizeWriterMediaFindings(options?.mediaFindings);
+  const perspectiveGaps = Array.from(
+    new Set(
+      (state.perspectiveGaps ?? [])
+        .map((gap) => normalizeSignalExcerpt(gap, 120))
+        .filter((gap) => gap.length > 0),
+    ),
+  ).slice(0, 3);
 
   // ── Thread signal summary ─────────────────────────────────────────────────
   // Structural counts derived from pipeline state — never exposes user content.
@@ -785,9 +982,14 @@ export function buildThreadStateForWriter(
     (s) => s.sourceSupport >= 0.5 || (s.factual?.factualConfidence ?? 0) >= 0.55,
   ).length;
 
+  const clarificationSignalCount = Math.max(
+    state.clarificationsAdded.length,
+    scoreList.filter((score) => score.role === 'clarifying' || score.role === 'useful_counterpoint').length,
+  );
+
   const threadSignalSummary: WriterThreadSignalSummary = {
     newAnglesCount: state.newAnglesAdded.length,
-    clarificationsCount: state.clarificationsAdded.length,
+    clarificationsCount: clarificationSignalCount,
     sourceBackedCount,
     factualSignalPresent: state.factualSignalPresent,
     evidencePresent: state.evidencePresent,
@@ -806,6 +1008,7 @@ export function buildThreadStateForWriter(
     safeEntities,
     factualHighlights: factualHighlights.slice(0, 5),
     whatChangedSignals: whatChangedSignals.slice(0, 6),
+    ...(perspectiveGaps.length > 0 ? { perspectiveGaps } : {}),
     ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
     threadSignalSummary,
     interpretiveExplanation,

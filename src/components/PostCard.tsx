@@ -9,12 +9,19 @@ import TwemojiText from './TwemojiText';
 import YouTubeEmbedCard from './YouTubeEmbedCard';
 import { useTranslationStore } from '../store/translationStore';
 import { translationClient } from '../lib/i18n/client';
-import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge';
 import { sportsFeedService } from '../services/sportsFeed';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
-import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia';
+import {
+  EMPTY_SENSITIVE_MEDIA_ASSESSMENT,
+  assessmentFromMediaAnalysis,
+  detectSensitiveMedia,
+  mergeSensitiveMediaAssessments,
+  type SensitiveMediaAssessment,
+} from '../lib/moderation/sensitiveMedia';
+import { callMediaAnalyzer } from '../intelligence/modelClient';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useUiStore } from '../store/uiStore';
 import { useAppearanceStore } from '../store/appearanceStore';
@@ -72,6 +79,8 @@ type MediaCarouselItem =
       }>;
     };
 
+const multimodalSensitiveCache = new Map<string, SensitiveMediaAssessment>();
+
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, timelineHint, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
@@ -81,6 +90,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxViewportWidth, setLightboxViewportWidth] = useState(0);
   const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
+  const [multimodalSensitiveAssessment, setMultimodalSensitiveAssessment] = useState<SensitiveMediaAssessment>(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
   const mediaScrollRef = useRef<HTMLDivElement | null>(null);
   const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation } = useTranslationStore();
@@ -238,15 +248,55 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
   const sportsMetadata = useMemo(() => sportsFeedService.extractSportsMetadata(post), [post]);
   const sensitiveMedia = useMemo(() => detectSensitiveMedia(post), [post]);
-  const isSensitiveMedia = sensitiveMedia.isSensitive;
-  const isSensitiveMediaRevealed = !!revealedPostIds[post.id];
-  const shouldBlurSensitiveMedia = sensitivePolicy.blurSensitiveMedia && isSensitiveMedia && !isSensitiveMediaRevealed;
-  const sensitiveReasonLabel = sensitiveMedia.reasons.slice(0, 2).join(', ');
+  const primaryVisualTarget = useMemo(() => {
+    if (mediaItems.length > 0) {
+      const first = mediaItems[0];
+      if (!first) return null;
+      return {
+        url: first.url,
+        alt: first.alt ?? '',
+        cacheKey: `image:${first.url}`,
+      };
+    }
+
+    if (post.embed?.type === 'video') {
+      const mediaUrl = post.embed.thumb || post.embed.url;
+      if (!mediaUrl) return null;
+      return {
+        url: mediaUrl,
+        alt: post.embed.title ?? '',
+        cacheKey: `video:${mediaUrl}`,
+      };
+    }
+
+    return null;
+  }, [mediaItems, post.embed]);
+  const resolvedSensitiveMedia = useMemo(
+    () => mergeSensitiveMediaAssessments(sensitiveMedia, multimodalSensitiveAssessment),
+    [multimodalSensitiveAssessment, sensitiveMedia],
+  );
+  const canRevealSensitiveMedia = sensitivePolicy.allowReveal && resolvedSensitiveMedia.allowReveal;
+  const isSensitiveMedia = resolvedSensitiveMedia.isSensitive;
+  const isSensitiveMediaRevealed = canRevealSensitiveMedia && !!revealedPostIds[post.id];
+  const shouldHideSensitiveMedia = resolvedSensitiveMedia.action === 'drop' && !isSensitiveMediaRevealed;
+  const shouldBlurSensitiveMedia = sensitivePolicy.blurSensitiveMedia
+    && resolvedSensitiveMedia.action === 'blur'
+    && !isSensitiveMediaRevealed;
+  const shouldWarnSensitiveMedia = resolvedSensitiveMedia.action === 'warn';
+  const sensitiveReasons = useMemo(() => {
+    return resolvedSensitiveMedia.reasons.map((reason) => (
+      reason === 'graphicviolence' ? 'graphic violence' : reason.replace(/-/g, ' ')
+    ));
+  }, [resolvedSensitiveMedia.reasons]);
+  const sensitiveReasonLabel = sensitiveReasons.slice(0, 2).join(', ');
+  const sensitiveRationale = resolvedSensitiveMedia.rationale;
+  const hasHateSpeechSensitiveReason = resolvedSensitiveMedia.reasons.includes('hate-speech');
 
   const displayNameKey = `displayName:${post.author.did}`;
   const translatedDisplayName = byId[displayNameKey]?.translatedText;
 
   const canAutoInlineTranslate = useMemo(() => {
+    if (!hasTranslatableLanguageSignal(post.content)) return false;
     const textLength = post.content.trim().length;
     if (textLength === 0 || textLength > 280) return false;
     if (detectedPostLanguage.language !== 'und' && isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)) return false;
@@ -281,10 +331,48 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [canAutoInlineTranslate, displayNameKey, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.author.displayName, post.author.handle, upsertTranslation]);
 
   useEffect(() => {
-    if (!shouldBlurSensitiveMedia || sensitiveImpressionLoggedRef.current) return;
+    if (!(shouldBlurSensitiveMedia || shouldHideSensitiveMedia) || sensitiveImpressionLoggedRef.current) return;
     sensitiveImpressionLoggedRef.current = true;
-    recordSensitiveMediaImpression(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
-  }, [shouldBlurSensitiveMedia, sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn]);
+    recordSensitiveMediaImpression(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
+  }, [sensitiveReasons.length, shouldBlurSensitiveMedia, shouldHideSensitiveMedia, sensitivePolicy.telemetryOptIn]);
+
+  useEffect(() => {
+    setMultimodalSensitiveAssessment(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+  }, [post.id]);
+
+  useEffect(() => {
+    if (!primaryVisualTarget) return;
+
+    const cached = multimodalSensitiveCache.get(primaryVisualTarget.cacheKey);
+    if (cached) {
+      setMultimodalSensitiveAssessment(cached);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await callMediaAnalyzer({
+          threadId: post.id,
+          mediaUrl: primaryVisualTarget.url,
+          ...(primaryVisualTarget.alt ? { mediaAlt: primaryVisualTarget.alt } : {}),
+          nearbyText: post.content,
+          candidateEntities: [],
+          factualHints: [],
+        });
+
+        const assessment = assessmentFromMediaAnalysis(result);
+        multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, assessment);
+        if (!cancelled) setMultimodalSensitiveAssessment(assessment);
+      } catch {
+        multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [post.content, post.id, primaryVisualTarget]);
 
   useEffect(() => {
     setExpandedAltIndex(null);
@@ -359,21 +447,26 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [isLightboxOpen]);
 
   useEffect(() => {
-    if (shouldBlurSensitiveMedia) return;
+    if (shouldBlurSensitiveMedia || shouldHideSensitiveMedia) return;
     sensitiveImpressionLoggedRef.current = false;
-  }, [shouldBlurSensitiveMedia]);
+  }, [shouldBlurSensitiveMedia, shouldHideSensitiveMedia]);
+
+  useEffect(() => {
+    if (canRevealSensitiveMedia || !revealedPostIds[post.id]) return;
+    hidePost(post.id);
+  }, [canRevealSensitiveMedia, hidePost, post.id, revealedPostIds]);
 
   const handleRevealSensitiveMedia = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!sensitivePolicy.allowReveal) return;
     revealPost(post.id);
-    recordSensitiveMediaReveal(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+    recordSensitiveMediaReveal(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
   };
 
   const handleHideSensitiveMedia = (e: React.MouseEvent) => {
     e.stopPropagation();
     hidePost(post.id);
-    recordSensitiveMediaRehide(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+    recordSensitiveMediaRehide(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
   };
 
   return (
@@ -563,7 +656,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           targetLang={policy.userLanguage}
           autoTranslate={policy.autoTranslateFeed && canAutoInlineTranslate}
           localOnlyMode={policy.localOnlyMode}
-          showTrigger={detectedPostLanguage.language === 'und' || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)}
+          showTrigger={
+            hasTranslatableLanguageSignal(post.content)
+            && (detectedPostLanguage.language === 'und'
+              || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage))
+          }
           renderText={(displayText) => (
             <p style={{
               fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)',
@@ -592,25 +689,39 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       ) : null}
 
       {/* Embeds */}
-      {shouldBlurSensitiveMedia && (
+      {(shouldWarnSensitiveMedia || shouldBlurSensitiveMedia || shouldHideSensitiveMedia) && (
         <div style={{
           marginBottom: 10,
-          border: '1px solid color-mix(in srgb, var(--orange) 35%, var(--sep))',
+          border: shouldHideSensitiveMedia
+            ? '1px solid color-mix(in srgb, var(--red) 32%, var(--sep))'
+            : '1px solid color-mix(in srgb, var(--orange) 35%, var(--sep))',
           borderRadius: 12,
-          background: 'color-mix(in srgb, var(--surface-card) 82%, var(--orange) 10%)',
+          background: shouldHideSensitiveMedia
+            ? 'color-mix(in srgb, var(--surface-card) 82%, var(--red) 10%)'
+            : 'color-mix(in srgb, var(--surface-card) 82%, var(--orange) 10%)',
           padding: '10px 12px',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <div>
               <p style={{ margin: 0, fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, color: 'var(--label-1)' }}>
-                Sensitive content warning
+                {shouldHideSensitiveMedia ? 'Sensitive media withheld' : 'Sensitive content warning'}
               </p>
               <p style={{ margin: '4px 0 0', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)' }}>
-                {sensitiveReasonLabel ? `Label: ${sensitiveReasonLabel}` : 'This media is flagged for sexual content, nudity, or graphic violence.'}
+                {shouldHideSensitiveMedia
+                  ? (sensitiveRationale ?? 'This media may contain severe graphic or exploitative content, so it stays hidden.')
+                  : hasHateSpeechSensitiveReason
+                    ? 'This media may include hateful or abusive language. Use caution while viewing it.'
+                    : sensitiveRationale
+                      ? sensitiveRationale
+                      : sensitiveReasonLabel
+                        ? `Reason: ${sensitiveReasonLabel}`
+                        : shouldWarnSensitiveMedia
+                          ? 'This media may need extra caution, but it remains visible.'
+                          : 'This media is flagged for sexual content, nudity, graphic violence, or another sensitive visual signal.'}
               </p>
             </div>
 
-            {sensitivePolicy.allowReveal && (
+            {canRevealSensitiveMedia && (shouldBlurSensitiveMedia || shouldHideSensitiveMedia) && (
               <button
                 onClick={handleRevealSensitiveMedia}
                 style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
@@ -622,7 +733,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         </div>
       )}
 
-      {isSensitiveMedia && isSensitiveMediaRevealed && sensitivePolicy.blurSensitiveMedia && sensitivePolicy.allowReveal && (
+      {isSensitiveMedia && isSensitiveMediaRevealed && sensitivePolicy.blurSensitiveMedia && canRevealSensitiveMedia && (
         <div style={{ marginBottom: 10 }}>
           <button
             onClick={handleHideSensitiveMedia}
@@ -634,7 +745,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
 
       {/* 1. Media Carousel (Images + Video) */}
-      {carouselItems.length > 0 && (
+      {carouselItems.length > 0 && !shouldHideSensitiveMedia && (
         <div style={{ position: 'relative' }}>
           <div style={{
             marginTop: 8,
@@ -1164,7 +1275,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       sourceLang={detectedCardLanguage.language}
                       targetLang={policy.userLanguage}
                       localOnlyMode={policy.localOnlyMode}
-                      showTrigger={detectedCardLanguage.language === 'und' || !isLikelySameLanguage(detectedCardLanguage.language, policy.userLanguage)}
+                      showTrigger={
+                        hasTranslatableLanguageSignal(post.embed.description)
+                        && (detectedCardLanguage.language === 'und'
+                          || !isLikelySameLanguage(detectedCardLanguage.language, policy.userLanguage))
+                      }
                       renderText={(displayText) => (
                         <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
                           {displayText}
@@ -1219,7 +1334,8 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         const quotedExternalEmbed = quotedPost.embed?.type === 'external' ? quotedPost.embed : null;
         const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
         const quotedVideoEmbed = quotedPost.embed?.type === 'video' ? quotedPost.embed : null;
-        const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quotedPost.sensitiveMedia?.isSensitive);
+        const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia
+          && (quotedPost.sensitiveMedia?.action === 'blur' || quotedPost.sensitiveMedia?.action === 'drop');
         const quotedStoryTitle = quotedPost.content.slice(0, 80);
 
         const openQuotedPost = (event: React.MouseEvent | React.KeyboardEvent) => {

@@ -49,6 +49,7 @@ function createEmptySession(
       writerResult: null,
       confidence: null,
       summaryMode: null,
+      deltaDecision: null,
       threadState: null,
       interpretiveExplanation: null,
       aiDiagnostics: createSessionAiDiagnostics(),

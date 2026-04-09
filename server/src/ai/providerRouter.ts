@@ -22,11 +22,16 @@ async function invokePremiumProvider(
   provider: PremiumAiProviderName,
   request: PremiumInterpolatorRequest,
 ): Promise<DeepInterpolatorResult> {
-  const result = provider === 'openai'
-    ? await openAIConversationProvider.writeDeepInterpolator(request)
-    : await geminiConversationProvider.writeDeepInterpolator(request);
-  recordPremiumAiProviderSuccess(provider);
-  return result;
+  try {
+    const result = provider === 'openai'
+      ? await openAIConversationProvider.writeDeepInterpolator(request)
+      : await geminiConversationProvider.writeDeepInterpolator(request);
+    recordPremiumAiProviderSuccess(provider);
+    return result;
+  } catch (error) {
+    recordPremiumAiProviderFailure(provider, error);
+    throw error;
+  }
 }
 
 export async function writePremiumDeepInterpolator(
@@ -44,7 +49,6 @@ export async function writePremiumDeepInterpolator(
   try {
     return await invokePremiumProvider(provider, request);
   } catch (error) {
-    recordPremiumAiProviderFailure(provider, error);
     if (!isPremiumAiProviderUnavailableError(error)) {
       throw error;
     }

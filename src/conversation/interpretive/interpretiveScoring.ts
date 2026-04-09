@@ -102,7 +102,6 @@ export function applyInterpretiveConfidence(
     interpretation: {
       ...session.interpretation,
       confidence: computation.confidence,
-      summaryMode: computation.explanation.mode,
       interpretiveExplanation: computation.explanation,
     },
   };

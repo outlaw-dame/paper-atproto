@@ -11,7 +11,7 @@ import type { RetryOptions } from '../lib/retry.js';
 import { env } from '../config/env.js';
 import { ensureSafetyInstructions } from '../lib/safeguards.js';
 import { ensureOllamaLocalUrlPolicy } from '../lib/ollama-policy.js';
-import { resolveGeminiModel } from '../lib/googleGenAi.js';
+import type { PremiumAiProviderPreference } from '../entitlements/resolveAiEntitlements.js';
 import {
   recordWriterEnhancerFailure,
   recordWriterEnhancerInvocation,
@@ -20,7 +20,10 @@ import {
   recordWriterEnhancerTakeoverApplied,
   type WriterEnhancerFailureClass,
 } from '../llm/writerDiagnostics.js';
-import { reviewInterpolatorWriter } from './geminiInterpolatorEnhancer.js';
+import {
+  resolveInterpolatorEnhancerModel,
+  reviewInterpolatorWriter,
+} from './interpolatorEnhancer.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 // These mirror src/intelligence/llmContracts.ts — kept local to avoid
@@ -52,6 +55,7 @@ export interface WriterRequest {
   safeEntities: Array<{ id: string; label: string; type: string; confidence: number; impact: number }>;
   factualHighlights: string[];
   whatChangedSignals: string[];
+  perspectiveGaps?: string[];
   mediaFindings?: Array<{ mediaType: string; summary: string; confidence: number; extractedText?: string; cautionFlags?: string[] }>;
   threadSignalSummary?: {
     newAnglesCount: number;
@@ -72,6 +76,12 @@ export interface WriterResponse {
   abstained: boolean;
   mode: SummaryMode;
 }
+
+type WriterRunOptions = {
+  enhancer?: {
+    preferredProvider?: PremiumAiProviderPreference;
+  };
+};
 
 // ─── Prompts ───────────────────────────────────────────────────────────────
 
@@ -110,6 +120,7 @@ CORE CONTENT RULES
 - Use CONTRIBUTOR DETAILS to attribute specific points only when grounded by stance excerpt / agreement signals.
 - If FACTUAL HIGHLIGHTS are sparse, do not overstate certainty.
 - If ENTITY THEMES are present, use them to frame the topic (e.g., "Policy revision" tells you what the thread is really about). Do not invent themes not listed.
+- If CONTEXT TO WATCH is present, treat it as missing-context guardrails rather than established facts.
 
 MODE RULES
 - normal:
@@ -120,7 +131,7 @@ MODE RULES
 - descriptive_fallback:
   collapsedSummary in 2 parts: (1) characterize root post in your own words, (2) describe observable reply patterns.
   Do not copy or closely paraphrase the root opening words.
-  Keep collapsedSummary <= 280 chars.
+  Keep collapsedSummary <= 300 chars.
 
 - minimal_fallback:
   Exactly 2 sentences: concrete root-post substance + observable reply activity.
@@ -308,7 +319,7 @@ function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
   const r = raw as Record<string, unknown>;
 
   // collapsedSummary — sanitise, enforce mode-specific length caps, reject garble.
-  const modeLengthCap = mode === 'minimal_fallback' ? 240 : mode === 'descriptive_fallback' ? 280 : 500;
+  const modeLengthCap = mode === 'minimal_fallback' ? 240 : mode === 'descriptive_fallback' ? 300 : 500;
   const rawCollapsed = typeof r.collapsedSummary === 'string'
     ? truncateAtWordBoundary(r.collapsedSummary, modeLengthCap)
     : '';
@@ -378,7 +389,7 @@ const RETRY_OPTIONS: RetryOptions = {
 
 const MODE_CONSTRAINTS: Record<SummaryMode, string> = {
   normal: 'collapsedSummary: 1-3 sentences, max 500 chars. expandedSummary: only include if it adds new information not in collapsedSummary, 3-5 sentences max. contributorBlurbs: up to 5.',
-  descriptive_fallback: 'collapsedSummary: HARD MAX 280 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
+  descriptive_fallback: 'collapsedSummary: HARD MAX 300 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
   minimal_fallback: 'collapsedSummary: EXACTLY 2 sentences, HARD MAX 240 chars. Sentence 1: root post substance. Sentence 2: observable reply activity. whatChanged MUST be []. contributorBlurbs MUST be [].',
 };
 
@@ -464,6 +475,12 @@ function buildUserMessage(request: WriterRequest): string {
     lines.push('');
     lines.push('THREAD SIGNALS:');
     request.whatChangedSignals.forEach((s) => lines.push(`- ${normalizePromptText(s, MAX_SIGNAL_CHARS)}`));
+  }
+
+  if (request.perspectiveGaps && request.perspectiveGaps.length > 0) {
+    lines.push('');
+    lines.push('CONTEXT TO WATCH:');
+    request.perspectiveGaps.forEach((gap) => lines.push(`- ${normalizePromptText(gap, 140)}`));
   }
 
   if (request.factualHighlights.length > 0) {
@@ -633,35 +650,40 @@ async function getEnhancerReplacement(
     candidate?: WriterResponse;
     qwenFailure?: string;
   },
+  options?: WriterRunOptions,
 ): Promise<WriterResponse | null> {
   const source = params.candidate ? 'candidate' : 'qwen_failure';
   const startedAt = Date.now();
-  const enhancerModel = resolveGeminiModel('interpolator-enhancer', env.GEMINI_INTERPOLATOR_ENHANCER_MODEL);
+  const preferredProvider = options?.enhancer?.preferredProvider;
   recordWriterEnhancerInvocation();
 
   try {
-    const decision = await reviewInterpolatorWriter({
+    const review = await reviewInterpolatorWriter({
       request,
       ...params,
-    });
-    if (!decision) {
+    }, preferredProvider ? {
+      preferredProvider,
+    } : undefined);
+    if (!review) {
       return null;
     }
 
     recordWriterEnhancerReview({
       source,
-      decision: decision.decision,
+      decision: review.decision.decision,
       latencyMs: Date.now() - startedAt,
-      issues: decision.issues,
+      provider: review.provider,
+      model: review.model,
+      issues: review.decision.issues,
     });
 
-    if (decision.decision !== 'replace' || !decision.response) {
+    if (review.decision.decision !== 'replace' || !review.decision.response) {
       return null;
     }
 
     let replacement: WriterResponse;
     try {
-      replacement = validateResponse(decision.response, request.summaryMode);
+      replacement = validateResponse(review.decision.response, request.summaryMode);
     } catch {
       recordWriterEnhancerRejectedReplacement('invalid-response');
       return null;
@@ -672,14 +694,20 @@ async function getEnhancerReplacement(
       return null;
     }
 
-    recordWriterEnhancerTakeoverApplied(source);
+    recordWriterEnhancerTakeoverApplied(source, review.provider);
     return replacement;
   } catch (error) {
     const failure = extractEnhancerFailureMetadata(error);
+    const enhancerModel = typeof (error as { enhancerModel?: unknown })?.enhancerModel === 'string'
+      ? String((error as { enhancerModel?: string }).enhancerModel)
+      : resolveInterpolatorEnhancerModel(preferredProvider) ?? 'unknown-enhancer-model';
     recordWriterEnhancerFailure({
       failureClass: failure.failureClass,
       latencyMs: Date.now() - startedAt,
       source,
+      ...(typeof (error as { enhancerProvider?: unknown })?.enhancerProvider === 'string'
+        ? { provider: String((error as { enhancerProvider?: string }).enhancerProvider) }
+        : {}),
       model: enhancerModel,
       message: failure.message,
       retryable: failure.retryable,
@@ -690,7 +718,7 @@ async function getEnhancerReplacement(
       ...(failure.preview ? { preview: failure.preview } : {}),
       ...(typeof failure.responseChars === 'number' ? { responseChars: failure.responseChars } : {}),
     });
-    console.warn('[llm/write/interpolator][gemini-enhancer]', {
+    console.warn('[llm/write/interpolator][remote-enhancer]', {
       requestId: request.requestId ?? 'unknown',
       source,
       model: enhancerModel,
@@ -707,7 +735,10 @@ async function getEnhancerReplacement(
   }
 }
 
-export async function runInterpolatorWriter(request: WriterRequest): Promise<WriterResponse> {
+export async function runInterpolatorWriter(
+  request: WriterRequest,
+  options?: WriterRunOptions,
+): Promise<WriterResponse> {
   const model = env.QWEN_WRITER_MODEL;
 
   const userMessage = buildUserMessage(request);
@@ -733,12 +764,12 @@ export async function runInterpolatorWriter(request: WriterRequest): Promise<Wri
     }
 
     const candidate = validateResponse(parsed, request.summaryMode);
-    const replacement = await getEnhancerReplacement(request, { candidate });
+    const replacement = await getEnhancerReplacement(request, { candidate }, options);
     return replacement ?? candidate;
   } catch (error) {
     const replacement = await getEnhancerReplacement(request, {
       qwenFailure: formatWriterError(error),
-    });
+    }, options);
     if (replacement) {
       return replacement;
     }

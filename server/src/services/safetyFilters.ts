@@ -359,6 +359,20 @@ export function filterMediaAnalyzerResponse(response: Record<string, any>): { fi
     });
   }
 
+  if (filtered.moderation && typeof filtered.moderation === 'object') {
+    const moderation = { ...filtered.moderation };
+    if (typeof moderation.rationale === 'string') {
+      const result = filterTextContent(moderation.rationale);
+      moderation.rationale = result.filtered;
+      result.categories.forEach(c => allFlags.add(c));
+      overallSeverity = mergeSeverity(overallSeverity, result);
+      if (!moderation.rationale.trim()) {
+        delete moderation.rationale;
+      }
+    }
+    filtered.moderation = moderation;
+  }
+
   return {
     filtered,
     safetyMetadata: {

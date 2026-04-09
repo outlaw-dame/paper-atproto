@@ -21,7 +21,7 @@ import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
 import { useTranslationStore } from '../store/translationStore';
 import { translationClient } from '../lib/i18n/client';
-import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
@@ -846,6 +846,7 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
 
     const visible = posts.slice(0, 6).filter((post) => {
       if (post.content.trim().length === 0 || translationById[post.id]) return false;
+      if (!hasTranslatableLanguageSignal(post.content)) return false;
       const detected = heuristicDetectLanguage(post.content);
       if (detected.language !== 'und' && isLikelySameLanguage(detected.language, translationPolicy.userLanguage)) return false;
       return true;

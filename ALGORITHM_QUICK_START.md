@@ -30,7 +30,7 @@ What you should see:
 - the session assembler orchestrates the full interpretation flow
 - the verified thread pipeline computes verification, confidence, and change
 - writer input consumes contributor, stance, entity, and comment-diversity logic
-- change detection is snapshot-based once a refresh happens, while Story mode freshness is still driven by bounded polling rather than live push
+- change detection is snapshot-based, but Story mode now also listens to a server watch stream and uses slow polling only as self-healing fallback
 
 ---
 
@@ -54,6 +54,43 @@ These cover:
 - writer-shaping correctness
 - session/model orchestration integrity
 - production telemetry access controls
+
+## 2b. Run The Premium Provider Eval
+
+When Gemini and OpenAI are configured on the local server, run:
+
+```bash
+pnpm run eval:premium-providers -- --providers gemini,openai
+```
+
+This checks two things at once:
+
+- the premium request contract still carries contributor, entity, signal, and interpretive-brief data from the ML layer into the LLM lane
+- Gemini and OpenAI are judged against the same live thread fixtures instead of ad hoc spot checks
+
+## 2c. Run The Conversation OS Substrate Eval
+
+When you need to check the deterministic conversation substrate itself, run:
+
+```bash
+pnpm run eval:conversation-os
+```
+
+This focuses on:
+
+- summary-mode selection from the canonical delta decision
+- whether contributor/entity shaping survives into writer input
+- whether `whatChangedSignals` and `perspectiveGaps` are being produced coherently
+- whether the deterministic substrate is behaving like one rolling interpreter instead of isolated heuristics
+
+To turn that judged fixture set into a human review pack, run:
+
+```bash
+pnpm run eval:conversation-os:review-pack -- --out /tmp/conversation-os-review.json
+pnpm run eval:conversation-os:review-score -- --file /tmp/conversation-os-review.json
+```
+
+The first command exports the fixture source material, the system projection, and blank human verdict slots. The second scores a completed review pack back into the same weighted rubric.
 
 ---
 
@@ -99,7 +136,7 @@ What should be true:
 
 - production AI-session telemetry requires `AI_SESSION_TELEMETRY_ADMIN_SECRET`
 - the browser UI does not pretend telemetry is available in production without that secret
-- browser clients still do not call Ollama or Gemini directly
+- browser clients still do not call Ollama, Gemini, or OpenAI directly
 - server routes still validate, sanitize, and protect model traffic
 
 ---

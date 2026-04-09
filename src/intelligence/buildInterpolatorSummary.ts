@@ -32,6 +32,16 @@ function topicPhrase(rootText: string): string {
   return base;
 }
 
+function compactTopicPhrase(value: string, maxLen = 64): string {
+  if (value.length <= maxLen) return value;
+  const sliced = value.slice(0, maxLen).trimEnd();
+  const lastSpace = sliced.lastIndexOf(' ');
+  if (lastSpace >= Math.max(20, Math.floor(maxLen * 0.5))) {
+    return `${sliced.slice(0, lastSpace).trimEnd()}...`;
+  }
+  return `${sliced}...`;
+}
+
 function ensureSentence(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '';
@@ -96,6 +106,63 @@ function synthesiseSummary(
   return `${opening} ${middle}${coda ? ` ${coda}` : ''}`.trim();
 }
 
+function buildPerspectiveGaps(params: {
+  rootText: string;
+  replies: ThreadNode[];
+  scores: Record<string, ContributionScore>;
+  clarificationsAdded: string[];
+  newAnglesAdded: string[];
+  sourceSupportPresent: boolean;
+  factualSignalPresent: boolean;
+}): string[] {
+  const {
+    rootText,
+    replies,
+    scores,
+    clarificationsAdded,
+    newAnglesAdded,
+    sourceSupportPresent,
+    factualSignalPresent,
+  } = params;
+
+  if (replies.length === 0) return [];
+
+  const gaps: string[] = [];
+  const focus = compactTopicPhrase(topicPhrase(rootText).replace(/[.!?…]+$/g, '').trim(), 64);
+  const focusPhrase = focus ? `"${focus}"` : 'the main claim';
+  const participantCount = new Set(
+    replies
+      .map((reply) => reply.authorDid || reply.authorHandle)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  ).size;
+  const hasCounterpoint = replies.some((reply) => scores[reply.uri]?.role === 'useful_counterpoint');
+  const hasOfficialSource = replies.some((reply) => scores[reply.uri]?.role === 'rule_source');
+  const hasSecondarySourceMention = replies.some((reply) => {
+    const lower = reply.text.toLowerCase();
+    return /\b(blog post|writeup|article|thread)\b/.test(lower);
+  });
+
+  if (!sourceSupportPresent && !factualSignalPresent) {
+    gaps.push(`The visible thread still lacks direct sourcing or verifiable evidence for ${focusPhrase}.`);
+  } else if (!hasOfficialSource && hasSecondarySourceMention) {
+    gaps.push(`Visible replies cite secondary context around ${focusPhrase}, but direct sourcing or verifiable evidence is still missing.`);
+  }
+
+  if (replies.length >= 2 && !hasCounterpoint) {
+    gaps.push(`There is little visible counterpoint to the main read of ${focusPhrase} so far.`);
+  }
+
+  if (replies.length >= 2 && participantCount <= 1) {
+    gaps.push(`${focusPhrase} is being shaped by a narrow slice of participants so far.`);
+  }
+
+  if (replies.length >= 2 && clarificationsAdded.length === 0 && newAnglesAdded.length === 0) {
+    gaps.push(`Visible replies have not materially moved the thread beyond the initial claim in ${focusPhrase}.`);
+  }
+
+  return Array.from(new Set(gaps)).slice(0, 3);
+}
+
 type SummaryPatch = Omit<
   InterpolatorState,
   'rootUri' | 'version' | 'updatedAt' | 'replyScores' | 'lastTrigger' | 'triggerHistory'
@@ -148,7 +215,10 @@ export function buildInterpolatorSummary(
     }
 
     if (score.evidenceSignals.some(s => s.kind !== 'speculation')) evidencePresent = true;
-    if (score.factualContribution > 0.3) factualSignalPresent = true;
+    const hasSourceLikeSignal = score.role === 'source_bringer'
+      || score.role === 'rule_source'
+      || score.evidenceSignals.some(s => s.kind === 'citation' && s.confidence >= 0.6);
+    if (score.factualContribution > 0.3 || hasSourceLikeSignal) factualSignalPresent = true;
 
     if (score.role === 'repetitive') {
       repetitionLevel = Math.min(1, repetitionLevel + 0.12);
@@ -195,6 +265,15 @@ export function buildInterpolatorSummary(
     .slice(0, 15);
 
   const topEntitySentiment = entityLandscape[0]?.sentimentShift ?? 0;
+  const perspectiveGaps = buildPerspectiveGaps({
+    rootText,
+    replies: sorted,
+    scores,
+    clarificationsAdded,
+    newAnglesAdded,
+    sourceSupportPresent,
+    factualSignalPresent,
+  });
 
   const summaryText = synthesiseSummary(
     rootText,
@@ -219,6 +298,7 @@ export function buildInterpolatorSummary(
     repetitionLevel,
     heatLevel,
     sourceSupportPresent,
+    perspectiveGaps,
     entityLandscape,
     topContributors,
     evidencePresent,

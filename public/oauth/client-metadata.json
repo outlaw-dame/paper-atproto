@@ -1,9 +1,9 @@
 {
   "$schema": "https://atproto.com/specs/oauth-client-metadata#",
-  "client_id": "https://owned-sur-driving-assumes.trycloudflare.com/oauth/client-metadata.json",
+  "client_id": "https://catalyst-pharmacies-betting-detection.trycloudflare.com/oauth/client-metadata.json",
   "client_name": "Glimpse",
-  "client_uri": "https://owned-sur-driving-assumes.trycloudflare.com",
-  "redirect_uris": ["https://owned-sur-driving-assumes.trycloudflare.com/"],
+  "client_uri": "https://catalyst-pharmacies-betting-detection.trycloudflare.com",
+  "redirect_uris": ["https://catalyst-pharmacies-betting-detection.trycloudflare.com/"],
   "scope": "atproto transition:generic",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],

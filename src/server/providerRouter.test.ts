@@ -82,14 +82,37 @@ describe('writePremiumDeepInterpolator', () => {
     expect(mockResolveEffectivePremiumAiProvider).toHaveBeenNthCalledWith(2, 'openai');
   });
 
-  it('does not mask non-provider-outage failures behind a fallback', async () => {
+  it('falls back on transient timeout failures instead of collapsing the request', async () => {
+    mockResolveEffectivePremiumAiProvider
+      .mockReturnValueOnce('openai')
+      .mockReturnValueOnce('gemini');
     const timeoutError = Object.assign(new Error('Premium AI timed out'), { status: 504 });
-    mockResolveEffectivePremiumAiProvider.mockReturnValueOnce('openai');
     mockOpenAIWrite.mockRejectedValueOnce(timeoutError);
+    mockGeminiWrite.mockResolvedValueOnce({
+      summary: 'Gemini timeout fallback summary.',
+      groundedContext: 'Recovered after timeout.',
+      perspectiveGaps: [],
+      followUpQuestions: [],
+      confidence: 0.69,
+      provider: 'gemini',
+      updatedAt: '2026-04-08T10:00:01.000Z',
+    });
+
+    const result = await writePremiumDeepInterpolator(request, { preferredProvider: 'openai' });
+
+    expect(result.provider).toBe('gemini');
+    expect(mockOpenAIWrite).toHaveBeenCalledTimes(1);
+    expect(mockGeminiWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mask non-provider-outage failures behind a fallback', async () => {
+    const validationError = Object.assign(new Error('Premium AI request invalid'), { status: 422 });
+    mockResolveEffectivePremiumAiProvider.mockReturnValueOnce('openai');
+    mockOpenAIWrite.mockRejectedValueOnce(validationError);
 
     await expect(
       writePremiumDeepInterpolator(request, { preferredProvider: 'openai' }),
-    ).rejects.toBe(timeoutError);
+    ).rejects.toBe(validationError);
 
     expect(mockGeminiWrite).not.toHaveBeenCalled();
   });

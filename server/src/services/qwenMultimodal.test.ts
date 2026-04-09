@@ -89,4 +89,64 @@ describe('qwenMultimodal', () => {
 
     expect(ollamaBody.messages[1]?.content).not.toContain('\u0000');
   });
+
+  it('downgrades unsupported low-confidence drop recommendations to blur', async () => {
+    const imageResponse = new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: {
+        'content-type': 'image/png',
+        'content-length': '3',
+      },
+    });
+
+    const modelResponse = {
+      message: {
+        role: 'assistant',
+        content: JSON.stringify({
+          mediaCentrality: 0.75,
+          mediaType: 'photo',
+          mediaSummary: 'A violent photo with blood visible.',
+          candidateEntities: [],
+          confidence: 0.82,
+          cautionFlags: [],
+          moderation: {
+            action: 'drop',
+            categories: ['graphic-violence'],
+            confidence: 0.58,
+            allowReveal: false,
+            rationale: 'Visible violent injury in frame.',
+          },
+        }),
+      },
+      done: true,
+    };
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(imageResponse)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn(async () => modelResponse),
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runMediaAnalyzer } = await import('./qwenMultimodal.js');
+
+    const result = await runMediaAnalyzer({
+      threadId: 'thread-1',
+      mediaUrl: 'https://example.com/image.png',
+      nearbyText: 'Nearby text',
+      candidateEntities: [],
+      factualHints: [],
+    });
+
+    expect(result.moderation).toEqual({
+      action: 'blur',
+      categories: ['graphic-violence'],
+      confidence: 0.58,
+      allowReveal: true,
+      rationale: 'Visible violent injury in frame.',
+    });
+  });
 });

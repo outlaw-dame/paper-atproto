@@ -18,6 +18,7 @@ import {
 import { projectComposerContext } from '../projections/composerProjection';
 import { projectThreadView } from '../projections/threadProjection';
 import { applyInterpretiveConfidence } from './interpretiveScoring';
+import { finalizeConversationDeltaDecision } from '../deltaDecision';
 import { useInterpolatorSettingsStore } from '../../store/interpolatorSettingsStore';
 
 const ROOT_URI = 'at://did:plc:root/app.bsky.feed.post/root';
@@ -525,13 +526,13 @@ function finalizeSession(session: ConversationSession): ConversationSession {
   const qualityAnnotated = annotateConversationQuality(session);
   const interpretive = applyInterpretiveConfidence(qualityAnnotated);
 
-  return {
+  return finalizeConversationDeltaDecision({
     ...interpretive,
     interpretation: {
       ...interpretive.interpretation,
       threadState: deriveThreadStateSignal(interpretive),
     },
-  };
+  });
 }
 
 function createFixtureSession(params: {
@@ -746,6 +747,7 @@ function createScore(
     entityImpacts: overrides.entityImpacts ?? [],
     scoredAt: overrides.scoredAt ?? '2026-03-30T12:00:00.000Z',
     ...(overrides.userFeedback ? { userFeedback: overrides.userFeedback } : {}),
+    ...(overrides.userFeedback ? { userFeedbackSource: 'user' as const } : {}),
   };
 }
 
@@ -842,6 +844,7 @@ function toLegacyContributionScore(score: ContributionScores): ContributionScore
     usefulnessScore: score.usefulnessScore,
     abuseScore: score.abuseScore,
     ...(score.userFeedback ? { userFeedback: score.userFeedback } : {}),
+    ...(score.userFeedback ? { userFeedbackSource: 'user' as const } : {}),
     scoredAt: score.scoredAt,
     evidenceSignals: score.evidenceSignals,
     entityImpacts: score.entityImpacts,

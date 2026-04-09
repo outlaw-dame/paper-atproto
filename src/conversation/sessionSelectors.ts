@@ -13,7 +13,7 @@ import type { PostFilterMatch } from '../lib/contentFilters/types';
 import type { MockPost } from '../data/mockData';
 import { projectThreadView, type ThreadFilter } from './projections/threadProjection';
 import { projectComposerContext } from './projections/composerProjection';
-import type { ComposerContext } from './projections/composerProjection';
+import type { ComposerContext } from '../intelligence/composer/types';
 import {
   projectStoryView,
   rootUriForStoryPost,
@@ -129,6 +129,7 @@ export function useConversationInterpolatedState(sessionId: string) {
         writerResult: session.interpretation.writerResult,
         mediaFindings: session.interpretation.mediaFindings ?? EMPTY_MEDIA_FINDINGS,
         summaryMode: session.interpretation.summaryMode,
+        deltaDecision: session.interpretation.deltaDecision ?? null,
         confidence: session.interpretation.confidence,
         threadState: session.interpretation.threadState,
         interpretiveExplanation: session.interpretation.interpretiveExplanation,

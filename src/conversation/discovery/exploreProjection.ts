@@ -12,6 +12,8 @@ export interface ExploreLiveCluster {
 export interface ExploreDomainCard {
   domain: string;
   description: string;
+  evidenceCount: number;
+  reason: string;
 }
 
 export interface ExploreDiscoverProjection {
@@ -51,26 +53,36 @@ export function projectExploreDiscoverView(params: {
     id: actor.did,
   }));
 
-  const domains = params.trendingPosts
-    .map((post) => {
-      const embed = post.embed;
-      if (!embed || (embed.type !== 'external' && embed.type !== 'video')) {
-        return null;
+  const domainCounts = new Map<string, number>();
+  const domainDescriptions = new Map<string, string>();
+  for (const post of params.trendingPosts) {
+    const embed = post.embed;
+    if (!embed || (embed.type !== 'external' && embed.type !== 'video')) {
+      continue;
+    }
+    try {
+      const domain = new URL(embed.url).hostname.replace(/^www\./, '');
+      if (!domain) continue;
+      domainCounts.set(domain, (domainCounts.get(domain) ?? 0) + 1);
+      if (!domainDescriptions.has(domain)) {
+        domainDescriptions.set(domain, ('title' in embed && embed.title) ? embed.title : 'Source');
       }
+    } catch {
+      // Ignore malformed URLs in discovery projection only.
+    }
+  }
 
-      try {
-        const domain = new URL(embed.url).hostname.replace(/^www\./, '');
-        return {
-          domain,
-          description: ('title' in embed && embed.title) ? embed.title : 'Source',
-        };
-      } catch {
-        return null;
-      }
-    })
-    .filter((entry): entry is ExploreDomainCard => Boolean(entry?.domain))
-    .filter((entry, index, allEntries) => allEntries.findIndex((candidate) => candidate.domain === entry.domain) === index)
-    .slice(0, 6);
+  const domains = [...domainCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 6)
+    .map(([domain, evidenceCount]) => ({
+      domain,
+      description: domainDescriptions.get(domain) ?? 'Source',
+      evidenceCount,
+      reason: evidenceCount > 1
+        ? `Referenced by ${evidenceCount} trending stories`
+        : 'Referenced by a trending story',
+    }));
 
   const hasVisibleDiscoverContent = params.visibleDiscoverSections == null
     || params.visibleDiscoverSections.has('live-sports')

@@ -68,6 +68,9 @@ export interface MockPost {
   sensitiveMedia?: {
     isSensitive: boolean;
     reasons: string[];
+    action?: 'none' | 'warn' | 'blur' | 'drop';
+    allowReveal?: boolean;
+    rationale?: string;
   };
   threadCount?: number;
   replyTo?: MockPost;

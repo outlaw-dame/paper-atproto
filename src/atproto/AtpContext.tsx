@@ -108,7 +108,19 @@ function hasRequiredGrantedScope(grantedScope: string | undefined, requestedScop
   if (!required.size) return true;
 
   const granted = normalizeScopeSet(grantedScope);
+  const hasTransitionGeneric = granted.has('transition:generic');
   for (const token of required) {
+    if (granted.has(token)) {
+      continue;
+    }
+
+    // Some providers return transition:generic instead of granular rpc:* scopes.
+    // Treat that grant as satisfying rpc requirements to avoid false-negative
+    // bootstrap failures on otherwise valid sessions.
+    if (token.startsWith('rpc:') && hasTransitionGeneric) {
+      continue;
+    }
+
     if (!granted.has(token)) {
       return false;
     }

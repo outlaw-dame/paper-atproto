@@ -103,6 +103,64 @@ describe('llm router hardening', () => {
     expect(response.headers.get('x-request-id')).toBe('req-test-123');
   });
 
+  it('preserves entity themes for the base interpolator writer', async () => {
+    runInterpolatorWriterMock.mockResolvedValue({
+      collapsedSummary: 'ok',
+      whatChanged: [],
+      contributorBlurbs: [],
+      abstained: false,
+      mode: 'normal',
+    });
+
+    const { llmRouter } = await import('./llm.js');
+
+    const response = await llmRouter.request('/write/interpolator', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...interpolatorPayload(),
+        entityThemes: ['security disclosure claim', 'patch reliability debate'],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(runInterpolatorWriterMock).toHaveBeenCalledWith(expect.objectContaining({
+      entityThemes: ['security disclosure claim', 'patch reliability debate'],
+    }), undefined);
+  });
+
+  it('forwards the requested remote provider to the local enhancer path', async () => {
+    runInterpolatorWriterMock.mockResolvedValue({
+      collapsedSummary: 'ok',
+      whatChanged: [],
+      contributorBlurbs: [],
+      abstained: false,
+      mode: 'normal',
+    });
+
+    const { llmRouter } = await import('./llm.js');
+
+    const response = await llmRouter.request('/write/interpolator', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-glympse-ai-provider': 'openai',
+      },
+      body: JSON.stringify(interpolatorPayload()),
+    });
+
+    expect(response.status).toBe(200);
+    expect(runInterpolatorWriterMock).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'thread-1',
+    }), {
+      enhancer: {
+        preferredProvider: 'openai',
+      },
+    });
+  });
+
   it('opens circuit after repeated upstream failures and returns CIRCUIT_OPEN', async () => {
     runInterpolatorWriterMock.mockRejectedValue(new Error('Ollama responded 503'));
 
@@ -166,12 +224,18 @@ describe('llm router hardening', () => {
         fallbackReasonDistribution?: { ['root-only-response-fallback']?: number };
         enhancer?: { invocations?: number; reviews?: number };
       };
+      multimodal?: {
+        invocations?: number;
+        fallbacks?: { total?: number };
+      };
     };
 
     expect(diagnostics.writer?.clientOutcomes?.fallback).toBeGreaterThanOrEqual(1);
     expect(diagnostics.writer?.fallbackReasonDistribution?.['root-only-response-fallback']).toBeGreaterThanOrEqual(1);
     expect(diagnostics.writer?.enhancer?.invocations).toBeGreaterThanOrEqual(0);
     expect(diagnostics.writer?.enhancer?.reviews).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.multimodal?.invocations).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.multimodal?.fallbacks?.total).toBeGreaterThanOrEqual(0);
   });
 
   it('blocks production diagnostics without admin secret', async () => {

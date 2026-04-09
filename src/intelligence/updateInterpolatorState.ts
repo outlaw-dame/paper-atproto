@@ -15,8 +15,11 @@ import type {
   InterpolatorTrigger,
   InterpolatorTriggerKind,
   ContributionScore,
+  InterpolatorDecisionScore,
 } from './interpolatorTypes';
-import { computeThreadChangeDelta, type ThreadStateSnapshot } from './algorithms';
+import { mergeContributionFeedbackState } from './interpolatorTypes';
+import { type ThreadStateSnapshot } from './algorithms';
+import { computeConversationDeltaDecision } from './conversationDelta';
 
 // ─── Thread snapshot tracking ────────────────────────────────────────────
 // Cache to store previous snapshots per thread URI for change detection
@@ -155,11 +158,15 @@ export function applyTriggerToState(
   trigger: InterpolatorTrigger,
 ): InterpolatorState {
   const triggerHistory = [...existing.triggerHistory, trigger].slice(-20);
+  const mergedReplyScores = { ...existing.replyScores };
+  for (const [uri, score] of Object.entries(patch.replyScores ?? {})) {
+    mergedReplyScores[uri] = mergeContributionFeedbackState(existing.replyScores[uri], score);
+  }
   return {
     ...existing,
     ...patch,
-    // Merge reply scores rather than replacing so userFeedback on old replies is preserved
-    replyScores: { ...existing.replyScores, ...(patch.replyScores ?? {}) },
+    // Merge reply scores per-uri so explicit user feedback survives rescoring.
+    replyScores: mergedReplyScores,
     lastTrigger: trigger,
     triggerHistory,
     updatedAt: new Date().toISOString(),
@@ -177,7 +184,9 @@ export function applyTriggerToState(
  */
 export function detectMeaningfulChange(
   threadUri: string,
+  previousState: InterpolatorState | null,
   currentState: InterpolatorState,
+  scores: Record<string, InterpolatorDecisionScore>,
   newRepliesCount: number,
   rateLimitThreshold: number = 30000, // 30 seconds
 ): { shouldUpdate: boolean; confidence: number; reasons: string[] } {
@@ -190,19 +199,22 @@ export function detectMeaningfulChange(
       return { shouldUpdate: false, confidence: 0, reasons: ['rate_limited'] };
     }
 
-    const currentSnapshot = buildThreadStateSnapshot(threadUri, currentState);
-    const delta = computeThreadChangeDelta(cached?.snapshot ?? null, currentSnapshot, {
-      minChangeThreshold: 0.4,
-      minHeatLevel: 0.25,
+    const deltaDecision = computeConversationDeltaDecision({
+      previous: previousState,
+      current: currentState,
+      scores,
     });
 
-    const reasons = [...delta.changeReasons];
-    if (newRepliesCount >= 3 && !reasons.includes('thread_maturity_change')) {
-      reasons.push('thread_maturity_change');
+    const reasons: string[] = [...deltaDecision.changeReasons];
+    if (newRepliesCount >= 3 && reasons.length === 0) {
+      reasons.push('new_replies');
     }
 
-    const shouldUpdate = delta.shouldUpdate || (cached == null && newRepliesCount > 0);
-    const confidence = Math.max(delta.confidence, Math.min(1, newRepliesCount / 6));
+    const shouldUpdate = deltaDecision.didMeaningfullyChange || (cached == null && newRepliesCount > 0);
+    const confidence = Math.max(
+      deltaDecision.changeMagnitude,
+      Math.min(1, newRepliesCount / 6),
+    );
 
     return {
       shouldUpdate,

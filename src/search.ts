@@ -15,6 +15,7 @@ import {
   getMediaBoostFactor,
   type MediaSignals,
 } from './lib/media/extractMediaSignals';
+import { detectVisualIntent } from './lib/searchIntent';
 import { resolveHybridSearchRuntimeConfig } from './search/runtime';
 import { BackoffTimer, SEARCH_BACKOFF_CONFIG } from './lib/backoffStrategy';
 import { CircuitBreaker, DB_CIRCUIT_BREAKER_CONFIG, ConnectionHealthMonitor } from './lib/circuitBreaker';
@@ -106,13 +107,7 @@ function normalizeQueryForCache(raw: string): string {
  * Examples: "meme", "screenshot", "video", "illustration", "chart", etc.
  */
 function queryHasVisualIntent(query: string): boolean {
-  const visualKeywords = [
-    'meme', 'screenshot', 'video', 'image', 'photo', 'picture',
-    'illustration', 'chart', 'graph', 'diagram', 'visual', 'design', 'art',
-    'artwork', 'drawing', 'sketch', 'appearance', 'looks', 'see', 'watch',
-  ];
-  const normalizedQuery = query.toLowerCase();
-  return visualKeywords.some(keyword => normalizedQuery.includes(keyword));
+  return detectVisualIntent(query);
 }
 
 function normalizeOptionalString(value: unknown): string {

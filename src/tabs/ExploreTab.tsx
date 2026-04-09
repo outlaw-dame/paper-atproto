@@ -18,7 +18,7 @@ import { useUiStore } from '../store/uiStore';
 import { useTranslationStore } from '../store/translationStore';
 import { useActivityStore } from '../store/activityStore';
 import { translationClient } from '../lib/i18n/client';
-import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
@@ -27,7 +27,8 @@ import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useAppearanceStore } from '../store/appearanceStore';
 import { actorLabelChips } from '../lib/atproto/labelPresentation';
 import { useExploreSearchResults } from '../conversation/discovery/exploreSearch';
-import { useExploreDiscoverContent } from '../conversation/discovery/exploreDiscovery';
+import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
+import { scorePostEngagement, useExploreDiscoverContent } from '../conversation/discovery/exploreDiscovery';
 import { projectExploreDiscoverView } from '../conversation/discovery/exploreProjection';
 import { useExploreActorRecommendations } from '../conversation/discovery/exploreRecommendations';
 import {
@@ -80,6 +81,7 @@ const DISCOVERY_PHRASES = [
 ];
 
 function canAutoInlineTranslateExplore(post: MockPost): boolean {
+  if (!hasTranslatableLanguageSignal(post.content)) return false;
   const textLength = post.content.trim().length;
   if (textLength === 0 || textLength > 280) return false;
   return true;
@@ -87,6 +89,280 @@ function canAutoInlineTranslateExplore(post: MockPost): boolean {
 
 function getAuthorInitial(displayName?: string, handle?: string): string {
   return ((displayName ?? handle ?? '').trim().charAt(0) || '?').toUpperCase();
+}
+
+function buildStoryExplanationChips(params: {
+  post: MockPost;
+  rank: number;
+  featured: boolean;
+  searching: boolean;
+  intentLabel?: string;
+}): string[] {
+  const chips: string[] = [];
+  const { post, rank, featured, searching, intentLabel } = params;
+
+  if (featured) chips.push('Top story selection');
+  if (post.embed?.type === 'external' || post.article) chips.push('Has source link');
+  if (post.article?.body) chips.push('Long-form context');
+  if (post.replyCount >= 5) chips.push('Active discussion');
+  if (post.repostCount >= 3) chips.push('Shared widely');
+  if (rank === 0 && scorePostEngagement(post) > 0) chips.push('High engagement signal');
+  if (searching && intentLabel) chips.push(intentLabel);
+
+  return Array.from(new Set(chips)).slice(0, 2);
+}
+
+function truncateCardText(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  const sliced = normalized.slice(0, maxChars + 1);
+  const boundary = Math.max(sliced.lastIndexOf(' '), sliced.lastIndexOf('.'));
+  const safe = boundary > maxChars * 0.55 ? sliced.slice(0, boundary) : sliced.slice(0, maxChars);
+  return `${safe.trim()}...`;
+}
+
+function resolvePostSurfaceKind(post: MockPost): string {
+  if (post.article) return 'Feature story';
+  switch (post.embed?.type) {
+    case 'external':
+      return 'Linked article';
+    case 'video':
+      return 'Video';
+    case 'audio':
+      return 'Audio';
+    case 'quote':
+      return 'Quoted post';
+    default:
+      return post.replyCount >= 6 ? 'Active thread' : 'Post';
+  }
+}
+
+function resolvePostPrimaryAction(post: MockPost): string {
+  if (post.article || post.embed?.type === 'external') return 'Read article';
+  if (post.embed?.type === 'video') return 'Watch media';
+  if (post.embed?.type === 'audio') return 'Listen now';
+  if (post.embed?.type === 'quote') return 'Open quote';
+  return post.replyCount >= 4 ? 'Open thread' : 'Open post';
+}
+
+function resolvePostDiveHint(post: MockPost): string {
+  if (post.article || post.embed?.type === 'external') return 'Open the source and follow the thread around it.';
+  if (post.embed?.type === 'video') return 'Watch the media, then open the surrounding thread.';
+  if (post.embed?.type === 'audio') return 'Listen first, then inspect the conversation around it.';
+  if (post.replyCount >= 6) return 'See who is shaping the conversation and why it is moving.';
+  return 'Dive into the post and inspect the related entities.';
+}
+
+function resolvePostHeadline(post: MockPost, bodyText: string): string {
+  const candidate = post.article?.title
+    ?? (post.embed?.type === 'external' ? post.embed.title : undefined)
+    ?? (post.embed?.type === 'video' ? post.embed.title : undefined)
+    ?? (post.embed?.type === 'audio' ? post.embed.title : undefined)
+    ?? bodyText;
+  return truncateCardText(candidate || bodyText, 110);
+}
+
+function resolvePostSynopsis(post: MockPost, bodyText: string, headline: string, preferredSynopsis?: string): string {
+  const normalizedPreferred = preferredSynopsis?.replace(/\s+/g, ' ').trim();
+  if (normalizedPreferred) {
+    return truncateCardText(normalizedPreferred, 170);
+  }
+  const candidate = post.embed?.type === 'external'
+    ? (post.embed.description || post.article?.body || post.content)
+    : post.embed?.type === 'video'
+      ? (post.embed.description || post.content)
+      : post.embed?.type === 'audio'
+        ? (post.embed.description || post.content)
+        : post.article?.body || post.content;
+  const normalizedCandidate = candidate.replace(/\s+/g, ' ').trim();
+  const normalizedHeadline = headline.replace(/\s+/g, ' ').trim();
+  const synopsisSource = normalizedCandidate === normalizedHeadline ? bodyText : normalizedCandidate;
+  return truncateCardText(synopsisSource, 170);
+}
+
+function buildWhySurfaceLines(params: {
+  post: MockPost;
+  explanationChips?: string[];
+  intentLabel?: string;
+  maxLines?: number;
+  sessionHint?: {
+    compactSummary?: string | undefined;
+    sourceSupportPresent: boolean;
+    factualSignalPresent: boolean;
+    continuityLabel?: string | undefined;
+  } | null;
+}): string[] {
+  const lines: string[] = [];
+  const { post, explanationChips, intentLabel, sessionHint, maxLines = 3 } = params;
+
+  const sourceDomain = post.embed?.type === 'external' || post.embed?.type === 'video' || post.embed?.type === 'audio'
+    ? post.embed.domain
+    : null;
+
+  const pushLine = (line: string) => {
+    if (lines.length >= maxLines) return;
+    const normalized = truncateCardText(line, 90).trim();
+    if (!normalized) return;
+    lines.push(normalized);
+  };
+
+  if (sessionHint?.sourceSupportPresent) {
+    pushLine('The surrounding thread includes source-backed context.');
+  }
+  if (sessionHint?.factualSignalPresent) {
+    pushLine('Replies add factual or corrective signal beyond the root post.');
+  }
+  if (sessionHint?.continuityLabel) {
+    pushLine(sessionHint.continuityLabel);
+  }
+  if (sessionHint?.compactSummary) {
+    pushLine(`Conversation snapshot: ${sessionHint.compactSummary}`);
+  }
+  if (post.article || post.embed?.type === 'external') {
+    pushLine(sourceDomain
+      ? `Includes a linked source from ${sourceDomain}.`
+      : 'Includes a linked source you can open directly.');
+  }
+  if (post.embed?.type === 'video') {
+    pushLine(sourceDomain
+      ? `Video context is available from ${sourceDomain}.`
+      : 'This includes video context that is better watched directly.');
+  }
+  if (post.embed?.type === 'audio') {
+    pushLine(sourceDomain
+      ? `Audio context is available from ${sourceDomain}.`
+      : 'This includes audio context that is better heard directly.');
+  }
+  if (post.embed?.type === 'quote') {
+    pushLine('This includes quoted context from a related post.');
+  }
+  if (post.replyCount >= 12) {
+    pushLine('The thread is highly active and worth opening for full context.');
+  } else if (post.replyCount >= 5) {
+    pushLine('The thread is active enough to reward opening the conversation.');
+  }
+  if (post.repostCount >= 8) {
+    pushLine('This post is being reshared widely across the graph.');
+  }
+  if (intentLabel) {
+    pushLine(`Matches your ${intentLabel.toLowerCase()} search.`);
+  }
+  if (lines.length < maxLines && explanationChips && explanationChips.length > 0) {
+    pushLine(`Selection signals: ${explanationChips.slice(0, 2).join(' + ')}.`);
+  }
+  if (lines.length < maxLines) {
+    for (const chip of explanationChips ?? []) {
+      if (lines.length >= maxLines) break;
+      pushLine(chip);
+    }
+  }
+
+  return Array.from(new Set(lines.map((line) => line.trim()).filter(Boolean))).slice(0, maxLines);
+}
+
+function ActionChipButton({ label, onTap }: { label: string; onTap: () => void }) {
+  return (
+    <button
+      onClick={(event) => {
+        event.stopPropagation();
+        onTap();
+      }}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '8px 12px',
+        borderRadius: radius.full,
+        border: 'none',
+        background: accent.primary,
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: 700,
+        letterSpacing: '0.01em',
+        cursor: 'pointer',
+        boxShadow: '0 10px 24px rgba(91,124,255,0.24)',
+      }}
+    >
+      {label}
+      <span aria-hidden="true">↗</span>
+    </button>
+  );
+}
+
+function WhySurfaceReveal({ lines, compact = false }: { lines: string[]; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+
+  if (lines.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: compact ? 4 : 6 }}>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
+        style={{
+          border: 'none',
+          background: 'transparent',
+          color: disc.textSecondary,
+          fontSize: compact ? 10 : 11,
+          fontWeight: 700,
+          padding: 0,
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+      >
+        {open ? 'Hide why' : 'Why this?'}
+        <motion.span
+          aria-hidden="true"
+          animate={{ rotate: open ? 180 : 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          style={{ display: 'inline-flex' }}
+        >
+          ▾
+        </motion.span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            onClick={(event) => event.stopPropagation()}
+            initial={{ opacity: 0, y: -2, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto' }}
+            exit={{ opacity: 0, y: -2, height: 0 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            style={{
+              width: '100%',
+              overflow: 'hidden',
+              padding: compact ? '6px 8px' : '8px 10px',
+              borderRadius: compact ? 10 : 12,
+              background: compact ? 'rgba(124,233,255,0.06)' : 'rgba(124,233,255,0.08)',
+              border: '0.5px solid rgba(124,233,255,0.18)',
+              display: 'grid',
+              gap: compact ? 4 : 5,
+            }}
+          >
+            {lines.map((line) => (
+              <p
+                key={line}
+                style={{
+                  margin: 0,
+                  fontSize: compact ? 10 : 11,
+                  lineHeight: compact ? '14px' : '15px',
+                  color: disc.textSecondary,
+                  fontWeight: 600,
+                }}
+              >
+                {line}
+              </p>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }
 
 // ─── Shared sub-components ────────────────────────────────────────────────
@@ -196,6 +472,9 @@ function FeaturedSearchStoryCard({
   translatedDisplayName,
   onToggleTranslate,
   onClearTranslation,
+  explanationChips,
+  sessionSynopsis,
+  whySurfaceLines,
 }: {
   post: MockPost;
   onTap: () => void;
@@ -209,6 +488,9 @@ function FeaturedSearchStoryCard({
   translatedDisplayName?: string | undefined;
   onToggleTranslate: (event: React.MouseEvent) => void;
   onClearTranslation: (event: React.MouseEvent) => void;
+  explanationChips?: string[];
+  sessionSynopsis?: string | undefined;
+  whySurfaceLines?: string[];
 }) {
   const navigateToProfile = useProfileNavigation();
   const targetLanguage = useTranslationStore((state) => state.policy.userLanguage);
@@ -217,12 +499,19 @@ function FeaturedSearchStoryCard({
   const domain = embed?.domain ?? (post.article ? 'Long-form' : '');
   const detectedLanguage = heuristicDetectLanguage(post.content);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const hasTranslatableSignal = hasTranslatableLanguageSignal(post.content);
   const shouldOfferTranslation = hasRenderableTranslation
-    || detectedLanguage.language === 'und'
-    || !isLikelySameLanguage(detectedLanguage.language, targetLanguage);
+    || (hasTranslatableSignal
+      && (detectedLanguage.language === 'und'
+        || !isLikelySameLanguage(detectedLanguage.language, targetLanguage)));
   const bodyText = post.article?.body
     ? post.article.body
     : (hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content);
+  const surfaceKind = resolvePostSurfaceKind(post);
+  const primaryAction = resolvePostPrimaryAction(post);
+  const diveHint = resolvePostDiveHint(post);
+  const headline = resolvePostHeadline(post, bodyText);
+  const synopsis = resolvePostSynopsis(post, bodyText, headline, sessionSynopsis);
   const hashtags: string[] = Array.from(new Set((bodyText.match(/#\w+/g) ?? []) as string[])).slice(0, 5);
   // Entity chips: prefer AI-extracted, fall back to content-derived
   const entityChips = extractPostEntities(bodyText).filter(e => e.type !== 'topic' || !hashtags.includes(e.label));
@@ -283,6 +572,13 @@ function FeaturedSearchStoryCard({
       {/* ── Content zone — seamlessly attached below hero ── */}
       <div style={{ padding: `14px ${space[10]}px ${space[10]}px` }}>
 
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+          <SynopsisChip label={surfaceKind} />
+          <span style={{ fontSize: 11, color: disc.textTertiary, fontWeight: 600 }}>
+            {post.replyCount > 0 ? `${post.replyCount} replies` : `${post.likeCount.toLocaleString()} likes`}
+          </span>
+        </div>
+
         {/* Hashtag chips */}
         {hashtags.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -304,6 +600,30 @@ function FeaturedSearchStoryCard({
           </div>
         )}
 
+        {explanationChips && explanationChips.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {explanationChips.map((chip) => (
+              <span
+                key={`${post.id}:${chip}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '3px 9px',
+                  borderRadius: radius.full,
+                  background: 'rgba(124,233,255,0.12)',
+                  border: '0.5px solid rgba(124,233,255,0.28)',
+                  color: accent.cyan400,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.01em',
+                }}
+              >
+                {chip}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Entity chips — tappable, open EntitySheet */}
         {onEntityTap && entityChips.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -313,23 +633,23 @@ function FeaturedSearchStoryCard({
           </div>
         )}
 
-        {/* Post text with inline hashtag linkification */}
+        {/* Headline */}
         <p style={{
           fontSize: typeScale.titleSm[0], lineHeight: `${typeScale.titleSm[1]}px`,
-          fontWeight: 600, letterSpacing: typeScale.titleSm[3],
+          fontWeight: 700, letterSpacing: typeScale.titleSm[3],
           color: disc.textPrimary, marginBottom: 8,
-          display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} onMention={(handle) => { void navigateToProfile(handle); }} />
+          <RichPostText text={headline} {...(onHashtag ? { onHashtag } : {})} onMention={(handle) => { void navigateToProfile(handle); }} />
         </p>
 
-        {/* Article title from embed (if different from post text) */}
-        {(post.article?.title || embed?.title) && (post.article?.title ?? embed?.title ?? '').trim() !== bodyText.trim() && (
+        {/* Synopsis */}
+        {synopsis && synopsis !== headline && (
           <p style={{
             fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
-            color: disc.textSecondary, marginBottom: 8,
-            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-          }}>{post.article?.title ?? embed?.title}</p>
+            color: disc.textSecondary, marginBottom: 10,
+            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>{synopsis}</p>
         )}
 
         {post.content.trim().length > 0 && shouldOfferTranslation && (
@@ -423,6 +743,28 @@ function FeaturedSearchStoryCard({
           </div>
         )}
 
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          paddingTop: 2,
+          marginBottom: 12,
+        }}>
+          <ActionChipButton label={primaryAction} onTap={onTap} />
+          <div style={{ flex: 1, minWidth: 160, display: 'grid', gap: 6 }}>
+            <span style={{
+              fontSize: 11,
+              lineHeight: '15px',
+              color: disc.textTertiary,
+              fontWeight: 600,
+            }}>
+              {diveHint}
+            </span>
+            <WhySurfaceReveal lines={whySurfaceLines ?? []} />
+          </div>
+        </div>
+
         {/* Footer: author avatar + name + engagement */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, borderTop: `0.5px solid ${disc.lineSubtle}`, marginTop: 12 }}>
           <div style={{ width: 22, height: 22, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
@@ -462,6 +804,9 @@ function LinkedPostMiniCard({
   autoTranslated,
   onToggleTranslate,
   onClearTranslation,
+  explanationChips,
+  sessionSynopsis,
+  whySurfaceLines,
 }: {
   post: MockPost;
   onTap: () => void;
@@ -473,6 +818,9 @@ function LinkedPostMiniCard({
   autoTranslated: boolean;
   onToggleTranslate: (event: React.MouseEvent) => void;
   onClearTranslation: (event: React.MouseEvent) => void;
+  explanationChips?: string[];
+  sessionSynopsis?: string | undefined;
+  whySurfaceLines?: string[];
 }) {
   const navigateToProfile = useProfileNavigation();
   const targetLanguage = useTranslationStore((state) => state.policy.userLanguage);
@@ -481,13 +829,19 @@ function LinkedPostMiniCard({
   const domain = embed?.domain ?? (post.article ? 'Long-form' : '');
   const detectedLanguage = heuristicDetectLanguage(post.content);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const hasTranslatableSignal = hasTranslatableLanguageSignal(post.content);
   const shouldOfferTranslation = hasRenderableTranslation
-    || detectedLanguage.language === 'und'
-    || !isLikelySameLanguage(detectedLanguage.language, targetLanguage);
+    || (hasTranslatableSignal
+      && (detectedLanguage.language === 'und'
+        || !isLikelySameLanguage(detectedLanguage.language, targetLanguage)));
 
   const bodyText = post.article?.body
     ? post.article.body
     : (hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content);
+  const surfaceKind = resolvePostSurfaceKind(post);
+  const primaryAction = resolvePostPrimaryAction(post);
+  const headline = resolvePostHeadline(post, bodyText);
+  const synopsis = resolvePostSynopsis(post, bodyText, headline, sessionSynopsis);
 
   return (
     <motion.div
@@ -517,12 +871,41 @@ function LinkedPostMiniCard({
       </div>
       {/* Text content */}
       <div style={{ padding: '8px 12px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '3px 8px',
+            borderRadius: radius.full,
+            background: 'rgba(91,124,255,0.12)',
+            color: accent.primary,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.03em',
+            textTransform: 'uppercase',
+          }}>
+            {surfaceKind}
+          </span>
+          <span style={{ fontSize: 10, color: disc.textTertiary, fontWeight: 600 }}>
+            {post.replyCount > 0 ? `${post.replyCount} replies` : `${post.likeCount.toLocaleString()} likes`}
+          </span>
+        </div>
         <p style={{
-          fontSize: 13, fontWeight: 600, lineHeight: '18px', color: disc.textPrimary,
+          fontSize: 13, fontWeight: 700, lineHeight: '18px', color: disc.textPrimary,
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
-          <RichPostText text={bodyText} {...(onHashtag ? { onHashtag } : {})} onMention={(handle) => { void navigateToProfile(handle); }} />
+          <RichPostText text={headline} {...(onHashtag ? { onHashtag } : {})} onMention={(handle) => { void navigateToProfile(handle); }} />
         </p>
+        {synopsis && synopsis !== headline && (
+          <p style={{
+            fontSize: 11,
+            lineHeight: '16px',
+            color: disc.textSecondary,
+            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>
+            {synopsis}
+          </p>
+        )}
         {post.content.trim().length > 0 && shouldOfferTranslation && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
@@ -595,6 +978,30 @@ function LinkedPostMiniCard({
             {embed?.authorName && embed?.publisher ? ` · ${embed.publisher}` : ''}
           </span>
         )}
+        {explanationChips && explanationChips.length > 0 && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+            {explanationChips.map((chip) => (
+              <span
+                key={`${post.id}:${chip}`}
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  borderRadius: 999,
+                  padding: '2px 7px',
+                  background: 'rgba(124,233,255,0.14)',
+                  color: accent.cyan400,
+                  border: `0.5px solid ${disc.lineSubtle}`,
+                }}
+              >
+                {chip}
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 'auto', paddingTop: 6 }}>
+          <ActionChipButton label={primaryAction} onTap={onTap} />
+        </div>
+        <WhySurfaceReveal lines={whySurfaceLines ?? []} compact />
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
           <button onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ border: 'none', background: 'none', padding: 0, fontSize: 11, color: disc.textSecondary, fontWeight: 600, cursor: 'pointer', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             @{post.author.handle}
@@ -725,7 +1132,7 @@ function FeedCard({ gen, onFollow }: { gen: AppBskyFeedDefs.GeneratorView; onFol
 }
 
 // ─── DomainCapsule ────────────────────────────────────────────────────────
-function DomainCapsule({ domain, description }: { domain: string; description: string }) {
+function DomainCapsule({ domain, description, reason, evidenceCount }: { domain: string; description: string; reason?: string; evidenceCount?: number }) {
   return (
     <motion.div
       whileTap={{ scale: 0.97 }}
@@ -747,6 +1154,11 @@ function DomainCapsule({ domain, description }: { domain: string; description: s
         <span style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>{domain}</span>
       </div>
       <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{description}</p>
+      {(reason || evidenceCount) && (
+        <p style={{ margin: 0, fontSize: 10, color: accent.cyan400, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {reason ?? `Referenced by ${evidenceCount} stories`}
+        </p>
+      )}
     </motion.div>
   );
 }
@@ -1011,6 +1423,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
     posts: searchPosts,
     actors: searchActors,
     feedItems: searchFeedItems,
+    intent: searchIntent,
     semanticActorDids: searchSemanticActorDids,
     keywordActorDids: searchKeywordActorDids,
     hasMorePosts: hasMoreSearchPosts,
@@ -1067,6 +1480,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
   }, [featuredPost, linkPosts, sidePosts, searchPosts, trendingPosts]);
 
   const filterResults = usePostFilterResults(exploreVisiblePool, 'explore');
+  const timelineHintsByPostId = useTimelineConversationHintsProjection(exploreVisiblePool);
 
   const filteredLinkPosts = useMemo(
     () => linkPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')),
@@ -1211,6 +1625,69 @@ export default function ExploreTab({ onOpenStory }: Props) {
   }, []);
 
   const isSearching = debouncedQuery.trim().length > 0;
+  const discoverStoryExplanations = useMemo(() => {
+    const output = new Map<string, string[]>();
+    filteredLinkPosts.forEach((post, index) => {
+      output.set(post.id, buildStoryExplanationChips({
+        post,
+        rank: index,
+        featured: index === featuredIdx,
+        searching: false,
+      }));
+    });
+    filteredSidePosts.forEach((post, index) => {
+      if (!output.has(post.id)) {
+        output.set(post.id, buildStoryExplanationChips({
+          post,
+          rank: index,
+          featured: false,
+          searching: false,
+        }));
+      }
+    });
+    return output;
+  }, [featuredIdx, filteredLinkPosts, filteredSidePosts]);
+
+  const searchStoryExplanations = useMemo(() => {
+    const output = new Map<string, string[]>();
+    searchPosts.forEach((post, index) => {
+      output.set(post.id, buildStoryExplanationChips({
+        post,
+        rank: index,
+        featured: false,
+        searching: true,
+        intentLabel: searchIntent.label,
+      }));
+    });
+    return output;
+  }, [searchIntent.label, searchPosts]);
+
+  const getSessionSynopsis = useCallback((post: MockPost) => {
+    return timelineHintsByPostId[post.id]?.compactSummary;
+  }, [timelineHintsByPostId]);
+
+  const getWhySurfaceLines = useCallback((post: MockPost, options?: {
+    intentLabel?: string;
+    explanationChips?: string[];
+    maxLines?: number;
+  }) => {
+    const hint = timelineHintsByPostId[post.id];
+    return buildWhySurfaceLines({
+      post,
+      ...(options?.intentLabel ? { intentLabel: options.intentLabel } : {}),
+      ...(typeof options?.maxLines === 'number' ? { maxLines: options.maxLines } : {}),
+      ...(options?.explanationChips ? { explanationChips: options.explanationChips } : {}),
+      sessionHint: hint
+        ? {
+            compactSummary: hint.compactSummary,
+            sourceSupportPresent: hint.sourceSupportPresent,
+            factualSignalPresent: hint.factualSignalPresent,
+            ...(hint.continuityLabel ? { continuityLabel: hint.continuityLabel } : {}),
+          }
+        : null,
+    });
+  }, [timelineHintsByPostId]);
+
   const {
     trendingTopics,
     liveClusters,
@@ -1301,6 +1778,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
       if (autoAttemptedIdsRef.current.has(post.id)) return false;
       if (translatingById[post.id]) return false;
       if (translationById[post.id]) return false;
+      if (!hasTranslatableLanguageSignal(post.content)) return false;
       // Skip posts already in the user's language
       const detected = heuristicDetectLanguage(post.content);
       if (detected.language !== 'und' && isLikelySameLanguage(detected.language, translationPolicy.userLanguage)) return false;
@@ -1628,6 +2106,12 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     >
                       Latest
                     </button>
+                    <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: '4px 8px', background: 'rgba(124,233,255,0.16)', color: accent.cyan400 }}>
+                      {searchIntent.label}
+                    </span>
+                    <span style={{ fontSize: 11, color: disc.textTertiary }}>
+                      Confidence {Math.round(Math.max(0, Math.min(1, searchIntent.confidence)) * 100)}%
+                    </span>
                   </div>
 
                   {searchPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')).length > 0 && (
@@ -1635,19 +2119,32 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       <SectionHeader title="Posts" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
                         {searchPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')).slice(0, 12).map((post) => (
-                          <LinkedPostMiniCard
-                            key={post.id}
-                            post={post}
-                            translation={translationById[post.id]}
-                            showOriginal={!!showOriginalById[post.id]}
-                            translating={!!translatingById[post.id]}
-                            translationError={!!translationErrorById[post.id]}
-                            autoTranslated={autoTranslatedIdsRef.current.has(post.id)}
-                            onToggleTranslate={(event) => handleToggleTranslate(event, post)}
-                            onClearTranslation={(event) => handleClearTranslation(event, post.id)}
-                            onTap={() => onOpenStory({ type: 'post', id: post.id, title: getExploreStoryTitle(post.content) })}
-                            onHashtag={openHashtagFeed}
-                          />
+                          (() => {
+                            const explanationChips = searchStoryExplanations.get(post.id);
+                            const whySurfaceLines = getWhySurfaceLines(post, {
+                              intentLabel: searchIntent.label,
+                              maxLines: 2,
+                              ...(explanationChips ? { explanationChips } : {}),
+                            });
+                            return (
+                              <LinkedPostMiniCard
+                                key={post.id}
+                                post={post}
+                                {...(explanationChips ? { explanationChips } : {})}
+                                sessionSynopsis={getSessionSynopsis(post)}
+                                whySurfaceLines={whySurfaceLines}
+                                translation={translationById[post.id]}
+                                showOriginal={!!showOriginalById[post.id]}
+                                translating={!!translatingById[post.id]}
+                                translationError={!!translationErrorById[post.id]}
+                                autoTranslated={autoTranslatedIdsRef.current.has(post.id)}
+                                onToggleTranslate={(event) => handleToggleTranslate(event, post)}
+                                onClearTranslation={(event) => handleClearTranslation(event, post.id)}
+                                onTap={() => onOpenStory({ type: 'post', id: post.id, title: getExploreStoryTitle(post.content) })}
+                                onHashtag={openHashtagFeed}
+                              />
+                            );
+                          })()
                         ))}
                       </div>
                       {hasMoreSearchPosts && (
@@ -1857,9 +2354,14 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       <SectionHeader title="Sports Pulse" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
                         {sportsPulsePosts.map((p) => (
+                          (() => {
+                            const whySurfaceLines = getWhySurfaceLines(p, { maxLines: 2 });
+                            return (
                           <LinkedPostMiniCard
                             key={p.id}
                             post={p}
+                            sessionSynopsis={getSessionSynopsis(p)}
+                            whySurfaceLines={whySurfaceLines}
                             translation={translationById[p.id]}
                             showOriginal={!!showOriginalById[p.id]}
                             translating={!!translatingById[p.id]}
@@ -1870,6 +2372,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
                             onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
                             onHashtag={openHashtagFeed}
                           />
+                            );
+                          })()
                         ))}
                       </div>
                     </div>
@@ -1959,20 +2463,29 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 );
                               }
                               return (
-                                <FeaturedSearchStoryCard
-                                  post={p}
-                                  translation={translationById[p.id]}
-                                  showOriginal={!!showOriginalById[p.id]}
-                                  translating={!!translatingById[p.id]}
-                                  translationError={!!translationErrorById[p.id]}
-                                  autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
-                                  translatedDisplayName={translationById[`displayName:${p.author.did}`]?.translatedText}
-                                  onToggleTranslate={(event) => handleToggleTranslate(event, p)}
-                                  onClearTranslation={(event) => handleClearTranslation(event, p.id)}
-                                  onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
-                                  onHashtag={openHashtagFeed}
-                                  onEntityTap={(e) => setActiveEntity(e)}
-                                />
+                                (() => {
+                                  const explanationChips = discoverStoryExplanations.get(p.id);
+                                  const whySurfaceLines = getWhySurfaceLines(p, explanationChips ? { explanationChips } : undefined);
+                                  return (
+                                    <FeaturedSearchStoryCard
+                                      post={p}
+                                      {...(explanationChips ? { explanationChips } : {})}
+                                      sessionSynopsis={getSessionSynopsis(p)}
+                                      whySurfaceLines={whySurfaceLines}
+                                      translation={translationById[p.id]}
+                                      showOriginal={!!showOriginalById[p.id]}
+                                      translating={!!translatingById[p.id]}
+                                      translationError={!!translationErrorById[p.id]}
+                                      autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
+                                      translatedDisplayName={translationById[`displayName:${p.author.did}`]?.translatedText}
+                                      onToggleTranslate={(event) => handleToggleTranslate(event, p)}
+                                      onClearTranslation={(event) => handleClearTranslation(event, p.id)}
+                                      onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
+                                      onHashtag={openHashtagFeed}
+                                      onEntityTap={(e) => setActiveEntity(e)}
+                                    />
+                                  );
+                                })()
                               );
                             })()}
                           </motion.div>
@@ -2047,19 +2560,31 @@ export default function ExploreTab({ onOpenStory }: Props) {
                               );
                             }
                             return (
-                              <LinkedPostMiniCard
-                                key={p.id}
-                                post={p}
-                                translation={translationById[p.id]}
-                                showOriginal={!!showOriginalById[p.id]}
-                                translating={!!translatingById[p.id]}
-                                translationError={!!translationErrorById[p.id]}
-                                autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
-                                onToggleTranslate={(event) => handleToggleTranslate(event, p)}
-                                onClearTranslation={(event) => handleClearTranslation(event, p.id)}
-                                onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
-                                onHashtag={openHashtagFeed}
-                              />
+                              (() => {
+                                const explanationChips = discoverStoryExplanations.get(p.id);
+                                const whySurfaceLines = getWhySurfaceLines(p, {
+                                  maxLines: 2,
+                                  ...(explanationChips ? { explanationChips } : {}),
+                                });
+                                return (
+                                  <LinkedPostMiniCard
+                                    key={p.id}
+                                    post={p}
+                                    {...(explanationChips ? { explanationChips } : {})}
+                                    sessionSynopsis={getSessionSynopsis(p)}
+                                    whySurfaceLines={whySurfaceLines}
+                                    translation={translationById[p.id]}
+                                    showOriginal={!!showOriginalById[p.id]}
+                                    translating={!!translatingById[p.id]}
+                                    translationError={!!translationErrorById[p.id]}
+                                    autoTranslated={autoTranslatedIdsRef.current.has(p.id)}
+                                    onToggleTranslate={(event) => handleToggleTranslate(event, p)}
+                                    onClearTranslation={(event) => handleClearTranslation(event, p.id)}
+                                    onTap={() => onOpenStory({ type: 'post', id: p.id, title: getExploreStoryTitle(p.content) })}
+                                    onHashtag={openHashtagFeed}
+                                  />
+                                );
+                              })()
                             );
                           })}
                         </div>
@@ -2117,7 +2642,15 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     <div>
                       <SectionHeader title="Sources" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 4 }}>
-                        {domains.map(d => <DomainCapsule key={d.domain} domain={d.domain} description={d.description} />)}
+                        {domains.map((d) => (
+                          <DomainCapsule
+                            key={d.domain}
+                            domain={d.domain}
+                            description={d.description}
+                            reason={d.reason}
+                            evidenceCount={d.evidenceCount}
+                          />
+                        ))}
                       </div>
                     </div>
                   )}

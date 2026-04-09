@@ -1,17 +1,8 @@
 import React from 'react';
 import SensitiveMediaSection from './SensitiveMediaSection';
 import ContentFilterSettingsSection from './ContentFilterSettingsSection';
-import InterpolatorSettingsSection from './InterpolatorSettingsSection';
-import LazyModuleBoundary from './LazyModuleBoundary';
 import ModerationSection from './ModerationSection';
 import ModerationPolicySummaryCard from './ModerationPolicySummaryCard';
-import { SettingsPageFallback } from './TranslationSettingsSheetFallback';
-import { lazyWithRetry } from '../lib/lazyWithRetry';
-
-const LocalAiRuntimeSection = lazyWithRetry(
-  () => import('./LocalAiRuntimeSection'),
-  'LocalAiRuntimeSection',
-);
 
 export default function ModerationSettingsPage() {
   return (
@@ -35,17 +26,6 @@ export default function ModerationSettingsPage() {
       </div>
 
       <ModerationPolicySummaryCard />
-
-      <InterpolatorSettingsSection />
-
-      <LazyModuleBoundary
-        resetKey="local-ai-runtime"
-        fallback={<SettingsPageFallback label="Local AI runtime controls failed to load." />}
-      >
-        <React.Suspense fallback={<SettingsPageFallback label="Loading local AI runtime controls…" />}>
-          <LocalAiRuntimeSection />
-        </React.Suspense>
-      </LazyModuleBoundary>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
         <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }}>

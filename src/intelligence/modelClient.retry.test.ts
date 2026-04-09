@@ -4,6 +4,10 @@ const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(() => Promise.resolve()),
 }));
 
+const { mockCaptionImage } = vi.hoisted(() => ({
+  mockCaptionImage: vi.fn(),
+}));
+
 vi.mock('../lib/abortSignals', async () => {
   const actual = await vi.importActual('../lib/abortSignals');
   return {
@@ -11,6 +15,12 @@ vi.mock('../lib/abortSignals', async () => {
     sleepWithAbort: sleepWithAbortMock,
   };
 });
+
+vi.mock('../workers/InferenceClient', () => ({
+  inferenceClient: {
+    captionImage: mockCaptionImage,
+  },
+}));
 
 import {
   callInterpolatorWriter,
@@ -24,6 +34,7 @@ import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore
 describe('modelClient retry policy', () => {
   beforeEach(() => {
     sleepWithAbortMock.mockClear();
+    mockCaptionImage.mockReset();
     vi.restoreAllMocks();
     useInterpolatorSettingsStore.setState({
       enabled: true,
@@ -77,6 +88,13 @@ describe('modelClient retry policy', () => {
         candidateEntities: ['Agency'],
         confidence: 0.8,
         cautionFlags: [],
+        moderation: {
+          action: 'warn',
+          categories: ['hate-speech'],
+          confidence: 0.72,
+          allowReveal: true,
+          rationale: 'Visible text may include abusive language.',
+        },
       }), {
         status: 200,
         headers: {
@@ -93,8 +111,49 @@ describe('modelClient retry policy', () => {
     });
 
     expect(result.mediaType).toBe('document');
+    expect(result.moderation?.action).toBe('warn');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the local caption worker when remote multimodal analysis stays unavailable', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('network down'));
+
+    mockCaptionImage.mockResolvedValueOnce('A screenshot of a redlined transit policy memo from the agency.');
+
+    const result = await callMediaAnalyzer({
+      threadId: 'thread-local-fallback',
+      mediaUrl: 'https://safe.example/policy.png',
+      mediaAlt: 'policy screenshot',
+      nearbyText: 'This screenshot shows the agency policy memo that people are debating.',
+      candidateEntities: ['Agency'],
+      factualHints: ['People want the underlying memo.'],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(mockCaptionImage).toHaveBeenCalledTimes(1);
+    expect(result.mediaType).toBe('screenshot');
+    expect(result.mediaSummary.toLowerCase()).toContain('redlined transit policy memo');
+    expect(result.confidence).toBeGreaterThan(0.35);
+    expect(result.candidateEntities).toContain('Agency');
+  });
+
+  it('does not use the local caption worker for non-retryable media-analysis rejections', async () => {
+    vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('blocked', { status: 400 }));
+
+    await expect(callMediaAnalyzer({
+      threadId: 'thread-unsafe',
+      mediaUrl: 'https://safe.example/policy.png',
+      nearbyText: 'caption text',
+      candidateEntities: [],
+      factualHints: [],
+    })).rejects.toThrow(/responded 400/i);
+
+    expect(mockCaptionImage).not.toHaveBeenCalled();
   });
 
   it('falls back when model output echoes a long root-post phrase', async () => {
@@ -468,5 +527,54 @@ describe('modelClient retry policy', () => {
     const headers = requestInit?.headers as Record<string, string> | undefined;
     expect(headers?.['X-Glympse-AI-Provider']).toBe('openai');
     expect(headers?.['X-Glympse-User-Did']).toBe('did:plc:test-user');
+  });
+
+  it('sends the selected provider header for local interpolator enhancer requests', async () => {
+    useInterpolatorSettingsStore.setState({
+      enabled: true,
+      premiumProviderPreference: 'openai',
+    });
+
+    const writerInput: ThreadStateForWriter = {
+      threadId: 'thread-local-openai-enhancer',
+      summaryMode: 'normal',
+      confidence: {
+        surfaceConfidence: 0.7,
+        entityConfidence: 0.68,
+        interpretiveConfidence: 0.59,
+      },
+      rootPost: {
+        uri: 'at://did:plc:test/app.bsky.feed.post/root',
+        handle: 'author.test',
+        text: 'Root post',
+        createdAt: new Date().toISOString(),
+      },
+      selectedComments: [],
+      topContributors: [],
+      safeEntities: [],
+      factualHighlights: [],
+      whatChangedSignals: [],
+    };
+
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        collapsedSummary: 'Thread summary.',
+        whatChanged: [],
+        contributorBlurbs: [],
+        abstained: false,
+        mode: 'normal',
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      }));
+
+    await callInterpolatorWriter(writerInput);
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = requestInit?.headers as Record<string, string> | undefined;
+    expect(headers?.['X-Glympse-AI-Provider']).toBe('openai');
   });
 });

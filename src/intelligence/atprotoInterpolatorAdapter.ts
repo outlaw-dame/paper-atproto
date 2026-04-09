@@ -42,6 +42,7 @@ export function emptyInterpolatorState(rootUri: string): InterpolatorState {
     repetitionLevel: 0,
     heatLevel: 0,
     sourceSupportPresent: false,
+    perspectiveGaps: [],
     replyScores: {},
     entityLandscape: [],
     topContributors: [],
@@ -78,7 +79,13 @@ export function runInterpolatorPipeline(input: InterpolatorInput): InterpolatorS
       ...summaryPatch,
       replyScores: { ...existingState.replyScores, ...newScores },
     };
-    const changeDecision = detectMeaningfulChange(rootUri, candidateState, newRepliesCount);
+    const changeDecision = detectMeaningfulChange(
+      rootUri,
+      existingState,
+      candidateState,
+      newScores,
+      newRepliesCount,
+    );
     const trigger = detectTrigger(existingState, triggerScores, newRepliesCount);
 
     // The change detector rate-limits routine refreshes, but a strong trigger

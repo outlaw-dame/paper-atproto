@@ -43,6 +43,46 @@ export interface HostedThreadComposerMeta {
   audience?: string;
 }
 
+export interface ComposerEpistemicSummary {
+  disagreementType: 'factual' | 'interpretive' | 'value-based';
+  missingContextHints: string[];
+  confidenceWarnings: string[];
+}
+
+export interface ComposerPremiumContextSummary {
+  deepSummary?: string;
+  groundedContext?: string;
+  perspectiveGaps: string[];
+  followUpQuestions: string[];
+  confidence: number;
+}
+
+export interface ComposerMediaContextSummary {
+  summary?: string;
+  primaryKind?: 'screenshot' | 'chart' | 'document' | 'photo' | 'meme' | 'unknown';
+  cautionFlags: string[];
+  confidence: number;
+}
+
+export interface ComposerSummaries {
+  directParentSummary?: string;
+  threadSummary?: string;
+  replyContextSummary?: string;
+  conversationHeatSummary?: string;
+  epistemicSummary?: ComposerEpistemicSummary;
+  premiumContext?: ComposerPremiumContextSummary;
+  mediaContext?: ComposerMediaContextSummary;
+}
+
+export interface ComposerThreadStateSummary {
+  dominantTone?: string;
+  conversationPhase?: string;
+  heatLevel?: number;
+  repetitionLevel?: number;
+  sourceSupportPresent?: boolean;
+  factualSignalPresent?: boolean;
+}
+
 export interface ComposerContext {
   mode: ComposerMode;
   draftText: string;
@@ -50,15 +90,8 @@ export interface ComposerContext {
   threadContext?: ComposerThreadContext;
   replyContext?: ComposerReplyContext;
   hostedThread?: HostedThreadComposerMeta;
-  summaries?: {
-    premiumContext?: {
-      deepSummary?: string;
-      groundedContext?: string;
-      perspectiveGaps: string[];
-      followUpQuestions: string[];
-      confidence: number;
-    };
-  };
+  summaries?: ComposerSummaries;
+  threadState?: ComposerThreadStateSummary;
 }
 
 export interface ComposerGuidanceUi {

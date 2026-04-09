@@ -6,6 +6,7 @@ const envMock = vi.hoisted(() => ({
   GEMINI_API_KEY: 'test-key',
   GEMINI_INTERPOLATOR_ENHANCER_ENABLED: true,
   GEMINI_INTERPOLATOR_ENHANCER_MODEL: 'gemini-3-flash-preview',
+  GEMINI_INTERPOLATOR_ENHANCER_FALLBACK_MODELS: 'gemini-2.5-flash',
   LLM_TIMEOUT_MS: 250,
 }));
 
@@ -19,12 +20,40 @@ vi.mock('../../server/src/lib/googleGenAi.js', () => ({
       generateContent: mockGenerateContent,
     },
   }),
-  resolveGeminiModel: () => 'gemini-enhancer-test',
-  isGemini3Model: () => true,
+  resolveGeminiModel: (_lane: string, override?: string | null) => override ?? 'gemini-3-flash-preview',
+  resolveGeminiModelFallbackChain: (_lane: string, override?: string | null) => [override ?? 'gemini-3-flash-preview', 'gemini-2.5-flash'],
+  isGemini3Model: (model?: string | null) => String(model ?? '').startsWith('gemini-3'),
   geminiThinkingConfig: () => ({ thinkingConfig: { thinkingLevel: 'minimal' } }),
+  isGeminiModelFallbackEligibleError: (error: unknown) => {
+    const status = (error as { status?: number })?.status;
+    return typeof status === 'number' && [400, 401, 403, 404, 408, 425, 429, 500, 502, 503, 504].includes(status);
+  },
+  withGeminiModelFallback: async <T,>(
+    models: string[],
+    runner: (model: string) => Promise<T>,
+    shouldFallback: (error: unknown, context: { model: string; attempt: number; nextModel: string | null; attemptedModels: string[] }) => boolean,
+  ) => {
+    const attemptedModels: string[] = [];
+    for (let attempt = 0; attempt < models.length; attempt += 1) {
+      const model = models[attempt]!;
+      attemptedModels.push(model);
+      try {
+        return { model, value: await runner(model) };
+      } catch (error) {
+        const nextModel = models[attempt + 1] ?? null;
+        if (!nextModel || !shouldFallback(error, { model, attempt, nextModel, attemptedModels: [...attemptedModels] })) {
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            geminiAttemptedModels: [...attemptedModels],
+            geminiFallbackExhausted: nextModel === null,
+          });
+        }
+      }
+    }
+    throw new Error('Gemini model fallback chain exhausted');
+  },
 }));
 
-import { reviewInterpolatorWriter } from '../../server/src/services/geminiInterpolatorEnhancer.js';
+import { reviewWithGeminiInterpolatorEnhancer } from '../../server/src/services/geminiInterpolatorEnhancer.js';
 
 describe('geminiInterpolatorEnhancer', () => {
   beforeEach(() => {
@@ -40,7 +69,7 @@ describe('geminiInterpolatorEnhancer', () => {
       }),
     });
 
-    const result = await reviewInterpolatorWriter({
+    const result = await reviewWithGeminiInterpolatorEnhancer({
       request: {
         threadId: 'thread-1',
         summaryMode: 'descriptive_fallback',
@@ -110,8 +139,11 @@ describe('geminiInterpolatorEnhancer', () => {
     });
 
     expect(result).toEqual({
-      decision: 'accept',
-      issues: [],
+      model: 'gemini-3-flash-preview',
+      decision: {
+        decision: 'accept',
+        issues: [],
+      },
     });
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 
@@ -125,12 +157,12 @@ describe('geminiInterpolatorEnhancer', () => {
       };
     };
 
-    expect(request.model).toBe('gemini-enhancer-test');
+    expect(request.model).toBe('gemini-3-flash-preview');
     expect(request.config?.responseMimeType).toBe('application/json');
     expect(request.config?.httpOptions?.timeout).toBe(12000);
     expect(request.config?.httpOptions?.retryOptions?.attempts).toBe(3);
     expect(request.config?.thinkingConfig?.thinkingLevel).toBe('minimal');
-    expect(request.contents).toContain('You are the Gemini Interpolator QA and takeover layer for Glympse.');
+    expect(request.contents).toContain('You are the Glympse Interpolator QA and takeover layer.');
     expect(request.contents).toContain('AUDIT CHECKLIST');
     expect(request.contents).toContain('CANONICAL IMPLEMENTATION PATHS');
     expect(request.contents).toContain('server/src/services/qwenWriter.ts');
@@ -163,7 +195,7 @@ describe('geminiInterpolatorEnhancer', () => {
       }),
     });
 
-    const result = await reviewInterpolatorWriter({
+    const result = await reviewWithGeminiInterpolatorEnhancer({
       request: {
         threadId: 'thread-2',
         summaryMode: 'descriptive_fallback',
@@ -189,14 +221,17 @@ describe('geminiInterpolatorEnhancer', () => {
     });
 
     expect(result).toEqual({
-      decision: 'replace',
-      issues: ['base-writer-failed'],
-      response: {
-        collapsedSummary: '@author.test claims Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies add little beyond comparing it to earlier incidents.',
-        whatChanged: ['counterpoint: replies compare it to earlier incidents'],
-        contributorBlurbs: [],
-        abstained: false,
-        mode: 'descriptive_fallback',
+      model: 'gemini-3-flash-preview',
+      decision: {
+        decision: 'replace',
+        issues: ['base-writer-failed'],
+        response: {
+          collapsedSummary: '@author.test claims Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies add little beyond comparing it to earlier incidents.',
+          whatChanged: ['counterpoint: replies compare it to earlier incidents'],
+          contributorBlurbs: [],
+          abstained: false,
+          mode: 'descriptive_fallback',
+        },
       },
     });
 
@@ -213,7 +248,7 @@ describe('geminiInterpolatorEnhancer', () => {
       text: malformed,
     });
 
-    const result = await reviewInterpolatorWriter({
+    const result = await reviewWithGeminiInterpolatorEnhancer({
       request: {
         threadId: 'thread-3',
         summaryMode: 'descriptive_fallback',
@@ -245,14 +280,17 @@ describe('geminiInterpolatorEnhancer', () => {
     });
 
     expect(result).toEqual({
-      decision: 'replace',
-      issues: ['generic-reply-pattern'],
-      response: {
-        collapsedSummary: '@author.test says Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies mostly compare the claim to earlier incidents.',
-        whatChanged: ['counterpoint: replies compare it to earlier incidents'],
-        contributorBlurbs: [],
-        abstained: false,
-        mode: 'descriptive_fallback',
+      model: 'gemini-3-flash-preview',
+      decision: {
+        decision: 'replace',
+        issues: ['generic-reply-pattern'],
+        response: {
+          collapsedSummary: '@author.test says Claude found zero-days in OpenBSD, ffmpeg, Linux, and FreeBSD. Replies mostly compare the claim to earlier incidents.',
+          whatChanged: ['counterpoint: replies compare it to earlier incidents'],
+          contributorBlurbs: [],
+          abstained: false,
+          mode: 'descriptive_fallback',
+        },
       },
     });
   });
@@ -269,7 +307,7 @@ describe('geminiInterpolatorEnhancer', () => {
         }),
       });
 
-    const result = await reviewInterpolatorWriter({
+    const result = await reviewWithGeminiInterpolatorEnhancer({
       request: {
         threadId: 'thread-4',
         summaryMode: 'descriptive_fallback',
@@ -301,9 +339,65 @@ describe('geminiInterpolatorEnhancer', () => {
     });
 
     expect(result).toEqual({
-      decision: 'accept',
-      issues: [],
+      model: 'gemini-3-flash-preview',
+      decision: {
+        decision: 'accept',
+        issues: [],
+      },
     });
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to Gemini 2.5 before failing the enhancer', async () => {
+    mockGenerateContent
+      .mockRejectedValueOnce(Object.assign(new Error('model unavailable'), { status: 404, code: 'model_not_found' }))
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: 'accept',
+          issues: [],
+        }),
+      });
+
+    const result = await reviewWithGeminiInterpolatorEnhancer({
+      request: {
+        threadId: 'thread-5',
+        summaryMode: 'descriptive_fallback',
+        confidence: {
+          surfaceConfidence: 0.5,
+          entityConfidence: 0.6,
+          interpretiveConfidence: 0.35,
+        },
+        visibleReplyCount: 4,
+        rootPost: {
+          uri: 'at://did:plc:root/app.bsky.feed.post/root',
+          handle: 'author.test',
+          text: "New Claude found zero-day's in OpenBSD, ffmpeg, Linux and FreeBSD.",
+          createdAt: new Date().toISOString(),
+        },
+        selectedComments: [],
+        topContributors: [],
+        safeEntities: [],
+        factualHighlights: [],
+        whatChangedSignals: [],
+      },
+      candidate: {
+        collapsedSummary: 'Visible replies mostly compare it to earlier incidents.',
+        whatChanged: [],
+        contributorBlurbs: [],
+        abstained: false,
+        mode: 'descriptive_fallback',
+      },
+    });
+
+    expect(result).toEqual({
+      model: 'gemini-2.5-flash',
+      decision: {
+        decision: 'accept',
+        issues: [],
+      },
+    });
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateContent.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });
+    expect(mockGenerateContent.mock.calls[1]?.[0]).toMatchObject({ model: 'gemini-2.5-flash' });
   });
 });
