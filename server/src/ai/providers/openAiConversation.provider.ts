@@ -3,10 +3,16 @@ import { env } from '../../config/env.js';
 import { createOpenAIClient, resolveOpenAiModel } from '../../lib/openAi.js';
 import { withRetry } from '../../lib/retry.js';
 import {
+  recordPremiumProviderModelAttempt,
+  recordPremiumProviderModelFailure,
+  recordPremiumProviderModelSuccess,
+} from '../../llm/premiumDiagnostics.js';
+import {
   buildUserPrompt,
   deepInterpolatorOutputSchema,
-  extractJsonObject,
-  sanitizeText,
+  parseDeepInterpolatorOutputJson,
+  DEEP_INTERPOLATOR_EMPTY_OUTPUT_CODE,
+  DEEP_INTERPOLATOR_INVALID_OUTPUT_CODE,
   SYSTEM_PROMPT,
   type DeepInterpolatorOutput,
   type DeepInterpolatorResult,
@@ -35,22 +41,21 @@ function extractStructuredResponse(
   if (response.output_parsed) {
     return response.output_parsed;
   }
-
-  const outputText = sanitizeText(response.output_text ?? '');
-  if (!outputText) {
-    throw Object.assign(new Error('OpenAI premium AI returned empty structured output'), {
-      code: OPENAI_EMPTY_OUTPUT_CODE,
-      status: 502,
-    });
-  }
-
   try {
-    return deepInterpolatorOutputSchema.parse(JSON.parse(extractJsonObject(outputText)));
-  } catch {
-    throw Object.assign(new Error('OpenAI premium AI returned invalid structured output'), {
-      code: OPENAI_INVALID_OUTPUT_CODE,
-      status: 502,
-    });
+    return parseDeepInterpolatorOutputJson(response.output_text ?? '');
+  } catch (error) {
+    throw Object.assign(
+      error instanceof Error ? error : new Error(String(error)),
+      {
+        message: (error as { code?: string })?.code === DEEP_INTERPOLATOR_EMPTY_OUTPUT_CODE
+          ? 'OpenAI premium AI returned empty structured output'
+          : 'OpenAI premium AI returned invalid structured output',
+        code: (error as { code?: string })?.code === DEEP_INTERPOLATOR_EMPTY_OUTPUT_CODE
+          ? OPENAI_EMPTY_OUTPUT_CODE
+          : OPENAI_INVALID_OUTPUT_CODE,
+        status: (error as { status?: number })?.status ?? 502,
+      },
+    );
   }
 }
 
@@ -70,44 +75,53 @@ export class OpenAIConversationProvider {
     }
 
     const prompt = buildUserPrompt(request);
-
-    const parsed = await withRetry(
-      async () => {
-        const response = await withTimeout(
-          this.client!.responses.parse({
-            model: this.model,
-            instructions: SYSTEM_PROMPT,
-            input: prompt,
-            max_output_tokens: 700,
-            store: false,
-            text: {
-              format: OPENAI_DEEP_INTERPOLATOR_FORMAT,
-              verbosity: 'low',
-            },
-          }),
-          env.PREMIUM_AI_TIMEOUT_MS,
-        );
-        return extractStructuredResponse(response);
-      },
-      {
-        attempts: env.PREMIUM_AI_RETRY_ATTEMPTS,
-        baseDelayMs: 350,
-        maxDelayMs: 3000,
-        jitter: true,
-        shouldRetry: (error) => {
-          const status = (error as { status?: number })?.status;
-          const code = (error as { code?: string })?.code;
-          if (code === OPENAI_EMPTY_OUTPUT_CODE || code === OPENAI_INVALID_OUTPUT_CODE) {
-            return false;
-          }
-          if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') {
-            return false;
-          }
-          return !status || [408, 425, 429, 500, 502, 503, 504].includes(status);
+    recordPremiumProviderModelAttempt({ provider: 'openai', model: this.model });
+    let parsed: DeepInterpolatorOutput;
+    try {
+      parsed = await withRetry(
+        async () => {
+          const response = await withTimeout(
+            this.client!.responses.parse({
+              model: this.model,
+              instructions: SYSTEM_PROMPT,
+              input: prompt,
+              max_output_tokens: 700,
+              temperature: 0.35,
+              top_p: 0.92,
+              store: false,
+              text: {
+                format: OPENAI_DEEP_INTERPOLATOR_FORMAT,
+                verbosity: 'low',
+              },
+            }),
+            env.PREMIUM_AI_TIMEOUT_MS,
+          );
+          return extractStructuredResponse(response);
         },
-      },
-    );
+        {
+          attempts: env.PREMIUM_AI_RETRY_ATTEMPTS,
+          baseDelayMs: 350,
+          maxDelayMs: 3000,
+          jitter: true,
+          shouldRetry: (error) => {
+            const status = (error as { status?: number })?.status;
+            const code = (error as { code?: string })?.code;
+            if (code === OPENAI_EMPTY_OUTPUT_CODE || code === OPENAI_INVALID_OUTPUT_CODE) {
+              return false;
+            }
+            if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') {
+              return false;
+            }
+            return !status || [408, 425, 429, 500, 502, 503, 504].includes(status);
+          },
+        },
+      );
+    } catch (error) {
+      recordPremiumProviderModelFailure({ provider: 'openai', model: this.model });
+      throw error;
+    }
+    recordPremiumProviderModelSuccess({ provider: 'openai', model: this.model });
 
-    return validateDeepInterpolatorResult(parsed, 'openai');
+    return validateDeepInterpolatorResult(parsed, 'openai', request);
   }
 }

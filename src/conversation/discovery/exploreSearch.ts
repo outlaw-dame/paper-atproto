@@ -66,6 +66,35 @@ export interface ExploreSearchState extends ExploreSearchPage {
   loadMoreActors: () => void;
 }
 
+// Maps intent classification to hybrid search weight overrides.
+// The defaults (RRF 0.45 / lexical 0.30 / semantic 0.25) are calibrated for
+// general queries. Intent-specific tuning shifts the balance toward the signal
+// most likely to surface relevant results for that query shape.
+function intentToSearchWeights(kind: DiscoveryIntentKind): {
+  rrfWeight?: number;
+  lexicalWeight?: number;
+  semanticWeight?: number;
+} {
+  switch (kind) {
+    // Hashtag queries need exact token matching — boost lexical, reduce semantic.
+    case 'hashtag':
+      return { lexicalWeight: 0.50, semanticWeight: 0.12 };
+    // People queries surface better via semantic profile similarity.
+    case 'people':
+      return { semanticWeight: 0.45, lexicalWeight: 0.18 };
+    // Domain/URL queries benefit from lexical substring matching.
+    case 'source':
+      return { lexicalWeight: 0.45, semanticWeight: 0.18 };
+    // Feed/podcast queries want semantic topic proximity.
+    case 'feed':
+      return { semanticWeight: 0.40, lexicalWeight: 0.22 };
+    // Visual intent: media boost already handles this via queryHasVisualIntent.
+    // General: use defaults.
+    default:
+      return {};
+  }
+}
+
 function toIntentLabel(kind: DiscoveryIntentKind): string {
   switch (kind) {
     case 'hashtag':
@@ -458,6 +487,7 @@ export function useExploreSearchResults(params: {
         : Promise.resolve(null),
       hybridSearch.search(normalizedQuery, 20, {
         queryHasVisualIntent: plan.intent.queryHasVisualIntent,
+        ...intentToSearchWeights(plan.intent.kind),
       }).catch(() => null),
       retryWithBackoff(() => atpCall(() => agent.searchActors({
         q: normalizedQuery,
@@ -469,6 +499,7 @@ export function useExploreSearchResults(params: {
       }), { operationName: 'semanticPeople' }).catch(() => []),
       hybridSearch.searchFeedItems(normalizedQuery, plan.feedLimit, {
         queryHasVisualIntent: plan.intent.queryHasVisualIntent,
+        ...intentToSearchWeights(plan.intent.kind),
       }).catch(() => null),
       retryWithBackoff(() => searchPodcastIndex(normalizedQuery, plan.podcastLimit), {
         operationName: 'searchPodcastIndex',

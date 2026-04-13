@@ -128,6 +128,8 @@ interface UiState {
   closePeopleFeed: () => void;
   setUnreadCount: (n: number) => void;
   openProfile: (did: string) => void;
+  exploreAiInsightEnabled: boolean;
+  toggleExploreAiInsight: () => void;
 }
 
 export function selectUiResumeState(state: UiState): UiResumeState {
@@ -160,6 +162,7 @@ export const useUiStore = create<UiState>()(
       peopleFeedQuery: null,
       unreadCount: 0,
       profileDid: null,
+      exploreAiInsightEnabled: false,
 
       setTab: (id) => set({ prevTab: get().activeTab, activeTab: id }),
       setHomeFeedMode: (mode) => set({ homeFeedMode: mode }),
@@ -200,6 +203,7 @@ export const useUiStore = create<UiState>()(
       closePeopleFeed: () => set({ peopleFeedQuery: null }),
       setUnreadCount: (n) => set({ unreadCount: n }),
       openProfile: (did) => set((s) => ({ profileDid: did, prevTab: s.activeTab, activeTab: 'profile' as TabId })),
+      toggleExploreAiInsight: () => set((s) => ({ exploreAiInsightEnabled: !s.exploreAiInsightEnabled })),
 
     }),
     {

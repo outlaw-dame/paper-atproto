@@ -62,6 +62,8 @@ export const ThreadStateSchema = z.object({
     confidence: z.number(),
     extractedText: z.string().max(500).optional(),
     cautionFlags: z.array(z.string()).optional(),
+    analysisStatus: z.enum(['complete', 'degraded']).optional(),
+    moderationStatus: z.enum(['authoritative', 'unavailable']).optional(),
   })).max(3).optional(),
   threadSignalSummary: z.object({
     newAnglesCount: z.number().int().min(0).max(50),
@@ -115,6 +117,8 @@ export const MediaResponseSchema = z.object({
   candidateEntities: z.array(z.string().max(80)).max(5),
   confidence: z.number().min(0).max(1),
   cautionFlags: z.array(z.string().max(40)).max(8),
+  analysisStatus: z.enum(['complete', 'degraded']).optional(),
+  moderationStatus: z.enum(['authoritative', 'unavailable']).optional(),
   moderation: z.object({
     action: MediaModerationActionSchema,
     categories: z.array(MediaModerationCategorySchema).max(4),
@@ -141,6 +145,8 @@ export const ExploreSynopsisSchema = z.object({
     confidence: z.number(),
     extractedText: z.string().max(500).optional(),
     cautionFlags: z.array(z.string()).optional(),
+    analysisStatus: z.enum(['complete', 'degraded']).optional(),
+    moderationStatus: z.enum(['authoritative', 'unavailable']).optional(),
   })).max(3).optional(),
   confidence: ConfidenceSchema,
 });
@@ -209,6 +215,8 @@ export const PremiumInterpolatorSchema = z.object({
     confidence: z.number(),
     extractedText: z.string().max(500).optional(),
     cautionFlags: z.array(z.string()).optional(),
+    analysisStatus: z.enum(['complete', 'degraded']).optional(),
+    moderationStatus: z.enum(['authoritative', 'unavailable']).optional(),
   })).max(3).optional(),
   threadSignalSummary: z.object({
     newAnglesCount: z.number().int().min(0).max(50),
@@ -227,6 +235,30 @@ export const PremiumInterpolatorSchema = z.object({
     supports: z.array(z.string().max(160)).max(6),
     limits: z.array(z.string().max(160)).max(6),
   }),
+});
+
+export const ExploreInsightSchema = z.object({
+  query: z.string().max(160),
+  intentKind: z.enum(['general', 'hashtag', 'people', 'source', 'feed', 'visual']),
+  intentConfidence: z.number().min(0).max(1),
+  storyId: z.string().max(300),
+  titleHint: z.string().max(200).optional(),
+  candidatePosts: z.array(z.object({
+    uri: z.string(),
+    handle: z.string().max(100),
+    text: z.string().max(300),
+    impactScore: z.number(),
+  })).max(10),
+  safeEntities: z.array(WriterEntitySchema).max(8),
+  factualHighlights: z.array(z.string().max(200)).max(5),
+  confidence: ConfidenceSchema,
+});
+
+export const ExploreInsightResponseSchema = z.object({
+  insight: z.string(),
+  shortInsight: z.string().optional(),
+  provider: z.enum(['gemini', 'openai']),
+  abstained: z.boolean(),
 });
 
 export const PremiumDeepInterpolatorResponseSchema = z.object({

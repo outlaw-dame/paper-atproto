@@ -22,6 +22,14 @@ import {
   logSafetyFlag,
 } from '../services/safetyFilters.js';
 import {
+  recordPremiumRouteFailure,
+  recordPremiumRouteInvocation,
+  recordPremiumRouteSafetyFilter,
+  recordPremiumRouteSuccess,
+} from '../llm/premiumDiagnostics.js';
+import {
+  ExploreInsightResponseSchema,
+  ExploreInsightSchema,
   PremiumDeepInterpolatorResponseSchema,
   PremiumInterpolatorSchema,
 } from '../llm/schemas.js';
@@ -144,9 +152,11 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
 
   try {
     const { visibleReplyCount, ...rest } = prepared.data;
+    recordPremiumRouteInvocation();
     const request: PremiumInterpolatorRequest = {
       ...rest,
       actorDid,
+      requestId,
       ...(typeof visibleReplyCount === 'number'
         ? { visibleReplyCount }
         : {}),
@@ -174,11 +184,19 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
       filtered: '',
     };
     logSafetyFlag('[premium-ai/interpolator/deep]', safety);
+    recordPremiumRouteSafetyFilter({
+      mutated: JSON.stringify(filtered) !== JSON.stringify(result),
+      blocked: !safety.passed,
+    });
 
     if (!safety.passed || typeof filtered.summary !== 'string' || !filtered.summary.trim()) {
-      throw Object.assign(new Error('Premium AI output failed safety validation'), { status: 503 });
+      throw Object.assign(new Error('Premium AI output failed safety validation'), {
+        status: 503,
+        code: 'premium_ai_safety_blocked',
+      });
     }
 
+    recordPremiumRouteSuccess();
     return c.json({
       ...filtered,
       safety: {
@@ -198,7 +216,178 @@ premiumAiRouter.post('/interpolator/deep', async (c) => {
     if ((safeStatus === 429 || safeStatus === 503 || safeStatus === 504) && typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
       c.header('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
     }
+    recordPremiumRouteFailure({
+      error,
+      requestId,
+    });
     console.error('[premium-ai/interpolator/deep]', message);
+    return c.json(errorPayloadForPremiumRoute(safeStatus), safeStatus);
+  }
+});
+
+// ─── POST /explore/insight ────────────────────────────────────────────────
+// Premium AI synthesis of explore search results. Frames query + top results
+// as a structured context and routes through the same Gemini/OpenAI pipeline
+// used by the deep interpolator. Requires explore_insight entitlement.
+
+premiumAiRouter.post('/explore/insight', async (c) => {
+  const actorDid = actorDidFromRequest(c, true);
+  const requestId = c.req.header('X-Request-Id') || crypto.randomUUID();
+  const preferredProvider = requestedProviderFromRequest(c);
+  assertTrustedBrowserOrigin(c, 'Premium AI explore insight');
+  await ensurePremiumAiProviderReady(preferredProvider);
+  const entitlements = resolvePremiumAiEntitlements(actorDid, preferredProvider);
+
+  if (!entitlements.capabilities.includes('explore_insight')) {
+    return c.json({ error: 'Premium explore insight is not available for this user' }, 403);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  let prepared: { data: z.infer<typeof ExploreInsightSchema> };
+  try {
+    prepared = prepareLlmInput(ExploreInsightSchema, body, {
+      task: 'premiumDeep',
+      requestId,
+    });
+    enforceNoToolsAuthorized({ task: 'premiumDeep', requestId });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
+  }
+
+  const {
+    query,
+    intentKind,
+    intentConfidence,
+    storyId,
+    titleHint,
+    candidatePosts,
+    safeEntities,
+    factualHighlights,
+    confidence,
+  } = prepared.data;
+
+  // Derive summary mode from confidence — same logic as other explore routes.
+  const summaryMode: 'normal' | 'descriptive_fallback' | 'minimal_fallback' =
+    confidence.interpretiveConfidence < 0.45
+      ? (confidence.surfaceConfidence >= 0.60 ? 'descriptive_fallback' : 'minimal_fallback')
+      : 'normal';
+
+  // Frame the explore context as a PremiumInterpolatorRequest:
+  // - Root post = the search query as a discovery anchor
+  // - Selected comments = top search results
+  // - interpretiveBrief captures intent and factual signals
+  const topPost = candidatePosts[0];
+  const request: PremiumInterpolatorRequest = {
+    actorDid,
+    requestId,
+    threadId: storyId,
+    summaryMode,
+    confidence,
+    rootPost: {
+      uri: topPost?.uri ?? storyId,
+      handle: topPost?.handle ?? 'explore',
+      text: titleHint ?? `Explore: ${query}`,
+      createdAt: new Date().toISOString(),
+    },
+    selectedComments: candidatePosts.slice(1).map((p) => ({
+      uri: p.uri,
+      handle: p.handle,
+      text: p.text,
+      impactScore: p.impactScore,
+    })),
+    topContributors: [],
+    safeEntities,
+    factualHighlights,
+    whatChangedSignals: [],
+    interpretiveBrief: {
+      summaryMode,
+      baseSummary: `Explore search: "${query}" — ${intentKind} intent (confidence ${intentConfidence.toFixed(2)})`,
+      dominantTone: 'informational',
+      conversationPhase: 'discovery',
+      supports: factualHighlights.slice(0, 3),
+      limits: [],
+    },
+  };
+
+  try {
+    recordPremiumRouteInvocation();
+    const result = await writePremiumDeepInterpolator(
+      request,
+      preferredProvider ? { preferredProvider } : undefined,
+    );
+    const insight = {
+      insight: result.summary,
+      ...(result.groundedContext ? { shortInsight: result.groundedContext } : {}),
+      provider: result.provider,
+      abstained: !result.summary.trim(),
+    };
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      ExploreInsightResponseSchema,
+      insight,
+      { task: 'premiumDeep', requestId },
+      {
+        filter: (value) => filterPremiumDeepInterpolatorResponse({
+          summary: (value as any).insight ?? '',
+          groundedContext: (value as any).shortInsight,
+          perspectiveGaps: [],
+          followUpQuestions: [],
+          confidence: 0.5,
+          provider: (value as any).provider ?? 'gemini',
+          updatedAt: new Date().toISOString(),
+        }) as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[premium-ai/explore/insight]', safety);
+    recordPremiumRouteSafetyFilter({
+      mutated: JSON.stringify(filtered) !== JSON.stringify(insight),
+      blocked: !safety.passed,
+    });
+
+    if (!safety.passed || typeof filtered.insight !== 'string' || !filtered.insight.trim()) {
+      throw Object.assign(new Error('Premium AI explore insight failed safety validation'), {
+        status: 503,
+        code: 'premium_ai_safety_blocked',
+      });
+    }
+
+    recordPremiumRouteSuccess();
+    return c.json({
+      ...filtered,
+      safety: {
+        flagged: safety.flagged,
+        severity: safety.severity,
+        categories: safety.categories,
+      },
+    });
+  } catch (error: unknown) {
+    const status = (error as { status?: number })?.status ?? 503;
+    const message = error instanceof Error ? error.message : 'Premium AI explore insight failed';
+    const safeStatus: 400 | 403 | 408 | 425 | 429 | 500 | 502 | 503 | 504 =
+      [400, 403, 408, 425, 429, 500, 502, 503, 504].includes(status)
+        ? (status as 400 | 403 | 408 | 425 | 429 | 500 | 502 | 503 | 504)
+        : 503;
+    const retryAfterMs = extractRetryAfterMs(error);
+    if ((safeStatus === 429 || safeStatus === 503 || safeStatus === 504) && typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
+      c.header('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+    }
+    recordPremiumRouteFailure({ error, requestId });
+    console.error('[premium-ai/explore/insight]', message);
     return c.json(errorPayloadForPremiumRoute(safeStatus), safeStatus);
   }
 });

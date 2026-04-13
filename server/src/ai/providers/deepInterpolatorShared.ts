@@ -5,6 +5,7 @@ export type SummaryMode = 'normal' | 'descriptive_fallback' | 'minimal_fallback'
 export interface PremiumInterpolatorRequest {
   actorDid: string;
   threadId: string;
+  requestId?: string | undefined;
   summaryMode: SummaryMode;
   confidence: {
     surfaceConfidence: number;
@@ -54,6 +55,8 @@ export interface PremiumInterpolatorRequest {
     confidence: number;
     extractedText?: string | undefined;
     cautionFlags?: string[] | undefined;
+    analysisStatus?: 'complete' | 'degraded' | undefined;
+    moderationStatus?: 'authoritative' | 'unavailable' | undefined;
   }> | undefined;
   threadSignalSummary?: {
     newAnglesCount: number;
@@ -120,6 +123,42 @@ export const DEEP_INTERPOLATOR_RESPONSE_JSON_SCHEMA = {
   },
 } as const;
 
+export const DEEP_INTERPOLATOR_EMPTY_OUTPUT_CODE = 'DEEP_INTERPOLATOR_EMPTY_STRUCTURED_OUTPUT';
+export const DEEP_INTERPOLATOR_INVALID_OUTPUT_CODE = 'DEEP_INTERPOLATOR_INVALID_STRUCTURED_OUTPUT';
+
+const DEEP_INTERPOLATOR_NON_ADDITIVE_OUTPUT_CODE = 'deep_interpolator_non_additive_output';
+const DEEP_INTERPOLATOR_LOW_SIGNAL_OUTPUT_CODE = 'deep_interpolator_low_signal_output';
+
+const COMPARISON_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'that', 'this', 'these', 'those',
+  'with', 'from', 'into', 'about', 'after', 'before', 'while', 'because',
+  'for', 'are', 'was', 'were', 'is', 'be', 'been', 'being', 'it', 'its',
+  'they', 'them', 'their', 'there', 'here', 'then', 'than', 'just', 'still',
+  'more', 'most', 'some', 'such', 'very', 'only', 'over', 'under', 'into',
+  'what', 'when', 'where', 'which', 'who', 'whom', 'whose', 'does', 'did',
+  'have', 'has', 'had', 'will', 'would', 'could', 'should',
+]);
+
+const GENERIC_PERSPECTIVE_GAP_PATTERNS = [
+  /^more context(?: is needed)?\.?$/i,
+  /^missing context\.?$/i,
+  /^more information(?: is needed)?\.?$/i,
+  /^additional context(?: is needed)?\.?$/i,
+  /^broader context(?: is needed)?\.?$/i,
+  /^other perspectives(?: are needed)?\.?$/i,
+  /^more perspective(?:s)?(?: are needed)?\.?$/i,
+  /^the thread needs more context\.?$/i,
+];
+
+const GENERIC_FOLLOW_UP_QUESTION_PATTERNS = [
+  /^what changed\??$/i,
+  /^what is missing\??$/i,
+  /^is there more context\??$/i,
+  /^do we have more context\??$/i,
+  /^what else happened\??$/i,
+  /^who is right\??$/i,
+];
+
 export const SYSTEM_PROMPT = `You are the Glympse Deep Interpolator.
 
 You receive a structured conversation brief that was already computed by the app's canonical Conversation OS.
@@ -145,6 +184,10 @@ RULES
 - Use MEDIA FINDINGS and THREAD SIGNAL SUMMARY when they sharpen interpretation, but do not overread them.
 - Treat ENTITY THEMES and INTERPRETIVE EXPLANATION as framing guardrails, not facts to restate blindly.
 - For sparse skeptical threads, say what replies actually add or fail to add instead of defaulting to vague phrases like "visible replies mostly."
+- Do not simply paraphrase BASE SUMMARY. Add a materially sharper synthesis, or keep the summary narrower and put the remaining uncertainty into groundedContext, perspectiveGaps, or followUpQuestions.
+- HIGH-IMPACT REPLY SIGNALS and FACTUAL SIGNALS are reference indicators, not quotes. Synthesize what each reply contributes analytically — describe what it adds or does (e.g., "source-backed clarification on X", "a counterpoint citing Y") rather than restating its wording.
+- Never reproduce wording from HIGH-IMPACT REPLY SIGNALS, FACTUAL SIGNALS, or stanceExcerpt/point: fields verbatim or near-verbatim. These are inputs to your analysis, not material to quote back.
+- When a contributor's position matters, abstract it: name the role and what it achieves in the thread, not what was literally said.
 - End summary and groundedContext on complete sentences. Stay inside the limit rather than trailing off mid-thought.
 
 OUTPUT JSON ONLY
@@ -159,9 +202,12 @@ OUTPUT JSON ONLY
 FIELD RULES
 - summary: specific and additive relative to the base summary; max 420 chars
 - groundedContext: optional; max 260 chars; use null when not needed
-- perspectiveGaps: short, concrete, non-ideological; max 3
-- followUpQuestions: practical and thread-specific; max 3
-- confidence: number in [0,1]
+- perspectiveGaps: short, concrete, non-ideological; max 3 items, max 120 chars each
+- followUpQuestions: practical and thread-specific; max 3 items, max 120 chars each
+- confidence: rate your confidence in the synthesis itself (not the thread's factual accuracy)
+  - 0.8–1.0: sharp, specific, well-grounded synthesis with strong signal
+  - 0.5–0.7: hedged or partial synthesis; multiple interpretations possible
+  - 0.0–0.4: thread too sparse or uncertain to synthesize responsibly
 - Always include every JSON key exactly once. Use [] when there are no perspective gaps or follow-up questions.
 - If a URL appears in the input, do not quote its full path in the output.
 `;
@@ -210,6 +256,94 @@ function clamp01(value: number): number {
   return value;
 }
 
+function createValidationError(message: string, code: string): Error & { status: number; code: string } {
+  return Object.assign(new Error(message), {
+    status: 502,
+    code,
+  });
+}
+
+function tokenizeComparableText(value: string): string[] {
+  return sanitizeText(value)
+    .toLowerCase()
+    .split(/[^a-z0-9@#]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !COMPARISON_STOP_WORDS.has(token));
+}
+
+function computeTextSimilarity(left: string, right: string): number {
+  const leftTokens = new Set(tokenizeComparableText(left));
+  const rightTokens = new Set(tokenizeComparableText(right));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      intersection += 1;
+    }
+  }
+
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function isGenericGap(value: string): boolean {
+  return GENERIC_PERSPECTIVE_GAP_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+
+function isGenericFollowUpQuestion(value: string): boolean {
+  return GENERIC_FOLLOW_UP_QUESTION_PATTERNS.some((pattern) => pattern.test(value.trim()));
+}
+
+function sanitizeThreadAwareList(
+  value: unknown,
+  maxItems: number,
+  maxLen: number,
+  mode: 'gap' | 'question',
+): string[] {
+  const items = sanitizeList(value, maxItems, maxLen);
+  return items.filter((item) => {
+    return mode === 'gap'
+      ? !isGenericGap(item)
+      : !isGenericFollowUpQuestion(item);
+  });
+}
+
+function hasMeaningfulPremiumInput(request?: PremiumInterpolatorRequest): boolean {
+  if (!request) return false;
+
+  return (
+    request.whatChangedSignals.length > 0
+    || request.factualHighlights.length > 0
+    || request.topContributors.length > 0
+    || request.selectedComments.length > 0
+    || (request.mediaFindings?.length ?? 0) > 0
+    || (request.threadSignalSummary?.newAnglesCount ?? 0) > 0
+    || (request.threadSignalSummary?.clarificationsCount ?? 0) > 0
+    || request.interpretiveBrief.supports.length > 0
+    || request.interpretiveBrief.limits.length > 0
+  );
+}
+
+function isNonAdditivePremiumSummary(
+  summary: string,
+  groundedContext: string,
+  perspectiveGaps: string[],
+  followUpQuestions: string[],
+  request?: PremiumInterpolatorRequest,
+): boolean {
+  const baseSummary = request?.interpretiveBrief.baseSummary;
+  if (!baseSummary || !hasMeaningfulPremiumInput(request)) return false;
+
+  const similarity = computeTextSimilarity(summary, baseSummary);
+  const hasAdditiveCompanions =
+    groundedContext.length > 0
+    || perspectiveGaps.length > 0
+    || followUpQuestions.length > 0;
+
+  return similarity >= 0.60 && !hasAdditiveCompanions;
+}
+
 function sanitizeList(value: unknown, maxItems: number, maxLen: number): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -230,6 +364,71 @@ export function extractJsonObject(raw: string): string {
     return trimmed.slice(start, end + 1);
   }
   return trimmed;
+}
+
+function normalizeLikelyJson(raw: string): string {
+  return raw
+    .replace(/^\uFEFF/, '')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, '\'')
+    .replace(/,\s*([}\]])/g, '$1')
+    .trim();
+}
+
+function looksLikeTruncatedJson(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    return !trimmed.endsWith('}');
+  }
+  if (trimmed.startsWith('[')) {
+    return !trimmed.endsWith(']');
+  }
+  if (trimmed.startsWith('"')) {
+    return !trimmed.endsWith('"');
+  }
+  return false;
+}
+
+export function parseDeepInterpolatorOutputJson(raw: string): DeepInterpolatorOutput {
+  const outputText = sanitizeText(raw ?? '');
+  if (!outputText) {
+    throw Object.assign(new Error('Premium AI returned empty structured output'), {
+      code: DEEP_INTERPOLATOR_EMPTY_OUTPUT_CODE,
+      status: 502,
+      retryable: false,
+    });
+  }
+
+  const extracted = extractJsonObject(outputText);
+  const candidates = [
+    outputText,
+    normalizeLikelyJson(outputText),
+    extracted,
+    normalizeLikelyJson(extracted),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (typeof parsed === 'string') {
+        return deepInterpolatorOutputSchema.parse(
+          JSON.parse(normalizeLikelyJson(extractJsonObject(parsed))),
+        );
+      }
+      return deepInterpolatorOutputSchema.parse(parsed);
+    } catch {
+      // Try the next repair candidate.
+    }
+  }
+
+  const normalized = normalizeLikelyJson(outputText);
+  throw Object.assign(new Error('Premium AI returned invalid structured output'), {
+    code: DEEP_INTERPOLATOR_INVALID_OUTPUT_CODE,
+    status: 502,
+    preview: normalized.slice(0, 220),
+    responseChars: outputText.length,
+    retryable: looksLikeTruncatedJson(normalized),
+  });
 }
 
 export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -261,9 +460,9 @@ export function buildUserPrompt(request: PremiumInterpolatorRequest): string {
 
   lines.push(`THREAD ID: ${request.threadId}`);
   lines.push(`MODE: ${request.summaryMode}`);
-  lines.push(`SURFACE CONFIDENCE: ${request.confidence.surfaceConfidence.toFixed(2)}`);
-  lines.push(`ENTITY CONFIDENCE: ${request.confidence.entityConfidence.toFixed(2)}`);
-  lines.push(`INTERPRETIVE CONFIDENCE: ${request.confidence.interpretiveConfidence.toFixed(2)}`);
+  lines.push(`SURFACE CONFIDENCE: ${clamp01(request.confidence.surfaceConfidence).toFixed(2)}`);
+  lines.push(`ENTITY CONFIDENCE: ${clamp01(request.confidence.entityConfidence).toFixed(2)}`);
+  lines.push(`INTERPRETIVE CONFIDENCE: ${clamp01(request.confidence.interpretiveConfidence).toFixed(2)}`);
   if (typeof request.visibleReplyCount === 'number') {
     lines.push(`VISIBLE REPLIES: ${request.visibleReplyCount}`);
   }
@@ -309,10 +508,11 @@ export function buildUserPrompt(request: PremiumInterpolatorRequest): string {
 
   if (request.selectedComments.length > 0) {
     lines.push('');
-    lines.push('HIGH-IMPACT REPLIES:');
+    lines.push('HIGH-IMPACT REPLY SIGNALS (reference only — synthesize the contribution, do not quote):');
     request.selectedComments.forEach((comment, index) => {
+      const hint = truncateAtWordBoundary(comment.text, 90);
       lines.push(
-        `${index + 1}. @${comment.handle} [impact:${comment.impactScore.toFixed(2)}${comment.role ? `, role:${comment.role}` : ''}]: ${comment.text}`,
+        `${index + 1}. @${comment.handle} [impact:${comment.impactScore.toFixed(2)}${comment.role ? `, role:${comment.role}` : ''}]: ${hint}`,
       );
     });
   }
@@ -342,12 +542,18 @@ export function buildUserPrompt(request: PremiumInterpolatorRequest): string {
       if (finding.cautionFlags?.length) {
         lines.push(`  cautions: ${finding.cautionFlags.join(', ')}`);
       }
+      if (finding.analysisStatus === 'degraded') {
+        lines.push('  analysis status: degraded; treat as a low-authority media hint');
+      }
+      if (finding.moderationStatus === 'unavailable') {
+        lines.push('  moderation status: unavailable');
+      }
     });
   }
 
   if (request.factualHighlights.length > 0) {
     lines.push('');
-    lines.push('FACTUAL HIGHLIGHTS:');
+    lines.push('FACTUAL SIGNALS (reference only — abstract the claim, do not reproduce the wording):');
     request.factualHighlights.forEach((item) => lines.push(`- ${item}`));
   }
 
@@ -395,6 +601,7 @@ export function buildUserPrompt(request: PremiumInterpolatorRequest): string {
 export function validateDeepInterpolatorResult(
   raw: unknown,
   provider: DeepInterpolatorResult['provider'],
+  request?: PremiumInterpolatorRequest,
 ): DeepInterpolatorResult {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('Deep interpolator returned non-object response');
@@ -408,15 +615,54 @@ export function validateDeepInterpolatorResult(
     throw new Error('Deep interpolator returned empty summary');
   }
 
-  const groundedContext = typeof value.groundedContext === 'string'
+  let groundedContext = typeof value.groundedContext === 'string'
     ? truncateNarrativeText(sanitizeText(value.groundedContext), 260)
     : '';
+  const perspectiveGaps = sanitizeThreadAwareList(value.perspectiveGaps, 3, 120, 'gap');
+  const followUpQuestions = sanitizeThreadAwareList(value.followUpQuestions, 3, 120, 'question');
+
+  if (groundedContext && computeTextSimilarity(summary, groundedContext) >= 0.82) {
+    groundedContext = '';
+  }
+
+  if (isNonAdditivePremiumSummary(summary, groundedContext, perspectiveGaps, followUpQuestions, request)) {
+    throw createValidationError(
+      'Deep interpolator returned a non-additive summary',
+      DEEP_INTERPOLATOR_NON_ADDITIVE_OUTPUT_CODE,
+    );
+  }
+
+  if (request?.selectedComments && request.selectedComments.length > 0) {
+    const maxSourceSimilarity = request.selectedComments.reduce((max, comment) => {
+      const sim = computeTextSimilarity(summary, comment.text);
+      return sim > max ? sim : max;
+    }, 0);
+    if (maxSourceSimilarity >= 0.65) {
+      throw createValidationError(
+        'Deep interpolator summary too similar to source reply text',
+        DEEP_INTERPOLATOR_NON_ADDITIVE_OUTPUT_CODE,
+      );
+    }
+  }
+
+  if (
+    hasMeaningfulPremiumInput(request)
+    && summary.length < 72
+    && groundedContext.length === 0
+    && perspectiveGaps.length === 0
+    && followUpQuestions.length === 0
+  ) {
+    throw createValidationError(
+      'Deep interpolator returned low-signal output',
+      DEEP_INTERPOLATOR_LOW_SIGNAL_OUTPUT_CODE,
+    );
+  }
 
   return {
     summary,
     ...(groundedContext ? { groundedContext } : {}),
-    perspectiveGaps: sanitizeList(value.perspectiveGaps, 3, 120),
-    followUpQuestions: sanitizeList(value.followUpQuestions, 3, 120),
+    perspectiveGaps,
+    followUpQuestions,
     confidence: clamp01(typeof value.confidence === 'number' ? value.confidence : 0),
     provider,
     updatedAt: new Date().toISOString(),

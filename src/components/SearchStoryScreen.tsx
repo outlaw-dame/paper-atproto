@@ -16,6 +16,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
 import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
+import { useExploreAiInsight } from '../conversation/discovery/exploreAiInsight';
 import { useAppearanceStore } from '../store/appearanceStore';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
@@ -146,15 +147,91 @@ function RichText({ text, color }: { text: string; color: string }) {
   );
 }
 
+// ─── AiInsightBlock ───────────────────────────────────────────────────────
+function AiInsightBlock({
+  insight,
+  shortInsight,
+  provider,
+  loading,
+}: {
+  insight: string | null;
+  shortInsight: string | null;
+  provider: string | null;
+  loading: boolean;
+}) {
+  if (!loading && !insight) return null;
+  return (
+    <div style={{
+      marginBottom: 14,
+      borderRadius: 14,
+      background: 'linear-gradient(135deg, rgba(91,124,255,0.13) 0%, rgba(124,233,255,0.09) 100%)',
+      border: '0.5px solid rgba(124,233,255,0.28)',
+      padding: '12px 14px',
+      position: 'relative',
+      overflow: 'hidden',
+    }}>
+      {/* Ambient glow */}
+      <div style={{
+        position: 'absolute', top: -16, right: -16,
+        width: 80, height: 80, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(124,233,255,0.14) 0%, transparent 70%)',
+        pointerEvents: 'none',
+      }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: loading ? 0 : 8 }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill={accent.cyan400} aria-hidden="true">
+          <path d="M12 2l1.8 7.2L21 7l-5.4 5.4L21 18l-7.2-1.8L12 24l-1.8-7.2L3 18l5.4-5.6L3 7l7.2 2.2L12 2z"/>
+        </svg>
+        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: accent.cyan400 }}>
+          AI Insight
+        </span>
+        {provider && !loading && (
+          <span style={{ fontSize: 9, color: disc.textTertiary, fontWeight: 600, marginLeft: 2 }}>
+            · {provider}
+          </span>
+        )}
+      </div>
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, paddingTop: 4 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={accent.cyan400} strokeWidth={2} strokeLinecap="round">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83">
+              <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>
+            </path>
+          </svg>
+          <span style={{ fontSize: 11, color: disc.textTertiary, fontWeight: 600 }}>Synthesising…</span>
+        </div>
+      ) : (
+        <>
+          <p style={{ fontSize: 12, lineHeight: '18px', color: disc.textPrimary, fontWeight: 500, margin: 0 }}>
+            {insight}
+          </p>
+          {shortInsight && (
+            <p style={{ marginTop: 6, fontSize: 11, lineHeight: '15px', color: disc.textSecondary, fontWeight: 600, fontStyle: 'italic', margin: '6px 0 0' }}>
+              {shortInsight}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── OverviewCard ─────────────────────────────────────────────────────────
 function OverviewCard({
   overview,
   resultCount,
   showAtprotoLabelChips,
+  aiInsight,
+  aiShortInsight,
+  aiInsightProvider,
+  aiInsightLoading,
 }: {
   overview: StoryProjectedPost | null;
   resultCount: number;
   showAtprotoLabelChips: boolean;
+  aiInsight: string | null;
+  aiShortInsight: string | null;
+  aiInsightProvider: string | null;
+  aiInsightLoading: boolean;
 }) {
   const navigateToProfile = useProfileNavigation();
   if (!overview) return null;
@@ -190,6 +267,14 @@ function OverviewCard({
       )}
 
       <div style={{ padding: `${ocTokens.padding}px` }}>
+        {/* AI Insight block — shown when AI insight is active */}
+        <AiInsightBlock
+          insight={aiInsight}
+          shortInsight={aiShortInsight}
+          provider={aiInsightProvider}
+          loading={aiInsightLoading}
+        />
+
         {/* Synopsis chip */}
         <div style={{ marginBottom: 10 }}>
           <span style={{
@@ -768,6 +853,7 @@ function ModerationNoticeCard({
 export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props) {
   const { agent, session } = useSessionStore();
   const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
+  const exploreAiInsightEnabled = useUiStore((state) => state.exploreAiInsightEnabled);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
   const [cardIdx, setCardIdx] = useState(0);
   const [dir, setDir] = useState(1);
@@ -874,6 +960,39 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     });
   }, [posts, translationById, translationPolicy.autoTranslateExplore, translationPolicy.localOnlyMode, translationPolicy.userLanguage, upsertTranslation]);
 
+  // Build a minimal page shape for the AI insight hook from story posts.
+  const storyInsightPage = useMemo(() => ({
+    posts: visiblePosts,
+    actors: [],
+    feedItems: [],
+    intent: {
+      kind: 'general' as const,
+      label: 'General discovery',
+      confidence: 0.6,
+      reasons: ['story_screen'],
+      queryHasVisualIntent: false,
+    },
+    postCursor: null,
+    tagPostCursor: null,
+    actorCursor: null,
+    semanticActorDids: new Set<string>(),
+    keywordActorDids: new Set<string>(),
+    hasMorePosts: false,
+    hasMoreActors: false,
+  }), [visiblePosts]);
+
+  const {
+    insight: aiInsight,
+    shortInsight: aiShortInsight,
+    provider: aiInsightProvider,
+    loading: aiInsightLoading,
+  } = useExploreAiInsight({
+    page: storyInsightPage,
+    query: refinedQuery,
+    actorDid: session?.did ?? null,
+    enabled: exploreAiInsightEnabled && visiblePosts.length >= 2,
+  });
+
   const advance = useCallback(() => {
     if (cardIdx < CARD_NAMES.length - 1) { setDir(1); setCardIdx(i => i + 1); }
   }, [cardIdx]);
@@ -894,6 +1013,10 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
       overview={storyProjection.overview}
       resultCount={storyProjection.resultCount}
       showAtprotoLabelChips={showAtprotoLabelChips}
+      aiInsight={aiInsight}
+      aiShortInsight={aiShortInsight}
+      aiInsightProvider={aiInsightProvider}
+      aiInsightLoading={aiInsightLoading}
     />,
     <BestSourceCard key="source" source={storyProjection.bestSource} showAtprotoLabelChips={showAtprotoLabelChips} />,
     <RelatedEntitiesCard key="entities" entities={storyProjection.relatedEntities} />,

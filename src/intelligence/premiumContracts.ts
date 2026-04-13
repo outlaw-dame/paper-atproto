@@ -8,7 +8,40 @@ export type PremiumAiTier = 'free' | 'plus' | 'pro';
 export type PremiumAiProvider = 'gemini' | 'openai';
 export type PremiumAiProviderPreference = PremiumAiProvider | 'auto';
 
-export type PremiumAiCapability = 'deep_interpolator';
+export type PremiumAiCapability = 'deep_interpolator' | 'explore_insight';
+
+export type ExploreIntentKind = 'general' | 'hashtag' | 'people' | 'source' | 'feed' | 'visual';
+
+export interface ExploreInsightRequest {
+  query: string;
+  intentKind: ExploreIntentKind;
+  intentConfidence: number;
+  storyId: string;
+  titleHint?: string | undefined;
+  candidatePosts: Array<{
+    uri: string;
+    handle: string;
+    text: string;
+    impactScore: number;
+  }>;
+  safeEntities: Array<{
+    id: string;
+    label: string;
+    type: string;
+    confidence: number;
+    impact: number;
+  }>;
+  factualHighlights: string[];
+  confidence: ConfidenceState;
+}
+
+export interface ExploreInsightResult {
+  insight: string;
+  shortInsight?: string | undefined;
+  provider: PremiumAiProvider;
+  abstained: boolean;
+  safety?: PremiumAiSafetyMetadata | undefined;
+}
 
 export interface PremiumAiEntitlements {
   tier: PremiumAiTier;

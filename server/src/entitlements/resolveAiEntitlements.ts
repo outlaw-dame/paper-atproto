@@ -2,7 +2,7 @@ import { isPremiumAiProviderOperational } from '../ai/premiumProviderHealth.js';
 import { env } from '../config/env.js';
 
 export type PremiumAiTier = 'free' | 'plus' | 'pro';
-export type PremiumAiCapability = 'deep_interpolator';
+export type PremiumAiCapability = 'deep_interpolator' | 'explore_insight';
 export type PremiumAiProvider = 'gemini' | 'openai';
 export type PremiumAiProviderPreference = PremiumAiProvider | 'auto';
 
@@ -16,8 +16,8 @@ export interface PremiumAiEntitlements {
 
 const CAPABILITIES_BY_TIER: Record<PremiumAiTier, PremiumAiCapability[]> = {
   free: [],
-  plus: ['deep_interpolator'],
-  pro: ['deep_interpolator'],
+  plus: ['deep_interpolator', 'explore_insight'],
+  pro: ['deep_interpolator', 'explore_insight'],
 };
 
 const PREMIUM_AI_PROVIDER_ORDER: PremiumAiProvider[] = ['gemini', 'openai'];

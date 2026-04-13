@@ -25,6 +25,8 @@ import { inferenceClient } from '../workers/InferenceClient';
 import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore';
 import type {
   DeepInterpolatorResult,
+  ExploreInsightRequest,
+  ExploreInsightResult,
   PremiumAiEntitlements,
   PremiumAiProviderPreference,
   PremiumAiSafetyMetadata,
@@ -1076,6 +1078,12 @@ function sanitizeMediaAnalysisResult(value: MediaAnalysisResult): MediaAnalysisR
   const moderationRationale = typeof rawModeration?.rationale === 'string'
     ? sanitizeSafeSummaryText(truncateAtWordBoundary(rawModeration.rationale, 180))
     : '';
+  const analysisStatus = raw.analysisStatus === 'degraded'
+    ? 'degraded'
+    : 'complete';
+  const moderationStatus = raw.moderationStatus === 'unavailable'
+    ? 'unavailable'
+    : 'authoritative';
 
   return {
     mediaCentrality: Math.max(0, Math.min(1, Number.isFinite(raw.mediaCentrality) ? Number(raw.mediaCentrality) : 0)),
@@ -1084,6 +1092,8 @@ function sanitizeMediaAnalysisResult(value: MediaAnalysisResult): MediaAnalysisR
     candidateEntities: sanitizeArray(raw.candidateEntities, 5, 80),
     confidence: Math.max(0, Math.min(1, Number.isFinite(raw.confidence) ? Number(raw.confidence) : 0)),
     cautionFlags: sanitizeArray(raw.cautionFlags, 6, 80),
+    analysisStatus,
+    moderationStatus,
     ...(moderationAction !== 'none' && moderationCategories.length > 0
       ? {
           moderation: {
@@ -1287,7 +1297,14 @@ export async function callMediaAnalyzer(
       request,
       signal,
     );
-    return refineMediaAnalysisResult(request, sanitizeMediaAnalysisResult(result));
+    const sanitized = sanitizeMediaAnalysisResult(result);
+    if (sanitized.analysisStatus === 'degraded' || sanitized.moderationStatus === 'unavailable') {
+      const localFallback = await tryLocalCaptionMediaFallback(request, signal);
+      if (localFallback) {
+        return localFallback;
+      }
+    }
+    return refineMediaAnalysisResult(request, sanitized);
   } catch (error: unknown) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw error;
@@ -1375,6 +1392,27 @@ export async function getPremiumAiEntitlements(
   });
 
   return result;
+}
+
+export async function callExploreInsight(
+  input: ExploreInsightRequest,
+  actorDid: string,
+  signal?: AbortSignal,
+): Promise<ExploreInsightResult> {
+  const preferredProvider = getPremiumAiProviderPreference();
+  return fetchWithRetry<ExploreInsightResult>(
+    '/api/premium-ai/explore/insight',
+    input,
+    signal,
+    {
+      attempts: 2,
+      retryOnStatuses: [408, 429, 500, 502, 503, 504],
+      headers: {
+        'X-Glympse-User-Did': actorDid.trim(),
+        [PREMIUM_AI_PROVIDER_HEADER]: preferredProvider,
+      },
+    },
+  );
 }
 
 export async function callPremiumDeepInterpolator(

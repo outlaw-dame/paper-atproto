@@ -27,6 +27,7 @@ import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useAppearanceStore } from '../store/appearanceStore';
 import { actorLabelChips } from '../lib/atproto/labelPresentation';
 import { useExploreSearchResults } from '../conversation/discovery/exploreSearch';
+import { useExploreAiInsight } from '../conversation/discovery/exploreAiInsight';
 import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
 import { scorePostEngagement, useExploreDiscoverContent } from '../conversation/discovery/exploreDiscovery';
 import { projectExploreDiscoverView } from '../conversation/discovery/exploreProjection';
@@ -1360,6 +1361,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const { agent, session, sessionReady } = useSessionStore();
   const exploreSearchQuery = useUiStore((state) => state.exploreSearchQuery);
   const clearExploreSearch = useUiStore((state) => state.clearExploreSearch);
+  const exploreAiInsightEnabled = useUiStore((state) => state.exploreAiInsightEnabled);
+  const toggleExploreAiInsight = useUiStore((state) => state.toggleExploreAiInsight);
   const navigateToProfile = useProfileNavigation();
   const platform = usePlatform();
   const buttonTokens = getButtonTokens(platform);
@@ -1439,6 +1442,32 @@ export default function ExploreTab({ onOpenStory }: Props) {
     agent,
     enabled: sessionReady,
   });
+  const exploreSearchPage = {
+    posts: searchPosts,
+    actors: searchActors,
+    feedItems: searchFeedItems,
+    intent: searchIntent,
+    postCursor: null,
+    tagPostCursor: null,
+    actorCursor: null,
+    semanticActorDids: searchSemanticActorDids,
+    keywordActorDids: searchKeywordActorDids,
+    hasMorePosts: hasMoreSearchPosts,
+    hasMoreActors: hasMoreSearchActors,
+  };
+
+  const {
+    insight: aiInsight,
+    shortInsight: aiShortInsight,
+    provider: aiInsightProvider,
+    loading: aiInsightLoading,
+  } = useExploreAiInsight({
+    page: exploreSearchPage,
+    query: debouncedQuery,
+    actorDid: session?.did ?? null,
+    enabled: exploreAiInsightEnabled && Boolean(debouncedQuery) && !loading,
+  });
+
   const {
     suggestedFeeds,
     suggestedActors,
@@ -2112,7 +2141,123 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     <span style={{ fontSize: 11, color: disc.textTertiary }}>
                       Confidence {Math.round(Math.max(0, Math.min(1, searchIntent.confidence)) * 100)}%
                     </span>
+                    <div style={{ flex: 1 }} />
+                    {/* AI insight toggle */}
+                    <button
+                      type="button"
+                      onClick={toggleExploreAiInsight}
+                      title={exploreAiInsightEnabled ? 'Disable AI insight' : 'Enable AI insight'}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        border: 'none',
+                        borderRadius: 999,
+                        padding: '6px 11px',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        transition: 'all 0.18s',
+                        ...(exploreAiInsightEnabled
+                          ? {
+                              background: 'linear-gradient(135deg, rgba(91,124,255,0.35) 0%, rgba(124,233,255,0.25) 100%)',
+                              color: accent.cyan400,
+                              boxShadow: '0 0 12px rgba(124,233,255,0.28), inset 0 0 0 0.5px rgba(124,233,255,0.4)',
+                            }
+                          : {
+                              background: disc.surfaceCard,
+                              color: disc.textTertiary,
+                              boxShadow: `inset 0 0 0 0.5px ${disc.lineSubtle}`,
+                            }),
+                      }}
+                    >
+                      {/* Sparkle / AI icon */}
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M12 2l1.8 7.2L21 7l-5.4 5.4L21 18l-7.2-1.8L12 24l-1.8-7.2L3 18l5.4-5.6L3 7l7.2 2.2L12 2z"/>
+                      </svg>
+                      AI
+                    </button>
                   </div>
+
+                  {/* ── AI Insight banner ─────────────────────────────── */}
+                  <AnimatePresence>
+                    {exploreAiInsightEnabled && (aiInsightLoading || aiInsight) && (
+                      <motion.div
+                        key="ai-insight-banner"
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.22, ease: 'easeOut' }}
+                        style={{
+                          marginBottom: 18,
+                          borderRadius: 18,
+                          background: 'linear-gradient(135deg, rgba(91,124,255,0.13) 0%, rgba(124,233,255,0.09) 100%)',
+                          border: '0.5px solid rgba(124,233,255,0.28)',
+                          padding: '14px 16px',
+                          position: 'relative',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {/* Ambient glow layer */}
+                        <div style={{
+                          position: 'absolute', top: -20, right: -20,
+                          width: 100, height: 100,
+                          borderRadius: '50%',
+                          background: 'radial-gradient(circle, rgba(124,233,255,0.12) 0%, transparent 70%)',
+                          pointerEvents: 'none',
+                        }} />
+                        {/* Header row */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: aiInsightLoading ? 0 : 10 }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill={accent.cyan400} aria-hidden="true">
+                            <path d="M12 2l1.8 7.2L21 7l-5.4 5.4L21 18l-7.2-1.8L12 24l-1.8-7.2L3 18l5.4-5.6L3 7l7.2 2.2L12 2z"/>
+                          </svg>
+                          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: accent.cyan400 }}>
+                            AI Insight
+                          </span>
+                          {aiInsightProvider && !aiInsightLoading && (
+                            <span style={{ fontSize: 10, color: disc.textTertiary, fontWeight: 600, marginLeft: 4 }}>
+                              via {aiInsightProvider}
+                            </span>
+                          )}
+                        </div>
+                        {aiInsightLoading ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 6 }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={accent.cyan400} strokeWidth={2} strokeLinecap="round">
+                              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83">
+                                <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>
+                              </path>
+                            </svg>
+                            <span style={{ fontSize: 12, color: disc.textTertiary, fontWeight: 600 }}>Synthesising results…</span>
+                          </div>
+                        ) : (
+                          <>
+                            <p style={{
+                              fontSize: 13,
+                              lineHeight: '20px',
+                              color: disc.textPrimary,
+                              fontWeight: 500,
+                              margin: 0,
+                            }}>
+                              {aiInsight}
+                            </p>
+                            {aiShortInsight && (
+                              <p style={{
+                                marginTop: 8,
+                                fontSize: 11,
+                                lineHeight: '16px',
+                                color: disc.textSecondary,
+                                fontWeight: 600,
+                                fontStyle: 'italic',
+                                margin: '8px 0 0',
+                              }}>
+                                {aiShortInsight}
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {searchPosts.filter((post) => !(filterResults[post.id] ?? []).some((m) => m.action === 'hide')).length > 0 && (
                     <div style={{ marginBottom: 24 }}>
