@@ -58,6 +58,12 @@ import {
   getMultimodalDiagnostics,
   resetMultimodalDiagnostics,
 } from '../llm/multimodalDiagnostics.js';
+import {
+  getPremiumDiagnostics,
+  resetPremiumDiagnostics,
+} from '../llm/premiumDiagnostics.js';
+import { getPremiumAiProviderHealthSnapshot, resetPremiumAiProviderHealth } from '../ai/premiumProviderHealth.js';
+import { getPremiumAiProviderReadinessSnapshot, resetPremiumAiProviderReadiness } from '../ai/premiumProviderReadiness.js';
 
 type LlmRouterContext = {
   Variables: {
@@ -166,15 +172,23 @@ function writerLlmDisabled(c: any) {
   return c.json({ error: 'LLM service is disabled', abstained: true, collapsedSummary: '' }, 503);
 }
 
+function degradedMediaAnalyzerPayload() {
+  return {
+    mediaCentrality: 0.3,
+    mediaType: 'unknown' as const,
+    mediaSummary: 'Media present — analysis unavailable.',
+    candidateEntities: [],
+    confidence: 0.15,
+    cautionFlags: [],
+    analysisStatus: 'degraded' as const,
+    moderationStatus: 'unavailable' as const,
+  };
+}
+
 function mediaLlmDisabled(c: any) {
   return c.json({
     error: 'LLM service is disabled',
-    mediaCentrality: 0,
-    mediaType: 'unknown',
-    mediaSummary: '',
-    candidateEntities: [],
-    confidence: 0,
-    cautionFlags: [],
+    ...degradedMediaAnalyzerPayload(),
   }, 503);
 }
 
@@ -283,6 +297,11 @@ llmRouter.get('/admin/diagnostics', (c) => {
   return c.json({
     writer: getWriterDiagnostics(),
     multimodal: getMultimodalDiagnostics(),
+    premium: getPremiumDiagnostics(),
+    premiumProviders: {
+      health: getPremiumAiProviderHealthSnapshot(),
+      readiness: getPremiumAiProviderReadinessSnapshot(),
+    },
   });
 });
 
@@ -290,6 +309,9 @@ llmRouter.delete('/admin/diagnostics', (c) => {
   assertDiagnosticsAccess(c);
   resetWriterDiagnostics();
   resetMultimodalDiagnostics();
+  resetPremiumDiagnostics();
+  resetPremiumAiProviderHealth();
+  resetPremiumAiProviderReadiness();
   applyDiagnosticsHeaders(c);
   return c.body(null, 204);
 });
@@ -460,14 +482,7 @@ llmRouter.post('/analyze/media', async (c) => {
     };
     logSafetyFlag('[llm/analyze/media]', safety);
     if (!safety.passed) {
-      return c.json({
-        mediaCentrality: 0,
-        mediaType: 'unknown',
-        mediaSummary: '',
-        candidateEntities: [],
-        confidence: 0,
-        cautionFlags: [],
-      });
+      return c.json(degradedMediaAnalyzerPayload());
     }
     return c.json(filtered);
   } catch (err: unknown) {
@@ -486,14 +501,7 @@ llmRouter.post('/analyze/media', async (c) => {
     const message = err instanceof Error ? err.message : 'Media analysis failed';
     console.error('[llm/analyze/media]', message);
     // Graceful degradation
-    return c.json({
-      mediaCentrality: 0,
-      mediaType: 'unknown',
-      mediaSummary: '',
-      candidateEntities: [],
-      confidence: 0,
-      cautionFlags: [],
-    });
+    return c.json(degradedMediaAnalyzerPayload());
   }
 });
 
@@ -735,14 +743,7 @@ llmRouter.onError((error, c) => {
 
   if (path.endsWith('/analyze/media')) {
     console.error('[llm/onError/analyze-media]', message);
-    return c.json({
-      mediaCentrality: 0,
-      mediaType: 'unknown',
-      mediaSummary: '',
-      candidateEntities: [],
-      confidence: 0,
-      cautionFlags: [],
-    });
+    return c.json(degradedMediaAnalyzerPayload());
   }
 
   if (path.endsWith('/write/search-story')) {

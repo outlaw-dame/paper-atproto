@@ -1,5 +1,6 @@
 import type { InterpolatorMetricsSnapshot } from '../perf/interpolatorTelemetry';
 import type { ConversationOsHealthHistoryEntry } from '../perf/conversationOsHealthHistory';
+import type { ConversationSupervisorTelemetrySnapshot } from '../perf/conversationSupervisorTelemetry';
 import type { WriterEnhancerProviderHistoryEntry } from '../perf/writerEnhancerProviderHistory';
 
 export type WriterEnhancerProviderSnapshot = {
@@ -140,6 +141,129 @@ export type WriterDiagnosticsAlert = {
   message: string;
 };
 
+export type PremiumDiagnosticsProviderSnapshot = {
+  attempts: number;
+  primaryAttempts: number;
+  fallbackAttempts: number;
+  successes: number;
+  failures: number;
+  lastModel?: string | null;
+  models?: Record<string, {
+    attempts: number;
+    successes: number;
+    failures: number;
+    successRate: number;
+    failureRate: number;
+    lastUsedAt: string | null;
+  }>;
+  successRate: number;
+  failureRate: number;
+  failoversFrom: number;
+  failoversTo: number;
+  qualityRejects: {
+    nonAdditive: number;
+    lowSignal: number;
+    total: number;
+    rejectionRate: number;
+  };
+  failureClasses: {
+    insufficient_quota: number;
+    auth_unavailable: number;
+    rate_limited: number;
+    timeout: number;
+    model_unavailable: number;
+    quality_unavailable: number;
+    provider_unavailable: number;
+    invalid_output: number;
+    bad_request: number;
+    safety_blocked: number;
+    unknown: number;
+  };
+  latencyMs: {
+    total: number;
+    max: number;
+    last: number;
+    average: number;
+  };
+};
+
+export type PremiumDiagnosticsSnapshot = {
+  startedAt: string;
+  lastUpdatedAt: string;
+  telemetryEvents: number;
+  route: {
+    invocations: number;
+    successes: number;
+    failures: number;
+    successRate: number;
+    failureRate: number;
+    failovers: {
+      attempted: number;
+      succeeded: number;
+      failed: number;
+      successRate: number;
+    };
+    safetyFilter: {
+      runs: number;
+      mutated: number;
+      blocked: number;
+      mutationRate: number;
+      blockRate: number;
+    };
+    qualityRejects: {
+      nonAdditive: number;
+      lowSignal: number;
+      total: number;
+      rejectionRate: number;
+    };
+  };
+  providers: Record<string, PremiumDiagnosticsProviderSnapshot>;
+  lastFailure?: {
+    at: string;
+    provider?: 'gemini' | 'openai';
+    attemptKind?: 'primary' | 'fallback';
+    failureClass:
+      | 'insufficient_quota'
+      | 'auth_unavailable'
+      | 'rate_limited'
+      | 'timeout'
+      | 'model_unavailable'
+      | 'quality_unavailable'
+      | 'provider_unavailable'
+      | 'invalid_output'
+      | 'bad_request'
+      | 'safety_blocked'
+      | 'unknown';
+    message: string;
+    retryable: boolean;
+    requestId?: string;
+    status?: number;
+    code?: string;
+    retryAfterMs?: number;
+  };
+};
+
+export type PremiumProviderHealthEntrySnapshot = {
+  operational: boolean;
+  reason: string | null;
+  unavailableUntil: string | null;
+};
+
+export type PremiumProviderReadinessEntrySnapshot = {
+  checkedAt: string | null;
+  inFlight: boolean;
+  lastOutcome: 'success' | 'transient_failure' | 'persistent_failure' | null;
+  lastFailureReason: string | null;
+  lastFailureStatus: number | null;
+  lastFailureCode: string | null;
+  lastFailureMessage: string | null;
+};
+
+export type PremiumProviderAvailabilitySnapshot = {
+  health: Record<string, PremiumProviderHealthEntrySnapshot>;
+  readiness: Record<string, PremiumProviderReadinessEntrySnapshot>;
+};
+
 export type ConversationDeltaDiagnosticsSnapshot = InterpolatorMetricsSnapshot['delta'];
 export type ConversationWatchDiagnosticsSnapshot = InterpolatorMetricsSnapshot['watch'];
 export type ConversationHydrationDiagnosticsSnapshot = InterpolatorMetricsSnapshot['hydration'];
@@ -151,6 +275,12 @@ export type ConversationOsHealthSummary = {
 };
 
 export type ConversationOsTrendSummary = {
+  status: 'healthy' | 'watch' | 'degraded';
+  headline: string;
+  details: string[];
+};
+
+export type ConversationSupervisorSummary = {
   status: 'healthy' | 'watch' | 'degraded';
   headline: string;
   details: string[];
@@ -180,6 +310,18 @@ const WRITER_ALERT_THRESHOLDS = {
   enhancerFailureMedium: 0.04,
 } as const;
 
+const PREMIUM_ALERT_THRESHOLDS = {
+  qualityRejectHigh: 0.18,
+  qualityRejectMedium: 0.08,
+  failoverHigh: 0.25,
+  failoverMedium: 0.1,
+  failureHigh: 0.18,
+  failureMedium: 0.08,
+  safetyBlockHigh: 0.05,
+  safetyMutationHigh: 0.2,
+  safetyMutationMedium: 0.08,
+} as const;
+
 const DELTA_ALERT_THRESHOLDS = {
   minResolutionsForDrift: 8,
   lowStoredReuseRate: 0.35,
@@ -199,6 +341,13 @@ const WATCH_ALERT_THRESHOLDS = {
   highPollShare: 0.55,
   mediumPollShare: 0.35,
   lowEventShare: 0.15,
+} as const;
+
+const SUPERVISOR_ALERT_THRESHOLDS = {
+  highRecommendationRate: 0.45,
+  mediumRecommendationRate: 0.2,
+  highCooldownSuppressionRate: 0.35,
+  mediumCooldownSuppressionRate: 0.15,
 } as const;
 
 const HISTORY_ALERT_THRESHOLDS = {
@@ -329,6 +478,97 @@ export function deriveWriterDiagnosticsAlerts(snapshot: WriterDiagnosticsSnapsho
   return alerts;
 }
 
+export function derivePremiumDiagnosticsAlerts(snapshot: PremiumDiagnosticsSnapshot): WriterDiagnosticsAlert[] {
+  const alerts: WriterDiagnosticsAlert[] = [];
+  const qualityRejectRate = snapshot.route.qualityRejects.rejectionRate;
+  const failoverRate = snapshot.route.failovers.attempted > 0
+    ? snapshot.route.failovers.attempted / Math.max(1, snapshot.route.invocations)
+    : 0;
+  const failureRate = snapshot.route.failureRate;
+  const safetyBlockRate = snapshot.route.safetyFilter.blockRate;
+  const safetyMutationRate = snapshot.route.safetyFilter.mutationRate;
+
+  if (qualityRejectRate >= PREMIUM_ALERT_THRESHOLDS.qualityRejectHigh) {
+    alerts.push({
+      severity: 'high',
+      message: 'Premium deep quality rejects are high. Remote providers are returning too many non-additive or low-signal passes.',
+    });
+  } else if (qualityRejectRate >= PREMIUM_ALERT_THRESHOLDS.qualityRejectMedium) {
+    alerts.push({
+      severity: 'medium',
+      message: 'Premium deep quality rejects are elevated. Review provider prompts and additive synthesis quality.',
+    });
+  }
+
+  if (failoverRate >= PREMIUM_ALERT_THRESHOLDS.failoverHigh) {
+    alerts.push({
+      severity: 'high',
+      message: 'Premium deep failover rate is high. One remote provider is unstable enough to disrupt the routed deep pass.',
+    });
+  } else if (failoverRate >= PREMIUM_ALERT_THRESHOLDS.failoverMedium) {
+    alerts.push({
+      severity: 'medium',
+      message: 'Premium deep failovers are elevated. Watch provider readiness and model availability.',
+    });
+  }
+
+  if (failureRate >= PREMIUM_ALERT_THRESHOLDS.failureHigh) {
+    alerts.push({
+      severity: 'high',
+      message: 'Premium deep failures are high. Quality gates or upstream provider health are degrading the deep pass.',
+    });
+  } else if (failureRate >= PREMIUM_ALERT_THRESHOLDS.failureMedium) {
+    alerts.push({
+      severity: 'medium',
+      message: 'Premium deep failures are elevated. Monitor provider outages, retries, and route-level error handling.',
+    });
+  }
+
+  if (safetyBlockRate >= PREMIUM_ALERT_THRESHOLDS.safetyBlockHigh) {
+    alerts.push({
+      severity: 'high',
+      message: 'Premium deep safety blocks are elevated. Deep synthesis may be producing unsafe or empty summaries.',
+    });
+  }
+
+  if (safetyMutationRate >= PREMIUM_ALERT_THRESHOLDS.safetyMutationHigh) {
+    alerts.push({
+      severity: 'high',
+      message: 'Premium deep safety mutation rate is high. Remote summaries may be drifting too close to safety boundaries.',
+    });
+  } else if (safetyMutationRate >= PREMIUM_ALERT_THRESHOLDS.safetyMutationMedium) {
+    alerts.push({
+      severity: 'medium',
+      message: 'Premium deep safety mutations are elevated. Watch for readability loss in filtered summaries.',
+    });
+  }
+
+  return alerts;
+}
+
+export function derivePremiumProviderAvailabilityAlerts(
+  snapshot: PremiumProviderAvailabilitySnapshot,
+): WriterDiagnosticsAlert[] {
+  const alerts: WriterDiagnosticsAlert[] = [];
+
+  for (const [provider, health] of Object.entries(snapshot.health)) {
+    if (!health.operational && health.reason) {
+      const readiness = snapshot.readiness[provider];
+      const detail = readiness?.lastFailureStatus
+        ? `${health.reason} (${readiness.lastFailureStatus})`
+        : health.reason;
+      alerts.push({
+        severity: health.reason === 'auth_unavailable' || health.reason === 'insufficient_quota'
+          ? 'high'
+          : 'medium',
+        message: `Premium provider ${provider} is currently suppressed: ${detail}.`,
+      });
+    }
+  }
+
+  return alerts;
+}
+
 export function deriveConversationDeltaAlerts(
   snapshot: ConversationDeltaDiagnosticsSnapshot,
 ): WriterDiagnosticsAlert[] {
@@ -445,9 +685,16 @@ export function deriveConversationWatchAlerts(params: {
 
 export function deriveConversationOsHealth(params: {
   writer?: WriterDiagnosticsSnapshot | null;
+  premium?: PremiumDiagnosticsSnapshot | null;
+  premiumProviders?: PremiumProviderAvailabilitySnapshot | null;
   metrics?: InterpolatorMetricsSnapshot | null;
+  supervisor?: ConversationSupervisorTelemetrySnapshot | null;
 }): ConversationOsHealthSummary {
   const writerAlerts = params.writer ? deriveWriterDiagnosticsAlerts(params.writer) : [];
+  const premiumAlerts = params.premium ? derivePremiumDiagnosticsAlerts(params.premium) : [];
+  const premiumProviderAlerts = params.premiumProviders
+    ? derivePremiumProviderAvailabilityAlerts(params.premiumProviders)
+    : [];
   const deltaAlerts = params.metrics ? deriveConversationDeltaAlerts(params.metrics.delta) : [];
   const watchAlerts = params.metrics
     ? deriveConversationWatchAlerts({
@@ -455,9 +702,12 @@ export function deriveConversationOsHealth(params: {
         hydration: params.metrics.hydration,
       })
     : [];
-  const alerts = [...writerAlerts, ...deltaAlerts, ...watchAlerts];
+  const alerts = [...writerAlerts, ...premiumAlerts, ...premiumProviderAlerts, ...deltaAlerts, ...watchAlerts];
   const highAlerts = alerts.filter((alert) => alert.severity === 'high');
   const metrics = params.metrics;
+  const premium = params.premium;
+  const premiumProviders = params.premiumProviders;
+  const supervisor = params.supervisor;
 
   if (!metrics) {
     return {
@@ -471,6 +721,21 @@ export function deriveConversationOsHealth(params: {
     `Watch state ${metrics.watch.currentState}; invalidations ${metrics.watch.invalidationCount}; last live change ${formatRelativeAge(metrics.watch.lastInvalidationAt)}.`,
     `Delta reuse ${formatRate(metrics.delta.storedReuseRate)}; self-heal ${formatRate(metrics.delta.selfHealRate)}; summary fallback ${metrics.delta.summaryFallbackCount}.`,
     `Hydration success ${formatRate(metrics.hydration.successRate)}; event share ${formatRate(metrics.hydration.eventShare)}; poll share ${formatRate(metrics.hydration.pollShare)}.`,
+    ...(premium
+      ? [
+          `Premium deep: invocations ${premium.route.invocations}; failovers ${premium.route.failovers.attempted}; quality rejects ${premium.route.qualityRejects.total}; failure rate ${formatRate(premium.route.failureRate)}.`,
+        ]
+      : []),
+    ...(supervisor
+      ? [
+          `Supervisor shadow: decisions ${supervisor.decisionsEvaluated}; recommendations ${supervisor.recommendationsIssued}; cooldown suppressions ${supervisor.cooldownSuppressions}.`,
+        ]
+      : []),
+    ...(premiumProviders
+      ? Object.entries(premiumProviders.health)
+        .filter(([, health]) => !health.operational && health.reason)
+        .map(([provider, health]) => `Premium provider ${provider} unavailable: ${health.reason}.${health.unavailableUntil ? ` Until ${formatRelativeAge(health.unavailableUntil)}.` : ''}`)
+      : []),
   ];
 
   if (highAlerts.length > 0) {
@@ -492,6 +757,64 @@ export function deriveConversationOsHealth(params: {
   return {
     status: 'healthy',
     headline: 'Conversation OS health looks stable. Live invalidation and canonical delta state are aligned.',
+    details,
+  };
+}
+
+export function deriveConversationSupervisorSummary(
+  snapshot?: ConversationSupervisorTelemetrySnapshot | null,
+): ConversationSupervisorSummary {
+  if (!snapshot) {
+    return {
+      status: 'watch',
+      headline: 'Conversation supervisor telemetry is waiting for local session activity.',
+      details: ['Open a live thread in local development so the shadow controller can evaluate canonical state transitions.'],
+    };
+  }
+
+  const recommendationRate = snapshot.decisionsEvaluated > 0
+    ? snapshot.recommendationsIssued / snapshot.decisionsEvaluated
+    : 0;
+  const cooldownSuppressionRate = snapshot.decisionsEvaluated > 0
+    ? snapshot.cooldownSuppressions / snapshot.decisionsEvaluated
+    : 0;
+  const strongActionCount = snapshot.actionCounts.rerun_writer_with_safe_fallback
+    + snapshot.actionCounts.skip_premium_for_cycle;
+  const details = [
+    `Shadow decisions ${snapshot.decisionsEvaluated} • recommendations ${snapshot.recommendationsIssued} (${formatRate(recommendationRate)}) • cooldown suppressions ${snapshot.cooldownSuppressions} (${formatRate(cooldownSuppressionRate)}).`,
+    `Triggers: hydrated ${snapshot.triggerCounts.session_hydrated} • writer ${snapshot.triggerCounts.writer_completed} • multimodal ${snapshot.triggerCounts.multimodal_completed} • premium ${snapshot.triggerCounts.premium_completed}.`,
+    ...(snapshot.lastDecision
+      ? [
+          `Last decision ${snapshot.lastDecision.trigger} ${formatRelativeAge(snapshot.lastDecision.evaluatedAt)} • actions ${snapshot.lastDecision.actionTypes.join(', ') || 'none'} • traces ${snapshot.lastDecision.traceCodes.join(', ') || 'none'}.`,
+        ]
+      : ['No shadow decision has been recorded yet.']),
+  ];
+
+  if (
+    strongActionCount > 0
+    && recommendationRate >= SUPERVISOR_ALERT_THRESHOLDS.highRecommendationRate
+  ) {
+    return {
+      status: 'degraded',
+      headline: 'The shadow supervisor is repeatedly recommending strong interventions. Session orchestration is drifting.',
+      details,
+    };
+  }
+
+  if (
+    recommendationRate >= SUPERVISOR_ALERT_THRESHOLDS.mediumRecommendationRate
+    || cooldownSuppressionRate >= SUPERVISOR_ALERT_THRESHOLDS.mediumCooldownSuppressionRate
+  ) {
+    return {
+      status: 'watch',
+      headline: 'The shadow supervisor is active and seeing some instability worth watching.',
+      details,
+    };
+  }
+
+  return {
+    status: 'healthy',
+    headline: 'The shadow supervisor is quiet. Canonical thread state and model work look well-aligned.',
     details,
   };
 }

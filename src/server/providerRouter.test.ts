@@ -116,4 +116,31 @@ describe('writePremiumDeepInterpolator', () => {
 
     expect(mockGeminiWrite).not.toHaveBeenCalled();
   });
+
+  it('falls back when the preferred provider returns semantically invalid premium output', async () => {
+    mockResolveEffectivePremiumAiProvider
+      .mockReturnValueOnce('openai')
+      .mockReturnValueOnce('gemini');
+    mockOpenAIWrite.mockRejectedValueOnce(
+      Object.assign(new Error('Deep interpolator returned a non-additive summary'), {
+        status: 502,
+        code: 'deep_interpolator_non_additive_output',
+      }),
+    );
+    mockGeminiWrite.mockResolvedValueOnce({
+      summary: 'Gemini rescue summary.',
+      groundedContext: 'Recovered after quality validation failed.',
+      perspectiveGaps: [],
+      followUpQuestions: [],
+      confidence: 0.7,
+      provider: 'gemini',
+      updatedAt: '2026-04-08T10:00:01.000Z',
+    });
+
+    const result = await writePremiumDeepInterpolator(request, { preferredProvider: 'openai' });
+
+    expect(result.provider).toBe('gemini');
+    expect(mockOpenAIWrite).toHaveBeenCalledTimes(1);
+    expect(mockGeminiWrite).toHaveBeenCalledTimes(1);
+  });
 });

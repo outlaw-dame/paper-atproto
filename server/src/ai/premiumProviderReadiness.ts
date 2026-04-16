@@ -9,22 +9,31 @@ import {
   withGeminiModelFallback,
 } from '../lib/googleGenAi.js';
 import { createOpenAIClient, resolveOpenAiModel } from '../lib/openAi.js';
+import { sanitizeText } from '../lib/sanitize.js';
 import {
+  classifyPremiumAiProviderOutage,
+  isPersistentPremiumAiProviderOutageReason,
   isPremiumAiProviderOperational,
   recordPremiumAiProviderFailure,
   recordPremiumAiProviderSuccess,
+  type PremiumAiProviderOutageReason,
   type PremiumAiProviderName,
 } from './premiumProviderHealth.js';
 
 type ReadinessEntry = {
   checkedAt: number;
   inFlight: Promise<void> | undefined;
+  lastOutcome: 'success' | 'transient_failure' | 'persistent_failure' | undefined;
+  lastFailureReason: PremiumAiProviderOutageReason | 'unknown' | undefined;
+  lastFailureStatus: number | undefined;
+  lastFailureCode: string | undefined;
+  lastFailureMessage: string | undefined;
 };
 
 const READINESS_TTL_MS = 15 * 60_000;
 const readinessState: Record<PremiumAiProviderName, ReadinessEntry> = {
-  gemini: { checkedAt: 0, inFlight: undefined },
-  openai: { checkedAt: 0, inFlight: undefined },
+  gemini: { checkedAt: 0, inFlight: undefined, lastOutcome: undefined, lastFailureReason: undefined, lastFailureStatus: undefined, lastFailureCode: undefined, lastFailureMessage: undefined },
+  openai: { checkedAt: 0, inFlight: undefined, lastOutcome: undefined, lastFailureReason: undefined, lastFailureStatus: undefined, lastFailureCode: undefined, lastFailureMessage: undefined },
 };
 
 async function withProbeTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -138,6 +147,27 @@ async function runReadinessProbe(provider: PremiumAiProviderName): Promise<void>
   await probeGeminiReadiness();
 }
 
+function shouldSuppressProviderFromReadinessProbe(error: unknown): boolean {
+  const outageReason = classifyPremiumAiProviderOutage(error);
+  return isPersistentPremiumAiProviderOutageReason(outageReason);
+}
+
+function normalizeFailureStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown })?.status;
+  return typeof status === 'number' && Number.isFinite(status) ? Math.trunc(status) : undefined;
+}
+
+function normalizeFailureCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown })?.code;
+  return typeof code === 'string' && code.trim() ? code.trim().toLowerCase() : undefined;
+}
+
+function normalizeFailureMessage(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const sanitized = sanitizeText(error.message).slice(0, 180);
+  return sanitized || undefined;
+}
+
 export async function ensurePremiumAiProviderReady(
   provider: PremiumAiProviderName | 'auto' | undefined,
 ): Promise<void> {
@@ -157,9 +187,24 @@ export async function ensurePremiumAiProviderReady(
   const probe = (async () => {
     try {
       await runReadinessProbe(provider);
+      entry.lastOutcome = 'success';
+      entry.lastFailureReason = undefined;
+      entry.lastFailureStatus = undefined;
+      entry.lastFailureCode = undefined;
+      entry.lastFailureMessage = undefined;
       recordPremiumAiProviderSuccess(provider);
     } catch (error) {
-      recordPremiumAiProviderFailure(provider, error);
+      const outageReason = classifyPremiumAiProviderOutage(error) ?? 'unknown';
+      entry.lastOutcome = shouldSuppressProviderFromReadinessProbe(error)
+        ? 'persistent_failure'
+        : 'transient_failure';
+      entry.lastFailureReason = outageReason;
+      entry.lastFailureStatus = normalizeFailureStatus(error);
+      entry.lastFailureCode = normalizeFailureCode(error);
+      entry.lastFailureMessage = normalizeFailureMessage(error);
+      if (entry.lastOutcome === 'persistent_failure') {
+        recordPremiumAiProviderFailure(provider, error);
+      }
     } finally {
       readinessState[provider].checkedAt = Date.now();
       readinessState[provider].inFlight = undefined;
@@ -171,6 +216,41 @@ export async function ensurePremiumAiProviderReady(
 }
 
 export function resetPremiumAiProviderReadinessForTests(): void {
-  readinessState.gemini = { checkedAt: 0, inFlight: undefined };
-  readinessState.openai = { checkedAt: 0, inFlight: undefined };
+  readinessState.gemini = { checkedAt: 0, inFlight: undefined, lastOutcome: undefined, lastFailureReason: undefined, lastFailureStatus: undefined, lastFailureCode: undefined, lastFailureMessage: undefined };
+  readinessState.openai = { checkedAt: 0, inFlight: undefined, lastOutcome: undefined, lastFailureReason: undefined, lastFailureStatus: undefined, lastFailureCode: undefined, lastFailureMessage: undefined };
+}
+
+export function resetPremiumAiProviderReadiness(): void {
+  resetPremiumAiProviderReadinessForTests();
+}
+
+export function getPremiumAiProviderReadinessSnapshot(): Record<PremiumAiProviderName, {
+  checkedAt: string | null;
+  inFlight: boolean;
+  lastOutcome: 'success' | 'transient_failure' | 'persistent_failure' | null;
+  lastFailureReason: PremiumAiProviderOutageReason | 'unknown' | null;
+  lastFailureStatus: number | null;
+  lastFailureCode: string | null;
+  lastFailureMessage: string | null;
+}> {
+  return {
+    gemini: {
+      checkedAt: readinessState.gemini.checkedAt ? new Date(readinessState.gemini.checkedAt).toISOString() : null,
+      inFlight: Boolean(readinessState.gemini.inFlight),
+      lastOutcome: readinessState.gemini.lastOutcome ?? null,
+      lastFailureReason: readinessState.gemini.lastFailureReason ?? null,
+      lastFailureStatus: readinessState.gemini.lastFailureStatus ?? null,
+      lastFailureCode: readinessState.gemini.lastFailureCode ?? null,
+      lastFailureMessage: readinessState.gemini.lastFailureMessage ?? null,
+    },
+    openai: {
+      checkedAt: readinessState.openai.checkedAt ? new Date(readinessState.openai.checkedAt).toISOString() : null,
+      inFlight: Boolean(readinessState.openai.inFlight),
+      lastOutcome: readinessState.openai.lastOutcome ?? null,
+      lastFailureReason: readinessState.openai.lastFailureReason ?? null,
+      lastFailureStatus: readinessState.openai.lastFailureStatus ?? null,
+      lastFailureCode: readinessState.openai.lastFailureCode ?? null,
+      lastFailureMessage: readinessState.openai.lastFailureMessage ?? null,
+    },
+  };
 }

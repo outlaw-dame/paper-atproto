@@ -9,6 +9,11 @@ import {
   type InterpolatorMetricsSnapshot,
 } from '../perf/interpolatorTelemetry';
 import {
+  getConversationSupervisorTelemetrySnapshot,
+  subscribeConversationSupervisorTelemetry,
+  type ConversationSupervisorTelemetrySnapshot,
+} from '../perf/conversationSupervisorTelemetry';
+import {
   appendConversationOsHealthHistory,
   clearConversationOsHealthHistory,
   readConversationOsHealthHistory,
@@ -27,8 +32,11 @@ import type {
 } from '../evals/conversationOsHumanReview';
 import {
   deriveConversationOsHealth,
+  deriveConversationSupervisorSummary,
   deriveConversationOsTrendSummary,
   deriveConversationDeltaAlerts,
+  derivePremiumDiagnosticsAlerts,
+  derivePremiumProviderAvailabilityAlerts,
   deriveConversationWatchAlerts,
   deriveWriterProviderTrendSummaries,
   deriveWriterDiagnosticsAlerts,
@@ -38,6 +46,9 @@ import {
   humanizeIssueLabel,
   topWriterEnhancerIssues,
   type ConversationOsTrendSummary,
+  type ConversationSupervisorSummary,
+  type PremiumDiagnosticsSnapshot,
+  type PremiumProviderAvailabilitySnapshot,
   type WriterProviderTrendSummary,
   type WriterDiagnosticsSnapshot,
   WRITER_DIAGNOSTICS_WATCH_INTERVAL_MS,
@@ -179,8 +190,13 @@ export default function LocalAiRuntimeSection() {
   const [writerDiagnosticsError, setWriterDiagnosticsError] = React.useState<string | null>(null);
   const [writerDiagnosticsUpdatedAt, setWriterDiagnosticsUpdatedAt] = React.useState<number | null>(null);
   const [writerDiagnosticsWatchEnabled, setWriterDiagnosticsWatchEnabled] = React.useState<boolean>(() => import.meta.env.DEV);
+  const [premiumDiagnostics, setPremiumDiagnostics] = React.useState<PremiumDiagnosticsSnapshot | null>(null);
+  const [premiumProviderAvailability, setPremiumProviderAvailability] = React.useState<PremiumProviderAvailabilitySnapshot | null>(null);
   const [interpolatorMetrics, setInterpolatorMetrics] = React.useState<InterpolatorMetricsSnapshot | null>(
     () => (supportsClientTelemetry ? getInterpolatorMetricsSnapshot() : null),
+  );
+  const [conversationSupervisorTelemetry, setConversationSupervisorTelemetry] = React.useState<ConversationSupervisorTelemetrySnapshot | null>(
+    () => (supportsClientTelemetry ? getConversationSupervisorTelemetrySnapshot() : null),
   );
   const [interpolatorMetricsUpdatedAt, setInterpolatorMetricsUpdatedAt] = React.useState<number | null>(
     () => (supportsClientTelemetry ? Date.now() : null),
@@ -306,6 +322,8 @@ export default function LocalAiRuntimeSection() {
   const refreshWriterDiagnostics = React.useCallback(async () => {
     if (!supportsClientTelemetry) {
       setWriterDiagnostics(null);
+      setPremiumDiagnostics(null);
+      setPremiumProviderAvailability(null);
       setWriterDiagnosticsUpdatedAt(null);
       setWriterDiagnosticsError(null);
       return;
@@ -321,12 +339,18 @@ export default function LocalAiRuntimeSection() {
         throw new Error(`Writer diagnostics fetch failed (${response.status}).`);
       }
 
-      const body = await response.json() as { writer?: WriterDiagnosticsSnapshot };
+      const body = await response.json() as {
+        writer?: WriterDiagnosticsSnapshot;
+        premium?: PremiumDiagnosticsSnapshot;
+        premiumProviders?: PremiumProviderAvailabilitySnapshot;
+      };
       if (!body.writer) {
         throw new Error('Writer diagnostics response was empty.');
       }
 
       setWriterDiagnostics(body.writer);
+      setPremiumDiagnostics(body.premium ?? null);
+      setPremiumProviderAvailability(body.premiumProviders ?? null);
       setWriterDiagnosticsUpdatedAt(Date.now());
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load writer diagnostics.';
@@ -339,6 +363,8 @@ export default function LocalAiRuntimeSection() {
   const resetWriterDiagnostics = React.useCallback(async () => {
     if (!supportsClientTelemetry) {
       setWriterDiagnostics(null);
+      setPremiumDiagnostics(null);
+      setPremiumProviderAvailability(null);
       setWriterDiagnosticsUpdatedAt(null);
       setWriterDiagnosticsError(null);
       return;
@@ -438,6 +464,7 @@ export default function LocalAiRuntimeSection() {
   React.useEffect(() => {
     if (!supportsClientTelemetry) {
       setInterpolatorMetrics(null);
+      setConversationSupervisorTelemetry(null);
       setInterpolatorMetricsUpdatedAt(null);
       setConversationOsHistory([]);
       return undefined;
@@ -446,6 +473,17 @@ export default function LocalAiRuntimeSection() {
     return subscribeInterpolatorMetrics((snapshot) => {
       setInterpolatorMetrics(snapshot);
       setInterpolatorMetricsUpdatedAt(Date.now());
+    });
+  }, [supportsClientTelemetry]);
+
+  React.useEffect(() => {
+    if (!supportsClientTelemetry) {
+      setConversationSupervisorTelemetry(null);
+      return undefined;
+    }
+
+    return subscribeConversationSupervisorTelemetry((snapshot) => {
+      setConversationSupervisorTelemetry(snapshot);
     });
   }, [supportsClientTelemetry]);
 
@@ -642,6 +680,14 @@ export default function LocalAiRuntimeSection() {
     () => (writerDiagnostics ? deriveWriterDiagnosticsAlerts(writerDiagnostics) : []),
     [writerDiagnostics],
   );
+  const premiumAlerts = React.useMemo(
+    () => (premiumDiagnostics ? derivePremiumDiagnosticsAlerts(premiumDiagnostics) : []),
+    [premiumDiagnostics],
+  );
+  const premiumProviderAlerts = React.useMemo(
+    () => (premiumProviderAvailability ? derivePremiumProviderAvailabilityAlerts(premiumProviderAvailability) : []),
+    [premiumProviderAvailability],
+  );
   const deltaAlerts = React.useMemo(
     () => (interpolatorMetrics ? deriveConversationDeltaAlerts(interpolatorMetrics.delta) : []),
     [interpolatorMetrics],
@@ -660,9 +706,16 @@ export default function LocalAiRuntimeSection() {
   const conversationOsHealth = React.useMemo(
     () => deriveConversationOsHealth({
       writer: writerDiagnostics,
+      premium: premiumDiagnostics,
+      premiumProviders: premiumProviderAvailability,
       metrics: interpolatorMetrics,
+      supervisor: conversationSupervisorTelemetry,
     }),
-    [interpolatorMetrics, writerDiagnostics],
+    [conversationSupervisorTelemetry, interpolatorMetrics, premiumDiagnostics, premiumProviderAvailability, writerDiagnostics],
+  );
+  const conversationSupervisorSummary = React.useMemo<ConversationSupervisorSummary>(
+    () => deriveConversationSupervisorSummary(conversationSupervisorTelemetry),
+    [conversationSupervisorTelemetry],
   );
   const conversationOsTrend = React.useMemo<ConversationOsTrendSummary>(
     () => deriveConversationOsTrendSummary(conversationOsHistory),
@@ -1115,7 +1168,7 @@ export default function LocalAiRuntimeSection() {
           </p>
         )}
 
-        {(writerDiagnostics || interpolatorMetrics) && (
+        {(writerDiagnostics || premiumDiagnostics || interpolatorMetrics || conversationSupervisorTelemetry) && (
           <>
             <div
               style={{
@@ -1145,6 +1198,40 @@ export default function LocalAiRuntimeSection() {
                 {conversationOsHealth.headline}
               </p>
               {conversationOsHealth.details.map((detail) => (
+                <p key={detail} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                  {detail}
+                </p>
+              ))}
+            </div>
+
+            <div
+              style={{
+                border: '1px solid var(--sep)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                background: 'var(--fill-1)',
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--label-1)' }}>
+                Conversation supervisor
+              </p>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 11,
+                  lineHeight: 1.45,
+                  color: conversationSupervisorSummary.status === 'degraded'
+                    ? 'var(--red, #d14b4b)'
+                    : conversationSupervisorSummary.status === 'watch'
+                      ? 'var(--yellow, #c58b16)'
+                      : 'var(--green, #228b5a)',
+                }}
+              >
+                {conversationSupervisorSummary.headline}
+              </p>
+              {conversationSupervisorSummary.details.map((detail) => (
                 <p key={detail} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
                   {detail}
                 </p>
@@ -1233,6 +1320,103 @@ export default function LocalAiRuntimeSection() {
               ))}
             </div>
 
+            {premiumDiagnostics && (
+              <>
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Premium deep: invocations <strong style={{ color: 'var(--label-1)' }}>{premiumDiagnostics.route.invocations}</strong>
+                  {' • '}success {premiumDiagnostics.route.successes}
+                  {' • '}failure {premiumDiagnostics.route.failures} ({formatRate(premiumDiagnostics.route.failureRate)})
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Premium failover:
+                  {' '}attempted {premiumDiagnostics.route.failovers.attempted}
+                  {' • '}succeeded {premiumDiagnostics.route.failovers.succeeded}
+                  {' • '}failed {premiumDiagnostics.route.failovers.failed}
+                  {' • '}success rate {formatRate(premiumDiagnostics.route.failovers.successRate)}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Premium quality gate:
+                  {' '}non-additive {premiumDiagnostics.route.qualityRejects.nonAdditive}
+                  {' • '}low-signal {premiumDiagnostics.route.qualityRejects.lowSignal}
+                  {' • '}reject rate {formatRate(premiumDiagnostics.route.qualityRejects.rejectionRate)}
+                </p>
+
+                <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                  Premium safety:
+                  {' '}runs {premiumDiagnostics.route.safetyFilter.runs}
+                  {' • '}mutated {premiumDiagnostics.route.safetyFilter.mutated} ({formatRate(premiumDiagnostics.route.safetyFilter.mutationRate)})
+                  {' • '}blocked {premiumDiagnostics.route.safetyFilter.blocked} ({formatRate(premiumDiagnostics.route.safetyFilter.blockRate)})
+                </p>
+
+                {Object.entries(premiumDiagnostics.providers)
+                  .filter(([, provider]) => provider.attempts > 0)
+                  .map(([provider, snapshot]) => (
+                    <div key={`premium-${provider}`} style={{ display: 'grid', gap: 2 }}>
+                      <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                        premium {provider}:
+                        {' '}attempts {snapshot.attempts}
+                        {' • '}failures {snapshot.failures} ({formatRate(snapshot.failureRate)})
+                        {' • '}quality rejects {snapshot.qualityRejects.total} ({formatRate(snapshot.qualityRejects.rejectionRate)})
+                        {' • '}avg latency {formatLatency(snapshot.latencyMs.average)}
+                        {snapshot.lastModel ? ` • last model ${snapshot.lastModel}` : ''}
+                      </p>
+                      {snapshot.models && Object.keys(snapshot.models).length > 0 && (
+                        <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
+                          {Object.entries(snapshot.models)
+                            .map(([model, modelStats]) => (
+                              `${model}: ${modelStats.successes}/${modelStats.attempts} ok`
+                            ))
+                            .join(' • ')}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+
+                {premiumDiagnostics.lastFailure && (
+                  <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                    Last premium failure:
+                    {' '}class {premiumDiagnostics.lastFailure.failureClass}
+                    {premiumDiagnostics.lastFailure.provider ? ` • provider ${premiumDiagnostics.lastFailure.provider}` : ''}
+                    {premiumDiagnostics.lastFailure.attemptKind ? ` • ${premiumDiagnostics.lastFailure.attemptKind}` : ''}
+                    {premiumDiagnostics.lastFailure.code ? ` • code ${premiumDiagnostics.lastFailure.code}` : ''}
+                    {' • '}updated {formatRelativeAge(premiumDiagnostics.lastFailure.at)}
+                  </p>
+                )}
+              </>
+            )}
+
+            {premiumProviderAvailability && (
+              <>
+                {Object.entries(premiumProviderAvailability.health).map(([provider, health]) => {
+                  const readiness = premiumProviderAvailability.readiness[provider];
+                  return (
+                    <p key={`premium-provider-health-${provider}`} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                      premium provider {provider}:
+                      {' '}status {health.operational ? 'ready' : 'suppressed'}
+                      {health.reason ? ` • reason ${health.reason}` : ''}
+                      {readiness?.lastFailureStatus ? ` • status ${readiness.lastFailureStatus}` : ''}
+                      {readiness?.lastFailureCode ? ` • code ${readiness.lastFailureCode}` : ''}
+                      {health.unavailableUntil ? ` • until ${formatRelativeAge(health.unavailableUntil)}` : ''}
+                    </p>
+                  );
+                })}
+
+                {Object.entries(premiumProviderAvailability.readiness)
+                  .filter(([, readiness]) => readiness.lastOutcome && readiness.lastOutcome !== 'success')
+                  .map(([provider, readiness]) => (
+                    <p key={`premium-provider-readiness-${provider}`} style={{ margin: 0, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
+                      readiness {provider}:
+                      {' '}{readiness.lastOutcome?.replace('_', ' ')}
+                      {readiness.lastFailureReason ? ` • ${readiness.lastFailureReason}` : ''}
+                      {readiness.lastFailureStatus ? ` • status ${readiness.lastFailureStatus}` : ''}
+                      {readiness.lastFailureMessage ? ` • ${readiness.lastFailureMessage}` : ''}
+                    </p>
+                  ))}
+              </>
+            )}
+
             {writerDiagnostics && (
               <>
                 <p style={{ margin: 0, fontSize: 11, color: 'var(--label-3)' }}>
@@ -1318,6 +1502,24 @@ export default function LocalAiRuntimeSection() {
                   </p>
                 )}
               </>
+            )}
+
+            {(premiumAlerts.length > 0 || premiumProviderAlerts.length > 0) && (
+              <div style={{ display: 'grid', gap: 4 }}>
+                {[...premiumAlerts, ...premiumProviderAlerts].map((alert) => (
+                  <p
+                    key={`premium-alert-${alert.message}`}
+                    style={{
+                      margin: 0,
+                      fontSize: 11,
+                      lineHeight: 1.45,
+                      color: alert.severity === 'high' ? 'var(--red, #d14b4b)' : 'var(--yellow, #c58b16)',
+                    }}
+                  >
+                    {alert.message}
+                  </p>
+                ))}
+              </div>
             )}
 
             {interpolatorMetrics && (

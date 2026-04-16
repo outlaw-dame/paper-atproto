@@ -17,6 +17,7 @@ import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
 import {
   EMPTY_SENSITIVE_MEDIA_ASSESSMENT,
   assessmentFromMediaAnalysis,
+  createUnavailableSensitiveMediaAssessment,
   detectSensitiveMedia,
   mergeSensitiveMediaAssessments,
   type SensitiveMediaAssessment,
@@ -80,6 +81,12 @@ type MediaCarouselItem =
     };
 
 const multimodalSensitiveCache = new Map<string, SensitiveMediaAssessment>();
+const MULTIMODAL_RETRY_BASE_MS = 5_000;
+const MULTIMODAL_RETRY_MAX_MS = 60_000;
+
+function multimodalRetryDelayMs(attempt: number): number {
+  return Math.min(MULTIMODAL_RETRY_MAX_MS, MULTIMODAL_RETRY_BASE_MS * (2 ** attempt));
+}
 
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, timelineHint, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
@@ -91,6 +98,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [lightboxViewportWidth, setLightboxViewportWidth] = useState(0);
   const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
   const [multimodalSensitiveAssessment, setMultimodalSensitiveAssessment] = useState<SensitiveMediaAssessment>(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+  const [multimodalRetryAttempt, setMultimodalRetryAttempt] = useState(0);
   const mediaScrollRef = useRef<HTMLDivElement | null>(null);
   const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation } = useTranslationStore();
@@ -338,6 +346,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
   useEffect(() => {
     setMultimodalSensitiveAssessment(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+    setMultimodalRetryAttempt(0);
   }, [post.id]);
 
   useEffect(() => {
@@ -350,6 +359,16 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     }
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRetry = () => {
+      if (cancelled) return;
+      retryTimer = setTimeout(() => {
+        if (!cancelled) {
+          setMultimodalRetryAttempt((current) => current + 1);
+        }
+      }, multimodalRetryDelayMs(multimodalRetryAttempt));
+    };
+
     (async () => {
       try {
         const result = await callMediaAnalyzer({
@@ -362,17 +381,29 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         });
 
         const assessment = assessmentFromMediaAnalysis(result);
-        multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, assessment);
+        const authoritative = result.analysisStatus !== 'degraded'
+          && result.moderationStatus !== 'unavailable';
+        if (authoritative) {
+          multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, assessment);
+        } else {
+          scheduleRetry();
+        }
         if (!cancelled) setMultimodalSensitiveAssessment(assessment);
       } catch {
-        multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+        if (!cancelled) {
+          setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
+        }
+        scheduleRetry();
       }
     })();
 
     return () => {
       cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
-  }, [post.content, post.id, primaryVisualTarget]);
+  }, [multimodalRetryAttempt, post.content, post.id, primaryVisualTarget]);
 
   useEffect(() => {
     setExpandedAltIndex(null);

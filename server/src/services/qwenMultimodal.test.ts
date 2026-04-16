@@ -81,6 +81,8 @@ describe('qwenMultimodal', () => {
     expect(result.cautionFlags).toContain('harmful-content-detected');
     expect(result.cautionFlags).toContain('partial-view');
     expect(result.cautionFlags).not.toContain('unexpected-flag');
+    expect(result.analysisStatus).toBe('complete');
+    expect(result.moderationStatus).toBe('authoritative');
 
     const ollamaRequestInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
     const ollamaBody = JSON.parse(String(ollamaRequestInit.body)) as {
@@ -148,5 +150,7 @@ describe('qwenMultimodal', () => {
       allowReveal: true,
       rationale: 'Visible violent injury in frame.',
     });
+    expect(result.analysisStatus).toBe('complete');
+    expect(result.moderationStatus).toBe('authoritative');
   });
 });

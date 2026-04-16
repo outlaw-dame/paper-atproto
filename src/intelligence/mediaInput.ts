@@ -249,6 +249,8 @@ export function mergeMediaResults(results: MediaAnalysisResult[]): WriterMediaFi
       };
       if (r.extractedText) finding.extractedText = r.extractedText;
       if (r.cautionFlags.length > 0) finding.cautionFlags = r.cautionFlags;
+      if (r.analysisStatus) finding.analysisStatus = r.analysisStatus;
+      if (r.moderationStatus) finding.moderationStatus = r.moderationStatus;
       return finding;
     });
 }

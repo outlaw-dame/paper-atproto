@@ -20,6 +20,7 @@ import type {
   DeepInterpolatorResult,
   PremiumAiEntitlements,
 } from '../intelligence/premiumContracts';
+import type { ConversationSupervisorState } from './supervisorTypes';
 
 export type ConversationSessionId = AtUri;
 export type ConversationSessionMode = 'thread' | 'story' | 'profile_slice';
@@ -172,6 +173,7 @@ export interface SessionInterpretationState {
     category?: MentalHealthCrisisCategory;
   };
   aiDiagnostics?: SessionAiDiagnostics;
+  supervisor?: ConversationSupervisorState;
   premium: {
     status: 'idle' | 'loading' | 'ready' | 'error' | 'not_entitled';
     entitlements?: PremiumAiEntitlements;

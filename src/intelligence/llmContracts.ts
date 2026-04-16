@@ -73,6 +73,8 @@ export interface WriterMediaFinding {
   confidence: number;
   extractedText?: string | undefined;
   cautionFlags?: string[] | undefined;
+  analysisStatus?: MediaAnalysisStatus | undefined;
+  moderationStatus?: MediaModerationStatus | undefined;
 }
 
 /**
@@ -156,6 +158,9 @@ export interface MediaModerationRecommendation {
   rationale?: string | undefined;
 }
 
+export type MediaAnalysisStatus = 'complete' | 'degraded';
+export type MediaModerationStatus = 'authoritative' | 'unavailable';
+
 export interface MediaAnalysisResult {
   mediaCentrality: number;
   mediaType: 'screenshot' | 'chart' | 'document' | 'photo' | 'meme' | 'unknown';
@@ -164,6 +169,8 @@ export interface MediaAnalysisResult {
   candidateEntities: string[];
   confidence: number;
   cautionFlags: string[];
+  analysisStatus?: MediaAnalysisStatus | undefined;
+  moderationStatus?: MediaModerationStatus | undefined;
   moderation?: MediaModerationRecommendation | undefined;
 }
 

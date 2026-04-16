@@ -14,6 +14,7 @@ vi.mock('../../server/src/config/env.js', () => ({
 }));
 
 import { OpenAIConversationProvider } from '../../server/src/ai/providers/openAiConversation.provider.js';
+import { getPremiumDiagnostics, resetPremiumDiagnostics } from '../../server/src/llm/premiumDiagnostics.js';
 
 function buildRequest() {
   return {
@@ -88,6 +89,7 @@ function buildRequest() {
 describe('OpenAIConversationProvider', () => {
   beforeEach(() => {
     mockParse.mockReset();
+    resetPremiumDiagnostics();
   });
 
   it('uses structured outputs with privacy-safe request options', async () => {
@@ -140,6 +142,15 @@ describe('OpenAIConversationProvider', () => {
     expect(request.text?.verbosity).toBe('low');
     expect(request.max_output_tokens).toBe(700);
     expect(request.store).toBe(false);
+    const diagnostics = getPremiumDiagnostics() as {
+      providers?: Record<string, {
+        lastModel?: string | null;
+        models?: Record<string, { attempts?: number; successes?: number; failures?: number }>;
+      }>;
+    };
+    expect(diagnostics.providers?.openai?.lastModel).toBe('gpt-5.4');
+    expect(diagnostics.providers?.openai?.models?.['gpt-5.4']?.attempts).toBe(1);
+    expect(diagnostics.providers?.openai?.models?.['gpt-5.4']?.successes).toBe(1);
   });
 
   it('falls back to validated JSON output when parsed content is unavailable', async () => {

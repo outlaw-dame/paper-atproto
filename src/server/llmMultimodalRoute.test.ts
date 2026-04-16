@@ -181,4 +181,34 @@ describe('llmRouter /api/llm/analyze/media Safe Browsing', () => {
     expect(mockCheckUrlAgainstSafeBrowsing).toHaveBeenCalledWith('https://safe.example/image.png');
     expect(mockRunMediaAnalyzer).toHaveBeenCalledTimes(1);
   });
+
+  it('returns an explicit degraded media state when the analyzer throws', async () => {
+    mockRunMediaAnalyzer.mockRejectedValueOnce(new Error('ollama down'));
+
+    const response = await llmRouter.request('/analyze/media', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        threadId: 'thread-1',
+        mediaUrl: 'https://safe.example/image.png',
+        nearbyText: 'caption text',
+        candidateEntities: ['Agency'],
+        factualHints: [],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      mediaCentrality: 0.3,
+      mediaType: 'unknown',
+      mediaSummary: 'Media present — analysis unavailable.',
+      candidateEntities: [],
+      confidence: 0.15,
+      cautionFlags: [],
+      analysisStatus: 'degraded',
+      moderationStatus: 'unavailable',
+    });
+  });
 });

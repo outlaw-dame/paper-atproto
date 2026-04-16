@@ -52,6 +52,15 @@ export const EMPTY_SENSITIVE_MEDIA_ASSESSMENT: SensitiveMediaAssessment = {
   source: 'label',
 };
 
+export function createUnavailableSensitiveMediaAssessment(): SensitiveMediaAssessment {
+  return normalizeAssessment({
+    reasons: [GENERIC_SENSITIVE_REASON],
+    action: 'warn',
+    allowReveal: true,
+    rationale: 'Automatic media moderation is temporarily unavailable.',
+  }, 'multimodal');
+}
+
 type SensitiveMediaAssessmentInput = {
   reasons?: string[] | undefined;
   action?: MediaModerationAction | undefined;
@@ -213,8 +222,12 @@ export function detectSensitiveMedia(post: MockPost): SensitiveMediaAssessment {
 }
 
 export function assessmentFromMediaAnalysis(
-  result: Pick<MediaAnalysisResult, 'moderation' | 'cautionFlags'> | null | undefined,
+  result: Pick<MediaAnalysisResult, 'moderation' | 'cautionFlags' | 'analysisStatus' | 'moderationStatus'> | null | undefined,
 ): SensitiveMediaAssessment {
+  if (result?.analysisStatus === 'degraded' || result?.moderationStatus === 'unavailable') {
+    return createUnavailableSensitiveMediaAssessment();
+  }
+
   const moderation = result?.moderation;
   if (!moderation || moderation.action === 'none' || moderation.confidence < 0.4) {
     if (result?.cautionFlags?.includes('harmful-content-detected')) {

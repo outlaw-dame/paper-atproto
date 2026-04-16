@@ -15,10 +15,12 @@ vi.mock('../../server/src/config/env.js', () => ({
 }));
 
 import { GeminiConversationProvider } from '../../server/src/ai/providers/geminiConversation.provider.js';
+import { getPremiumDiagnostics, resetPremiumDiagnostics } from '../../server/src/llm/premiumDiagnostics.js';
 
 describe('GeminiConversationProvider', () => {
   beforeEach(() => {
     mockGenerateContent.mockReset();
+    resetPremiumDiagnostics();
   });
 
   it('sends contributor, media, and structural thread signals to Gemini', async () => {
@@ -130,13 +132,134 @@ describe('GeminiConversationProvider', () => {
     expect(request.contents).toContain('ENTITY CONFIDENCE: 0.61');
     expect(request.config?.maxOutputTokens).toBe(700);
     expect(request.config?.responseJsonSchema).toBeTruthy();
-    expect(request.config?.thinkingConfig?.thinkingLevel).toBe('LOW');
+    expect(request.config?.thinkingConfig?.thinkingLevel).toBe('MINIMAL');
     expect(request.config?.httpOptions?.retryOptions?.attempts).toBe(3);
     expect(request.config?.httpOptions?.timeout).toBe(12_000);
   });
 
-  it('surfaces Gemini-chain exhaustion when both Gemini models fail structured output', async () => {
+  it('extracts structured JSON from Gemini candidate parts when response.text is unusable', async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      text: '{"summary":"partial"',
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  summary: 'Gemini parts summary.',
+                  groundedContext: 'Parts grounded context.',
+                  perspectiveGaps: ['No primary source'],
+                  followUpQuestions: ['Did anyone post the official notice?'],
+                  confidence: 0.69,
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const provider = new GeminiConversationProvider();
+    (provider as unknown as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
+      models: {
+        generateContent: mockGenerateContent,
+      },
+    };
+
+    const result = await provider.writeDeepInterpolator({
+      actorDid: 'did:plc:abc',
+      threadId: 'thread-parts',
+      summaryMode: 'descriptive_fallback',
+      confidence: {
+        surfaceConfidence: 0.52,
+        entityConfidence: 0.61,
+        interpretiveConfidence: 0.47,
+      },
+      rootPost: {
+        uri: 'at://did:plc:root/app.bsky.feed.post/root',
+        handle: 'author.test',
+        text: 'Root post text.',
+        createdAt: new Date().toISOString(),
+      },
+      selectedComments: [],
+      topContributors: [],
+      safeEntities: [],
+      factualHighlights: [],
+      whatChangedSignals: [],
+      interpretiveBrief: {
+        summaryMode: 'descriptive_fallback',
+        supports: [],
+        limits: [],
+      },
+    });
+
+    expect(result.summary).toBe('Gemini parts summary.');
+    expect(result.groundedContext).toBe('Parts grounded context.');
+  });
+
+  it('retries the same Gemini model when structured output looks truncated', async () => {
     mockGenerateContent
+      .mockResolvedValueOnce({
+        text: '{"summary":"partial"',
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'Recovered summary.',
+          groundedContext: 'Recovered context.',
+          perspectiveGaps: [],
+          followUpQuestions: [],
+          confidence: 0.66,
+        }),
+      });
+
+    const provider = new GeminiConversationProvider();
+    (provider as unknown as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
+      models: {
+        generateContent: mockGenerateContent,
+      },
+    };
+
+    const result = await provider.writeDeepInterpolator({
+      actorDid: 'did:plc:abc',
+      threadId: 'thread-retry',
+      summaryMode: 'descriptive_fallback',
+      confidence: {
+        surfaceConfidence: 0.52,
+        entityConfidence: 0.61,
+        interpretiveConfidence: 0.47,
+      },
+      rootPost: {
+        uri: 'at://did:plc:root/app.bsky.feed.post/root',
+        handle: 'author.test',
+        text: 'Root post text.',
+        createdAt: new Date().toISOString(),
+      },
+      selectedComments: [],
+      topContributors: [],
+      safeEntities: [],
+      factualHighlights: [],
+      whatChangedSignals: [],
+      interpretiveBrief: {
+        summaryMode: 'descriptive_fallback',
+        supports: [],
+        limits: [],
+      },
+    });
+
+    expect(result.summary).toBe('Recovered summary.');
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateContent.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });
+    expect(mockGenerateContent.mock.calls[1]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });
+  });
+
+  it('surfaces structured-output exhaustion honestly when both Gemini models fail JSON repair', async () => {
+    mockGenerateContent
+      .mockResolvedValueOnce({
+        text: '{"summary":"partial"',
+      })
+      .mockResolvedValueOnce({
+        text: '{"summary":"partial"',
+      })
       .mockResolvedValueOnce({
         text: '{"summary":"partial"',
       })
@@ -177,8 +300,8 @@ describe('GeminiConversationProvider', () => {
         limits: [],
       },
     })).rejects.toMatchObject({
-      status: 503,
-      code: 'gemini_model_fallback_exhausted',
+      status: 502,
+      code: 'DEEP_INTERPOLATOR_INVALID_STRUCTURED_OUTPUT',
     });
   });
 
@@ -231,7 +354,24 @@ describe('GeminiConversationProvider', () => {
 
     expect(result.summary).toBe('Gemini fallback summary.');
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-    expect(mockGenerateContent.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });
-    expect(mockGenerateContent.mock.calls[1]?.[0]).toMatchObject({ model: 'gemini-2.5-flash' });
+    expect(mockGenerateContent.mock.calls[0]?.[0]).toMatchObject({
+      model: 'gemini-3-flash-preview',
+      config: { maxOutputTokens: 700 },
+    });
+    expect(mockGenerateContent.mock.calls[1]?.[0]).toMatchObject({
+      model: 'gemini-2.5-flash',
+      config: { maxOutputTokens: 4000 },
+    });
+    const diagnostics = getPremiumDiagnostics() as {
+      providers?: Record<string, {
+        lastModel?: string | null;
+        models?: Record<string, { attempts?: number; successes?: number; failures?: number }>;
+      }>;
+    };
+    expect(diagnostics.providers?.gemini?.lastModel).toBe('gemini-2.5-flash');
+    expect(diagnostics.providers?.gemini?.models?.['gemini-3-flash-preview']?.attempts).toBe(1);
+    expect(diagnostics.providers?.gemini?.models?.['gemini-3-flash-preview']?.failures).toBe(1);
+    expect(diagnostics.providers?.gemini?.models?.['gemini-2.5-flash']?.attempts).toBe(1);
+    expect(diagnostics.providers?.gemini?.models?.['gemini-2.5-flash']?.successes).toBe(1);
   });
 });

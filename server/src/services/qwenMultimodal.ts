@@ -43,6 +43,8 @@ export interface MediaResponse {
   candidateEntities: string[];
   confidence: number;
   cautionFlags: string[];
+  analysisStatus?: 'complete' | 'degraded';
+  moderationStatus?: 'authoritative' | 'unavailable';
   moderation?: {
     action: 'none' | 'warn' | 'blur' | 'drop';
     categories: Array<
@@ -475,6 +477,8 @@ function validateResponse(raw: unknown): MediaResponse {
     candidateEntities,
     confidence,
     cautionFlags: dedupedFlags,
+    analysisStatus: 'complete',
+    moderationStatus: 'authoritative',
     ...(moderation && moderation.action !== 'none' ? { moderation } : {}),
     ...(safeExtractedText !== undefined ? { extractedText: safeExtractedText } : {}),
   };
@@ -490,12 +494,8 @@ function fallbackResponse(mediaAlt?: string, nearbyText?: string): MediaResponse
     candidateEntities: [],
     confidence: 0.15,
     cautionFlags: [],
-    moderation: {
-      action: 'none',
-      categories: [],
-      confidence: 0,
-      allowReveal: true,
-    },
+    analysisStatus: 'degraded',
+    moderationStatus: 'unavailable',
   };
 }
 

@@ -163,6 +163,12 @@ function sanitizeComposerProjectionContext(context: ComposerContext): ComposerCo
                       : {}),
                     cautionFlags: uniqComposerTexts(context.summaries.mediaContext.cautionFlags, 3, 80),
                     confidence: clamp01(context.summaries.mediaContext.confidence) ?? 0,
+                    ...(context.summaries.mediaContext.analysisStatus
+                      ? { analysisStatus: context.summaries.mediaContext.analysisStatus }
+                      : {}),
+                    ...(context.summaries.mediaContext.moderationStatus
+                      ? { moderationStatus: context.summaries.mediaContext.moderationStatus }
+                      : {}),
                   },
                 }
               : {}),
@@ -446,8 +452,14 @@ function projectMediaComposerContext(
   const ranked = [...findings]
     .filter((finding) => typeof finding?.summary === 'string' && finding.summary.trim().length > 0)
     .sort((left, right) => {
-      const rightScore = (right.confidence ?? 0) + (right.extractedText ? 0.08 : 0);
-      const leftScore = (left.confidence ?? 0) + (left.extractedText ? 0.08 : 0);
+      const rightScore = (right.confidence ?? 0)
+        + (right.extractedText ? 0.08 : 0)
+        + (right.analysisStatus === 'complete' ? 0.06 : 0)
+        - (right.analysisStatus === 'degraded' ? 0.08 : 0);
+      const leftScore = (left.confidence ?? 0)
+        + (left.extractedText ? 0.08 : 0)
+        + (left.analysisStatus === 'complete' ? 0.06 : 0)
+        - (left.analysisStatus === 'degraded' ? 0.08 : 0);
       return rightScore - leftScore;
     });
 
@@ -468,6 +480,8 @@ function projectMediaComposerContext(
     primaryKind: primary.mediaType,
     cautionFlags: uniqComposerTexts(ranked.flatMap((finding) => finding.cautionFlags ?? []), 3, 80),
     confidence: Math.max(0, Math.min(1, primary.confidence ?? 0)),
+    ...(primary.analysisStatus ? { analysisStatus: primary.analysisStatus } : {}),
+    ...(primary.moderationStatus ? { moderationStatus: primary.moderationStatus } : {}),
   };
 }
 

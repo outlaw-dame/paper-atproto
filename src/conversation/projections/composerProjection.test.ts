@@ -157,6 +157,8 @@ function makeConversationSession(): ConversationSession {
           confidence: 0.82,
           extractedText: 'WEEKEND SERVICE REDUCTION BEGINS MAY 1',
           cautionFlags: ['partial-view'],
+          analysisStatus: 'degraded',
+          moderationStatus: 'unavailable',
         },
       ],
       confidence: {
@@ -302,5 +304,7 @@ describe('composerProjection helpers', () => {
     expect(context.summaries?.mediaContext?.summary).toContain('Visible text includes');
     expect(context.summaries?.mediaContext?.primaryKind).toBe('document');
     expect(context.summaries?.mediaContext?.cautionFlags).toEqual(['partial-view']);
+    expect(context.summaries?.mediaContext?.analysisStatus).toBe('degraded');
+    expect(context.summaries?.mediaContext?.moderationStatus).toBe('unavailable');
   });
 });

@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import {
   deriveConversationOsHealth,
+  deriveConversationSupervisorSummary,
   deriveConversationOsTrendSummary,
   deriveConversationDeltaAlerts,
+  derivePremiumDiagnosticsAlerts,
+  derivePremiumProviderAvailabilityAlerts,
   deriveConversationWatchAlerts,
   deriveWriterProviderTrendSummaries,
   formatRelativeAge,
   deriveWriterDiagnosticsAlerts,
   humanizeIssueLabel,
+  type PremiumDiagnosticsSnapshot,
+  type PremiumProviderAvailabilitySnapshot,
   topWriterEnhancerIssues,
   type WriterDiagnosticsSnapshot,
 } from './localAiRuntimeDiagnostics';
@@ -176,6 +181,161 @@ function createSnapshot(): WriterDiagnosticsSnapshot {
   };
 }
 
+function createPremiumSnapshot(): PremiumDiagnosticsSnapshot {
+  return {
+    startedAt: new Date().toISOString(),
+    lastUpdatedAt: new Date().toISOString(),
+    telemetryEvents: 9,
+    route: {
+      invocations: 10,
+      successes: 7,
+      failures: 3,
+      successRate: 0.7,
+      failureRate: 0.3,
+      failovers: {
+        attempted: 3,
+        succeeded: 2,
+        failed: 1,
+        successRate: 2 / 3,
+      },
+      safetyFilter: {
+        runs: 7,
+        mutated: 2,
+        blocked: 1,
+        mutationRate: 2 / 7,
+        blockRate: 1 / 7,
+      },
+      qualityRejects: {
+        nonAdditive: 1,
+        lowSignal: 1,
+        total: 2,
+        rejectionRate: 0.2,
+      },
+    },
+    providers: {
+      gemini: {
+        attempts: 5,
+        primaryAttempts: 4,
+        fallbackAttempts: 1,
+        successes: 3,
+        failures: 2,
+        successRate: 0.6,
+        failureRate: 0.4,
+        failoversFrom: 1,
+        failoversTo: 1,
+        qualityRejects: {
+          nonAdditive: 1,
+          lowSignal: 0,
+          total: 1,
+          rejectionRate: 0.2,
+        },
+        failureClasses: {
+          insufficient_quota: 0,
+          auth_unavailable: 0,
+          rate_limited: 1,
+          timeout: 0,
+          model_unavailable: 0,
+          quality_unavailable: 1,
+          provider_unavailable: 0,
+          invalid_output: 0,
+          bad_request: 0,
+          safety_blocked: 0,
+          unknown: 0,
+        },
+        latencyMs: {
+          total: 1500,
+          max: 420,
+          last: 210,
+          average: 300,
+        },
+      },
+      openai: {
+        attempts: 5,
+        primaryAttempts: 4,
+        fallbackAttempts: 1,
+        successes: 4,
+        failures: 1,
+        successRate: 0.8,
+        failureRate: 0.2,
+        failoversFrom: 2,
+        failoversTo: 0,
+        qualityRejects: {
+          nonAdditive: 0,
+          lowSignal: 1,
+          total: 1,
+          rejectionRate: 0.2,
+        },
+        failureClasses: {
+          insufficient_quota: 0,
+          auth_unavailable: 0,
+          rate_limited: 0,
+          timeout: 1,
+          model_unavailable: 0,
+          quality_unavailable: 0,
+          provider_unavailable: 0,
+          invalid_output: 0,
+          bad_request: 0,
+          safety_blocked: 0,
+          unknown: 0,
+        },
+        latencyMs: {
+          total: 1200,
+          max: 380,
+          last: 140,
+          average: 240,
+        },
+      },
+    },
+    lastFailure: {
+      at: new Date().toISOString(),
+      provider: 'gemini',
+      attemptKind: 'primary',
+      failureClass: 'quality_unavailable',
+      message: 'Deep interpolator returned a non-additive summary',
+      retryable: false,
+      code: 'deep_interpolator_non_additive_output',
+      status: 502,
+    },
+  };
+}
+
+function createPremiumProviderAvailabilitySnapshot(): PremiumProviderAvailabilitySnapshot {
+  return {
+    health: {
+      gemini: {
+        operational: false,
+        reason: 'auth_unavailable',
+        unavailableUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
+      },
+      openai: {
+        operational: true,
+        reason: null,
+        unavailableUntil: null,
+      },
+    },
+    readiness: {
+      gemini: {
+        checkedAt: new Date().toISOString(),
+        inFlight: false,
+        lastOutcome: 'persistent_failure',
+        lastFailureReason: 'auth_unavailable',
+        lastFailureStatus: 403,
+        lastFailureCode: null,
+        lastFailureMessage: 'permission denied',
+      },
+      openai: {
+        checkedAt: new Date().toISOString(),
+        inFlight: false,
+        lastOutcome: 'success',
+        lastFailureReason: null,
+        lastFailureStatus: null,
+        lastFailureCode: null,
+        lastFailureMessage: null,
+      },
+    },
+  };
+}
+
 describe('localAiRuntimeDiagnostics', () => {
   it('derives high-signal alerts for writer and enhancer health', () => {
     const alerts = deriveWriterDiagnosticsAlerts(createSnapshot());
@@ -213,6 +373,44 @@ describe('localAiRuntimeDiagnostics', () => {
     ]);
     expect(humanizeIssueLabel('generic-reply-pattern')).toBe('generic reply pattern');
     expect(humanizeIssueLabel('uniqueLabels')).toBe('unique labels');
+  });
+
+  it('derives premium deep alerts for quality rejects, failovers, and safety blocks', () => {
+    const alerts = derivePremiumDiagnosticsAlerts(createPremiumSnapshot());
+
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: 'high',
+        message: 'Premium deep quality rejects are high. Remote providers are returning too many non-additive or low-signal passes.',
+      }),
+      expect.objectContaining({
+        severity: 'high',
+        message: 'Premium deep failover rate is high. One remote provider is unstable enough to disrupt the routed deep pass.',
+      }),
+      expect.objectContaining({
+        severity: 'high',
+        message: 'Premium deep failures are high. Quality gates or upstream provider health are degrading the deep pass.',
+      }),
+      expect.objectContaining({
+        severity: 'high',
+        message: 'Premium deep safety blocks are elevated. Deep synthesis may be producing unsafe or empty summaries.',
+      }),
+      expect.objectContaining({
+        severity: 'high',
+        message: 'Premium deep safety mutation rate is high. Remote summaries may be drifting too close to safety boundaries.',
+      }),
+    ]));
+  });
+
+  it('derives provider-availability alerts for suppressed premium providers', () => {
+    const alerts = derivePremiumProviderAvailabilityAlerts(createPremiumProviderAvailabilitySnapshot());
+
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: 'high',
+        message: 'Premium provider gemini is currently suppressed: auth_unavailable (403).',
+      }),
+    ]));
   });
 
   it('derives provider-specific enhancer drift summaries from longitudinal history', () => {
@@ -341,6 +539,8 @@ describe('localAiRuntimeDiagnostics', () => {
 
     const health = deriveConversationOsHealth({
       writer: createSnapshot(),
+      premium: createPremiumSnapshot(),
+      premiumProviders: createPremiumProviderAvailabilitySnapshot(),
       metrics: {
         modes: {
           normal: { count: 4, modelRate: 0.75, fallbackRate: 0.25, avgSurfaceConfidence: 0.7, avgInterpretiveConfidence: 0.66 },
@@ -394,6 +594,7 @@ describe('localAiRuntimeDiagnostics', () => {
 
     expect(health.status).toBe('degraded');
     expect(health.headline).toContain('degraded');
+    expect(health.details.some((detail) => detail.includes('Premium provider gemini unavailable'))).toBe(true);
   });
 
   it('derives longitudinal Conversation OS trend summaries from bounded history', () => {
@@ -466,6 +667,55 @@ describe('localAiRuntimeDiagnostics', () => {
     expect(trend.headline).toContain('trends show churn');
     expect(trend.details[0]).toContain('self-heal 30.0%');
     expect(trend.details[2]).toContain('descriptive 5');
+  });
+
+  it('derives a shadow supervisor summary from recommendation telemetry', () => {
+    const summary = deriveConversationSupervisorSummary({
+      mode: 'shadow',
+      decisionsEvaluated: 8,
+      noActionDecisions: 3,
+      recommendationsIssued: 5,
+      cooldownSuppressions: 2,
+      triggerCounts: {
+        session_hydrated: 2,
+        writer_completed: 2,
+        multimodal_completed: 1,
+        premium_completed: 3,
+      },
+      actionCounts: {
+        hold_premium_until_fresh: 1,
+        rerun_writer_with_safe_fallback: 1,
+        skip_premium_for_cycle: 1,
+        stabilize_composer_context: 1,
+        treat_multimodal_as_low_authority: 1,
+      },
+      traceCounts: {
+        writer_error: 1,
+        writer_stale_discard: 0,
+        multimodal_degraded: 1,
+        multimodal_error: 0,
+        premium_error: 2,
+        premium_low_signal_cycle: 1,
+        mutation_churn: 1,
+        premium_waiting_on_freshness: 0,
+      },
+      lastDecision: {
+        trigger: 'premium_completed',
+        evaluatedAt: '2026-04-09T13:10:00.000Z',
+        actionTypes: ['skip_premium_for_cycle'],
+        traceCodes: ['premium_error', 'premium_low_signal_cycle'],
+        summaryMode: 'minimal_fallback',
+        activeTasks: [],
+        premiumStatus: 'error',
+        multimodalAuthority: 'low_authority',
+        cooldownSuppressed: false,
+      },
+    });
+
+    expect(summary.status).toBe('degraded');
+    expect(summary.headline).toContain('shadow supervisor');
+    expect(summary.details[0]).toContain('recommendations 5');
+    expect(summary.details[2]).toContain('skip_premium_for_cycle');
   });
 
   it('formats relative timestamp ages for the operator view', () => {

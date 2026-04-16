@@ -228,6 +228,13 @@ describe('llm router hardening', () => {
         invocations?: number;
         fallbacks?: { total?: number };
       };
+      premium?: {
+        route?: {
+          invocations?: number;
+          failures?: number;
+          qualityRejects?: { total?: number };
+        };
+      };
     };
 
     expect(diagnostics.writer?.clientOutcomes?.fallback).toBeGreaterThanOrEqual(1);
@@ -236,6 +243,9 @@ describe('llm router hardening', () => {
     expect(diagnostics.writer?.enhancer?.reviews).toBeGreaterThanOrEqual(0);
     expect(diagnostics.multimodal?.invocations).toBeGreaterThanOrEqual(0);
     expect(diagnostics.multimodal?.fallbacks?.total).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.premium?.route?.invocations).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.premium?.route?.failures).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.premium?.route?.qualityRejects?.total).toBeGreaterThanOrEqual(0);
   });
 
   it('blocks production diagnostics without admin secret', async () => {

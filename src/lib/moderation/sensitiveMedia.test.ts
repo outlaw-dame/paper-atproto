@@ -63,6 +63,8 @@ describe('detectSensitiveMedia', () => {
 
   it('builds multimodal drop assessments from severe model recommendations', () => {
     const result = assessmentFromMediaAnalysis({
+      analysisStatus: 'complete',
+      moderationStatus: 'authoritative',
       cautionFlags: [],
       moderation: {
         action: 'drop',
@@ -79,6 +81,23 @@ describe('detectSensitiveMedia', () => {
       action: 'drop',
       allowReveal: false,
       rationale: 'The image may depict exploitative content involving a child.',
+      source: 'multimodal',
+    });
+  });
+
+  it('fails closed to a warning when multimodal moderation is unavailable', () => {
+    const result = assessmentFromMediaAnalysis({
+      analysisStatus: 'degraded',
+      moderationStatus: 'unavailable',
+      cautionFlags: [],
+    });
+
+    expect(result).toEqual({
+      isSensitive: true,
+      reasons: ['sensitive-content'],
+      action: 'warn',
+      allowReveal: true,
+      rationale: 'Automatic media moderation is temporarily unavailable.',
       source: 'multimodal',
     });
   });

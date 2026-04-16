@@ -168,6 +168,8 @@ describe('runMediaAnalyzer hardening', () => {
 
     expect(result.mediaSummary).toBe('Media present — analysis unavailable.');
     expect(result.confidence).toBe(0.15);
+    expect(result.analysisStatus).toBe('degraded');
+    expect(result.moderationStatus).toBe('unavailable');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -184,6 +186,8 @@ describe('runMediaAnalyzer hardening', () => {
 
     expect(result.mediaSummary).toBe('Media present — analysis unavailable.');
     expect(result.confidence).toBe(0.15);
+    expect(result.analysisStatus).toBe('degraded');
+    expect(result.moderationStatus).toBe('unavailable');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -232,6 +236,8 @@ describe('runMediaAnalyzer hardening', () => {
       candidateEntities: ['Agency'],
       confidence: 0.92,
       cautionFlags: ['partial-view'],
+      analysisStatus: 'complete',
+      moderationStatus: 'authoritative',
     });
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0]).toBe('http://localhost:11434/api/chat');
@@ -269,6 +275,8 @@ describe('runMediaAnalyzer hardening', () => {
       candidateEntities: ['Settings', 'Notifications'],
       confidence: 0.81,
       cautionFlags: [],
+      analysisStatus: 'complete',
+      moderationStatus: 'authoritative',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('http://localhost:11434/api/chat');

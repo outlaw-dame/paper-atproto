@@ -5,6 +5,7 @@ import type {
   ConversationSessionMode,
 } from './sessionTypes';
 import { createSessionAiDiagnostics } from './modelExecution';
+import { createConversationSupervisorState } from './shadowSupervisor';
 
 type ConversationSessionStore = {
   byId: Record<ConversationSessionId, ConversationSession>;
@@ -53,6 +54,7 @@ function createEmptySession(
       threadState: null,
       interpretiveExplanation: null,
       aiDiagnostics: createSessionAiDiagnostics(),
+      supervisor: createConversationSupervisorState(),
       premium: {
         status: 'idle',
       },

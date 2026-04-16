@@ -281,6 +281,8 @@ export function refineMediaAnalysisResult(
     candidateEntities,
     confidence,
     cautionFlags,
+    analysisStatus: result.analysisStatus ?? 'complete',
+    moderationStatus: result.moderationStatus ?? 'authoritative',
     ...(result.moderation ? { moderation: result.moderation } : {}),
     ...(extractedText ? { extractedText } : {}),
   };
@@ -313,6 +315,8 @@ export function buildCaptionFallbackMediaAnalysis(
     candidateEntities: [],
     confidence: buildCaptionFallbackConfidence(classification, summary),
     cautionFlags: [],
+    analysisStatus: 'degraded',
+    moderationStatus: 'unavailable',
   };
 
   return refineMediaAnalysisResult(request, provisional);

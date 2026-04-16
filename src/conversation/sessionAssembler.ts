@@ -45,6 +45,7 @@ import { applyInterpretiveConfidence } from './interpretive/interpretiveScoring'
 import { humanizeInterpretiveReason } from './interpretive/interpretiveExplanation';
 import { updateConversationContinuitySnapshots } from './continuitySnapshots';
 import { finalizeConversationDeltaDecision } from './deltaDecision';
+import { applyShadowConversationSupervisor } from './shadowSupervisor';
 import {
   buildConversationModelSourceToken,
   matchesConversationModelSourceToken,
@@ -766,6 +767,7 @@ export async function hydrateConversationSession(
       },
     };
     nextSession = updateConversationContinuitySnapshots(nextSession);
+    nextSession = applyShadowConversationSupervisor(nextSession, 'session_hydrated');
 
     store.updateSession(sessionId, () => nextSession!);
     const modelSourceToken = buildConversationModelSourceToken(nextSession);
@@ -953,11 +955,11 @@ export async function hydrateConversationSession(
           }
 
           if (mediaOutcome.status === 'error') {
-            return markConversationModelError(current, 'multimodal', {
+            return applyShadowConversationSupervisor(markConversationModelError(current, 'multimodal', {
               sourceToken: modelSourceToken,
               requestedAt: multimodalRequestedAt,
               error: mediaOutcome.error,
-            });
+            }), 'multimodal_completed');
           }
 
           const nextCurrent = mediaFindings.length > 0
@@ -970,10 +972,10 @@ export async function hydrateConversationSession(
               }
             : current;
 
-          return markConversationModelReady(nextCurrent, 'multimodal', {
+          return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'multimodal', {
             sourceToken: modelSourceToken,
             requestedAt: multimodalRequestedAt,
-          });
+          }), 'multimodal_completed');
         });
       }
 
@@ -1043,10 +1045,10 @@ export async function hydrateConversationSession(
             })
           : current;
 
-        return markConversationModelReady(nextCurrent, 'writer', {
+        return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'writer', {
           sourceToken: modelSourceToken,
           requestedAt: writerRequestedAt,
-        });
+        }), 'writer_completed');
       });
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -1056,11 +1058,11 @@ export async function hydrateConversationSession(
       const errorMessage = sanitizeErrorMessage(err);
       store.updateSession(sessionId, (current) => (
         matchesConversationModelSourceToken(current, modelSourceToken)
-          ? markConversationModelError(current, 'writer', {
+          ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
               sourceToken: modelSourceToken,
               requestedAt: writerRequestedAt,
               error: errorMessage,
-            })
+            }), 'writer_completed')
           : markConversationModelDiscarded(current, 'writer')
       ));
       console.warn('[conversation] writer step failed', errorMessage);
@@ -1070,7 +1072,7 @@ export async function hydrateConversationSession(
     const actorDid = useSessionStore.getState().session?.did?.trim();
     if (!actorDid) {
       store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped({
+        applyShadowConversationSupervisor(markConversationModelSkipped({
           ...current,
           interpretation: {
             ...current.interpretation,
@@ -1081,7 +1083,7 @@ export async function hydrateConversationSession(
         }, 'premium', {
           reason: 'not_entitled',
           sourceToken: modelSourceToken,
-        })
+        }), 'premium_completed')
       ));
       return;
     }
@@ -1129,12 +1131,12 @@ export async function hydrateConversationSession(
 
       if (!shouldRunPremiumDeepInterpolator(currentSession, allReplies.length, entitlements)) {
         store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'premium', {
+          applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
             reason: entitlements.capabilities.includes('deep_interpolator')
               ? 'premium_ineligible'
               : 'not_entitled',
             sourceToken: modelSourceToken,
-          })
+          }), 'premium_completed')
         ));
         return;
       }
@@ -1171,7 +1173,7 @@ export async function hydrateConversationSession(
 
       store.updateSession(sessionId, (current) => ({
         ...(matchesConversationModelSourceToken(current, modelSourceToken)
-          ? markConversationModelReady({
+          ? applyShadowConversationSupervisor(markConversationModelReady({
               ...current,
               interpretation: {
                 ...current.interpretation,
@@ -1187,7 +1189,7 @@ export async function hydrateConversationSession(
             }, 'premium', {
               sourceToken: modelSourceToken,
               requestedAt: premiumRequestedAt,
-            })
+            }), 'premium_completed')
           : markConversationModelDiscarded(current, 'premium')),
       }));
     } catch (err) {
@@ -1198,7 +1200,7 @@ export async function hydrateConversationSession(
       const errorMessage = sanitizeErrorMessage(err);
       store.updateSession(sessionId, (current) => (
         matchesConversationModelSourceToken(current, modelSourceToken)
-          ? markConversationModelError({
+          ? applyShadowConversationSupervisor(markConversationModelError({
               ...current,
               interpretation: {
                 ...current.interpretation,
@@ -1218,7 +1220,7 @@ export async function hydrateConversationSession(
               sourceToken: modelSourceToken,
               requestedAt: premiumRequestedAt,
               error: errorMessage,
-            })
+            }), 'premium_completed')
           : markConversationModelDiscarded(current, 'premium')
       ));
       console.warn('[conversation] premium interpolation failed', errorMessage);

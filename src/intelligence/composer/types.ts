@@ -1,6 +1,7 @@
 import type { AbuseModelResult } from '../../lib/abuseModel';
 import type { SentimentResult } from '../../lib/sentiment';
 import type { ComposerMLSignals } from './classifierContracts';
+import type { MediaAnalysisStatus, MediaModerationStatus } from '../llmContracts';
 
 export type ComposerMode = 'post' | 'reply' | 'hosted_thread';
 export type ComposerGuidanceLevel = 'ok' | 'positive' | 'caution' | 'warning' | 'alert';
@@ -62,6 +63,8 @@ export interface ComposerMediaContextSummary {
   primaryKind?: 'screenshot' | 'chart' | 'document' | 'photo' | 'meme' | 'unknown';
   cautionFlags: string[];
   confidence: number;
+  analysisStatus?: MediaAnalysisStatus;
+  moderationStatus?: MediaModerationStatus;
 }
 
 export interface ComposerSummaries {

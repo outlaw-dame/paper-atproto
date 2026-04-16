@@ -138,6 +138,44 @@ describe('modelClient retry policy', () => {
     expect(result.mediaSummary.toLowerCase()).toContain('redlined transit policy memo');
     expect(result.confidence).toBeGreaterThan(0.35);
     expect(result.candidateEntities).toContain('Agency');
+    expect(result.analysisStatus).toBe('degraded');
+    expect(result.moderationStatus).toBe('unavailable');
+  });
+
+  it('upgrades degraded server media analysis with a local caption fallback while keeping moderation unavailable', async () => {
+    vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        mediaCentrality: 0.3,
+        mediaType: 'unknown',
+        mediaSummary: 'Media present — analysis unavailable.',
+        candidateEntities: [],
+        confidence: 0.15,
+        cautionFlags: [],
+        analysisStatus: 'degraded',
+        moderationStatus: 'unavailable',
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      }));
+
+    mockCaptionImage.mockResolvedValueOnce('A screenshot of a city memo about transit funding cuts.');
+
+    const result = await callMediaAnalyzer({
+      threadId: 'thread-degraded-server',
+      mediaUrl: 'https://safe.example/memo.png',
+      mediaAlt: 'memo screenshot',
+      nearbyText: 'People are arguing over whether the memo confirms the transit cuts.',
+      candidateEntities: ['City transit'],
+      factualHints: ['The screenshot is central to the claim.'],
+    });
+
+    expect(mockCaptionImage).toHaveBeenCalledTimes(1);
+    expect(result.mediaSummary.toLowerCase()).toContain('transit funding cuts');
+    expect(result.analysisStatus).toBe('degraded');
+    expect(result.moderationStatus).toBe('unavailable');
   });
 
   it('does not use the local caption worker for non-retryable media-analysis rejections', async () => {

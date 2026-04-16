@@ -67,7 +67,20 @@ vi.mock('../../server/src/lib/googleGenAi.js', () => ({
 }));
 
 vi.mock('../../server/src/ai/premiumProviderHealth.js', () => ({
+  classifyPremiumAiProviderOutage: (error: unknown) => {
+    const code = (error as { code?: string })?.code;
+    const status = (error as { status?: number })?.status;
+    if (code === 'insufficient_quota') return 'insufficient_quota';
+    if (code === 'model_not_found' || status === 404) return 'model_unavailable';
+    if (status === 429) return 'rate_limited';
+    if (status === 504) return 'timeout';
+    if (status === 503) return 'provider_unavailable';
+    return null;
+  },
   isPremiumAiProviderOperational: mockIsPremiumAiProviderOperational,
+  isPersistentPremiumAiProviderOutageReason: (reason: string | null | undefined) => (
+    reason === 'insufficient_quota' || reason === 'auth_unavailable' || reason === 'model_unavailable'
+  ),
   recordPremiumAiProviderFailure: mockRecordPremiumAiProviderFailure,
   recordPremiumAiProviderSuccess: mockRecordPremiumAiProviderSuccess,
 }));
@@ -127,6 +140,22 @@ describe('ensurePremiumAiProviderReady', () => {
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockRecordPremiumAiProviderFailure).toHaveBeenCalledWith('openai', quotaError);
+  });
+
+  it('does not suppress Gemini on transient readiness probe failures', async () => {
+    const timeoutError = Object.assign(new Error('temporary timeout'), {
+      status: 504,
+      code: 'deadline_exceeded',
+    });
+    mockGeminiGenerate.mockRejectedValue(timeoutError);
+
+    await expect(ensurePremiumAiProviderReady('gemini')).resolves.toBeUndefined();
+
+    expect(mockGeminiGenerate).toHaveBeenCalledTimes(4);
+    expect(mockGeminiGenerate.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });
+    expect(mockGeminiGenerate.mock.calls[2]?.[0]).toMatchObject({ model: 'gemini-2.5-flash' });
+    expect(mockRecordPremiumAiProviderFailure).not.toHaveBeenCalled();
+    expect(mockRecordPremiumAiProviderSuccess).not.toHaveBeenCalledWith('gemini');
   });
 
   it('probes Gemini generation once and caches a successful readiness result', async () => {

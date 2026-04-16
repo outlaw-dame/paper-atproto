@@ -31,30 +31,43 @@ function buildPremiumContextSignals(
   const premiumContext = context.summaries?.premiumContext;
   if (!premiumContext) return [];
 
+  const deepSummary = sanitizeWriterText(premiumContext.deepSummary, 110);
   const groundedContext = sanitizeWriterText(premiumContext.groundedContext, 120);
-  const perspectiveGap = sanitizeWriterText(premiumContext.perspectiveGaps[0], 100);
-  const followUpQuestion = sanitizeWriterText(premiumContext.followUpQuestions[0], 100);
+  const perspectiveGaps = uniqStrings(
+    premiumContext.perspectiveGaps
+      .map((value) => sanitizeWriterText(value, 90))
+      .filter((value): value is string => Boolean(value)),
+  ).slice(0, 2);
+  const followUpQuestions = uniqStrings(
+    premiumContext.followUpQuestions
+      .map((value) => sanitizeWriterText(value, 90))
+      .filter((value): value is string => Boolean(value)),
+  ).slice(0, 2);
 
   const signals: string[] = [];
   const contextParts: string[] = [];
 
   if (groundedContext) {
     contextParts.push(`Deep context: ${groundedContext}`);
+  } else if (deepSummary) {
+    contextParts.push(`Deep summary: ${deepSummary}`);
   }
 
-  if (perspectiveGap) {
-    contextParts.push(`Missing context: ${perspectiveGap}`);
+  if (perspectiveGaps.length > 0) {
+    contextParts.push(`Missing context: ${perspectiveGaps.join(' | ')}`);
   }
 
   if (contextParts.length > 0) {
     signals.push(contextParts.join(' '));
   }
 
-  if (followUpQuestion) {
-    signals.push(`Open question: ${followUpQuestion}`);
+  if (followUpQuestions.length > 0) {
+    signals.push(
+      `${followUpQuestions.length > 1 ? 'Open questions' : 'Open question'}: ${followUpQuestions.join(' | ')}`,
+    );
   }
 
-  return uniqStrings(signals).slice(0, 2);
+  return uniqStrings(signals).slice(0, 3);
 }
 
 function buildMediaContextSignals(
@@ -76,6 +89,12 @@ function buildMediaContextSignals(
   if (caution) {
     parts.push(`Caution: ${caution}.`);
   }
+  if (mediaContext.analysisStatus === 'degraded') {
+    parts.push('Use this as a low-authority media hint.');
+  }
+  if (mediaContext.moderationStatus === 'unavailable') {
+    parts.push('Moderation status is unavailable.');
+  }
 
   return [`Media context: ${parts.join(' ')}`];
 }
@@ -89,11 +108,17 @@ function buildParentSignals(
       .map((value) => sanitizeWriterText(value, 100))
       .filter((value): value is string => Boolean(value)),
   );
+  const premiumSignals = buildPremiumContextSignals(context);
+  const mediaSignals = buildMediaContextSignals(context);
+  const prioritizedContextSignals = uniqStrings([
+    ...premiumSignals,
+    ...mediaSignals,
+  ]).slice(0, 3);
+  const heuristicBudget = Math.max(0, 4 - prioritizedContextSignals.length);
 
   return uniqStrings([
-    ...heuristicSignals,
-    ...buildMediaContextSignals(context),
-    ...buildPremiumContextSignals(context),
+    ...prioritizedContextSignals,
+    ...heuristicSignals.slice(0, heuristicBudget),
   ]).slice(0, 4);
 }
 

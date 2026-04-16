@@ -9,6 +9,12 @@ import {
   type PremiumAiProviderName,
 } from './premiumProviderHealth.js';
 import {
+  recordPremiumProviderAttempt,
+  recordPremiumProviderFailure,
+  recordPremiumProviderFailover,
+  recordPremiumProviderSuccess,
+} from '../llm/premiumDiagnostics.js';
+import {
   GeminiConversationProvider,
   type DeepInterpolatorResult,
   type PremiumInterpolatorRequest,
@@ -21,15 +27,37 @@ const openAIConversationProvider = new OpenAIConversationProvider();
 async function invokePremiumProvider(
   provider: PremiumAiProviderName,
   request: PremiumInterpolatorRequest,
+  attemptKind: 'primary' | 'fallback',
+  requestId?: string,
 ): Promise<DeepInterpolatorResult> {
+  const startedAt = Date.now();
+  recordPremiumProviderAttempt({ provider, attemptKind });
   try {
     const result = provider === 'openai'
       ? await openAIConversationProvider.writeDeepInterpolator(request)
       : await geminiConversationProvider.writeDeepInterpolator(request);
     recordPremiumAiProviderSuccess(provider);
+    recordPremiumProviderSuccess({
+      provider,
+      attemptKind,
+      latencyMs: Date.now() - startedAt,
+    });
     return result;
   } catch (error) {
+    if (error && typeof error === 'object') {
+      Object.assign(error as object, {
+        premiumProvider: provider,
+        premiumAttemptKind: attemptKind,
+      });
+    }
     recordPremiumAiProviderFailure(provider, error);
+    recordPremiumProviderFailure({
+      provider,
+      attemptKind,
+      latencyMs: Date.now() - startedAt,
+      error,
+      ...(requestId ? { requestId } : {}),
+    });
     throw error;
   }
 }
@@ -47,7 +75,7 @@ export async function writePremiumDeepInterpolator(
   }
 
   try {
-    return await invokePremiumProvider(provider, request);
+    return await invokePremiumProvider(provider, request, 'primary', request.requestId);
   } catch (error) {
     if (!isPremiumAiProviderUnavailableError(error)) {
       throw error;
@@ -57,6 +85,10 @@ export async function writePremiumDeepInterpolator(
     if (!fallbackProvider || fallbackProvider === provider) {
       throw error;
     }
-    return invokePremiumProvider(fallbackProvider, request);
+    recordPremiumProviderFailover({
+      fromProvider: provider,
+      toProvider: fallbackProvider,
+    });
+    return invokePremiumProvider(fallbackProvider, request, 'fallback', request.requestId);
   }
 }

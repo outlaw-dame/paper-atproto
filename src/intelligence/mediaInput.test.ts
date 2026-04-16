@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveMediaFactualHints, selectMediaForAnalysis } from './mediaInput';
+import { deriveMediaFactualHints, mergeMediaResults, selectMediaForAnalysis } from './mediaInput';
 
 describe('selectMediaForAnalysis', () => {
   it('drops unsafe local media urls before multimodal analysis', () => {
@@ -137,6 +137,34 @@ describe('selectMediaForAnalysis', () => {
 
     expect(hints).toEqual([
       'Reuters says the memo applies only to federal contractors after January.',
+    ]);
+  });
+
+  it('preserves degraded analysis state when merging media results', () => {
+    const findings = mergeMediaResults([
+      {
+        mediaCentrality: 0.7,
+        mediaType: 'document',
+        mediaSummary: 'Fallback caption says the image shows a transit memo.',
+        extractedText: 'WEEKEND SERVICE REDUCTION',
+        candidateEntities: [],
+        confidence: 0.66,
+        cautionFlags: ['partial-view'],
+        analysisStatus: 'degraded',
+        moderationStatus: 'unavailable',
+      },
+    ]);
+
+    expect(findings).toEqual([
+      {
+        mediaType: 'document',
+        summary: 'Fallback caption says the image shows a transit memo.',
+        confidence: 0.66,
+        extractedText: 'WEEKEND SERVICE REDUCTION',
+        cautionFlags: ['partial-view'],
+        analysisStatus: 'degraded',
+        moderationStatus: 'unavailable',
+      },
     ]);
   });
 });

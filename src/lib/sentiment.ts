@@ -345,6 +345,8 @@ export interface AnalyzeOptions {
   commentTexts?: string[];
   /** Aggregate comments/replies count if available. */
   totalCommentCount?: number;
+  /** Bounded Conversation OS summary signals that can inform reply-aware analysis. */
+  contextSignals?: string[];
 }
 
 export type ToneClassifier = (text: string) => Promise<ToneModelResult>;
@@ -398,7 +400,7 @@ function toneLooksHostile(tone: ToneModelResult, isReplyContext: boolean): boole
   );
 }
 
-function mergeToneModelIntoSentiment(
+export function applyToneModelToSentiment(
   base: SentimentResult,
   text: string,
   tone: ToneModelResult,
@@ -486,6 +488,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     threadTexts = [],
     commentTexts = [],
     totalCommentCount = 0,
+    contextSignals = [],
   } = options;
 
   // Check for mental health crisis language immediately
@@ -544,6 +547,14 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
   const stanceCoverage = analyzeStanceCoverage(threadContextTexts);
   if (parentText && stanceCoverage.represented.length > 0 && stanceCoverage.diversity < 0.5) {
     parentSignals.push('Thread viewpoints look narrow right now — adding context or an evidence-based angle can improve balance.');
+  }
+
+  const normalizedContextSignals = contextSignals
+    .map((signal) => signal.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (normalizedContextSignals.length > 0) {
+    parentSignals.push(...normalizedContextSignals);
   }
 
   // In reply context, lower the baseline threshold because short replies are
@@ -685,7 +696,7 @@ export async function analyzeSentimentWithModel(
 
   try {
     const tone = await classifyTone(trimmed);
-    return mergeToneModelIntoSentiment(base, trimmed, tone);
+    return applyToneModelToSentiment(base, trimmed, tone);
   } catch {
     return base;
   }

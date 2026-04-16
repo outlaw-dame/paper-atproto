@@ -6,8 +6,8 @@ import type {
   ComposerTargetedToneResult,
 } from '../lib/composerMl';
 import {
+  applyToneModelToSentiment,
   analyzeSentiment,
-  analyzeSentimentWithModel,
   type AnalyzeOptions,
   type SentimentResult,
   type ToneClassifier,
@@ -44,6 +44,8 @@ const ABUSE_HIGH_SEVERITY_THRESHOLD = 0.42;
 const ABUSE_INSULT_THRESHOLD = 0.78;
 const ABUSE_TOXIC_THRESHOLD = 0.76;
 const ML_MIN_LENGTH = 12;
+const MODEL_CONTEXT_SIGNAL_LIMIT = 4;
+const MODEL_CONTEXT_SIGNAL_MAX_LENGTH = 120;
 
 let inferenceClientModulePromise: Promise<typeof import('../workers/InferenceClient')> | null = null;
 
@@ -180,6 +182,25 @@ function toComposerMLSignals(input: {
   return ml;
 }
 
+function buildContextAwareModelText(text: string, options: AnalyzeOptions): string {
+  const contextSignals = (options.contextSignals ?? [])
+    .map((value) => value.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, MODEL_CONTEXT_SIGNAL_LIMIT)
+    .map((value) => value.slice(0, MODEL_CONTEXT_SIGNAL_MAX_LENGTH));
+
+  if (contextSignals.length === 0) {
+    return text;
+  }
+
+  return [
+    text.trim(),
+    '',
+    'Conversation context:',
+    ...contextSignals.map((signal) => `- ${signal}`),
+  ].join('\n');
+}
+
 export function analyzeComposeToneImmediate(
   text: string,
   options: AnalyzeOptions = {},
@@ -200,12 +221,14 @@ export async function analyzeComposeTone(
   const toolsUsed: ComposeToneToolKey[] = ['heuristic'];
   let result = analyzeSentiment(text, options);
   const trimmed = text.trim();
+  const contextAwareText = buildContextAwareModelText(trimmed, options);
   const skipNuanceModels = result.level === 'alert' || result.hasMentalHealthCrisis;
 
   if (!skipNuanceModels && trimmed.length >= 6) {
     try {
       const classifyTone = dependencies.classifyTone ?? await getDefaultToneClassifier();
-      result = await analyzeSentimentWithModel(text, options, classifyTone);
+      const tone = await classifyTone(contextAwareText);
+      result = applyToneModelToSentiment(result, trimmed, tone);
       toolsUsed.push('zero-shot-tone');
     } catch {
       result = analyzeSentiment(text, options);
@@ -258,7 +281,7 @@ export async function analyzeComposeTone(
 
     try {
       const classifyQuality = dependencies.classifyQuality ?? await getDefaultQualityClassifier();
-      quality = await classifyQuality(trimmed);
+      quality = await classifyQuality(contextAwareText);
       toolsUsed.push('quality-score');
     } catch {
       quality = null;

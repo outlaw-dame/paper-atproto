@@ -524,6 +524,16 @@ function sanitizeWriterMediaFindings(
       const extractedText = typeof finding.extractedText === 'string'
         ? finding.extractedText.replace(/\s+/g, ' ').trim().slice(0, 280)
         : undefined;
+      const analysisStatus: WriterMediaFinding['analysisStatus'] = finding.analysisStatus === 'degraded'
+        ? 'degraded'
+        : finding.analysisStatus === 'complete'
+          ? 'complete'
+          : undefined;
+      const moderationStatus: WriterMediaFinding['moderationStatus'] = finding.moderationStatus === 'unavailable'
+        ? 'unavailable'
+        : finding.moderationStatus === 'authoritative'
+          ? 'authoritative'
+          : undefined;
 
       return {
         mediaType,
@@ -531,6 +541,8 @@ function sanitizeWriterMediaFindings(
         confidence,
         ...(extractedText ? { extractedText } : {}),
         ...(cautionFlags.length > 0 ? { cautionFlags } : {}),
+        ...(analysisStatus ? { analysisStatus } : {}),
+        ...(moderationStatus ? { moderationStatus } : {}),
       };
     })
     .filter((finding) => finding.summary.length > 0)
