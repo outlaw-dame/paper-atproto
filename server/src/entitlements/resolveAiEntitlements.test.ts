@@ -41,7 +41,7 @@ describe('resolvePremiumAiEntitlements', () => {
     const entitlements = resolvePremiumAiEntitlements('did:plc:test-user', 'openai');
 
     expect(entitlements.tier).toBe('pro');
-    expect(entitlements.capabilities).toEqual(['deep_interpolator']);
+    expect(entitlements.capabilities).toEqual(['deep_interpolator', 'explore_insight']);
     expect(entitlements.providerAvailable).toBe(true);
     expect(entitlements.availableProviders).toEqual(['gemini', 'openai']);
     expect(entitlements.provider).toBe('openai');

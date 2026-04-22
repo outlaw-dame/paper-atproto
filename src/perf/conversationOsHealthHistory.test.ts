@@ -92,9 +92,12 @@ describe('conversationOsHealthHistory', () => {
   });
 
   it('persists sanitized bounded history snapshots', () => {
+    const t0 = new Date(Date.now() - 120_000).toISOString();
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+
     appendConversationOsHealthHistory(createSnapshot(), {
       storage,
-      recordedAt: '2026-04-08T20:00:00.000Z',
+      recordedAt: t0,
       minSampleIntervalMs: 0,
     });
     appendConversationOsHealthHistory(createSnapshot({
@@ -110,7 +113,7 @@ describe('conversationOsHealthHistory', () => {
       },
     }), {
       storage,
-      recordedAt: '2026-04-08T20:02:00.000Z',
+      recordedAt: t1,
       minSampleIntervalMs: 0,
     });
 
@@ -121,9 +124,12 @@ describe('conversationOsHealthHistory', () => {
   });
 
   it('replaces the most recent entry inside the sampling window', () => {
+    const t0 = new Date(Date.now() - 90_000).toISOString();
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+
     appendConversationOsHealthHistory(createSnapshot(), {
       storage,
-      recordedAt: '2026-04-08T20:00:00.000Z',
+      recordedAt: t0,
       minSampleIntervalMs: 60_000,
     });
     appendConversationOsHealthHistory(createSnapshot({
@@ -135,13 +141,13 @@ describe('conversationOsHealthHistory', () => {
         degradedCount: 1,
         reconnectCount: 1,
         closedCount: 0,
-        lastReadyAt: '2026-04-08T20:00:00.000Z',
-        lastInvalidationAt: '2026-04-08T20:01:00.000Z',
+        lastReadyAt: t0,
+        lastInvalidationAt: t1,
         lastStatusCode: 'timeout',
       },
     }), {
       storage,
-      recordedAt: '2026-04-08T20:00:30.000Z',
+      recordedAt: t1,
       minSampleIntervalMs: 60_000,
     });
 

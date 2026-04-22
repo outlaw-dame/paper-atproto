@@ -84,9 +84,12 @@ describe('writerEnhancerProviderHistory', () => {
   });
 
   it('persists sanitized provider snapshots', () => {
+    const t0 = new Date(Date.now() - 120_000).toISOString();
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+
     appendWriterEnhancerProviderHistory(createSnapshot(), {
       storage,
-      recordedAt: '2026-04-08T20:00:00.000Z',
+      recordedAt: t0,
       minSampleIntervalMs: 0,
     });
     appendWriterEnhancerProviderHistory(createSnapshot({
@@ -99,7 +102,7 @@ describe('writerEnhancerProviderHistory', () => {
       },
     }), {
       storage,
-      recordedAt: '2026-04-08T20:03:00.000Z',
+      recordedAt: t1,
       minSampleIntervalMs: 0,
     });
 
@@ -110,9 +113,12 @@ describe('writerEnhancerProviderHistory', () => {
   });
 
   it('replaces the latest sample inside the bounded sampling window', () => {
+    const t0 = new Date(Date.now() - 90_000).toISOString();
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+
     appendWriterEnhancerProviderHistory(createSnapshot(), {
       storage,
-      recordedAt: '2026-04-08T20:00:00.000Z',
+      recordedAt: t0,
       minSampleIntervalMs: 60_000,
     });
     appendWriterEnhancerProviderHistory(createSnapshot({
@@ -125,7 +131,7 @@ describe('writerEnhancerProviderHistory', () => {
       },
     }), {
       storage,
-      recordedAt: '2026-04-08T20:00:20.000Z',
+      recordedAt: t1,
       minSampleIntervalMs: 60_000,
     });
 
