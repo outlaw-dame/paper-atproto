@@ -25,6 +25,11 @@ import {
 
 let cachedProviders: VerificationProviders | null = null;
 
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
 function readBaseUrl(): string | null {
   try {
     // import.meta.env is Vite-specific; guard for non-browser test environments
@@ -32,9 +37,23 @@ function readBaseUrl(): string | null {
       typeof import.meta !== 'undefined'
         ? (import.meta as any).env?.VITE_GLYMPSE_VERIFY_BASE_URL
         : undefined;
-    return typeof value === 'string' && value.trim()
-      ? value.trim().replace(/\/$/, '')
-      : null;
+    if (typeof value !== 'string' || !value.trim()) return null;
+
+    const normalized = value.trim().replace(/\/$/, '');
+    try {
+      const parsed = new URL(normalized);
+      if (
+        isLoopbackHost(parsed.hostname)
+        && typeof window !== 'undefined'
+        && !isLoopbackHost(window.location.hostname)
+      ) {
+        return null;
+      }
+    } catch {
+      // Non-URL values are handled by downstream fetch and may be relative.
+    }
+
+    return normalized;
   } catch {
     return null;
   }

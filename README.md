@@ -14,16 +14,26 @@ A local-first ATProto social reader inspired by Facebook Paper, Neeva Gist, and 
 
 ## Core Architecture
 
-The app uses a **Dual Pipeline** architecture for content processing:
+The app now runs as one connected AI system with layered execution rather than a few disconnected model features:
 
-1.  **Pipeline A (Story Search):**
-    *   **Deterministic Layer:** Resolves AT URIs, facets, and labels synchronously.
-    *   **Inference Layer:** Generates embeddings off-thread using `all-MiniLM-L6-v2`.
-    *   **Storage:** Persists to local PGlite with vector search.
+1. **Deterministic substrate**
+   Resolves ATProto objects, shapes thread/search context, and applies safety-aware heuristics before any remote model is invoked.
 
-2.  **Pipeline B (Conversation Interpolation):**
-    *   **Rolling State:** Scores threads for "usefulness" (clarifying, new info, counterpoint).
-    *   **Scoring:** Currently uses heuristics; planned migration to SetFit classifier.
+2. **Decision layer**
+   Uses bounded algorithms for contributor selection, thread-change detection, entity centrality, stance coverage, and comment diversity.
+
+3. **Evidence enrichment**
+   Adds verification, translation, and multimodal gating only when the thread actually warrants it.
+
+4. **Model execution lanes**
+   Uses server-side writers and multimodal analysis for the default path, with premium provider-routed Gemini/OpenAI interpolation for entitled users and explicit browser-runtime policies for larger local models.
+
+5. **Session/control plane**
+   Streams AI session state, presence, and replay lanes through protected `/api/ai/sessions/*` routes.
+
+Thread freshness is still bounded rather than truly live: Story mode rehydrates on a polling budget, and the app now reuses existing writer outputs when no meaningful thread change is detected instead of re-running the full model stack on every refresh.
+
+The canonical architecture and execution flow now live in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Getting Started
 
@@ -38,7 +48,7 @@ Run the auth/retry hardening checks with:
 pnpm test
 ```
 
-For GIF search, create a `.env` file from `.env.example` and set `VITE_TENOR_API_KEY` to a valid Tenor API key.
+For GIF search, create a `.env` file from `.env.example` and set `VITE_KLIPY_API_KEY` to a valid Klipy API key (get one at https://partner.klipy.com/api-keys).
 
 Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
 
@@ -105,10 +115,37 @@ npm install
 npm run dev
 ```
 
+The verify server now supports secure response compression negotiation:
+
+* Uses `Accept-Encoding` with weighted q-values.
+* Prefers `zstd` when supported by client/runtime, otherwise falls back to `gzip`.
+* Skips binary media and already-compressed payloads.
+* Skips responses with `Cache-Control: no-transform`.
+* Applies a minimum/maximum payload window to avoid CPU abuse.
+
+Compression env keys (`server/.env`):
+
+* `COMPRESSION_ENABLED`
+* `COMPRESSION_MIN_BYTES`
+* `COMPRESSION_MAX_BYTES`
+* `COMPRESSION_GZIP_LEVEL`
+* `COMPRESSION_ZSTD_LEVEL`
+
+Rate limiting env keys (`server/.env`):
+
+* `RATE_LIMIT_REDIS_URL` (optional; enables shared Redis-backed limiting)
+* `RATE_LIMIT_REDIS_PREFIX` (optional; default `paper:ratelimit`)
+* `RATE_LIMIT_REDIS_FAIL_CLOSED` (optional; default `false`; when `true`, requests fail with `503` if Redis limiter is unavailable)
+* `RATE_LIMIT_TRUST_PROXY` (optional; default `false`; only trust proxy IP header when enabled)
+* `RATE_LIMIT_TRUSTED_IP_HEADER` (optional; default `cf-connecting-ip`; header used when proxy trust is enabled)
+
+Operational details and failover behavior are documented in `docs/rate-limit-runbook.md`.
+
 The server reads `server/.env.example` keys:
 
-* `VERIFY_ENTITY_LINKING_PROVIDER` (`dbpedia` | `rel` | `heuristic`)
+* `VERIFY_ENTITY_LINKING_PROVIDER` (`dbpedia` | `wikidata` | `hybrid` | `rel` | `heuristic`)
 * `VERIFY_ENTITY_LINKING_ENDPOINT`
+* `VERIFY_WIKIDATA_ENDPOINT`
 * `VERIFY_ENTITY_LINKING_TIMEOUT_MS`
 * `VERIFY_ENTITY_LINKING_API_KEY`
 * `GOOGLE_SAFE_BROWSING_API_KEY` (optional, enables URL reputation checks)
@@ -127,6 +164,64 @@ Then run the app:
 ```bash
 pnpm dev
 ```
+
+Production builds also generate precompressed static files (`.gz` and `.zst`) for compressible assets. Ensure your CDN or edge server is configured to:
+
+* Negotiate from `Accept-Encoding` and serve matching precompressed variants.
+* Return `Content-Encoding` and `Vary: Accept-Encoding` correctly.
+* Preserve original MIME type when serving `.gz`/`.zst` files.
+
+Detailed edge/CDN examples are available in `docs/compression-deployment.md`.
+You can run local size/latency benchmarks with `npm run benchmark:compression`.
+
+## Google Gemini Integration
+
+The server already uses `@google/genai` for three Gemini-backed lanes:
+
+* verification grounding
+* premium deep interpolation
+* composer guidance
+
+Setup:
+
+```bash
+cd server
+cp .env.example .env
+```
+
+Then set the Gemini env values you want:
+
+```bash
+GEMINI_API_KEY=your-google-api-key
+VERIFY_GEMINI_GROUNDING_ENABLED=true
+PREMIUM_AI_ENABLED=true
+GEMINI_COMPOSER_ENABLED=true
+
+# Set any Google model string your account can access.
+GEMINI_GROUNDING_MODEL=gemini-2.5-flash
+GEMINI_DEEP_INTERPOLATOR_MODEL=gemini-2.5-flash
+GEMINI_COMPOSER_MODEL=gemini-2.5-flash
+```
+
+If you specifically want to trial a newer Google preview model, set the lane you want to route to that model, for example:
+
+```bash
+GEMINI_DEEP_INTERPOLATOR_MODEL=gemini-3.1-pro-preview
+```
+
+That maps onto the same `GoogleGenAI` SDK path the server already uses internally, equivalent to:
+
+```ts
+import { GoogleGenAI } from '@google/genai';
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+```
+
+Notes:
+
+* Keep Gemini on the server side; do not expose the API key to the browser.
+* Model availability changes over time, so use a model string your Google account/project can actually access.
+* Each Gemini lane is independently configurable, so you can test a preview model in one path without moving the others.
 
 ### 3. Optional: Switch to REL
 
@@ -187,16 +282,17 @@ Configure:
 
 ## Current Status
 
-🚧 **Active Prototype / Refactoring**
+🚧 **Active prototype with a connected interpretation pipeline**
 
 ### Implemented
-*   App Password Auth (`AtpContext` + `sessionStore`)
-*   Feed Sync with off-thread embeddings
-*   Hybrid Search (FTS + Vector)
-*   Story Mode UI (5-card layout)
+* App Password Auth plus hardened OAuth/browser-origin safeguards
+* Verified thread pipeline with confidence, verification, and summary-mode shaping
+* Phase 1 decision algorithms wired into production code paths
+* Hybrid search with off-thread embeddings and local vector storage
+* Story mode, multimodal gating, premium deep interpolation, and AI session transport
 
 ### In Progress
-*   Refactoring sync pipeline
-*   Migrating thread scoring to SetFit
-*   Adding unit tests
-*   OAuth protocol compliance planning (see `OAUTH_COMPLIANCE_RESEARCH.md`)
+* SetFit-backed replacement for remaining heuristic scoring paths
+* Story-clustering and deeper discovery algorithms from the roadmap
+* Safer local browser generation runtime expansion, especially multimodal
+* Continued test hardening and rollout validation

@@ -2,11 +2,18 @@ import { create } from 'zustand';
 import type {
   ConversationSession,
   ConversationSessionId,
+  ConversationSessionMode,
 } from './sessionTypes';
+import { createSessionAiDiagnostics } from './modelExecution';
+import { createConversationSupervisorState } from './shadowSupervisor';
 
 type ConversationSessionStore = {
   byId: Record<ConversationSessionId, ConversationSession>;
-  ensureSession: (id: ConversationSessionId, seedRootUri?: ConversationSessionId) => void;
+  ensureSession: (
+    id: ConversationSessionId,
+    seedRootUri?: ConversationSessionId,
+    mode?: ConversationSessionMode,
+  ) => void;
   updateSession: (
     id: ConversationSessionId,
     updater: (current: ConversationSession) => ConversationSession
@@ -17,9 +24,11 @@ type ConversationSessionStore = {
 function createEmptySession(
   id: ConversationSessionId,
   rootUri?: ConversationSessionId,
+  mode: ConversationSessionMode = 'thread',
 ): ConversationSession {
   return {
     id,
+    mode,
     graph: {
       rootUri: rootUri ?? id,
       nodesByUri: {},
@@ -41,7 +50,14 @@ function createEmptySession(
       writerResult: null,
       confidence: null,
       summaryMode: null,
+      deltaDecision: null,
       threadState: null,
+      interpretiveExplanation: null,
+      aiDiagnostics: createSessionAiDiagnostics(),
+      supervisor: createConversationSupervisorState(),
+      premium: {
+        status: 'idle',
+      },
     },
     evidence: {
       verificationByUri: {},
@@ -65,6 +81,11 @@ function createEmptySession(
       repetitionLevel: 0,
       activityVelocity: 0,
       turningPoints: [],
+      snapshots: [],
+    },
+    mutations: {
+      revision: 0,
+      recent: [],
     },
     meta: {
       status: 'idle',
@@ -75,13 +96,13 @@ function createEmptySession(
 
 export const useConversationSessionStore = create<ConversationSessionStore>((set, get) => ({
   byId: {},
-  ensureSession: (id, seedRootUri) => {
+  ensureSession: (id, seedRootUri, mode = 'thread') => {
     set((state) => {
       if (state.byId[id]) return state;
       return {
         byId: {
           ...state.byId,
-          [id]: createEmptySession(id, seedRootUri),
+          [id]: createEmptySession(id, seedRootUri, mode),
         },
       };
     });

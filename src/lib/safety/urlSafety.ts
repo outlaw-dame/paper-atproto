@@ -25,7 +25,16 @@ const BASE_URL = getConfiguredApiBaseUrl(
 );
 
 const TIMEOUT_MS = 6000;
-const cache = new Map<string, Promise<UrlSafetyVerdict>>();
+const SAFE_CACHE_TTL_MS = 5 * 60 * 1000;
+const UNKNOWN_CACHE_TTL_MS = 30 * 1000;
+const CACHE_MAX_ENTRIES = 1000;
+
+type SafetyCacheEntry = {
+  expiresAt: number;
+  promise: Promise<UrlSafetyVerdict>;
+};
+
+const cache = new Map<string, SafetyCacheEntry>();
 
 function normalizeUrl(rawUrl: string): string {
   try {
@@ -88,12 +97,59 @@ async function fetchUrlSafety(url: string): Promise<UrlSafetyVerdict> {
   }
 }
 
+function cacheTtlMs(verdict: UrlSafetyVerdict): number {
+  return verdict.status === 'unknown' ? UNKNOWN_CACHE_TTL_MS : SAFE_CACHE_TTL_MS;
+}
+
+function pruneExpiredCache(now = Date.now()): void {
+  if (cache.size === 0) return;
+  for (const [key, entry] of cache.entries()) {
+    if (entry.expiresAt > now) continue;
+    cache.delete(key);
+  }
+}
+
+function enforceCacheBounds(): void {
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) break;
+    cache.delete(oldestKey);
+  }
+}
+
 export function checkUrlSafety(rawUrl: string): Promise<UrlSafetyVerdict> {
   const normalized = normalizeUrl(rawUrl);
-  const cached = cache.get(normalized);
-  if (cached) return cached;
+  const now = Date.now();
+  pruneExpiredCache(now);
 
-  const promise = fetchUrlSafety(normalized);
-  cache.set(normalized, promise);
+  const cached = cache.get(normalized);
+  if (cached && cached.expiresAt > now) {
+    // Refresh insertion order so hot keys survive bounded-cache eviction.
+    cache.delete(normalized);
+    cache.set(normalized, cached);
+    return cached.promise;
+  }
+
+  if (cached) {
+    cache.delete(normalized);
+  }
+
+  const promise = fetchUrlSafety(normalized).then((verdict) => {
+    const entry = cache.get(normalized);
+    if (entry) {
+      entry.expiresAt = Date.now() + cacheTtlMs(verdict);
+      cache.delete(normalized);
+      cache.set(normalized, entry);
+      enforceCacheBounds();
+    }
+    return verdict;
+  });
+
+  cache.set(normalized, {
+    promise,
+    expiresAt: now + UNKNOWN_CACHE_TTL_MS,
+  });
+  enforceCacheBounds();
+
   return promise;
 }

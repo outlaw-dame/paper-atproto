@@ -22,7 +22,12 @@ import type { InterpolatorState, InterpolatorInput, ThreadPost, ThreadMediaItem 
 import type { ThreadNode } from '../lib/resolver/atproto';
 import { scoreAllReplies } from './scoreThread';
 import { buildInterpolatorSummary } from './buildInterpolatorSummary';
-import { detectTrigger, applyTriggerToState } from './updateInterpolatorState';
+import {
+  detectTrigger,
+  applyTriggerToState,
+  detectMeaningfulChange,
+  recordThreadSnapshot,
+} from './updateInterpolatorState';
 
 // ─── emptyInterpolatorState ───────────────────────────────────────────────
 
@@ -37,6 +42,7 @@ export function emptyInterpolatorState(rootUri: string): InterpolatorState {
     repetitionLevel: 0,
     heatLevel: 0,
     sourceSupportPresent: false,
+    perspectiveGaps: [],
     replyScores: {},
     entityLandscape: [],
     topContributors: [],
@@ -54,30 +60,75 @@ export function emptyInterpolatorState(rootUri: string): InterpolatorState {
 export function runInterpolatorPipeline(input: InterpolatorInput): InterpolatorState {
   const { rootUri, rootText, replies, existingState } = input;
   const base = existingState ?? emptyInterpolatorState(rootUri);
+  const existingReplyUris = new Set(Object.keys(existingState?.replyScores ?? {}));
 
   // Step 1: Score all replies
   const newScores = scoreAllReplies(rootText, replies);
+  const triggerScores = Object.fromEntries(
+    Object.entries(newScores).filter(([uri]) => !existingReplyUris.has(uri)),
+  );
+  const newRepliesCount = Object.keys(triggerScores).length;
 
-  // Step 2: Detect trigger
-  const trigger = detectTrigger(existingState ?? null, newScores, replies.length);
+  // Step 2: Build a candidate patch and use it to evaluate whether the thread
+  // actually changed enough to justify a visible update.
+  const summaryPatch = buildInterpolatorSummary(rootText, replies, newScores);
+
+  if (existingState && existingState.version > 0) {
+    const candidateState: InterpolatorState = {
+      ...existingState,
+      ...summaryPatch,
+      replyScores: { ...existingState.replyScores, ...newScores },
+    };
+    const changeDecision = detectMeaningfulChange(
+      rootUri,
+      existingState,
+      candidateState,
+      newScores,
+      newRepliesCount,
+    );
+    const trigger = detectTrigger(existingState, triggerScores, newRepliesCount);
+
+    // The change detector rate-limits routine refreshes, but a strong trigger
+    // (high evidence, new entity, enough new replies) should still advance the
+    // visible state immediately.
+    if (!changeDecision.shouldUpdate && !trigger) {
+      return existingState;
+    }
+
+    const activeTrigger = trigger ?? {
+      kind: 'new_replies' as const,
+      payload: {
+        count: newRepliesCount,
+        confidence: changeDecision.confidence,
+        reasons: changeDecision.reasons,
+      },
+      triggeredAt: new Date().toISOString(),
+    };
+
+    const nextState = applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+    recordThreadSnapshot(rootUri, nextState);
+    return nextState;
+  }
+
+  // Step 3: Detect trigger
+  const trigger = detectTrigger(existingState ?? null, triggerScores, newRepliesCount);
 
   // Short-circuit: no meaningful change detected
   if (!trigger && existingState && existingState.version > 0) {
     return existingState;
   }
 
-  // Step 3: Build summary patch
-  const summaryPatch = buildInterpolatorSummary(rootText, replies, newScores);
-
   // Step 4: Apply trigger (create a default 'new_replies' trigger if detectTrigger
   //         returned null but we had no existing state — first-run path)
   const activeTrigger = trigger ?? {
     kind: 'new_replies' as const,
-    payload: { count: replies.length, initial: true },
+    payload: { count: newRepliesCount, initial: true },
     triggeredAt: new Date().toISOString(),
   };
 
-  return applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+  const nextState = applyTriggerToState(base, { ...summaryPatch, replyScores: newScores }, activeTrigger);
+  recordThreadSnapshot(rootUri, nextState);
+  return nextState;
 }
 
 // ─── Phase 3: ATProto → ThreadPost adapter ────────────────────────────────

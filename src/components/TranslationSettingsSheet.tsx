@@ -1,14 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslationStore } from '../store/translationStore';
-import ContentFilterSettingsSection from './ContentFilterSettingsSection';
+import { useMediaSettingsStore } from '../store/mediaSettingsStore';
 import AccountPrefsSection from './AccountPrefsSection';
-import ModerationSettingsPage from './ModerationSettingsPage';
-import FeedsSettingsPage from './FeedsSettingsPage';
+import LazyModuleBoundary from './LazyModuleBoundary';
+import { SettingsPageFallback } from './TranslationSettingsSheetFallback';
 import AppleSettingsSection from './AppleSettingsSection';
+import InterpolatorSettingsSection from './InterpolatorSettingsSection';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 import { getAltTextMetricsSnapshot } from '../perf/altTextTelemetry';
+import {
+  getBootstrapTelemetrySnapshot,
+  type BootstrapTelemetrySnapshot,
+} from '../perf/bootstrapTelemetry';
+import {
+  getRecommendationTelemetrySnapshot,
+  type RecommendationTelemetrySnapshot,
+} from '../perf/recommendationTelemetry';
+import { getLocalizedCrisisResources } from '../lib/mentalHealthResources';
 import { useAppearanceStore } from '../store/appearanceStore';
+import { lazyWithRetry } from '../lib/lazyWithRetry';
 
 interface Props {
   open: boolean;
@@ -20,7 +31,19 @@ type LanguageOption = {
   label: string;
 };
 
-type SettingsPage = 'translation' | 'moderation' | 'feeds' | 'appearance' | 'debug';
+type SettingsPage = 'translation' | 'moderation' | 'feeds' | 'appearance' | 'debug' | 'location';
+const ModerationSettingsPage = lazyWithRetry(
+  () => import('./ModerationSettingsPage'),
+  'ModerationSettingsPage',
+);
+const FeedsSettingsPage = lazyWithRetry(
+  () => import('./FeedsSettingsPage'),
+  'FeedsSettingsPage',
+);
+const LocalAiRuntimeSection = lazyWithRetry(
+  () => import('./LocalAiRuntimeSection'),
+  'LocalAiRuntimeSection',
+);
 
 interface ComposeDebugSnapshot {
   draftText: string;
@@ -113,7 +136,7 @@ function ToggleRow({
       <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--label-1)' }}>{label}</span>
         {helper && (
-          <span style={{ fontSize: 12, lineHeight: 1.35, color: 'var(--label-3)' }}>{helper}</span>
+          <span style={{ fontSize: 12, lineHeight: 1.35, color: 'var(--label-2)' }}>{helper}</span>
         )}
       </span>
 
@@ -152,16 +175,27 @@ function ToggleRow({
 
 export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const { policy, setPolicy } = useTranslationStore();
+  const { preferredCaptionLanguage, setPreferredCaptionLanguage } = useMediaSettingsStore();
   const {
     showFeaturedHashtags,
     setShowFeaturedHashtags,
     useMlFeaturedHashtagRanking,
     setUseMlFeaturedHashtagRanking,
+    showProvenanceChips,
+    setShowProvenanceChips,
+    showAtprotoLabelChips,
+    setShowAtprotoLabelChips,
   } = useAppearanceStore();
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
   const [page, setPage] = useState<SettingsPage>('translation');
   const [altMetrics, setAltMetrics] = useState(() => getAltTextMetricsSnapshot());
+  const [recommendationMetrics, setRecommendationMetrics] = useState<RecommendationTelemetrySnapshot>(
+    () => getRecommendationTelemetrySnapshot(),
+  );
+  const [bootstrapMetrics, setBootstrapMetrics] = useState<BootstrapTelemetrySnapshot>(
+    () => getBootstrapTelemetrySnapshot(),
+  );
   const [composeDebug, setComposeDebug] = useState<ComposeDebugSnapshot | null>(null);
 
   const systemLang = useMemo(() => {
@@ -175,10 +209,12 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
   const languageOptions = useMemo(() => buildLanguageOptions(systemLang), [systemLang]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || page !== 'debug') return;
 
     const refresh = () => {
       setAltMetrics(getAltTextMetricsSnapshot());
+      setRecommendationMetrics(getRecommendationTelemetrySnapshot());
+      setBootstrapMetrics(getBootstrapTelemetrySnapshot());
       if (typeof window !== 'undefined') {
         const snapshot = (window as Window & { __PAPER_COMPOSE_DEBUG__?: unknown }).__PAPER_COMPOSE_DEBUG__;
         setComposeDebug((snapshot ?? null) as ComposeDebugSnapshot | null);
@@ -187,7 +223,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
     refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [open, page]);
 
   useEffect(() => {
     if (!open) return;
@@ -242,7 +278,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
             }}>
               <div>
                 <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--label-1)' }}>Settings</h3>
-                <p style={{ fontSize: 12, color: 'var(--label-3)' }}>
+                <p style={{ fontSize: 12, color: 'var(--label-1)' }}>
                   {page === 'translation'
                     ? 'Inline + automatic translation'
                     : page === 'moderation'
@@ -251,7 +287,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         ? 'Visual display preferences for profile and timeline surfaces'
                       : page === 'feeds'
                         ? 'Manage News, Podcasts, Videos, and other feed subscriptions'
-                      : 'Diagnostics and QA details for internal testing'}
+                      : 'Debug diagnostics, AI runtime controls, and QA details for internal testing'}
                 </p>
               </div>
               <button
@@ -288,7 +324,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'translation' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'translation' ? '#fff' : 'var(--label-2)',
+                    color: page === 'translation' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -305,7 +341,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'moderation' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'moderation' ? '#fff' : 'var(--label-2)',
+                    color: page === 'moderation' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -323,7 +359,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'appearance' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'appearance' ? '#fff' : 'var(--label-2)',
+                    color: page === 'appearance' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -341,7 +377,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'debug' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'debug' ? '#fff' : 'var(--label-2)',
+                    color: page === 'debug' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -359,7 +395,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     borderRadius: 10,
                     border: 'none',
                     background: page === 'feeds' ? 'var(--blue)' : 'var(--fill-2)',
-                    color: page === 'feeds' ? '#fff' : 'var(--label-2)',
+                    color: page === 'feeds' ? '#fff' : 'var(--label-1)',
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: 'pointer',
@@ -367,12 +403,30 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 >
                   Feeds
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setPage('location')}
+                  style={{
+                    flex: 1,
+                    minWidth: 88,
+                    height: 34,
+                    borderRadius: 10,
+                    border: 'none',
+                    background: page === 'location' ? 'var(--blue)' : 'var(--fill-2)',
+                    color: page === 'location' ? '#fff' : 'var(--label-1)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Location
+                </button>
               </div>
 
               {page === 'translation' && (
                 <>
                   <div style={{ marginBottom: 8 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--label-3)', marginBottom: 6 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--label-1)', marginBottom: 6 }}>
                       Translate to
                     </label>
                     <select
@@ -396,6 +450,37 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--label-1)', marginBottom: 6 }}>
+                      Caption / transcription language
+                    </label>
+                    <select
+                      value={preferredCaptionLanguage ?? ''}
+                      onChange={(e) => setPreferredCaptionLanguage(e.target.value || null)}
+                      style={{
+                        width: '100%',
+                        height: platform.prefersCoarsePointer ? 44 : 40,
+                        borderRadius: 12,
+                        border: '1px solid var(--sep)',
+                        background: 'var(--fill-1)',
+                        color: 'var(--label-1)',
+                        padding: '0 12px',
+                        fontSize: 14,
+                        fontWeight: 500,
+                      }}
+                    >
+                      <option value="">Auto-detect</option>
+                      {languageOptions.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p style={{ marginTop: 6, fontSize: 11, color: 'var(--label-2)', lineHeight: 1.35 }}>
+                      Used for both composer video captions and on-demand podcast/video transcript generation.
+                    </p>
                   </div>
 
                   <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' }} />
@@ -429,7 +514,7 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                     touchLike={platform.prefersCoarsePointer || platform.isMobile}
                   />
 
-                  <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 10, lineHeight: 1.35 }}>
+                  <p style={{ fontSize: 11, color: 'var(--label-2)', marginTop: 10, lineHeight: 1.35 }}>
                     Note: translation may use external services depending on the selected mode and language pair.
                   </p>
 
@@ -442,9 +527,27 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                 </>
               )}
 
-              {page === 'moderation' && <ModerationSettingsPage />}
+              {page === 'moderation' && (
+                <LazyModuleBoundary
+                  resetKey={page}
+                  fallback={<SettingsPageFallback label="Moderation settings failed to load." />}
+                >
+                  <React.Suspense fallback={<SettingsPageFallback label="Loading moderation settings…" />}>
+                    <ModerationSettingsPage />
+                  </React.Suspense>
+                </LazyModuleBoundary>
+              )}
 
-              {page === 'feeds' && <FeedsSettingsPage />}
+              {page === 'feeds' && (
+                <LazyModuleBoundary
+                  resetKey={page}
+                  fallback={<SettingsPageFallback label="Feed settings failed to load." />}
+                >
+                  <React.Suspense fallback={<SettingsPageFallback label="Loading feed settings…" />}>
+                    <FeedsSettingsPage />
+                  </React.Suspense>
+                </LazyModuleBoundary>
+              )}
 
               {page === 'appearance' && (
                 <>
@@ -468,11 +571,118 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                       touchLike={platform.prefersCoarsePointer || platform.isMobile}
                     />
                   </div>
+
+                  <div style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', background: 'var(--surface)', marginTop: 10 }}>
+                    <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)', marginBottom: 2 }}>ATProto Labels</h4>
+                    <p style={{ fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35, marginBottom: 4 }}>
+                      Control relevance provenance and ATProto label/labeller chips in people search surfaces.
+                    </p>
+                    <ToggleRow
+                      label="Show provenance chips"
+                      helper="Display semantic/keyword match reason chips in Explore and People results."
+                      checked={showProvenanceChips}
+                      onChange={setShowProvenanceChips}
+                      touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                    />
+                    <ToggleRow
+                      label="Show ATProto label chips"
+                      helper="Display actor labels and whether labels are self-applied or from external labellers."
+                      checked={showAtprotoLabelChips}
+                      onChange={setShowAtprotoLabelChips}
+                      touchLike={platform.prefersCoarsePointer || platform.isMobile}
+                    />
+                  </div>
                 </>
               )}
 
+              {page === 'location' && (() => {
+                const localized = getLocalizedCrisisResources();
+                const browserLocale = typeof navigator !== 'undefined' ? navigator.language : '—';
+                const browserLocales = typeof navigator !== 'undefined' ? Array.from(navigator.languages ?? [navigator.language]).join(', ') : '—';
+                const timezone = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : '—';
+                return (
+                  <div>
+                    <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }}>Location / Region (debug)</h4>
+                    <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 0, marginBottom: 10, lineHeight: 1.35 }}>
+                      Shows how the browser's locale and timezone are resolved into a crisis-resource region. Used to verify localized crisis hotlines.
+                    </p>
+
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 2 }}>Browser locale (primary)</div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{browserLocale}</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 2 }}>Browser locales (all)</div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{browserLocales}</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 2 }}>IANA timezone</div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{timezone}</div>
+                      </div>
+                    </div>
+
+                    <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' }} />
+
+                    <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)', marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 2 }}>Detected region</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--blue)' }}>{localized.regionLabel}</div>
+                      <div style={{ fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--label-3)', marginTop: 2 }}>id={localized.region}</div>
+                    </div>
+                    <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)', marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 2 }}>Emergency number</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--label-1)' }}>{localized.emergencyNumber}</div>
+                    </div>
+
+                    <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' }} />
+
+                    <h4 style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Resolved crisis resources ({localized.resources.length})</h4>
+                    <div style={{ display: 'grid', gap: 5 }}>
+                      {localized.resources.map((r, i) => (
+                        <div key={i} style={{ border: '1px solid var(--sep)', borderRadius: 8, padding: '6px 10px', background: 'var(--fill-1)' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>{r.name}</div>
+                          <div style={{ fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--label-3)' }}>
+                            {r.contact}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {localized.globalDirectories.length > 0 && (
+                      <>
+                        <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '12px 0' }} />
+                        <h4 style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Global directories ({localized.globalDirectories.length})</h4>
+                        <div style={{ display: 'grid', gap: 5 }}>
+                          {localized.globalDirectories.map((r, i) => (
+                            <div key={i} style={{ border: '1px solid var(--sep)', borderRadius: 8, padding: '6px 10px', background: 'var(--fill-1)' }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-1)' }}>{r.name}</div>
+                              <div style={{ fontSize: 11, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--label-3)' }}>
+                                {r.contact}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
               {page === 'debug' && (
                 <>
+                  <InterpolatorSettingsSection />
+
+                  <LazyModuleBoundary
+                    resetKey="settings-debug-local-ai-runtime"
+                    fallback={<SettingsPageFallback label="Local AI runtime controls failed to load." />}
+                  >
+                    <React.Suspense fallback={<SettingsPageFallback label="Loading local AI runtime controls…" />}>
+                      <LocalAiRuntimeSection />
+                    </React.Suspense>
+                  </LazyModuleBoundary>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                       <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Compose sentiment (debug)</h4>
@@ -542,6 +752,51 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
 
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Bootstrap telemetry (debug)</h4>
+                      <button
+                        type="button"
+                        onClick={() => setBootstrapMetrics(getBootstrapTelemetrySnapshot())}
+                        style={{
+                          border: '1px solid var(--sep)',
+                          borderRadius: 8,
+                          background: 'var(--fill-1)',
+                          color: 'var(--label-2)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }}>
+                      Tracks local bootstrap stages in memory only so DB and runtime startup can be profiled without persisting user state.
+                    </p>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {(Object.entries(bootstrapMetrics) as Array<[keyof BootstrapTelemetrySnapshot, BootstrapTelemetrySnapshot[keyof BootstrapTelemetrySnapshot]]>).map(([key, value]) => (
+                        <div key={key} style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: 'var(--label-3)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                            <span>{key}</span>
+                            <span>{value.status}</span>
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 13, fontWeight: 800, color: 'var(--label-1)' }}>
+                            {value.durationMs === null ? '—' : `${value.durationMs}ms`}
+                          </div>
+                          {value.message && (
+                            <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }}>
+                              {value.message}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                       <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>ALT telemetry (debug)</h4>
                       <button
                         type="button"
@@ -590,6 +845,86 @@ export default function TranslationSettingsSheet({ open, onClose }: Props) {
                         <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>
                           {altMetrics.bulkGeneratedItems}/{altMetrics.bulkRequestedItems}
                         </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '14px 0 10px' }} />
+
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Recommendation telemetry (debug)</h4>
+                      <button
+                        type="button"
+                        onClick={() => setRecommendationMetrics(getRecommendationTelemetrySnapshot())}
+                        style={{
+                          border: '1px solid var(--sep)',
+                          borderRadius: 8,
+                          background: 'var(--fill-1)',
+                          color: 'var(--label-2)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--label-4)', marginTop: 4, lineHeight: 1.35 }}>
+                      Tracks Explore suggestion conversion, reason-chip outcomes, and confidence calibration.
+                    </p>
+
+                    <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Impressions</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{recommendationMetrics.impressionCount}</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Follow Conversion</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{(recommendationMetrics.followConversionRate * 100).toFixed(1)}%</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Dismiss Rate</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>{(recommendationMetrics.dismissRate * 100).toFixed(1)}%</div>
+                      </div>
+                      <div style={{ border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--label-3)' }}>Follows / Dismisses</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--label-1)' }}>
+                          {recommendationMetrics.followCount}/{recommendationMetrics.dismissCount}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 8, border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                      <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 4 }}>Reason chip outcomes</div>
+                      {Object.keys(recommendationMetrics.reasonImpressions).length === 0 ? (
+                        <div style={{ fontSize: 12, color: 'var(--label-3)' }}>No recommendation reason telemetry yet.</div>
+                      ) : (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          {Object.entries(recommendationMetrics.reasonImpressions).slice(0, 6).map(([reason, impressions]) => {
+                            const follows = recommendationMetrics.reasonFollows[reason] ?? 0;
+                            const dismisses = recommendationMetrics.reasonDismisses[reason] ?? 0;
+                            return (
+                              <div key={reason} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: 'var(--label-2)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reason}</span>
+                                <span>I:{impressions} F:{follows} D:{dismisses}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ marginTop: 8, border: '1px solid var(--sep)', borderRadius: 10, padding: 8, background: 'var(--fill-1)' }}>
+                      <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 4 }}>Confidence calibration</div>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        {recommendationMetrics.confidenceBuckets.map((bucket) => (
+                          <div key={bucket.bucket} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, color: 'var(--label-2)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                            <span>{bucket.bucket}%</span>
+                            <span>I:{bucket.impressions} F:{(bucket.followRate * 100).toFixed(0)}% D:{(bucket.dismissRate * 100).toFixed(0)}%</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>

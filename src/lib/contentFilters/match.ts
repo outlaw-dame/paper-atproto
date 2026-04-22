@@ -1,4 +1,5 @@
-import { inferenceClient } from '../../workers/InferenceClient';
+import { embeddingPipeline } from '../../intelligence/embeddingPipeline';
+import { recordEmbeddingVector } from '../../perf/embeddingTelemetry';
 import type { MockPost } from '../../data/mockData';
 import type { FilterContext, KeywordFilterRule, PostFilterMatch } from './types';
 
@@ -44,7 +45,8 @@ async function embedText(text: string): Promise<number[]> {
   if (!key) return [];
   const cached = embeddingCache.get(key);
   if (cached) return cached;
-  const embedding = await inferenceClient.embed(key);
+  const embedding = await embeddingPipeline.embed(key, { mode: 'filter' });
+  if (embedding.length > 0) recordEmbeddingVector('filter', embedding);
   embeddingCache.set(key, embedding);
   if (embeddingCache.size > EMBEDDING_CACHE_MAX) {
     embeddingCache.delete(embeddingCache.keys().next().value!);

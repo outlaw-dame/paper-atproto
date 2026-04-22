@@ -1,7 +1,14 @@
 import crypto from 'node:crypto';
 import type { LanguageDetectionResult } from './types.js';
 
-const detectionCache = new Map<string, LanguageDetectionResult>();
+type DetectionCacheEntry = {
+  value: LanguageDetectionResult;
+  expiresAt: number;
+};
+
+const detectionCache = new Map<string, DetectionCacheEntry>();
+const DETECTION_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+const DETECTION_CACHE_MAX_ENTRIES = 5000;
 
 const cjkRegex = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 const arabicRegex = /[\u0600-\u06ff]/;
@@ -56,13 +63,41 @@ function hash(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
+function pruneExpired(now = Date.now()): void {
+  if (detectionCache.size === 0) return;
+  for (const [key, entry] of detectionCache.entries()) {
+    if (entry.expiresAt > now) continue;
+    detectionCache.delete(key);
+  }
+}
+
+function enforceBounds(): void {
+  while (detectionCache.size > DETECTION_CACHE_MAX_ENTRIES) {
+    const oldestKey = detectionCache.keys().next().value;
+    if (!oldestKey) break;
+    detectionCache.delete(oldestKey);
+  }
+}
+
 export function detectLanguage(text: string): LanguageDetectionResult {
   const normalized = text.trim();
   if (!normalized) return { language: 'und', confidence: 0 };
 
+  const now = Date.now();
+  pruneExpired(now);
+
   const key = hash(normalized);
   const cached = detectionCache.get(key);
-  if (cached) return cached;
+  if (cached && cached.expiresAt > now) {
+    // Refresh insertion order so hot keys survive bounded-cache eviction.
+    detectionCache.delete(key);
+    detectionCache.set(key, cached);
+    return cached.value;
+  }
+
+  if (cached) {
+    detectionCache.delete(key);
+  }
 
   let result: LanguageDetectionResult;
   if (cjkRegex.test(normalized)) result = { language: 'ja', confidence: 0.65 };
@@ -71,6 +106,18 @@ export function detectLanguage(text: string): LanguageDetectionResult {
   else if (latinRegex.test(normalized)) result = detectLatinLanguage(normalized);
   else result = { language: 'und', confidence: 0.1 };
 
-  detectionCache.set(key, result);
+  detectionCache.set(key, {
+    value: result,
+    expiresAt: now + DETECTION_CACHE_TTL_MS,
+  });
+  enforceBounds();
   return result;
+}
+
+export function getLanguageDetectionCacheStats(): { size: number } {
+  return { size: detectionCache.size };
+}
+
+export function resetLanguageDetectionCache(): void {
+  detectionCache.clear();
 }

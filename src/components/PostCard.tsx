@@ -6,23 +6,38 @@ import { formatTime, formatCount } from '../data/mockData';
 import { fetchOGData } from '../og';
 import VideoPlayer from './VideoPlayer';
 import TwemojiText from './TwemojiText';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
 import { useTranslationStore } from '../store/translationStore';
 import { translationClient } from '../lib/i18n/client';
-import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { OfficialSportsBadge, SportsPostIndicator } from './SportsAccountBadge';
 import { sportsFeedService } from '../services/sportsFeed';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
-import { detectSensitiveMedia } from '../lib/moderation/sensitiveMedia';
+import {
+  EMPTY_SENSITIVE_MEDIA_ASSESSMENT,
+  assessmentFromMediaAnalysis,
+  createUnavailableSensitiveMediaAssessment,
+  detectSensitiveMedia,
+  mergeSensitiveMediaAssessments,
+  type SensitiveMediaAssessment,
+} from '../lib/moderation/sensitiveMedia';
+import { callMediaAnalyzer } from '../intelligence/modelClient';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useUiStore } from '../store/uiStore';
+import { useAppearanceStore } from '../store/appearanceStore';
 import {
   recordSensitiveMediaImpression,
   recordSensitiveMediaReveal,
   recordSensitiveMediaRehide,
 } from '../perf/sensitiveMediaTelemetry';
 import { openExternalUrl } from '../lib/safety/externalUrl';
+import { Gif } from './Gif';
 import type { TimelineConversationHint } from '../conversation/projections/timelineProjection';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import { buildStandardProfileCardData } from '../lib/profileCardData';
+import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
+import { postLabelChips } from '../lib/atproto/labelPresentation';
 
 interface PostCardProps {
   post: MockPost;
@@ -58,7 +73,20 @@ type MediaCarouselItem =
       title?: string;
       domain: string;
       aspectRatio?: number;
+      captions?: Array<{
+        lang: string;
+        url: string;
+        label?: string;
+      }>;
     };
+
+const multimodalSensitiveCache = new Map<string, SensitiveMediaAssessment>();
+const MULTIMODAL_RETRY_BASE_MS = 5_000;
+const MULTIMODAL_RETRY_MAX_MS = 60_000;
+
+function multimodalRetryDelayMs(attempt: number): number {
+  return Math.min(MULTIMODAL_RETRY_MAX_MS, MULTIMODAL_RETRY_BASE_MS * (2 ** attempt));
+}
 
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, timelineHint, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
@@ -69,9 +97,12 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxViewportWidth, setLightboxViewportWidth] = useState(0);
   const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
+  const [multimodalSensitiveAssessment, setMultimodalSensitiveAssessment] = useState<SensitiveMediaAssessment>(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+  const [multimodalRetryAttempt, setMultimodalRetryAttempt] = useState(0);
   const mediaScrollRef = useRef<HTMLDivElement | null>(null);
   const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation } = useTranslationStore();
+  const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
   const {
     policy: sensitivePolicy,
     revealedPostIds,
@@ -99,6 +130,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         ...(post.embed.title ? { title: post.embed.title } : {}),
         domain: post.embed.domain,
         ...(typeof post.embed.aspectRatio === 'number' ? { aspectRatio: post.embed.aspectRatio } : {}),
+        ...(post.embed.captions ? { captions: post.embed.captions } : {}),
       });
     }
 
@@ -122,12 +154,25 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [carouselItems]);
   const detectedPostLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
   const sensitiveImpressionLoggedRef = useRef(false);
+  const externalEmbedYouTubeRef = useMemo(
+    () => (post.embed?.type === 'external' ? parseYouTubeUrl(post.embed.url) : null),
+    [post.embed],
+  );
+  const inlineTextYouTubeRef = useMemo(() => {
+    if (post.embed || mediaItems.length > 0) return null;
+    return extractFirstYouTubeReference({
+      explicitUrls: (post.facets ?? [])
+        .filter((facet) => facet.kind === 'link')
+        .map((facet) => facet.uri),
+      text: post.content,
+    });
+  }, [mediaItems.length, post.content, post.embed, post.facets]);
 
   // Lazy-fetch author metadata for external link cards.
   // ATProto's external embed spec doesn't carry author/fediverse fields, so we
   // fetch them from the article page's meta tags (cached in og.ts).
   const [fetchedAuthor, setFetchedAuthor] = useState<{ name?: string; handle?: string; profileUrl?: string } | null>(null);
-  const externalEmbedUrl = post.embed?.type === 'external' ? post.embed.url : null;
+  const externalEmbedUrl = post.embed?.type === 'external' && !externalEmbedYouTubeRef ? post.embed.url : null;
   useEffect(() => {
     if (!externalEmbedUrl) return;
     // Skip if the API already gave us author info
@@ -147,6 +192,24 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [externalEmbedUrl]);
 
   const storyTitle = post.content.slice(0, 80);
+  const standardProfileCardData = buildStandardProfileCardData(post);
+  const moderationLabelChips = useMemo(() => {
+    if (!showAtprotoLabelChips) return [];
+    return postLabelChips({
+      contentLabels: post.contentLabels,
+      labelDetails: post.labelDetails,
+      authorDid: post.author.did,
+      maxChips: 2,
+      includeLabellerProvenance: true,
+    });
+  }, [post.author.did, post.contentLabels, post.labelDetails, showAtprotoLabelChips]);
+
+  const chipStyleByTone: Record<'neutral' | 'warning' | 'danger' | 'info', React.CSSProperties> = {
+    neutral: { background: 'var(--fill-3)', color: 'var(--label-2)' },
+    warning: { background: 'rgba(255,149,0,0.18)', color: '#ffb454' },
+    danger: { background: 'rgba(255,77,79,0.18)', color: '#ff7b7d' },
+    info: { background: 'rgba(124,233,255,0.2)', color: '#6de7ff' },
+  };
 
   const openActorProfile = (actor: string) => {
     if (!actor) return;
@@ -172,13 +235,18 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     openExploreSearch(normalized);
   };
 
-  // Handle "open story" click
-  const handleCardClick = (e: React.MouseEvent) => {
-    // Don't trigger if clicking interactive elements
-    if ((e.target as HTMLElement).closest('button, a, .video-player-wrapper')) {
-      return;
-    }
+  const isInteractiveTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false;
+    return !!target.closest('button, a, input, textarea, select, .video-player-wrapper');
+  };
+
+  const openStoryFromCard = () => {
     onOpenStory({ id: post.id, type: 'post', title: storyTitle });
+  };
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (isInteractiveTarget(e.target)) return;
+    openStoryFromCard();
   };
 
   const handleRepostToggle = (e: React.MouseEvent) => {
@@ -188,15 +256,55 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
   const sportsMetadata = useMemo(() => sportsFeedService.extractSportsMetadata(post), [post]);
   const sensitiveMedia = useMemo(() => detectSensitiveMedia(post), [post]);
-  const isSensitiveMedia = sensitiveMedia.isSensitive;
-  const isSensitiveMediaRevealed = !!revealedPostIds[post.id];
-  const shouldBlurSensitiveMedia = sensitivePolicy.blurSensitiveMedia && isSensitiveMedia && !isSensitiveMediaRevealed;
-  const sensitiveReasonLabel = sensitiveMedia.reasons.slice(0, 2).join(', ');
+  const primaryVisualTarget = useMemo(() => {
+    if (mediaItems.length > 0) {
+      const first = mediaItems[0];
+      if (!first) return null;
+      return {
+        url: first.url,
+        alt: first.alt ?? '',
+        cacheKey: `image:${first.url}`,
+      };
+    }
+
+    if (post.embed?.type === 'video') {
+      const mediaUrl = post.embed.thumb || post.embed.url;
+      if (!mediaUrl) return null;
+      return {
+        url: mediaUrl,
+        alt: post.embed.title ?? '',
+        cacheKey: `video:${mediaUrl}`,
+      };
+    }
+
+    return null;
+  }, [mediaItems, post.embed]);
+  const resolvedSensitiveMedia = useMemo(
+    () => mergeSensitiveMediaAssessments(sensitiveMedia, multimodalSensitiveAssessment),
+    [multimodalSensitiveAssessment, sensitiveMedia],
+  );
+  const canRevealSensitiveMedia = sensitivePolicy.allowReveal && resolvedSensitiveMedia.allowReveal;
+  const isSensitiveMedia = resolvedSensitiveMedia.isSensitive;
+  const isSensitiveMediaRevealed = canRevealSensitiveMedia && !!revealedPostIds[post.id];
+  const shouldHideSensitiveMedia = resolvedSensitiveMedia.action === 'drop' && !isSensitiveMediaRevealed;
+  const shouldBlurSensitiveMedia = sensitivePolicy.blurSensitiveMedia
+    && resolvedSensitiveMedia.action === 'blur'
+    && !isSensitiveMediaRevealed;
+  const shouldWarnSensitiveMedia = resolvedSensitiveMedia.action === 'warn';
+  const sensitiveReasons = useMemo(() => {
+    return resolvedSensitiveMedia.reasons.map((reason) => (
+      reason === 'graphicviolence' ? 'graphic violence' : reason.replace(/-/g, ' ')
+    ));
+  }, [resolvedSensitiveMedia.reasons]);
+  const sensitiveReasonLabel = sensitiveReasons.slice(0, 2).join(', ');
+  const sensitiveRationale = resolvedSensitiveMedia.rationale;
+  const hasHateSpeechSensitiveReason = resolvedSensitiveMedia.reasons.includes('hate-speech');
 
   const displayNameKey = `displayName:${post.author.did}`;
   const translatedDisplayName = byId[displayNameKey]?.translatedText;
 
   const canAutoInlineTranslate = useMemo(() => {
+    if (!hasTranslatableLanguageSignal(post.content)) return false;
     const textLength = post.content.trim().length;
     if (textLength === 0 || textLength > 280) return false;
     if (detectedPostLanguage.language !== 'und' && isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)) return false;
@@ -231,10 +339,71 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [canAutoInlineTranslate, displayNameKey, policy.autoTranslateFeed, policy.localOnlyMode, policy.userLanguage, post.author.displayName, post.author.handle, upsertTranslation]);
 
   useEffect(() => {
-    if (!shouldBlurSensitiveMedia || sensitiveImpressionLoggedRef.current) return;
+    if (!(shouldBlurSensitiveMedia || shouldHideSensitiveMedia) || sensitiveImpressionLoggedRef.current) return;
     sensitiveImpressionLoggedRef.current = true;
-    recordSensitiveMediaImpression(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
-  }, [shouldBlurSensitiveMedia, sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn]);
+    recordSensitiveMediaImpression(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
+  }, [sensitiveReasons.length, shouldBlurSensitiveMedia, shouldHideSensitiveMedia, sensitivePolicy.telemetryOptIn]);
+
+  useEffect(() => {
+    setMultimodalSensitiveAssessment(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
+    setMultimodalRetryAttempt(0);
+  }, [post.id]);
+
+  useEffect(() => {
+    if (!primaryVisualTarget) return;
+
+    const cached = multimodalSensitiveCache.get(primaryVisualTarget.cacheKey);
+    if (cached) {
+      setMultimodalSensitiveAssessment(cached);
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRetry = () => {
+      if (cancelled) return;
+      retryTimer = setTimeout(() => {
+        if (!cancelled) {
+          setMultimodalRetryAttempt((current) => current + 1);
+        }
+      }, multimodalRetryDelayMs(multimodalRetryAttempt));
+    };
+
+    (async () => {
+      try {
+        const result = await callMediaAnalyzer({
+          threadId: post.id,
+          mediaUrl: primaryVisualTarget.url,
+          ...(primaryVisualTarget.alt ? { mediaAlt: primaryVisualTarget.alt } : {}),
+          nearbyText: post.content,
+          candidateEntities: [],
+          factualHints: [],
+        });
+
+        const assessment = assessmentFromMediaAnalysis(result);
+        const authoritative = result.analysisStatus !== 'degraded'
+          && result.moderationStatus !== 'unavailable';
+        if (authoritative) {
+          multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, assessment);
+        } else {
+          scheduleRetry();
+        }
+        if (!cancelled) setMultimodalSensitiveAssessment(assessment);
+      } catch {
+        if (!cancelled) {
+          setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
+        }
+        scheduleRetry();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+    };
+  }, [multimodalRetryAttempt, post.content, post.id, primaryVisualTarget]);
 
   useEffect(() => {
     setExpandedAltIndex(null);
@@ -309,21 +478,26 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [isLightboxOpen]);
 
   useEffect(() => {
-    if (shouldBlurSensitiveMedia) return;
+    if (shouldBlurSensitiveMedia || shouldHideSensitiveMedia) return;
     sensitiveImpressionLoggedRef.current = false;
-  }, [shouldBlurSensitiveMedia]);
+  }, [shouldBlurSensitiveMedia, shouldHideSensitiveMedia]);
+
+  useEffect(() => {
+    if (canRevealSensitiveMedia || !revealedPostIds[post.id]) return;
+    hidePost(post.id);
+  }, [canRevealSensitiveMedia, hidePost, post.id, revealedPostIds]);
 
   const handleRevealSensitiveMedia = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!sensitivePolicy.allowReveal) return;
     revealPost(post.id);
-    recordSensitiveMediaReveal(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+    recordSensitiveMediaReveal(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
   };
 
   const handleHideSensitiveMedia = (e: React.MouseEvent) => {
     e.stopPropagation();
     hidePost(post.id);
-    recordSensitiveMediaRehide(sensitiveMedia.reasons.length, sensitivePolicy.telemetryOptIn);
+    recordSensitiveMediaRehide(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
   };
 
   return (
@@ -360,49 +534,79 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            type="button"
-            onClick={handleProfileClick}
-            style={{
-              width: 40, height: 40, borderRadius: '50%',
-              background: 'var(--fill-2)', overflow: 'hidden',
-              flexShrink: 0, cursor: 'pointer', border: 'none', padding: 0,
-            }}
+          <ProfileCardTrigger
+            data={standardProfileCardData}
+            did={post.author.did}
+            disabled={!standardProfileCardData}
           >
-            {post.author.avatar ? (
-              <img src={post.author.avatar} alt={post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            ) : (
-              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontWeight: 700 }}>
-                {post.author.handle[0]}
-              </div>
-            )}
-          </button>
-          <div
-            onClick={handleProfileClick}
-            role="button"
-            tabIndex={0}
-            className="interactive-link-surface"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                e.stopPropagation();
-                openActorProfile(post.author.did || post.author.handle);
-              }
-            }}
-            style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer', minWidth: 0 }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-ui-title-sm-track)', color: 'var(--label-1)' }}>{translatedDisplayName || post.author.displayName || post.author.handle}</span>
-              {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
-              {post.article && (
-                <span style={{ background: 'var(--fill-3)', color: 'var(--label-2)', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5, border: '1px solid var(--stroke-dim)' }}>
-                  Article
-                </span>
+            <button
+              type="button"
+              onClick={handleProfileClick}
+              style={{
+                width: 40, height: 40, borderRadius: '50%',
+                background: 'var(--fill-2)', overflow: 'hidden',
+                flexShrink: 0, cursor: 'pointer', border: 'none', padding: 0,
+              }}
+            >
+              {post.author.avatar ? (
+                <img src={post.author.avatar} alt={post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontWeight: 700 }}>
+                  {post.author.handle[0]}
+                </div>
               )}
-              <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
+            </button>
+          </ProfileCardTrigger>
+          <ProfileCardTrigger
+            data={standardProfileCardData}
+            did={post.author.did}
+            disabled={!standardProfileCardData}
+          >
+            <div
+              onClick={handleProfileClick}
+              role="button"
+              tabIndex={0}
+              className="interactive-link-surface"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openActorProfile(post.author.did || post.author.handle);
+                }
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: 'pointer', minWidth: 0 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 'var(--type-ui-title-sm-size)', lineHeight: 'var(--type-ui-title-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-ui-title-sm-track)', color: 'var(--label-1)' }}>{translatedDisplayName || post.author.displayName || post.author.handle}</span>
+                {sportsMetadata.isOfficial ? <OfficialSportsBadge authorDid={post.author.did} size="small" /> : null}
+                {post.article && (
+                  <span style={{ background: 'var(--fill-3)', color: 'var(--label-2)', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5, border: '1px solid var(--stroke-dim)' }}>
+                    Article
+                  </span>
+                )}
+                <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
+              </div>
+              <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
+              {moderationLabelChips.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  {moderationLabelChips.map((chip) => (
+                    <span
+                      key={chip.key}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        padding: '2px 8px',
+                        ...chipStyleByTone[chip.tone],
+                      }}
+                    >
+                      {chip.text}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-            <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
-          </div>
+          </ProfileCardTrigger>
         </div>
       </div>
 
@@ -414,25 +618,43 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
 
       {timelineHint && (
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          margin: replyingTo ? '0 0 10px' : '0 0 8px',
-          padding: '4px 9px',
-          borderRadius: 999,
-          border: '1px solid var(--stroke-dim)',
-          background: 'var(--surface-2)',
-          color: 'var(--label-3)',
-          fontSize: 'var(--type-meta-sm-size)',
-          lineHeight: 'var(--type-meta-sm-line)',
-          letterSpacing: 'var(--type-meta-sm-track)',
-          fontWeight: 600,
-        }}>
-          <span>{timelineHint.direction}</span>
-          {timelineHint.branchDepth > 0 && <span>depth {timelineHint.branchDepth}</span>}
-          {timelineHint.factualSignalPresent && <span>factual</span>}
-          {timelineHint.sourceSupportPresent && <span>source-backed</span>}
+        <div style={{ margin: replyingTo ? '0 0 10px' : '0 0 8px' }}>
+          {(timelineHint.isReply || timelineHint.continuityLabel) && timelineHint.compactSummary && (
+            <p style={{
+              margin: '0 0 6px',
+              fontSize: 'var(--type-meta-sm-size)',
+              lineHeight: 'var(--type-meta-sm-line)',
+              letterSpacing: 'var(--type-meta-sm-track)',
+              color: 'var(--label-3)',
+              fontWeight: 500,
+            }}>
+              Conversation: {timelineHint.compactSummary}
+            </p>
+          )}
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 6,
+            padding: '4px 9px',
+            borderRadius: 999,
+            border: '1px solid var(--stroke-dim)',
+            background: 'var(--surface-2)',
+            color: 'var(--label-3)',
+            fontSize: 'var(--type-meta-sm-size)',
+            lineHeight: 'var(--type-meta-sm-line)',
+            letterSpacing: 'var(--type-meta-sm-track)',
+            fontWeight: 600,
+          }}>
+            <span>{timelineHint.direction}</span>
+            {timelineHint.dominantTone && timelineHint.dominantTone !== 'forming' && (
+              <span>{timelineHint.dominantTone}</span>
+            )}
+            {timelineHint.branchDepth > 0 && <span>depth {timelineHint.branchDepth}</span>}
+            {timelineHint.continuityLabel && <span>{timelineHint.continuityLabel}</span>}
+            {timelineHint.factualSignalPresent && <span>factual</span>}
+            {timelineHint.sourceSupportPresent && <span>source-backed</span>}
+          </div>
         </div>
       )}
 
@@ -465,7 +687,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           targetLang={policy.userLanguage}
           autoTranslate={policy.autoTranslateFeed && canAutoInlineTranslate}
           localOnlyMode={policy.localOnlyMode}
-          showTrigger={detectedPostLanguage.language === 'und' || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage)}
+          showTrigger={
+            hasTranslatableLanguageSignal(post.content)
+            && (detectedPostLanguage.language === 'und'
+              || !isLikelySameLanguage(detectedPostLanguage.language, policy.userLanguage))
+          }
           renderText={(displayText) => (
             <p style={{
               fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-1)',
@@ -474,7 +700,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             }}>
               <TwemojiText
                 text={displayText}
-                facets={displayText === post.content ? post.facets : undefined}
+                {...(displayText === post.content && post.facets ? { facets: post.facets } : {})}
                 onMention={handleMentionClick}
                 onHashtag={handleHashtagClick}
               />
@@ -494,25 +720,39 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       ) : null}
 
       {/* Embeds */}
-      {shouldBlurSensitiveMedia && (
+      {(shouldWarnSensitiveMedia || shouldBlurSensitiveMedia || shouldHideSensitiveMedia) && (
         <div style={{
           marginBottom: 10,
-          border: '1px solid color-mix(in srgb, var(--orange) 35%, var(--sep))',
+          border: shouldHideSensitiveMedia
+            ? '1px solid color-mix(in srgb, var(--red) 32%, var(--sep))'
+            : '1px solid color-mix(in srgb, var(--orange) 35%, var(--sep))',
           borderRadius: 12,
-          background: 'color-mix(in srgb, var(--surface-card) 82%, var(--orange) 10%)',
+          background: shouldHideSensitiveMedia
+            ? 'color-mix(in srgb, var(--surface-card) 82%, var(--red) 10%)'
+            : 'color-mix(in srgb, var(--surface-card) 82%, var(--orange) 10%)',
           padding: '10px 12px',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <div>
               <p style={{ margin: 0, fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, color: 'var(--label-1)' }}>
-                Sensitive content warning
+                {shouldHideSensitiveMedia ? 'Sensitive media withheld' : 'Sensitive content warning'}
               </p>
               <p style={{ margin: '4px 0 0', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)' }}>
-                {sensitiveReasonLabel ? `Label: ${sensitiveReasonLabel}` : 'This media is flagged for sexual content, nudity, or graphic violence.'}
+                {shouldHideSensitiveMedia
+                  ? (sensitiveRationale ?? 'This media may contain severe graphic or exploitative content, so it stays hidden.')
+                  : hasHateSpeechSensitiveReason
+                    ? 'This media may include hateful or abusive language. Use caution while viewing it.'
+                    : sensitiveRationale
+                      ? sensitiveRationale
+                      : sensitiveReasonLabel
+                        ? `Reason: ${sensitiveReasonLabel}`
+                        : shouldWarnSensitiveMedia
+                          ? 'This media may need extra caution, but it remains visible.'
+                          : 'This media is flagged for sexual content, nudity, graphic violence, or another sensitive visual signal.'}
               </p>
             </div>
 
-            {sensitivePolicy.allowReveal && (
+            {canRevealSensitiveMedia && (shouldBlurSensitiveMedia || shouldHideSensitiveMedia) && (
               <button
                 onClick={handleRevealSensitiveMedia}
                 style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', fontWeight: 700, padding: 0, cursor: 'pointer' }}
@@ -524,7 +764,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         </div>
       )}
 
-      {isSensitiveMedia && isSensitiveMediaRevealed && sensitivePolicy.blurSensitiveMedia && sensitivePolicy.allowReveal && (
+      {isSensitiveMedia && isSensitiveMediaRevealed && sensitivePolicy.blurSensitiveMedia && canRevealSensitiveMedia && (
         <div style={{ marginBottom: 10 }}>
           <button
             onClick={handleHideSensitiveMedia}
@@ -536,7 +776,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
 
       {/* 1. Media Carousel (Images + Video) */}
-      {carouselItems.length > 0 && (
+      {carouselItems.length > 0 && !shouldHideSensitiveMedia && (
         <div style={{ position: 'relative' }}>
           <div style={{
             marginTop: 8,
@@ -623,6 +863,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       <VideoPlayer
                         url={item.url}
                         postId={post.id}
+                        {...(item.captions ? { captions: item.captions } : {})}
                         {...(item.thumb ? { thumb: item.thumb } : {})}
                         {...(typeof item.aspectRatio === 'number' ? { aspectRatio: item.aspectRatio } : {})}
                         autoplay={false}
@@ -983,9 +1224,43 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       )}
       </AnimatePresence>
 
+      {inlineTextYouTubeRef && (
+        <div style={{ marginTop: 8 }}>
+          <YouTubeEmbedCard
+            url={inlineTextYouTubeRef.normalizedUrl}
+            domain={inlineTextYouTubeRef.domain}
+          />
+        </div>
+      )}
+
       {/* 3. External Link */}
       {post.embed?.type === 'external' && (() => {
         const externalUrl = post.embed.url;
+        const isGif = externalUrl.includes('tenor.com') || externalUrl.includes('klipy.com');
+        if (isGif) {
+          return (
+            <div style={{ marginTop: 8 }}>
+              <Gif
+                url={externalUrl}
+                title={post.embed.title}
+                {...(post.embed.thumb ? { thumbnail: post.embed.thumb } : {})}
+              />
+            </div>
+          );
+        }
+        if (externalEmbedYouTubeRef) {
+          return (
+            <div style={{ marginTop: 8 }}>
+              <YouTubeEmbedCard
+                url={externalUrl}
+                title={post.embed.title}
+                description={post.embed.description}
+                thumb={post.embed.thumb}
+                domain={post.embed.domain}
+              />
+            </div>
+          );
+        }
         return (
         <div
           role="link"
@@ -1031,7 +1306,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       sourceLang={detectedCardLanguage.language}
                       targetLang={policy.userLanguage}
                       localOnlyMode={policy.localOnlyMode}
-                      showTrigger={detectedCardLanguage.language === 'und' || !isLikelySameLanguage(detectedCardLanguage.language, policy.userLanguage)}
+                      showTrigger={
+                        hasTranslatableLanguageSignal(post.embed.description)
+                        && (detectedCardLanguage.language === 'und'
+                          || !isLikelySameLanguage(detectedCardLanguage.language, policy.userLanguage))
+                      }
                       renderText={(displayText) => (
                         <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
                           {displayText}
@@ -1082,14 +1361,43 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       {post.embed?.type === 'quote' && (() => {
         const quotedPost = post.embed.post;
         const quotedActor = quotedPost.author.did || quotedPost.author.handle;
+        const quotedStandardProfileCardData = buildStandardProfileCardData(quotedPost);
         const quotedExternalEmbed = quotedPost.embed?.type === 'external' ? quotedPost.embed : null;
+        const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
         const quotedVideoEmbed = quotedPost.embed?.type === 'video' ? quotedPost.embed : null;
-        const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia && Boolean(quotedPost.sensitiveMedia?.isSensitive);
+        const shouldBlurQuotedImages = sensitivePolicy.blurSensitiveMedia
+          && (quotedPost.sensitiveMedia?.action === 'blur' || quotedPost.sensitiveMedia?.action === 'drop');
+        const quotedStoryTitle = quotedPost.content.slice(0, 80);
+
+        const openQuotedPost = (event: React.MouseEvent | React.KeyboardEvent) => {
+          event.stopPropagation();
+          onOpenStory({ id: quotedPost.id, type: 'post', title: quotedStoryTitle });
+        };
+
         return (
         <div style={{
           border: '1px solid var(--quote-border)', borderRadius: 12,
           padding: '10px 12px', marginTop: 8, background: 'var(--quote-surface)'
         }}>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={openQuotedPost}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              openQuotedPost(event);
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+          >
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
             <span style={{
               display: 'inline-flex',
@@ -1113,13 +1421,19 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
-              {quotedPost.author.avatar
-                ? <img src={quotedPost.author.avatar} alt={quotedPost.author.handle} style={{ width: '100%', height: '100%' }} />
-                : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontSize: 10, fontWeight: 700 }}>{((quotedPost.author.displayName || quotedPost.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
-            </div>
-            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
-            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--fill-3)', overflow: 'hidden', flexShrink: 0 }}>
+                {quotedPost.author.avatar
+                  ? <img src={quotedPost.author.avatar} alt={quotedPost.author.handle} style={{ width: '100%', height: '100%' }} />
+                  : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)', fontSize: 10, fontWeight: 700 }}>{((quotedPost.author.displayName || quotedPost.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
+              </div>
+            </ProfileCardTrigger>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
+            </ProfileCardTrigger>
+            <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
+            </ProfileCardTrigger>
           </div>
           <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
             <TwemojiText text={quotedPost.content} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
@@ -1177,26 +1491,37 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               borderTop: '0.5px solid var(--quote-preview-border)',
               paddingTop: 8,
             }}>
-              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
-                {quotedExternalEmbed.thumb && (
-                  <div style={{ marginBottom: 0, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
-                    <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                )}
-                <div style={{ padding: '9px 10px 10px' }}>
-                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 3 }}>
-                    {quotedExternalEmbed.domain}
-                  </div>
-                  <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: quotedExternalEmbed.description ? 4 : 0 }}>
-                    {quotedExternalEmbed.title}
-                  </div>
-                  {quotedExternalEmbed.description && (
-                    <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)' }}>
-                      {quotedExternalEmbed.description}
+              {quotedExternalYouTubeRef ? (
+                <YouTubeEmbedCard
+                  url={quotedExternalEmbed.url}
+                  title={quotedExternalEmbed.title}
+                  description={quotedExternalEmbed.description}
+                  thumb={quotedExternalEmbed.thumb}
+                  domain={quotedExternalEmbed.domain}
+                  compact
+                />
+              ) : (
+                <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                  {quotedExternalEmbed.thumb && (
+                    <div style={{ marginBottom: 0, overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                      <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                   )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 3 }}>
+                      {quotedExternalEmbed.domain}
+                    </div>
+                    <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700, marginBottom: quotedExternalEmbed.description ? 4 : 0 }}>
+                      {quotedExternalEmbed.title}
+                    </div>
+                    {quotedExternalEmbed.description && (
+                      <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', color: 'var(--label-2)' }}>
+                        {quotedExternalEmbed.description}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
           {quotedVideoEmbed && (
@@ -1228,25 +1553,37 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               paddingTop: 8,
               borderTop: '0.5px solid var(--quote-preview-border)',
             }}>
-              <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
-                {post.embed.externalLink.thumb && (
-                  <div style={{ overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
-                    <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                )}
-                <div style={{ padding: '9px 10px 10px' }}>
-                  <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
-                    {post.embed.externalLink.domain}
-                  </div>
-                  {post.embed.externalLink.title && (
-                    <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
-                      {post.embed.externalLink.title}
+              {parseYouTubeUrl(post.embed.externalLink.url) ? (
+                <YouTubeEmbedCard
+                  url={post.embed.externalLink.url}
+                  title={post.embed.externalLink.title}
+                  description={post.embed.externalLink.description}
+                  thumb={post.embed.externalLink.thumb}
+                  domain={post.embed.externalLink.domain}
+                  compact
+                />
+              ) : (
+                <div style={{ border: '1px solid var(--quote-preview-border)', borderRadius: 12, background: 'var(--quote-preview-surface)', overflow: 'hidden' }}>
+                  {post.embed.externalLink.thumb && (
+                    <div style={{ overflow: 'hidden', background: 'var(--fill-2)', aspectRatio: '1.91 / 1' }}>
+                      <img src={post.embed.externalLink.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                   )}
+                  <div style={{ padding: '9px 10px 10px' }}>
+                    <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)', marginBottom: 2 }}>
+                      {post.embed.externalLink.domain}
+                    </div>
+                    {post.embed.externalLink.title && (
+                      <div style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', color: 'var(--label-1)', fontWeight: 700 }}>
+                        {post.embed.externalLink.title}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
+          </div>
         </div>
         );
       })()}

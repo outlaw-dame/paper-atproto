@@ -6,9 +6,11 @@ type PrefetchModuleKey =
   | 'prompt-composer'
   | 'story-mode'
   | 'search-story'
+  | 'hashtag-feed'
+  | 'people-feed'
   | 'atproto-queries';
 
-type FeatureKey = 'compose' | 'promptComposer' | 'storyMode' | 'searchStory';
+type FeatureKey = 'compose' | 'promptComposer' | 'storyMode' | 'searchStory' | 'hashtagFeed' | 'peopleFeed';
 
 interface ModuleMetric {
   attempts: number;
@@ -41,6 +43,8 @@ const moduleMetrics: Record<PrefetchModuleKey, ModuleMetric> = {
   'prompt-composer': { attempts: 0, successes: 0, failures: 0, totalDurationMs: 0, lastDurationMs: null },
   'story-mode': { attempts: 0, successes: 0, failures: 0, totalDurationMs: 0, lastDurationMs: null },
   'search-story': { attempts: 0, successes: 0, failures: 0, totalDurationMs: 0, lastDurationMs: null },
+  'hashtag-feed': { attempts: 0, successes: 0, failures: 0, totalDurationMs: 0, lastDurationMs: null },
+  'people-feed': { attempts: 0, successes: 0, failures: 0, totalDurationMs: 0, lastDurationMs: null },
   'atproto-queries': { attempts: 0, successes: 0, failures: 0, totalDurationMs: 0, lastDurationMs: null },
 };
 
@@ -49,6 +53,8 @@ const featureMetrics: Record<FeatureKey, FeatureMetric> = {
   promptComposer: { opens: 0, mounts: 0, pendingStartMs: null, firstOpenLatencyMs: null, firstOpenUsedPrefetch: null },
   storyMode: { opens: 0, mounts: 0, pendingStartMs: null, firstOpenLatencyMs: null, firstOpenUsedPrefetch: null },
   searchStory: { opens: 0, mounts: 0, pendingStartMs: null, firstOpenLatencyMs: null, firstOpenUsedPrefetch: null },
+  hashtagFeed: { opens: 0, mounts: 0, pendingStartMs: null, firstOpenLatencyMs: null, firstOpenUsedPrefetch: null },
+  peopleFeed: { opens: 0, mounts: 0, pendingStartMs: null, firstOpenLatencyMs: null, firstOpenUsedPrefetch: null },
 };
 
 const prefetchedModules = new Set<PrefetchModuleKey>();

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Card } from 'konsta/react';
 import { getSafeExternalHostname, openExternalUrl, sanitizeExternalUrl } from '../lib/safety/externalUrl';
+import { parseYouTubeUrl } from '../lib/youtube';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
 
 interface LinkPreviewProps {
   url: string;
@@ -19,14 +21,27 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({
 }) => {
   const safeUrl = sanitizeExternalUrl(url);
   const hostname = getSafeExternalHostname(url);
+  const youtubeReference = parseYouTubeUrl(url);
 
   if (!safeUrl || !hostname) {
     return null;
   }
 
+  if (youtubeReference) {
+    return (
+      <YouTubeEmbedCard
+        url={safeUrl}
+        title={title}
+        description={description}
+        thumb={image}
+        domain={siteName || hostname}
+        compact
+      />
+    );
+  }
+
   return (
     <Card
-      margin="m-0"
       className="overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition-colors"
       onClick={() => { openExternalUrl(safeUrl); }}
     >

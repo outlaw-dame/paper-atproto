@@ -52,7 +52,100 @@
 			"mv": true,
 			"corepack": true,
 			"lsof": true,
-			"env": true
+			"env": true,
+			"npm run -s vitest": true,
+			"npx vitest": true,
+			"/^node scripts/eval_hard_negative_thresholds\\.mjs --input scripts/retrieval_hard_negatives\\.sample\\.jsonl$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"apply_patch": true,
+			"cp": true,
+			"/^node -v && npm -v && cat package\\.json \\| sed -n '1,220p'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npm exec": true,
+			"npm run -s build": true,
+			"npm run -s typecheck": true,
+			"npm run -s test": true,
+			"awk": true,
+			"/^node -e \"const id = 'node_modules/@atproto-labs/fetch'; console\\.log\\(id\\.includes\\('node_modules/@atproto'\\)\\)\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && node -e \"\nconst fs = require\\('fs'\\);\nconst pkg = JSON\\.parse\\(fs\\.readFileSync\\('package\\.json', 'utf8'\\)\\);\nconst deps = Object\\.keys\\(pkg\\.dependencies \\|\\| \\{\\}\\);\nconst sizes = \\[\\];\nfor \\(const dep of deps\\) \\{\n  try \\{\n    const dir = dep\\.replace\\(/\\^@/, ''\\)\\.replace\\('/', '\\+'\\);\n    const paths = \\[\n      \\\\`node_modules/\\.pnpm/\\\\\\$\\{dir\\}@\\*/node_modules/\\\\\\$\\{dep\\}\\\\`,\n      \\\\`node_modules/\\\\\\$\\{dep\\}\\\\`\n    \\];\n    // just print dep names\n    console\\.log\\(dep\\);\n  \\} catch \\{\\}\n\\}\n\" 2>&1 \\| head -20$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && node -e \"\nconst \\{ execSync \\} = require\\('child_process'\\);\nconst deps = \\['@tanstack/react-query', 'jsonld', 'rdf-parse', 'drizzle-orm', 'localforage', 'lucide-react', 'react-markdown', 'konsta'\\];\nfor \\(const dep of deps\\) \\{\n  try \\{\n    const name = dep\\.replace\\('@', ''\\)\\.replace\\('/', '\\+'\\);\n    const result = execSync\\(\\\\`du -sk node_modules/\\.pnpm/\\\\\\$\\{name\\}\\*/node_modules/\\\\\\$\\{dep\\} 2>/dev/null \\|\\| du -sk node_modules/\\\\\\$\\{dep\\} 2>/dev/null\\\\`\\)\\.toString\\(\\)\\.trim\\(\\);\n    console\\.log\\(dep, result\\.split\\('\\\\t'\\)\\[0\\], 'kB'\\);\n  \\} catch\\(e\\) \\{ console\\.log\\(dep, 'err'\\); \\}\n\\}\" 2>&1$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && cat dist/assets/index-\\*\\.js \\| node -e \"\nconst data = require\\('fs'\\)\\.readFileSync\\('/dev/stdin','utf8'\\);\nconst hits = \\{\\};\n\\['jsonld','feedsmith','rdf-parse','@tanstack','drizzle','localforage','konsta'\\]\\.forEach\\(k => \\{\n  hits\\[k\\] = \\(data\\.match\\(new RegExp\\(k,'g'\\)\\) \\|\\| \\[\\]\\)\\.length;\n\\}\\);\nconsole\\.log\\(JSON\\.stringify\\(hits,null,2\\)\\);\n\" 2>&1$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && ls dist/assets/\\*\\.js \\| wc -l && for f in dist/assets/recommendationTelemetry\\*\\.js dist/assets/Gif\\*\\.js; do echo \"=== \\$f ===\"; node -e \"\nconst data = require\\('fs'\\)\\.readFileSync\\('\\$f','utf8'\\);\nconst hits = \\{\\};\n\\['jsonld','feedsmith','rdf-parse','tanstack','drizzle','localforage','konsta','@atproto','react-query'\\]\\.forEach\\(k => \\{\n  const c = \\(data\\.match\\(new RegExp\\(k,'g'\\)\\) \\|\\| \\[\\]\\)\\.length;\n  if\\(c>0\\) hits\\[k\\] = c;\n\\}\\);\nconsole\\.log\\(JSON\\.stringify\\(hits\\)\\);\n\"; done$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && node -e \"\nconst data = require\\('fs'\\)\\.readFileSync\\('dist/assets/Gif-CClon9S2\\.js','utf8'\\);\n// Get unique identifiers - check for CSS classes and konsta-related strings\nconst konsta = \\(data\\.match\\(/konsta/g\\) \\|\\| \\[\\]\\)\\.length;\nconst card = \\(data\\.match\\(/Card\\|card/g\\) \\|\\| \\[\\]\\)\\.length;\nconsole\\.log\\('size:', data\\.length, 'konsta:', konsta, 'card:', card, 'first500:', data\\.slice\\(0,500\\)\\);\n\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && node -e \"\nconst r = require\\('\\./test-results\\.json'\\);\nconsole\\.log\\('keys:', Object\\.keys\\(r\\)\\);\nconsole\\.log\\('numTotalTests:', r\\.numTotalTests\\);\nconsole\\.log\\('numPassedTests:', r\\.numPassedTests\\);\nconsole\\.log\\('testResults sample:', JSON\\.stringify\\(\\(r\\.testResults\\|\\|\\[\\]\\)\\.slice\\(0,1\\)\\.map\\(s=>\\(\\{path:s\\.testFilePath\\?\\.split\\('/'\\)\\.slice\\(-1\\)\\[0\\],status:s\\.status\\}\\)\\)\\)\\);\n\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && node -e \"\nconst r = require\\('\\./test-results\\.json'\\);\nconst s = r\\.testResults\\[0\\];\nconsole\\.log\\('sample suite keys:', Object\\.keys\\(s\\)\\);\nconsole\\.log\\('sample:', JSON\\.stringify\\(s, null, 2\\)\\.slice\\(0, 400\\)\\);\n\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e \"\nconst crypto = require\\('crypto'\\);\nconst script = \\\\`\\(function\\(\\)\\{var dark=window\\.matchMedia\\('\\(prefers-color-scheme: dark\\)'\\)\\.matches;var themeColor=dark\\?'#000000':'#F2F2F7';if\\(dark\\) document\\.documentElement\\.classList\\.add\\('dark'\\);document\\.documentElement\\.style\\.background=themeColor;document\\.documentElement\\.style\\.backgroundColor=themeColor;\\}\\)\\(\\);\\\\`;\nconst hash = crypto\\.createHash\\('sha256'\\)\\.update\\(script\\)\\.digest\\('base64'\\);\nconsole\\.log\\('sha256-' \\+ hash\\);\n\"\n$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd /Users/damonoutlaw/paper-atproto && node -e \"\nconst crypto = require\\('crypto'\\);\nconst fs = require\\('fs'\\);\nconst html = fs\\.readFileSync\\('index\\.html','utf8'\\);\nconst match = html\\.match\\(/<script>\\(\\.\\+\\?\\)<\\\\/script>/\\);\nif \\(match\\) \\{\n  const hash = crypto\\.createHash\\('sha256'\\)\\.update\\(match\\[1\\]\\)\\.digest\\('base64'\\);\n  const cspMatch = html\\.match\\(/sha256-\\[A-Za-z0-9\\+/=\\]\\+/g\\);\n  console\\.log\\('Script hash:', 'sha256-' \\+ hash\\);\n  console\\.log\\('CSP hashes in file:', cspMatch\\);\n  console\\.log\\('Match:', cspMatch && cspMatch\\[0\\] === 'sha256-' \\+ hash \\? 'OK' : 'MISMATCH'\\);\n\\}\n\"\n$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^bash scripts/tunnel\\.sh$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"git checkout": true,
+			"/^node -e \"const fs=require\\('fs'\\);const q=fs\\.readFileSync\\('server/src/services/qwenWriter\\.ts','utf8'\\);const m=q\\.match\\(/const SYSTEM_PROMPT_BASE = `\\(\\[\\\\s\\\\S\\]\\*\\?\\)`;/\\);console\\.log\\('writer_system_prompt_chars',m\\?m\\[1\\]\\.length:'na'\\);\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e \"const fs=require\\('fs'\\);const s=fs\\.readFileSync\\('src/intelligence/modelClient\\.ts','utf8'\\);const idx=s\\.indexOf\\('function shouldPreferDeterministicFallback'\\);console\\.log\\('has_root_only_fallback',idx>=0\\);\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);if\\(start<0\\)\\{console\\.log\\(\"writer_system_prompt_chars na\"\\);process\\.exit\\(0\\);\\}const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=end>=0\\?rest\\.slice\\(0,end\\):rest;console\\.log\\(\"writer_system_prompt_chars\",body\\.length\\);'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenComposerGuidanceWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);if\\(start<0\\)\\{console\\.log\\(\"composer_system_prompt_chars na\"\\);process\\.exit\\(0\\);\\}const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=end>=0\\?rest\\.slice\\(0,end\\):rest;console\\.log\\(\"composer_system_prompt_chars\",body\\.length\\);'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^node -e 'const fs=require\\(\"fs\"\\);const q=fs\\.readFileSync\\(\"server/src/services/qwenWriter\\.ts\",\"utf8\"\\);const start=q\\.indexOf\\(\"const SYSTEM_PROMPT_BASE = `\"\\);const rest=q\\.slice\\(start\\+\"const SYSTEM_PROMPT_BASE = `\"\\.length\\);const end=rest\\.indexOf\\(\"`;\\\\n\"\\);const body=rest\\.slice\\(0,end\\);console\\.log\\(\"writer_system_prompt_chars\",body\\.length\\);'$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"pgrep": true,
+			"/^cd server && pwd && npm run$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npm run build": true,
+			"npm install": true,
+			"npx @vscode/vsce": true,
+			"code": true,
+			"command": true,
+			"true": true
 		}
 	}
 }

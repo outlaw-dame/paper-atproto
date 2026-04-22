@@ -1,7 +1,8 @@
 import { parseFeed, generateRssFeed, generateAtomFeed, generateJsonFeed } from 'feedsmith';
 import * as jsonld from 'jsonld';
 import { paperDB } from './db';
-import { hybridSearch } from './search';
+import { embeddingPipeline } from './intelligence/embeddingPipeline';
+import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 
 /**
  * Feed Service for consuming and generating ATOM, RSS, JSON, RDF/XML, and JSON-LD feeds.
@@ -12,7 +13,8 @@ export class FeedService {
   private getFirstChildByLocalName(parent: Element, localName: string): Element | null {
     const all = parent.getElementsByTagName('*');
     for (let i = 0; i < all.length; i += 1) {
-      const node = all[i];
+      const node = all.item(i);
+      if (!node) continue;
       if (node.localName?.toLowerCase() === localName.toLowerCase()) {
         return node;
       }
@@ -32,7 +34,8 @@ export class FeedService {
 
       const items = doc.getElementsByTagName('item');
       for (let i = 0; i < items.length; i += 1) {
-        const item = items[i];
+        const item = items.item(i);
+        if (!item) continue;
         const guid = item.getElementsByTagName('guid')[0]?.textContent?.trim();
         const link = item.getElementsByTagName('link')[0]?.textContent?.trim();
         const enclosureUrl = item.getElementsByTagName('enclosure')[0]?.getAttribute('url')?.trim();
@@ -49,7 +52,8 @@ export class FeedService {
           const recipients = valueEl.getElementsByTagName('*');
           const valueRecipients: Array<Record<string, string>> = [];
           for (let r = 0; r < recipients.length; r += 1) {
-            const recipientNode = recipients[r];
+            const recipientNode = recipients.item(r);
+            if (!recipientNode) continue;
             if (recipientNode.localName?.toLowerCase() !== 'valuerecipient') continue;
             const record: Record<string, string> = {};
             for (let a = 0; a < recipientNode.attributes.length; a += 1) {
@@ -68,7 +72,11 @@ export class FeedService {
           };
         }
 
-        const meta = { transcriptUrl, chaptersUrl, valueConfig };
+        const meta: { transcriptUrl?: string; chaptersUrl?: string; valueConfig?: unknown } = {
+          ...(transcriptUrl ? { transcriptUrl } : {}),
+          ...(chaptersUrl ? { chaptersUrl } : {}),
+          ...(valueConfig !== undefined ? { valueConfig } : {}),
+        };
         const keys = [guid, link, enclosureUrl].filter((key): key is string => Boolean(key));
         keys.forEach((key) => metadataByKey.set(key, meta));
       }
@@ -94,7 +102,7 @@ export class FeedService {
       const hit = metadataByKey.get(key);
       if (hit) return hit;
     }
-    return { transcriptUrl: undefined, chaptersUrl: undefined, valueConfig: undefined };
+    return {};
   }
 
   /**
@@ -139,7 +147,8 @@ export class FeedService {
     const itemElements = doc.getElementsByTagName('item');
 
     for (let i = 0; i < itemElements.length; i++) {
-      const el = itemElements[i];
+      const el = itemElements.item(i);
+      if (!el) continue;
       const getTextContent = (tag: string) => el.getElementsByTagName(tag)[0]?.textContent;
 
       items.push({
@@ -205,7 +214,10 @@ export class FeedService {
         [url, parsed.title, parsed.description, parsed.type, category]
       );
 
-      const feedId = feedResult.rows[0].id;
+      const feedId = (feedResult.rows[0] as { id: string } | undefined)?.id;
+      if (!feedId) {
+        throw new Error('Feed insert did not return an id');
+      }
 
       // 2. Save feed items
       for (const item of parsed.items) {
@@ -214,7 +226,8 @@ export class FeedService {
         const podcast20 = this.getPodcast20ForItem(item, podcast20ByKey);
 
         // Generate embedding for hybrid search — format as pgvector string [x,y,...]
-        const embeddingArr = await hybridSearch.generateEmbedding(item.title + ' ' + content);
+        const embeddingArr = await embeddingPipeline.embed(item.title + ' ' + content, { mode: 'ingest' });
+        if (embeddingArr.length > 0) recordEmbeddingVector('ingest', embeddingArr);
         const embedding = embeddingArr.length ? `[${embeddingArr.join(',')}]` : null;
 
         await pg.query(
@@ -290,8 +303,8 @@ export class FeedService {
       })),
     };
 
-    if (type === 'atom') return generateAtomFeed(feedData);
-    if (type === 'json') return generateJsonFeed(feedData);
+    if (type === 'atom') return generateAtomFeed(feedData as any);
+    if (type === 'json') return generateJsonFeed(feedData as any);
     if (type === 'jsonld') return this.generateJsonLdFeed(feedData);
     if (type === 'rdf') return this.generateRdfXmlFeed(feedData);
     return generateRssFeed(feedData);

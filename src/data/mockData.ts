@@ -39,6 +39,20 @@ export interface MockPost {
     description?: string;
     domain: string;
     aspectRatio?: number;
+    captions?: Array<{
+      lang: string;
+      url: string;
+      label?: string;
+    }>;
+  } | {
+    type: 'audio';
+    url: string;
+    title: string;
+    description?: string; // "Artist\nAlbum" format
+    thumb?: string;       // cover art URL
+    mimeType?: string;    // e.g. "audio/mpeg"
+    duration?: number;    // seconds
+    domain: string;
   } | {
     type: 'quote';
     post: Omit<MockPost, 'replyTo' | 'threadRoot'>;
@@ -46,9 +60,17 @@ export interface MockPost {
   };
   chips: ChipType[];
   contentLabels?: string[];
+  labelDetails?: Array<{
+    val: string;
+    src?: string;
+    neg: boolean;
+  }>;
   sensitiveMedia?: {
     isSensitive: boolean;
     reasons: string[];
+    action?: 'none' | 'warn' | 'blur' | 'drop';
+    allowReveal?: boolean;
+    rationale?: string;
   };
   threadCount?: number;
   replyTo?: MockPost;

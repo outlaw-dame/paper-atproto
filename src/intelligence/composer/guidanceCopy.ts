@@ -174,6 +174,7 @@ export function buildComposerGuidanceUi(
   const title = getTitle(context.mode, state);
   const badges = getBadges(context, heuristics, scores);
   const footnote = getFootnote(state, context);
+  const suggestion = getSuggestion(state, context, scores);
 
   let message = '';
   if (state === 'positive') {
@@ -194,7 +195,9 @@ export function buildComposerGuidanceUi(
     message,
     badges,
     footnote,
-    suggestion: getSuggestion(state, context, scores),
+    ...(suggestion !== undefined
+      ? { suggestion }
+      : {}),
     copySource: 'template',
   };
 }

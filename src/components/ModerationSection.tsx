@@ -5,7 +5,7 @@
 // Timed mutes: the mute form lets users pick a duration;
 // the store manages expiry and useTimedMuteWatcher auto-unmutes when expired.
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import {
   useGetBlocks,
@@ -16,7 +16,14 @@ import {
   useUnblockActor,
   useUnmuteActor,
   useMuteActor,
+  usePreferences,
+  useLabelerServices,
+  useAddLabeler,
+  useRemoveLabeler,
+  useRemoveLabelers,
+  useSetContentLabelPref,
 } from '../lib/atproto/queries';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import {
   useModerationStore,
   formatMuteExpiry,
@@ -24,6 +31,11 @@ import {
   type MuteDuration,
 } from '../store/moderationStore';
 import { atpCall } from '../lib/atproto/client';
+import {
+  recordLabelPrefWriteAttempt,
+  recordLabelPrefWriteFailure,
+  recordUnavailableLabelersDetected,
+} from '../perf/moderationLabelerTelemetry';
 
 // ─── Styles (inline — consistent with the rest of the settings sheet) ─────
 const styles = {
@@ -201,6 +213,115 @@ interface ActorSuggestion {
   handle: string;
   displayName?: string;
   avatar?: string;
+}
+
+type LabelVisibility = 'hide' | 'warn' | 'ignore';
+
+interface LabelDefinitionSummary {
+  identifier: string;
+  name: string;
+  description: string;
+  defaultSetting: LabelVisibility;
+  adultOnly: boolean;
+  canWarn: boolean;
+  blurs: 'none' | 'content' | 'media';
+  severity: 'none' | 'alert' | 'inform';
+}
+
+function toTitleCaseLabel(value: string): string {
+  return value
+    .replace(/^!/, '')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function sanitizeLabelIdentifier(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!/^!?[a-z-]{1,64}$/.test(normalized)) return null;
+  return normalized;
+}
+
+function normalizeDefaultSetting(raw: unknown): LabelVisibility {
+  return raw === 'hide' || raw === 'warn' || raw === 'ignore' ? raw : 'warn';
+}
+
+function parseLabelDefinitionsFromService(service: unknown): LabelDefinitionSummary[] {
+  const policies = (service as { policies?: unknown } | undefined)?.policies as {
+    labelValues?: unknown;
+    labelValueDefinitions?: unknown;
+  } | undefined;
+
+  const values = Array.isArray(policies?.labelValues) ? policies?.labelValues : [];
+  const definitions = Array.isArray(policies?.labelValueDefinitions)
+    ? policies?.labelValueDefinitions as Array<{
+      identifier?: unknown;
+      defaultSetting?: unknown;
+      adultOnly?: unknown;
+      blurs?: unknown;
+      severity?: unknown;
+      locales?: unknown;
+    }>
+    : [];
+
+  const defByIdentifier = new Map<string, LabelDefinitionSummary>();
+  for (const def of definitions) {
+    const identifier = sanitizeLabelIdentifier(def.identifier);
+    if (!identifier) continue;
+
+    const localeEntry = Array.isArray(def.locales)
+      ? def.locales.find((entry) => entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string')
+      : null;
+    const localeName = localeEntry && typeof localeEntry === 'object' ? (localeEntry as { name?: string }).name : undefined;
+    const localeDescription = localeEntry && typeof localeEntry === 'object' ? (localeEntry as { description?: string }).description : undefined;
+    const blurs = def.blurs === 'none' || def.blurs === 'content' || def.blurs === 'media' ? def.blurs : 'none';
+    const severity = def.severity === 'none' || def.severity === 'alert' || def.severity === 'inform' ? def.severity : 'none';
+
+    defByIdentifier.set(identifier, {
+      identifier,
+      name: (localeName?.trim() || toTitleCaseLabel(identifier)).slice(0, 80),
+      description: (localeDescription?.trim() || `Labeled "${identifier}"`).slice(0, 220),
+      defaultSetting: normalizeDefaultSetting(def.defaultSetting),
+      adultOnly: Boolean(def.adultOnly),
+      canWarn: !(blurs === 'none' && severity === 'none'),
+      blurs,
+      severity,
+    });
+  }
+
+  for (const value of values) {
+    const identifier = sanitizeLabelIdentifier(value);
+    if (!identifier || defByIdentifier.has(identifier)) continue;
+    defByIdentifier.set(identifier, {
+      identifier,
+      name: toTitleCaseLabel(identifier),
+      description: `Labeled "${identifier}"`,
+      defaultSetting: 'warn',
+      adultOnly: false,
+      canWarn: true,
+      blurs: 'none',
+      severity: 'inform',
+    });
+  }
+
+  return [...defByIdentifier.values()].slice(0, 48);
+}
+
+function describeLabelBehavior(def: LabelDefinitionSummary, pref: LabelVisibility): string {
+  if (pref === 'ignore') {
+    if (def.severity === 'inform') return 'Show badge only in relevant surfaces.';
+    return 'Label signals are disabled for your view.';
+  }
+
+  if (pref === 'warn') {
+    if (def.blurs === 'content') return 'Show warning before opening this content.';
+    if (def.blurs === 'media') return 'Blur media and allow reveal with warning context.';
+    return 'Show warning badge without feed filtering.';
+  }
+
+  if (def.blurs === 'content') return 'Filter labeled content from feeds and lists.';
+  if (def.blurs === 'media') return 'Filter items and keep sensitive media hidden.';
+  return 'Filter labeled items from feeds and discovery surfaces.';
 }
 
 // ─── Inline actor-search hook ─────────────────────────────────────────────
@@ -725,6 +846,400 @@ function ModerationListsSection() {
   );
 }
 
+function LabelersSection() {
+  const { agent } = useSessionStore();
+  const navigateToProfile = useProfileNavigation();
+  const [open, setOpen] = useState(false);
+  const [labelerInput, setLabelerInput] = useState('');
+  const [acSelectedIndex, setAcSelectedIndex] = useState(0);
+  const [expandedLabelerDid, setExpandedLabelerDid] = useState<string | null>(null);
+  const [labelPrefError, setLabelPrefError] = useState<string | null>(null);
+  const [labelPrefSuccess, setLabelPrefSuccess] = useState<string | null>(null);
+  const [optimisticLabelPrefs, setOptimisticLabelPrefs] = useState<Record<string, LabelVisibility>>({});
+  const [pendingPrefWrites, setPendingPrefWrites] = useState<Record<string, true>>({});
+  const inputRef = useRef<HTMLInputElement>(null);
+  const lastSuccessAtRef = useRef(0);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { data: preferencesData, isLoading: preferencesLoading } = usePreferences();
+  const { mutate: addLabeler, isPending: addingLabeler } = useAddLabeler();
+  const { mutate: removeLabeler, isPending: removingLabeler } = useRemoveLabeler();
+  const { mutate: removeLabelers, isPending: removingManyLabelers } = useRemoveLabelers();
+  const { mutate: setContentLabelPref } = useSetContentLabelPref();
+
+  const labelerPrefs = useMemo(
+    () => (preferencesData?.moderationPrefs?.labelers ?? []) as Array<{ did: string }>,
+    [preferencesData],
+  );
+  const labelerDids = useMemo(
+    () => labelerPrefs.map((entry) => entry.did).filter(Boolean),
+    [labelerPrefs],
+  );
+  const { data: servicesData, isLoading: servicesLoading } = useLabelerServices(labelerDids);
+
+  const serviceViews = (servicesData?.data?.views ?? []) as Array<{
+    creator?: { did?: string; handle?: string; displayName?: string; avatar?: string };
+    policies?: unknown;
+  }>;
+  const serviceByDid = useMemo(() => {
+    const byDid = new Map<string, { handle?: string; displayName?: string; avatar?: string; definitions: LabelDefinitionSummary[] }>();
+    for (const view of serviceViews) {
+      const did = view.creator?.did;
+      if (!did) continue;
+      byDid.set(did, {
+        ...(view.creator?.handle ? { handle: view.creator.handle } : {}),
+        ...(view.creator?.displayName ? { displayName: view.creator.displayName } : {}),
+        ...(view.creator?.avatar ? { avatar: view.creator.avatar } : {}),
+        definitions: parseLabelDefinitionsFromService(view),
+      });
+    }
+    return byDid;
+  }, [serviceViews]);
+
+  const {
+    suggestions: acSuggestions,
+    isLoading: acLoading,
+    dismiss: acDismiss,
+  } = useActorSearchSuggestions(labelerInput);
+
+  useEffect(() => {
+    setAcSelectedIndex(0);
+  }, [acSuggestions.length]);
+
+  const unavailableDids = useMemo(
+    () => labelerDids.filter((did) => !serviceByDid.has(did)),
+    [labelerDids, serviceByDid],
+  );
+
+  useEffect(() => {
+    recordUnavailableLabelersDetected(unavailableDids.length);
+  }, [unavailableDids.length]);
+
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current !== null) {
+        clearTimeout(successTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showRateLimitedSuccess = useCallback((message: string) => {
+    const now = Date.now();
+    if (now - lastSuccessAtRef.current < 1_500) return;
+    lastSuccessAtRef.current = now;
+    setLabelPrefSuccess(message);
+    if (successTimerRef.current !== null) clearTimeout(successTimerRef.current);
+    successTimerRef.current = setTimeout(() => {
+      setLabelPrefSuccess(null);
+      successTimerRef.current = null;
+    }, 2_200);
+  }, []);
+
+  const handleSelectSuggestion = useCallback(
+    (s: ActorSuggestion) => {
+      setLabelerInput(s.did);
+      acDismiss();
+      inputRef.current?.focus();
+    },
+    [acDismiss],
+  );
+
+  const handleInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (acSuggestions.length === 0) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setAcSelectedIndex((i) => Math.min(i + 1, acSuggestions.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setAcSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        const s = acSuggestions[acSelectedIndex];
+        if (s) {
+          e.preventDefault();
+          handleSelectSuggestion(s);
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        acDismiss();
+      }
+    },
+    [acDismiss, acSelectedIndex, acSuggestions, handleSelectSuggestion],
+  );
+
+  function handleAddLabelerSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = labelerInput.trim();
+    if (!trimmed) return;
+    acDismiss();
+    const directDid = trimmed.startsWith('did:') ? trimmed : null;
+
+    const commitAdd = (did: string) => {
+      if (labelerDids.includes(did)) {
+        setLabelerInput('');
+        return;
+      }
+      setLabelPrefError(null);
+      addLabeler(
+        { did },
+        { onSuccess: () => setLabelerInput('') },
+      );
+    };
+
+    if (directDid) {
+      commitAdd(directDid);
+      return;
+    }
+
+    void atpCall(() => agent.searchActors({ q: trimmed.replace(/^@/, ''), limit: 1 }))
+      .then((res) => {
+        const did = res.data.actors[0]?.did;
+        if (!did) return;
+        commitAdd(did);
+      })
+      .catch(() => {
+        // Ignore resolution failures and keep input for correction.
+      });
+  }
+
+  const isLoading = preferencesLoading || (labelerDids.length > 0 && servicesLoading);
+  const adultContentEnabled = Boolean(preferencesData?.moderationPrefs?.adultContentEnabled);
+
+  return (
+    <div>
+      <div style={styles.subsectionHeader} onClick={() => setOpen((p) => !p)} role="button" aria-expanded={open}>
+        <span style={styles.subsectionTitle}>
+          Labelers
+          {labelerDids.length > 0 && <span style={styles.badge}>{labelerDids.length}</span>}
+        </span>
+        <span style={styles.chevron(open)}>›</span>
+      </div>
+
+      {open && (
+        <div>
+          <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.35 }}>
+            Subscribe to trusted labelers to apply their moderation labels, similar to Bluesky labeler controls.
+          </p>
+          {unavailableDids.length > 0 && (
+            <div style={{ marginBottom: 10, border: '1px solid var(--sep)', borderRadius: 10, padding: '8px 10px', background: 'var(--fill-1)' }}>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--label-2)', lineHeight: 1.35 }}>
+                Some moderation services are unavailable right now.
+              </p>
+              <button
+                style={{ ...styles.actionBtn(true), marginTop: 8 }}
+                disabled={removingManyLabelers}
+                onClick={() => removeLabelers({ dids: unavailableDids })}
+              >
+                Remove unavailable services
+              </button>
+            </div>
+          )}
+          <form onSubmit={handleAddLabelerSubmit} style={styles.muteFormRow}>
+            <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+              <input
+                ref={inputRef}
+                style={{ ...styles.input, flex: undefined, width: '100%' }}
+                placeholder="Labeler DID or @handle"
+                value={labelerInput}
+                onChange={(e) => setLabelerInput(e.target.value)}
+                onKeyDown={handleInputKeyDown}
+                onBlur={acDismiss}
+                disabled={addingLabeler}
+                aria-label="Labeler to add"
+                aria-autocomplete="list"
+                aria-expanded={acSuggestions.length > 0 || acLoading}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <ActorSuggestionDropdown
+                suggestions={acSuggestions}
+                isLoading={acLoading}
+                selectedIndex={acSelectedIndex}
+                onSelect={handleSelectSuggestion}
+                onPointerEnterRow={setAcSelectedIndex}
+              />
+            </div>
+            <button style={styles.submitBtn} type="submit" disabled={addingLabeler || !labelerInput.trim()}>
+              Add
+            </button>
+          </form>
+          {labelPrefError && (
+            <p role="alert" aria-live="polite" style={{ margin: '4px 0 8px', fontSize: 12, color: 'var(--destructive)' }}>
+              {labelPrefError}
+            </p>
+          )}
+          {labelPrefSuccess && (
+            <p aria-live="polite" style={{ margin: '4px 0 8px', fontSize: 12, color: 'var(--green)' }}>
+              {labelPrefSuccess}
+            </p>
+          )}
+
+          {isLoading && <p style={styles.emptyText}>Loading…</p>}
+          {!isLoading && labelerDids.length === 0 && (
+            <p style={styles.emptyText}>No labelers configured</p>
+          )}
+          {labelerDids.map((did) => {
+            const view = serviceByDid.get(did);
+            const handle = view?.handle;
+            const display = view?.displayName || handle || did;
+            const prefEntry = labelerPrefs.find((entry) => entry.did === did);
+            const labelRules: Record<string, LabelVisibility> | undefined = prefEntry && 'labels' in prefEntry && prefEntry.labels
+              ? (prefEntry.labels as Record<string, LabelVisibility>)
+              : undefined;
+            const labelRuleCount = labelRules ? Object.keys(labelRules).length : 0;
+            const definitions = view?.definitions ?? [];
+            const isExpanded = expandedLabelerDid === did;
+            return (
+              <div key={did}>
+                <div style={styles.accountRow}>
+                  <div style={styles.avatar}>
+                    {view?.avatar && (
+                      <img
+                        src={view.avatar}
+                        alt=""
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    )}
+                  </div>
+                  <div style={styles.accountInfo}>
+                    <div style={styles.displayName}>{display}</div>
+                    <div style={styles.handle}>{handle ? `@${handle}` : did}</div>
+                    {labelRuleCount > 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                        {labelRuleCount} label preference{labelRuleCount === 1 ? '' : 's'}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    style={styles.actionBtn()}
+                    onClick={() => {
+                      void navigateToProfile(did);
+                    }}
+                  >
+                    View
+                  </button>
+                  {definitions.length > 0 && (
+                    <button
+                      style={styles.actionBtn()}
+                      onClick={() => setExpandedLabelerDid((current) => current === did ? null : did)}
+                    >
+                      {isExpanded ? 'Hide labels' : 'Configure labels'}
+                    </button>
+                  )}
+                  <button
+                    style={styles.actionBtn(true)}
+                    disabled={removingLabeler || removingManyLabelers}
+                    onClick={() => removeLabeler({ did })}
+                  >
+                    Remove
+                  </button>
+                </div>
+                {isExpanded && definitions.length > 0 && (
+                  <div style={{ margin: '2px 0 10px 42px', border: '1px solid var(--sep)', borderRadius: 10, overflow: 'hidden', background: 'var(--surface)' }}>
+                    {definitions.map((def, index) => {
+                      const prefKey = `${did}:${def.identifier}`;
+                      const persistedPref = (labelRules?.[def.identifier] as LabelVisibility | undefined)
+                        ?? def.defaultSetting;
+                      const currentPref = optimisticLabelPrefs[prefKey] ?? persistedPref;
+                      const forcedHide = def.adultOnly && !adultContentEnabled;
+                      const effectivePref: LabelVisibility = forcedHide ? 'hide' : currentPref;
+                      const options: LabelVisibility[] = def.canWarn ? ['hide', 'warn', 'ignore'] : ['hide', 'ignore'];
+                      const settingDisabled = forcedHide || pendingPrefWrites[prefKey] === true;
+
+                      return (
+                        <div key={`${did}:${def.identifier}`} style={{ padding: '8px 10px', borderTop: index > 0 ? '1px solid var(--sep)' : 'none' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{def.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{def.description}</div>
+                          {forcedHide && (
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                              Adult content is disabled, so this label is forced to Hide.
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                            {options.map((option) => {
+                              const active = effectivePref === option;
+                              const optionLabel = option === 'ignore' ? 'Show' : option.charAt(0).toUpperCase() + option.slice(1);
+                              return (
+                                <button
+                                  key={option}
+                                  style={{
+                                    borderRadius: 999,
+                                    border: active ? '1px solid var(--blue)' : '1px solid var(--sep)',
+                                    background: active ? 'color-mix(in srgb, var(--blue) 14%, var(--surface))' : 'var(--fill-1)',
+                                    color: active ? 'var(--blue)' : 'var(--text)',
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    padding: '4px 10px',
+                                    cursor: settingDisabled ? 'default' : 'pointer',
+                                    opacity: settingDisabled ? 0.65 : 1,
+                                  }}
+                                  disabled={settingDisabled}
+                                  onClick={() => {
+                                    const safeIdentifier = sanitizeLabelIdentifier(def.identifier);
+                                    if (!safeIdentifier) {
+                                      setLabelPrefError('Invalid label identifier. Please refresh and try again.');
+                                      return;
+                                    }
+                                    if (effectivePref === option) return;
+                                    setLabelPrefError(null);
+                                    setOptimisticLabelPrefs((prev) => ({ ...prev, [prefKey]: option }));
+                                    setPendingPrefWrites((prev) => ({ ...prev, [prefKey]: true }));
+                                    recordLabelPrefWriteAttempt();
+                                    setContentLabelPref(
+                                      { label: safeIdentifier, visibility: option, labelerDid: did },
+                                      {
+                                        onSuccess: () => {
+                                          setOptimisticLabelPrefs((prev) => {
+                                            const next = { ...prev };
+                                            delete next[prefKey];
+                                            return next;
+                                          });
+                                          showRateLimitedSuccess(`Saved ${def.name} preference.`);
+                                        },
+                                        onError: () => {
+                                          recordLabelPrefWriteFailure();
+                                          setOptimisticLabelPrefs((prev) => {
+                                            const next = { ...prev };
+                                            delete next[prefKey];
+                                            return next;
+                                          });
+                                          setLabelPrefError('Could not save label preference. Please retry.');
+                                        },
+                                        onSettled: () => {
+                                          setPendingPrefWrites((prev) => {
+                                            const next = { ...prev };
+                                            delete next[prefKey];
+                                            return next;
+                                          });
+                                        },
+                                      },
+                                    );
+                                  }}
+                                >
+                                  {optionLabel}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+                            {describeLabelBehavior(def, effectivePref)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Root export ─────────────────────────────────────────────────────────
 export default function ModerationSection() {
   const { session } = useSessionStore();
@@ -738,6 +1253,8 @@ export default function ModerationSection() {
       <MutedAccountsSection />
       <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '4px 0' }} />
       <ModerationListsSection />
+      <hr style={{ border: 0, borderTop: '1px solid var(--sep)', margin: '4px 0' }} />
+      <LabelersSection />
     </section>
   );
 }

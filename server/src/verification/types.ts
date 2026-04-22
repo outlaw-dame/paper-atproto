@@ -125,14 +125,18 @@ export type VerificationResult = {
   factualConfidence: number;
   factualState: FactualState;
   reasons: FactualContributionReason[];
+  /** Wikidata/DBpedia canonical entities (confidence ≥ 0.55) resolved from this reply's text.
+   *  Always returned so the client can upgrade locally-generated entity IDs. */
+  canonicalEntities?: Array<{
+    mention: string;
+    canonicalId: string;
+    canonicalLabel: string;
+    confidence: number;
+    provider: string;
+  }>;
+  /** Debug-only: full entity linking diagnostic output. */
   entityLinking?: {
-    provider: 'heuristic' | 'rel' | 'dbpedia';
+    provider: 'heuristic' | 'rel' | 'dbpedia' | 'wikidata' | 'hybrid';
     endpoint?: string;
-    linkedEntities: Array<{
-      mention: string;
-      canonicalId: string;
-      canonicalLabel: string;
-      confidence: number;
-    }>;
   };
 };

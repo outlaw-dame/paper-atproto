@@ -123,7 +123,7 @@ export default function LinkPreviewTooltip({ url, children, linkStyle }: Props) 
     const verdict = safety ?? await checkUrlSafety(safeUrl);
     setSafety(verdict);
 
-    if (verdict.status === 'unsafe') {
+    if (verdict.status !== 'safe') {
       showCard();
       return;
     }

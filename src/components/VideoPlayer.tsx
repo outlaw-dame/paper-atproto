@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useMiniPlayer } from '../context/MiniPlayerContext';
 import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback';
+import { resolveApiUrl } from '../lib/apiBase';
 import {
   describeSourceKind,
   describeSupportLevel,
@@ -15,6 +16,11 @@ interface VideoPlayerProps {
   thumb?: string;
   aspectRatio?: number;
   autoplay?: boolean;
+  captions?: Array<{
+    lang: string;
+    url: string;
+    label?: string;
+  }>;
   /** Post ID — used to associate this player with a mini-player session */
   postId?: string;
 }
@@ -24,7 +30,7 @@ interface VideoPlayerProps {
  * When the user scrolls away while a video is playing, it automatically
  * transitions to the floating MiniPlayer at the bottom of the screen.
  */
-export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay = false, postId }: VideoPlayerProps) {
+export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay = false, captions = [], postId }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoplay);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -32,16 +38,25 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   const [duration, setDuration] = useState(0);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [useProxyForNativeHls, setUseProxyForNativeHls] = useState(false);
+  const [hlsMode, setHlsMode] = useState<'pending' | 'native' | 'hlsjs' | 'unsupported'>(() => (
+    detectVideoSourceKind(url) === 'hls' ? 'pending' : 'native'
+  ));
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const hlsInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const lastPersistAtRef = useRef(0);
   const { entry: miniEntry, activate } = useMiniPlayer();
   const mediaKey = `video:${postId ?? url}`;
   const [capabilities] = useState(() => getVideoPlaybackCapabilities());
   const sourceKind = detectVideoSourceKind(url);
+  const proxiedUrl = resolveApiUrl(`/api/media/proxy?url=${encodeURIComponent(url)}`);
   const likelySourceSupport = getLikelySourceSupport(capabilities, sourceKind);
   const likelyUnsupportedReason = getLikelyUnsupportedReason(capabilities, sourceKind);
   const sourceSupportWarning = playbackError ?? likelyUnsupportedReason;
+  const shouldAttemptInlinePlayback = sourceKind === 'hls'
+    ? hlsMode !== 'unsupported'
+    : likelySourceSupport !== false;
   const capabilityRows = [
     capabilities.hls,
     capabilities.mp4,
@@ -52,7 +67,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     capabilities.webmVp9Opus,
     capabilities.webmVp8Vorbis,
   ];
-  const shouldShowCapabilityPanel = showCapabilities || playbackError !== null;
+  const shouldShowCapabilityPanel = showCapabilities;
 
   // Is the floating mini-player currently showing this video?
   const isInMiniPlayer = miniEntry?.url === url && miniEntry?.postId === (postId ?? url);
@@ -88,6 +103,85 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     if (!v) return;
     v.play().catch(() => setIsPlaying(false));
   }, [autoplay, isInMiniPlayer]);
+
+  useEffect(() => {
+    setUseProxyForNativeHls(false);
+  }, [url]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || isInMiniPlayer) return;
+
+    hlsInstanceRef.current?.destroy();
+    hlsInstanceRef.current = null;
+
+    if (sourceKind !== 'hls') {
+      setHlsMode('native');
+      return;
+    }
+
+    const nativeHls = typeof video.canPlayType === 'function'
+      && (video.canPlayType('application/vnd.apple.mpegurl') !== '' || video.canPlayType('application/x-mpegURL') !== '');
+
+    if (nativeHls) {
+      setHlsMode('native');
+      setPlaybackError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setHlsMode('pending');
+
+    void import('hls.js')
+      .then((module) => {
+        if (cancelled) return;
+        const Hls = module.default;
+        if (!Hls || typeof Hls.isSupported !== 'function' || !Hls.isSupported()) {
+          setHlsMode('unsupported');
+          setPlaybackError('This browser cannot play this HLS stream inline.');
+          return;
+        }
+
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+        });
+        hlsInstanceRef.current = hls;
+        setHlsMode('hlsjs');
+        setPlaybackError(null);
+
+        hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
+          if (!data?.fatal) return;
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+            return;
+          }
+          setPlaybackError('Unable to play this HLS stream inline.');
+          setHlsMode('unsupported');
+          hls.destroy();
+          hlsInstanceRef.current = null;
+        });
+
+        hls.attachMedia(video);
+        hls.loadSource(proxiedUrl);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHlsMode('unsupported');
+        setPlaybackError('Unable to initialize HLS playback in this browser.');
+      });
+
+    return () => {
+      cancelled = true;
+      hlsInstanceRef.current?.destroy();
+      hlsInstanceRef.current = null;
+    };
+  }, [isInMiniPlayer, proxiedUrl, sourceKind, url]);
 
   useEffect(() => {
     return () => {
@@ -157,9 +251,13 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
   };
 
   const handlePlaybackError = () => {
+    if (sourceKind === 'hls' && hlsMode === 'native' && !useProxyForNativeHls) {
+      setUseProxyForNativeHls(true);
+      setPlaybackError(null);
+      return;
+    }
     const generic = 'This browser could not play the current video source.';
     setPlaybackError(likelyUnsupportedReason ?? generic);
-    setShowCapabilities(true);
     setIsPlaying(false);
   };
 
@@ -193,11 +291,9 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
             <div>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, letterSpacing: '0.02em' }}>Playback support</p>
+              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, letterSpacing: '0.02em' }}>Video formats</p>
               <p style={{ margin: '4px 0 0', fontSize: 11, color: 'rgba(255,255,255,0.74)' }}>
-                Current source: {describeSourceKind(sourceKind)}
-                {likelySourceSupport === true ? ' · likely supported' : ''}
-                {likelySourceSupport === false ? ' · likely unsupported' : ''}
+                Source: {describeSourceKind(sourceKind)}
               </p>
             </div>
             <button
@@ -284,12 +380,73 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
         </div>
       )}
 
+      {/* Graceful fallback for unsupported/failed inline playback */}
+      {!isInMiniPlayer && (!shouldAttemptInlinePlayback || playbackError) && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 12,
+            background: 'linear-gradient(180deg, rgba(0,0,0,0.58) 0%, rgba(0,0,0,0.76) 100%)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            padding: '16px 18px',
+          }}
+        >
+          <p style={{ margin: 0, color: '#fff', fontSize: 13, fontWeight: 700, textAlign: 'center' }}>
+            Inline playback is unavailable on this source
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                textDecoration: 'none',
+                border: '1px solid rgba(255,255,255,0.3)',
+                background: 'rgba(255,255,255,0.16)',
+                color: '#fff',
+                borderRadius: 999,
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Open video
+            </a>
+            <button
+              type="button"
+              onClick={() => setShowCapabilities((prev) => !prev)}
+              style={{
+                border: '1px solid rgba(255,255,255,0.2)',
+                background: 'rgba(255,255,255,0.08)',
+                color: 'rgba(255,255,255,0.9)',
+                borderRadius: 999,
+                padding: '6px 10px',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+            >
+              Details
+            </button>
+          </div>
+          {sourceSupportWarning && (
+            <p style={{ margin: 0, color: 'rgba(255,255,255,0.75)', fontSize: 11, textAlign: 'center' }}>
+              {sourceSupportWarning}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Play button (not playing, not in mini-player) */}
-      {!isInMiniPlayer && (
+      {!isInMiniPlayer && shouldAttemptInlinePlayback && !playbackError && (
         <>
           <video
             ref={videoRef}
-            src={url}
+            src={sourceKind === 'hls' ? (hlsMode === 'native' ? (useProxyForNativeHls ? proxiedUrl : url) : undefined) : url}
             autoPlay={autoplay}
             playsInline
             preload="metadata"
@@ -345,7 +502,18 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
                 playbackRate: event.currentTarget.playbackRate,
               });
             }}
-          />
+          >
+            {captions.map((caption, index) => (
+              <track
+                key={`${caption.lang}-${caption.url}-${index}`}
+                kind="captions"
+                src={caption.url}
+                srcLang={caption.lang}
+                label={caption.label || caption.lang.toUpperCase()}
+                default={index === 0}
+              />
+            ))}
+          </video>
 
           {!isPlaying && (
             <button

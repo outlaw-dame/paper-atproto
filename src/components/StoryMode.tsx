@@ -20,10 +20,12 @@ import { atpCall } from '../lib/atproto/client';
 import type { MockPost, ChipType } from '../data/mockData';
 import { formatTime, formatCount } from '../data/mockData';
 import {
+  isAtUri,
   extractClusterSignals,
   type ThreadNode, type ResolvedFacet,
 } from '../lib/resolver/atproto';
 import {
+  getExplicitContributionFeedback,
   type ContributionRole,
   type ContributionScores,
   type ContributorImpact,
@@ -33,12 +35,16 @@ import {
 import { createVerificationProviders } from '../intelligence/verification/providerFactory';
 import { InMemoryVerificationCache } from '../intelligence/verification/cache';
 import type { SummaryMode, WriterEntity } from '../intelligence/llmContracts';
+import type { PremiumThreadProjection } from '../intelligence/premiumContracts';
 import { WriterEntitySheet, EntityChip } from './EntitySheet';
 import VideoPlayer from './VideoPlayer';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
+import { Gif } from './Gif';
 import { useTranslationStore } from '../store/translationStore';
 import { useUiStore } from '../store/uiStore';
+import { useBookmarksStore } from '../store/bookmarksStore';
 import { translationClient } from '../lib/i18n/client';
-import { heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
 import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
@@ -61,7 +67,7 @@ import {
   slideUpVariants,
 } from '../design/index';
 import { openExternalUrl } from '../lib/safety/externalUrl';
-import { hydrateConversationSession } from '../conversation/sessionAssembler';
+import { useConversationHydration } from '../conversation/sessionHydration';
 import type { ThreadFilter } from '../conversation/projections/threadProjection';
 import {
   useConversationSession,
@@ -73,6 +79,18 @@ import {
 import { useConversationActions } from '../conversation/sessionActions';
 import { projectComposerContext } from '../conversation/projections/composerProjection';
 import { projectModerationDecision } from '../conversation/projections/moderationProjection';
+import {
+  buildQuotedSnippetThreadScopedProfileCardData,
+  buildQuotedThreadScopedProfileCardData,
+  projectThreadScopedProfileCardDataForNode,
+} from '../conversation/projections/profileCardProjection';
+import type { ConversationSession } from '../conversation/sessionTypes';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import type { ProfileCardData } from '../types/profileCard';
+import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
+import { Markdown } from './Markdown';
+import { recordInterpolatorStageTiming } from '../perf/interpolatorTelemetry';
+import { renderSummaryText as renderSummaryTextCore } from './storyModeSummaryText';
 
 interface Props {
   entry: StoryEntry;
@@ -161,14 +179,41 @@ function ThreadModerationNotice({
   );
 }
 
-function RichText({ text, facets, baseColor, onHashtag }: { text: string; facets?: ResolvedFacet[]; baseColor: string; onHashtag?: (tag: string) => void }) {
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function RichText({
+  text,
+  facets,
+  baseColor,
+  onHashtag,
+}: {
+  text: string;
+  facets?: ResolvedFacet[];
+  baseColor: string;
+  onHashtag?: (tag: string) => void;
+}) {
   const navigateToProfile = useProfileNavigation();
   if (!facets?.length) {
     const parts = text.split(/(@[\w.]+|#\w+|https?:\/\/\S+)/g);
     return (
       <span>
         {parts.map((p, i) => {
-          if (p.startsWith('@')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>{p}</button>;
+          if (p.startsWith('@')) {
+            return (
+              <button
+                key={i}
+                className="interactive-link-button"
+                onClick={(e) => { e.stopPropagation(); void navigateToProfile(p); }}
+                style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                {p}
+              </button>
+            );
+          }
           if (p.startsWith('#')) return <button key={i} className="interactive-link-button" onClick={(e) => { e.stopPropagation(); onHashtag?.(p.slice(1)); }} style={{ color: accent.blue500, font: 'inherit', fontWeight: 500, background: 'none', border: 'none', cursor: onHashtag ? 'pointer' : 'default', padding: 0 }}>{p}</button>;
           if (p.startsWith('http')) {
             try { return <a key={i} href={p} target="_blank" rel="noopener noreferrer" style={{ color: accent.blue500 }} onClick={e => e.stopPropagation()}>{new URL(p).hostname.replace(/^www\./, '')}</a>; }
@@ -259,17 +304,29 @@ function PromptHeroCard({
   const [likeCount, setLikeCount] = useState(post.likeCount);
   const [reposted, setReposted] = useState(!!post.viewer?.repost);
   const [repostCount, setRepostCount] = useState(post.repostCount);
-  const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
-  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const { openProfile, openExploreSearch } = useUiStore();
+  const sessionDid = useSessionStore((state) => state.session?.did ?? '');
+  const emptyBookmarkedUris = useMemo<string[]>(() => [], []);
+  const bookmarked = useBookmarksStore((state) => (
+    sessionDid
+      ? (state.bookmarksByDid[sessionDid] ?? emptyBookmarkedUris).includes(post.id)
+      : false
+  ));
+  const addBookmark = useBookmarksStore((state) => state.addBookmark);
+  const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
+  const translationPolicy = useTranslationStore((state) => state.policy);
+  const translation = useTranslationStore((state) => state.byId[post.id]);
+  const upsertTranslation = useTranslationStore((state) => state.upsertTranslation);
+  const openProfile = useUiStore((state) => state.openProfile);
+  const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const navigateToProfile = useProfileNavigation();
-  const translation = translationById[post.id];
   const detectedRootLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(post.content, translation.translatedText);
+  const hasRootTranslatableSignal = useMemo(() => hasTranslatableLanguageSignal(post.content), [post.content]);
   const shouldOfferTranslation = hasRenderableTranslation
-    || detectedRootLanguage.language === 'und'
-    || !isLikelySameLanguage(detectedRootLanguage.language, translationPolicy.userLanguage);
+    || (hasRootTranslatableSignal
+      && (detectedRootLanguage.language === 'und'
+        || !isLikelySameLanguage(detectedRootLanguage.language, translationPolicy.userLanguage)));
   const rootText = hasRenderableTranslation && !showOriginal ? translation.translatedText : post.content;
 
   const handleHashtagClick = (tag: string) => {
@@ -306,11 +363,39 @@ function PromptHeroCard({
     }
   };
 
+  const handleBookmark = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!sessionDid) return;
+    const wasBookmarked = useBookmarksStore.getState().isBookmarked(sessionDid, post.id);
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, post.id);
+    } else {
+      addBookmark(sessionDid, post.id);
+    }
+  };
+
   const embedThumb = post.embed && post.embed.type !== 'quote' ? post.embed.thumb : undefined;
   const img = post.media?.[0]?.url ?? embedThumb;
   const quoteEmbed = post.embed?.type === 'quote' ? post.embed : null;
   const videoEmbed = post.embed?.type === 'video' ? post.embed : null;
+  const externalEmbedYouTubeRef = post.embed?.type === 'external' ? parseYouTubeUrl(post.embed.url) : null;
+  const inlineTextYouTubeRef = !post.embed && !(post.media?.length)
+    ? extractFirstYouTubeReference({
+        explicitUrls: (post.facets ?? [])
+          .filter((facet) => facet.kind === 'link')
+          .map((facet) => facet.uri),
+        text: post.content,
+      })
+    : null;
+  const quotedThreadProfileCardData: ProfileCardData | null = quoteEmbed?.post
+    ? buildQuotedThreadScopedProfileCardData({
+        threadUri: post.id,
+        post: quoteEmbed.post,
+        roleSummary: 'Quoted in thread context',
+      })
+    : null;
   const quotedExternalEmbed = quoteEmbed?.post.embed?.type === 'external' ? quoteEmbed.post.embed : null;
+  const quotedExternalYouTubeRef = quotedExternalEmbed ? parseYouTubeUrl(quotedExternalEmbed.url) : null;
   const quotedVideoEmbed = quoteEmbed?.post.embed?.type === 'video' ? quoteEmbed.post.embed : null;
   return (
     <div style={{
@@ -404,11 +489,13 @@ function PromptHeroCard({
             opacity: 0.95, 
             lineHeight: 1.7, 
             marginBottom: 32, 
-            whiteSpace: 'pre-wrap',
-            fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
             letterSpacing: '-0.01em'
           }}>
-            <RichText text={post.article.body} facets={[]} baseColor={phTokens.text} onHashtag={handleHashtagClick} />
+            <Markdown
+              content={post.article.body}
+              className="story-article-markdown"
+              onHashtag={handleHashtagClick}
+            />
           </div>
         )}
 
@@ -447,6 +534,7 @@ function PromptHeroCard({
             <VideoPlayer
               url={videoEmbed.url}
               postId={post.id}
+              {...(videoEmbed.captions ? { captions: videoEmbed.captions } : {})}
               {...(videoEmbed.thumb ? { thumb: videoEmbed.thumb } : {})}
               {...(typeof videoEmbed.aspectRatio === 'number' ? { aspectRatio: videoEmbed.aspectRatio } : {})}
               autoplay={false}
@@ -454,9 +542,43 @@ function PromptHeroCard({
           </div>
         )}
 
+        {inlineTextYouTubeRef && (
+          <div style={{ marginBottom: 16 }}>
+            <YouTubeEmbedCard
+              url={inlineTextYouTubeRef.normalizedUrl}
+              domain={inlineTextYouTubeRef.domain}
+            />
+          </div>
+        )}
+
         {/* External link card */}
         {post.embed?.type === 'external' && (() => {
           const ext = post.embed;
+          const isGif = ext.url.includes('tenor.com') || ext.url.includes('klipy.com');
+          if (isGif) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <Gif
+                  url={ext.url}
+                  title={ext.title}
+                  {...(ext.thumb ? { thumbnail: ext.thumb } : {})}
+                />
+              </div>
+            );
+          }
+          if (externalEmbedYouTubeRef) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <YouTubeEmbedCard
+                  url={ext.url}
+                  title={ext.title}
+                  description={ext.description}
+                  thumb={ext.thumb}
+                  domain={ext.domain}
+                />
+              </div>
+            );
+          }
           return (
             <div
               role="link"
@@ -543,55 +665,72 @@ function PromptHeroCard({
                   ? <img src={quoteEmbed.post.author.avatar} alt={quoteEmbed.post.author.handle} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: phTokens.text, fontSize: 10, fontWeight: 700 }}>{((quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle || '?').trim().charAt(0) || '?').toUpperCase()}</div>}
               </div>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
-              </button>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                @{quoteEmbed.post.author.handle}
-              </button>
+              <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: phTokens.meta, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  {quoteEmbed.post.author.displayName || quoteEmbed.post.author.handle}
+                </button>
+              </ProfileCardTrigger>
+              <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quoteEmbed.post.author.did || quoteEmbed.post.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: phTokens.meta, opacity: 0.6, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  @{quoteEmbed.post.author.handle}
+                </button>
+              </ProfileCardTrigger>
             </div>
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: phTokens.meta, opacity: 0.85, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               <RichText text={quoteEmbed.post.content} baseColor={phTokens.meta} onHashtag={handleHashtagClick} />
             </p>
             {quotedExternalEmbed && (
-              <a
-                href={quotedExternalEmbed.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                style={{
-                  display: 'block',
-                  marginTop: 10,
-                  background: 'var(--quote-preview-surface)',
-                  borderRadius: radius[12],
-                  border: '1px solid var(--quote-preview-border)',
-                  textDecoration: 'none',
-                  overflow: 'hidden',
-                }}
-              >
-                {quotedExternalEmbed.thumb && (
-                  <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: 112, objectFit: 'cover' }} />
-                )}
-                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quotedExternalEmbed.title}</p>
-                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quotedExternalEmbed.domain}</p>
-                  {quotedExternalEmbed.description && (
-                    <p style={{
-                      margin: '6px 0 0',
-                      fontSize: typeScale.metaSm[0],
-                      lineHeight: '18px',
-                      color: phTokens.meta,
-                      opacity: 0.82,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }}>
-                      {quotedExternalEmbed.description}
-                    </p>
-                  )}
+              quotedExternalYouTubeRef ? (
+                <div style={{ marginTop: 10 }}>
+                  <YouTubeEmbedCard
+                    url={quotedExternalEmbed.url}
+                    title={quotedExternalEmbed.title}
+                    description={quotedExternalEmbed.description}
+                    thumb={quotedExternalEmbed.thumb}
+                    domain={quotedExternalEmbed.domain}
+                    compact
+                  />
                 </div>
-              </a>
+              ) : (
+                <a
+                  href={quotedExternalEmbed.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    marginTop: 10,
+                    background: 'var(--quote-preview-surface)',
+                    borderRadius: radius[12],
+                    border: '1px solid var(--quote-preview-border)',
+                    textDecoration: 'none',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {quotedExternalEmbed.thumb && (
+                    <img src={quotedExternalEmbed.thumb} alt="" style={{ width: '100%', height: 112, objectFit: 'cover' }} />
+                  )}
+                  <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                    <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quotedExternalEmbed.title}</p>
+                    <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quotedExternalEmbed.domain}</p>
+                    {quotedExternalEmbed.description && (
+                      <p style={{
+                        margin: '6px 0 0',
+                        fontSize: typeScale.metaSm[0],
+                        lineHeight: '18px',
+                        color: phTokens.meta,
+                        opacity: 0.82,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}>
+                        {quotedExternalEmbed.description}
+                      </p>
+                    )}
+                  </div>
+                </a>
+              )
             )}
             {quotedVideoEmbed && (
               <div style={{
@@ -615,70 +754,111 @@ function PromptHeroCard({
 
         {/* External link preview (standalone or from recordWithMedia) */}
         {quoteEmbed?.externalLink && (
-          <a
-            href={quoteEmbed.externalLink.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
-            style={{
-              display: 'block', marginBottom: 16,
-              background: 'var(--quote-preview-surface)',
-              borderRadius: radius[12],
-              border: '1px solid var(--quote-preview-border)',
-              textDecoration: 'none', overflow: 'hidden',
-            }}
-          >
-            {quoteEmbed.externalLink.thumb && (
-              <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
-            )}
-            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-              {quoteEmbed.externalLink.title && (
-                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quoteEmbed.externalLink.title}</p>
-              )}
-              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quoteEmbed.externalLink.domain}</p>
-              {quoteEmbed.externalLink.description && (
-                <p style={{
-                  margin: '6px 0 0',
-                  fontSize: typeScale.metaSm[0],
-                  lineHeight: '18px',
-                  color: phTokens.meta,
-                  opacity: 0.82,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                }}>
-                  {quoteEmbed.externalLink.description}
-                </p>
-              )}
+          parseYouTubeUrl(quoteEmbed.externalLink.url) ? (
+            <div style={{ marginBottom: 16 }}>
+              <YouTubeEmbedCard
+                url={quoteEmbed.externalLink.url}
+                title={quoteEmbed.externalLink.title}
+                description={quoteEmbed.externalLink.description}
+                thumb={quoteEmbed.externalLink.thumb}
+                domain={quoteEmbed.externalLink.domain}
+                compact
+              />
             </div>
-          </a>
-        )}
-        {post.embed?.type === 'external' && (
-          <a
-            href={post.embed.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
-            style={{
-              display: 'block', marginBottom: 16,
-              background: 'rgba(255,255,255,0.06)',
-              borderRadius: radius[12],
-              border: `0.5px solid ${phTokens.line}`,
-              textDecoration: 'none', overflow: 'hidden',
-            }}
-          >
-            {post.embed.thumb && (
-              <img src={post.embed.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
-            )}
-            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-              {post.embed.title && (
-                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.title}</p>
+          ) : (
+            <a
+              href={quoteEmbed.externalLink.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              style={{
+                display: 'block', marginBottom: 16,
+                background: 'var(--quote-preview-surface)',
+                borderRadius: radius[12],
+                border: '1px solid var(--quote-preview-border)',
+                textDecoration: 'none', overflow: 'hidden',
+              }}
+            >
+              {quoteEmbed.externalLink.thumb && (
+                <img src={quoteEmbed.externalLink.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
               )}
-              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.domain}</p>
-            </div>
-          </a>
+              <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                {quoteEmbed.externalLink.title && (
+                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{quoteEmbed.externalLink.title}</p>
+                )}
+                <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{quoteEmbed.externalLink.domain}</p>
+                {quoteEmbed.externalLink.description && (
+                  <p style={{
+                    margin: '6px 0 0',
+                    fontSize: typeScale.metaSm[0],
+                    lineHeight: '18px',
+                    color: phTokens.meta,
+                    opacity: 0.82,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }}>
+                    {quoteEmbed.externalLink.description}
+                  </p>
+                )}
+              </div>
+            </a>
+          )
         )}
+        {post.embed?.type === 'external' && (() => {
+          const isGif = post.embed.url.includes('tenor.com') || post.embed.url.includes('klipy.com');
+          if (isGif) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <Gif
+                  url={post.embed.url}
+                  title={post.embed.title}
+                  {...(post.embed.thumb ? { thumbnail: post.embed.thumb } : {})}
+                />
+              </div>
+            );
+          }
+          if (externalEmbedYouTubeRef) {
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <YouTubeEmbedCard
+                  url={post.embed.url}
+                  title={post.embed.title}
+                  description={post.embed.description}
+                  thumb={post.embed.thumb}
+                  domain={post.embed.domain}
+                  compact
+                />
+              </div>
+            );
+          }
+          return (
+            <a
+              href={post.embed.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              style={{
+                display: 'block', marginBottom: 16,
+                background: 'rgba(255,255,255,0.06)',
+                borderRadius: radius[12],
+                border: `0.5px solid ${phTokens.line}`,
+                textDecoration: 'none', overflow: 'hidden',
+              }}
+            >
+              {post.embed.thumb && (
+                <img src={post.embed.thumb} alt="" style={{ width: '100%', height: 120, objectFit: 'cover' }} />
+              )}
+              <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                {post.embed.title && (
+                  <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: phTokens.text }}>{post.embed.title}</p>
+                )}
+                <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: phTokens.meta }}>{post.embed.domain}</p>
+              </div>
+            </a>
+          );
+        })()}
 
         {/* Factual chips from root verification */}
         {rootVerification && (() => {
@@ -782,7 +962,7 @@ function PromptHeroCard({
           {/* Bookmark */}
           <button
             style={{ ...heroActionBtnStyle, color: bookmarked ? accent.primary : 'rgba(255,255,255,0.55)' }}
-            onClick={e => { e.stopPropagation(); setBookmarked(v => !v); }}
+            onClick={handleBookmark}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill={bookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={bookmarked ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
@@ -800,41 +980,240 @@ function PromptHeroCard({
 }
 
 // ─── renderSummaryText ────────────────────────────────────────────────────
-// Splits summaryText on @mentions and #hashtags, returning a React node array
-// with linkified, slightly-bold handles and linkified tags.
-function renderSummaryText(text: string): React.ReactNode[] {
-  const parts = text.split(/(@[\w.:-]+|#[\w]+)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('@')) {
-      const handle = part.slice(1);
-      return (
-        <a
-          key={i}
-          href={`https://bsky.app/profile/${handle}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ fontWeight: 600, color: 'inherit', textDecoration: 'none' }}
-        >
-          {part}
-        </a>
-      );
+// Splits summary text into plain text, @mentions, #hashtags, and URL-ish
+// references so summary copy can stay readable while still surfacing sources.
+const SUMMARY_TOKEN_RE =
+  /(@[\w.:-]+|#[\w]+|https?:\/\/[^\s<>"')]+|(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s<>"')]+)?)/gi;
+
+const GENERIC_ENTITY_LABELS = new Set([
+  'thread',
+  'discussion',
+  'post',
+  'reply',
+  'replies',
+  'comment',
+  'comments',
+  'story',
+  'article',
+  'report',
+  'reporting',
+  'source',
+  'sources',
+  'context',
+  'timeline',
+  'claim',
+  'claims',
+]);
+
+type SummaryRenderOptions = {
+  summaryEntities?: SummaryEntityCandidate[];
+  onEntityTap?: (entity: WriterEntity) => void;
+  onMentionTap?: (actor: string) => void;
+};
+
+type SummaryEntityCandidate = {
+  entity: WriterEntity;
+  label: string;
+  normalizedLabel: string;
+};
+
+function splitSummaryTokenSuffix(token: string): { core: string; suffix: string } {
+  const match = token.match(/^(.*?)([),.;!?…]+)?$/);
+  if (!match) return { core: token, suffix: '' };
+  return {
+    core: match[1] || token,
+    suffix: match[2] || '',
+  };
+}
+
+function buildSummaryHref(token: string): string | null {
+  const candidate = /^https?:\/\//i.test(token) ? token : `https://${token}`;
+  try {
+    return new URL(candidate).toString();
+  } catch {
+    return null;
+  }
+}
+
+function formatRelativeTimestamp(timestamp?: string): string {
+  if (!timestamp) return '';
+  try {
+    const diff = Date.now() - new Date(timestamp).getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    return `${Math.floor(minutes / 60)}h ago`;
+  } catch {
+    return '';
+  }
+}
+
+function mapEntityImpactToWriterEntity(entity: EntityImpact): WriterEntity | null {
+  const label = (entity.canonicalLabel ?? entity.entityText ?? '').trim();
+  if (!label) return null;
+
+  const type: WriterEntity['type'] = entity.entityKind === 'person'
+    ? 'person'
+    : entity.entityKind === 'org'
+      ? 'organization'
+      : entity.entityKind === 'claim'
+        ? 'rule'
+        : 'topic';
+
+  return {
+    id: entity.canonicalEntityId ?? label.toLowerCase().replace(/\s+/g, '-'),
+    label,
+    type,
+    confidence: Math.max(0, Math.min(1, entity.matchConfidence ?? Math.min(1, entity.mentionCount / 4))),
+    impact: Math.max(0, Math.min(1, entity.mentionCount / 5)),
+  };
+}
+
+function shouldLinkSummaryEntity(entity: WriterEntity): boolean {
+  const label = entity.label.trim();
+  if (!label || /^[@#]/.test(label)) return false;
+  if (/^\d+$/.test(label)) return false;
+  if (GENERIC_ENTITY_LABELS.has(label.toLowerCase())) return false;
+
+  const words = label.split(/\s+/).filter(Boolean);
+  const isAcronym = /^[A-Z0-9]{2,6}$/.test(label);
+  if (words.length === 1) {
+    if (!isAcronym && label.length < 4) return false;
+    if (entity.type === 'topic' && !isAcronym && label.length < 6) return false;
+  }
+
+  return entity.confidence >= 0.52 || entity.impact >= 0.28 || words.length > 1;
+}
+
+function collectSummaryEntityCandidates(
+  safeEntities?: WriterEntity[],
+  entityLandscape?: EntityImpact[],
+): SummaryEntityCandidate[] {
+  const deduped = new Map<string, SummaryEntityCandidate>();
+  const addCandidate = (entity: WriterEntity | null | undefined) => {
+    if (!entity || !shouldLinkSummaryEntity(entity)) return;
+    const normalizedLabel = entity.label.trim().toLowerCase();
+    if (!normalizedLabel) return;
+    const existing = deduped.get(normalizedLabel);
+    if (!existing || entity.confidence > existing.entity.confidence || entity.impact > existing.entity.impact) {
+      deduped.set(normalizedLabel, {
+        entity,
+        label: entity.label.trim(),
+        normalizedLabel,
+      });
     }
-    if (part.startsWith('#')) {
-      const tag = part.slice(1);
-      return (
-        <a
-          key={i}
-          href={`https://bsky.app/search?q=%23${tag}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: 'inherit', textDecoration: 'none' }}
-        >
-          {part}
-        </a>
-      );
+  };
+
+  safeEntities?.forEach((entity) => addCandidate(entity));
+  entityLandscape?.forEach((entity) => addCandidate(mapEntityImpactToWriterEntity(entity)));
+
+  return [...deduped.values()].sort((a, b) => (
+    b.label.length - a.label.length || b.entity.confidence - a.entity.confidence || b.entity.impact - a.entity.impact
+  ));
+}
+
+function isEntityBoundaryChar(value: string | undefined): boolean {
+  return !value || !/[A-Za-z0-9_@#]/.test(value);
+}
+
+function findEntityMatch(
+  text: string,
+  startIndex: number,
+  candidates: SummaryEntityCandidate[],
+): { index: number; candidate: SummaryEntityCandidate } | null {
+  if (candidates.length === 0) return null;
+
+  const lowerText = text.toLowerCase();
+  let best: { index: number; candidate: SummaryEntityCandidate } | null = null;
+
+  for (const candidate of candidates) {
+    let searchFrom = startIndex;
+    while (searchFrom < text.length) {
+      const index = lowerText.indexOf(candidate.normalizedLabel, searchFrom);
+      if (index < 0) break;
+
+      const before = index > 0 ? text[index - 1] : undefined;
+      const afterIndex = index + candidate.label.length;
+      const after = afterIndex < text.length ? text[afterIndex] : undefined;
+      if (isEntityBoundaryChar(before) && isEntityBoundaryChar(after)) {
+        if (!best || index < best.index || (index === best.index && candidate.label.length > best.candidate.label.length)) {
+          best = { index, candidate };
+        }
+        break;
+      }
+
+      searchFrom = index + candidate.label.length;
     }
-    return part;
-  });
+  }
+
+  return best;
+}
+
+function renderPlainSummarySegment(
+  text: string,
+  keyPrefix: string,
+  options: SummaryRenderOptions,
+): React.ReactNode[] {
+  const { summaryEntities = [], onEntityTap } = options;
+  const candidates = summaryEntities;
+  if (text.length === 0 || candidates.length === 0 || !onEntityTap) return text ? [text] : [];
+
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  let partIndex = 0;
+
+  while (cursor < text.length) {
+    const match = findEntityMatch(text, cursor, candidates);
+    if (!match) {
+      nodes.push(text.slice(cursor));
+      break;
+    }
+
+    if (match.index > cursor) {
+      nodes.push(text.slice(cursor, match.index));
+    }
+
+    const label = text.slice(match.index, match.index + match.candidate.label.length);
+    nodes.push(
+      <button
+        key={`${keyPrefix}-entity-${partIndex}`}
+        type="button"
+        className="interactive-link-button"
+        onMouseEnter={(e) => {
+          e.stopPropagation();
+          onEntityTap(match.candidate.entity);
+        }}
+        onFocus={(e) => {
+          e.stopPropagation();
+          onEntityTap(match.candidate.entity);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onEntityTap(match.candidate.entity);
+        }}
+        style={{
+          color: accent.blue500,
+          font: 'inherit',
+          fontWeight: 600,
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          padding: 0,
+        }}
+      >
+        {label}
+      </button>,
+    );
+
+    cursor = match.index + match.candidate.label.length;
+    partIndex += 1;
+  }
+
+  return nodes;
+}
+
+export function renderSummaryText(text: string, options: SummaryRenderOptions = {}): React.ReactNode[] {
+  return renderSummaryTextCore(text, options);
 }
 
 // ─── InterpolatorCard ─────────────────────────────────────────────────────
@@ -846,7 +1225,8 @@ function InterpolatorCard({
   clarifications, newAngles,
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
-  topContributors, entityLandscape, factualSignalPresent,
+  topContributors, entityLandscape, factualSignalPresent, basePerspectiveGaps,
+  premium,
   onEntityTap,
 }: {
   rootUri: string;
@@ -871,27 +1251,62 @@ function InterpolatorCard({
   topContributors: ContributorImpact[];
   entityLandscape: EntityImpact[];
   factualSignalPresent: boolean;
+  basePerspectiveGaps: string[];
+  premium: PremiumThreadProjection;
   onEntityTap?: (entity: WriterEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const firstCardReadyByRootRef = React.useRef<Record<string, boolean>>({});
+  const navigateToProfile = useProfileNavigation();
   // Use writer summary if available, otherwise fall back to heuristic
   const displaySummary = writerSummary || summaryText;
   // Only show "emerging" when there is genuinely nothing to display —
   // the model can write a summary for even a 1-reply thread.
   const state: InterpolatorState = displaySummary === '' ? 'emerging' : 'collapsed';
-
-  const updatedAgo = (() => {
-    try {
-      const diff = Date.now() - new Date(updatedAt).getTime();
-      const m = Math.floor(diff / 60000);
-      if (m < 1) return 'just now';
-      if (m < 60) return `${m}m ago`;
-      return `${Math.floor(m / 60)}h ago`;
-    } catch { return ''; }
-  })();
+  const updatedAgo = formatRelativeTimestamp(updatedAt);
 
   const bg = intTokens.discussion.bg;
   const bg2 = intTokens.discussion.bg2;
+  const premiumReady = premium.status === 'ready' && !!premium.deepInterpolator;
+  const premiumLoading = premium.isEntitled && premium.status === 'loading';
+  const premiumError = premium.isEntitled && premium.status === 'error';
+  const deepSummary = premium.deepInterpolator?.summary?.trim() ?? '';
+  const groundedContext = premium.deepInterpolator?.groundedContext?.trim() ?? '';
+  const perspectiveGaps = premium.deepInterpolator?.perspectiveGaps ?? [];
+  const followUpQuestions = premium.deepInterpolator?.followUpQuestions ?? [];
+  const premiumSafetyFlagged = premium.deepInterpolator?.safety?.flagged === true;
+  const premiumUpdatedAgo = formatRelativeTimestamp(premium.deepInterpolator?.updatedAt);
+  const premiumSourceAgo = formatRelativeTimestamp(premium.deepInterpolator?.sourceComputedAt);
+  const premiumProviderLabel = premium.deepInterpolator?.provider === 'openai'
+    ? 'ChatGPT'
+    : premium.entitlements?.provider === 'openai'
+      ? 'ChatGPT'
+      : 'Gemini 3';
+  const premiumConfidence = premium.deepInterpolator
+    ? Math.round(Math.max(0, Math.min(1, premium.deepInterpolator.confidence)) * 100)
+    : null;
+  const visibleBasePerspectiveGaps = premiumReady ? [] : basePerspectiveGaps.slice(0, 3);
+  const summaryEntities = useMemo(
+    () => collectSummaryEntityCandidates(safeEntities, entityLandscape),
+    [safeEntities, entityLandscape],
+  );
+  const summaryRenderOptions = useMemo<SummaryRenderOptions>(
+    () => ({
+      summaryEntities,
+      onMentionTap: (actor: string) => {
+        void navigateToProfile(actor);
+      },
+      ...(onEntityTap ? { onEntityTap } : {}),
+    }),
+    [summaryEntities, onEntityTap, navigateToProfile],
+  );
+
+  useEffect(() => {
+    if (!displaySummary.trim()) return;
+    if (firstCardReadyByRootRef.current[rootUri]) return;
+    firstCardReadyByRootRef.current[rootUri] = true;
+    recordInterpolatorStageTiming('ui.interpolator_card_ready', 0);
+  }, [displaySummary, rootUri]);
 
   return (
     <motion.div
@@ -960,16 +1375,16 @@ function InterpolatorCard({
       }}>
         {state === 'emerging'
           ? replyCount === 0
-            ? 'This discussion is just beginning. Be the first to contribute.'
-            : `This discussion is forming around ${replyCount} early response${replyCount > 1 ? 's' : ''}. Early voices are shaping the conversation.`
-          : displaySummary ? renderSummaryText(displaySummary) : 'Analyzing conversation…'
+            ? 'There are no replies yet. Be the first to contribute.'
+            : `This post has ${replyCount} early response${replyCount > 1 ? 's' : ''}, but there is not enough visible reply text yet to characterize how the thread is breaking.`
+          : displaySummary ? renderSummaryText(displaySummary, summaryRenderOptions) : 'Analyzing conversation…'
         }
       </p>
 
       {/* Fallback mode badge */}
       {writerSummary && summaryMode && summaryMode !== 'normal' && (
         <p style={{ fontSize: 11, color: intTokens.text.secondary, opacity: 0.5, margin: '-10px 0 10px', fontStyle: 'italic' }}>
-          {summaryMode === 'descriptive_fallback' ? 'Descriptive analysis' : 'Summary'}
+          {summaryMode === 'descriptive_fallback' ? 'Observable thread summary' : 'Early thread summary'}
         </p>
       )}
 
@@ -1011,6 +1426,24 @@ function InterpolatorCard({
             fontSize: typeScale.metaLg[0], fontWeight: 600,
           }}>evidence verified</span>
         )}
+        {premiumReady && (
+          <span style={{
+            padding: '4px 10px', borderRadius: radius.full,
+            background: 'rgba(124, 178, 255, 0.14)',
+            border: '0.5px solid rgba(124, 178, 255, 0.30)',
+            color: '#A7C9FF',
+            fontSize: typeScale.metaLg[0], fontWeight: 600,
+          }}>deep pass ready</span>
+        )}
+        {premiumLoading && (
+          <span style={{
+            padding: '4px 10px', borderRadius: radius.full,
+            background: 'rgba(255,255,255,0.08)',
+            border: '0.5px solid rgba(255,255,255,0.14)',
+            color: intTokens.text.secondary,
+            fontSize: typeScale.metaLg[0], fontWeight: 600,
+          }}>deep pass loading</span>
+        )}
       </div>
 
       {/* Expanded content */}
@@ -1023,6 +1456,184 @@ function InterpolatorCard({
             transition={transitions.interpolatorToggle}
             style={{ overflow: 'hidden' }}
           >
+            {(premiumReady || premiumLoading || premiumError) && (
+              <div
+                style={{
+                  marginBottom: 16,
+                  padding: '12px 12px 10px',
+                  borderRadius: 14,
+                  background: 'rgba(12, 24, 43, 0.28)',
+                  border: '0.5px solid rgba(135, 177, 255, 0.18)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: premiumReady ? 10 : 0 }}>
+                  <div>
+                    <p style={{
+                      fontSize: typeScale.metaLg[0],
+                      fontWeight: 700,
+                      color: '#CFE1FF',
+                      marginBottom: 2,
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                    }}>Deep Interpolator</p>
+                    <p style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: 'rgba(226, 235, 255, 0.72)',
+                    }}>
+                      {premiumReady
+                        ? `${premiumProviderLabel} deep pass built from the base Interpolator${premiumSourceAgo ? ` ${premiumSourceAgo}` : ''}.`
+                        : premiumLoading
+                          ? `${premiumProviderLabel} is preparing a deeper pass from the current base Interpolator state.`
+                          : `${premiumProviderLabel} is temporarily unavailable for the deep pass.`}
+                    </p>
+                  </div>
+                  {premiumReady && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <span style={{
+                        padding: '3px 8px',
+                        borderRadius: radius.full,
+                        background: 'rgba(135, 177, 255, 0.14)',
+                        border: '0.5px solid rgba(135, 177, 255, 0.25)',
+                        color: '#D6E5FF',
+                        fontSize: typeScale.metaSm[0],
+                        fontWeight: 700,
+                      }}>{`Base + ${premiumProviderLabel}`}</span>
+                      {premiumConfidence !== null && (
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: radius.full,
+                          background: 'rgba(255,255,255,0.07)',
+                          border: '0.5px solid rgba(255,255,255,0.12)',
+                          color: intTokens.text.secondary,
+                          fontSize: typeScale.metaSm[0],
+                          fontWeight: 600,
+                        }}>{premiumConfidence}% confidence</span>
+                      )}
+                      {premiumUpdatedAgo && (
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: radius.full,
+                          background: 'rgba(255,255,255,0.07)',
+                          border: '0.5px solid rgba(255,255,255,0.12)',
+                          color: intTokens.text.secondary,
+                          fontSize: typeScale.metaSm[0],
+                          fontWeight: 600,
+                        }}>deep {premiumUpdatedAgo}</span>
+                      )}
+                      {premiumSafetyFlagged && (
+                        <span style={{
+                          padding: '3px 8px',
+                          borderRadius: radius.full,
+                          background: 'rgba(255, 206, 122, 0.12)',
+                          border: '0.5px solid rgba(255, 206, 122, 0.25)',
+                          color: '#FFD38A',
+                          fontSize: typeScale.metaSm[0],
+                          fontWeight: 600,
+                        }}>safety-normalized</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {premiumLoading && (
+                  <p style={{
+                    fontSize: typeScale.bodySm[0],
+                    color: intTokens.text.secondary,
+                    lineHeight: '1.45',
+                  }}>
+                    The base Interpolator is already live. The premium pass is building extra context, perspective gaps, and follow-up questions.
+                  </p>
+                )}
+
+                {premiumError && !premiumReady && (
+                  <p style={{
+                    fontSize: typeScale.bodySm[0],
+                    color: intTokens.text.secondary,
+                    lineHeight: '1.45',
+                  }}>
+                    The standard Interpolator is still active, but the deeper premium pass did not complete on this refresh.
+                  </p>
+                )}
+
+                {premiumReady && (
+                  <>
+                    {deepSummary && (
+                      <p style={{
+                        fontSize: typeScale.bodySm[0],
+                        color: '#F5F8FF',
+                        lineHeight: '1.55',
+                        marginBottom: groundedContext || perspectiveGaps.length > 0 || followUpQuestions.length > 0 ? 12 : 0,
+                      }}>
+                        {renderSummaryText(deepSummary, summaryRenderOptions)}
+                      </p>
+                    )}
+
+                    {groundedContext && (
+                      <div style={{ marginBottom: perspectiveGaps.length > 0 || followUpQuestions.length > 0 ? 12 : 0 }}>
+                        <p style={{
+                          fontSize: typeScale.metaLg[0],
+                          fontWeight: 700,
+                          color: intTokens.text.meta,
+                          marginBottom: 6,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>Grounded context</p>
+                        <p style={{
+                          fontSize: typeScale.bodySm[0],
+                          color: intTokens.text.secondary,
+                          lineHeight: '1.5',
+                        }}>
+                          {renderSummaryText(groundedContext, summaryRenderOptions)}
+                        </p>
+                      </div>
+                    )}
+
+                    {perspectiveGaps.length > 0 && (
+                      <div style={{ marginBottom: followUpQuestions.length > 0 ? 12 : 0 }}>
+                        <p style={{
+                          fontSize: typeScale.metaLg[0],
+                          fontWeight: 700,
+                          color: intTokens.text.meta,
+                          marginBottom: 6,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>Context to watch</p>
+                        {perspectiveGaps.slice(0, 3).map((gap, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                            <span style={{ color: '#A7C9FF', fontSize: 13, flexShrink: 0 }}>•</span>
+                            <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                              {renderSummaryText(gap, summaryRenderOptions)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {followUpQuestions.length > 0 && (
+                      <div>
+                        <p style={{
+                          fontSize: typeScale.metaLg[0],
+                          fontWeight: 700,
+                          color: intTokens.text.meta,
+                          marginBottom: 6,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                        }}>Questions worth tracking</p>
+                        {followUpQuestions.slice(0, 3).map((question, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                            <span style={{ color: '#63DCB4', fontSize: 13, flexShrink: 0 }}>?</span>
+                            <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                              {renderSummaryText(question, summaryRenderOptions)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {/* What changed — prefer model output, fall back to heuristic */}
             {((writerWhatChanged && writerWhatChanged.length > 0) || clarifications.length > 0 || newAngles.length > 0) && (
               <div style={{ marginBottom: 14 }}>
@@ -1033,7 +1644,9 @@ function InterpolatorCard({
                     return (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                         <span style={{ color: isNewAngle ? intel.accentLime : intel.accentCyan, fontSize: 13, flexShrink: 0 }}>{isNewAngle ? '↗' : '•'}</span>
-                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{signal}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                          {renderSummaryText(signal, summaryRenderOptions)}
+                        </span>
                       </div>
                     );
                   })
@@ -1042,17 +1655,35 @@ function InterpolatorCard({
                     {clarifications.slice(0, 2).map((c, i) => (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                         <span style={{ color: intel.accentCyan, fontSize: 13, flexShrink: 0 }}>•</span>
-                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{c}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                          {renderSummaryText(c, summaryRenderOptions)}
+                        </span>
                       </div>
                     ))}
                     {newAngles.slice(0, 2).map((a, i) => (
                       <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                         <span style={{ color: intel.accentLime, fontSize: 13, flexShrink: 0 }}>↗</span>
-                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>{a}</span>
+                        <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                          {renderSummaryText(a, summaryRenderOptions)}
+                        </span>
                       </div>
                     ))}
                   </>
                 )}
+              </div>
+            )}
+
+            {visibleBasePerspectiveGaps.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: typeScale.metaLg[0], fontWeight: 700, color: intTokens.text.meta, marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Context to watch</p>
+                {visibleBasePerspectiveGaps.map((gap, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                    <span style={{ color: '#A7C9FF', fontSize: 13, flexShrink: 0 }}>•</span>
+                    <span style={{ fontSize: typeScale.bodySm[0], color: intTokens.text.secondary }}>
+                      {renderSummaryText(gap, summaryRenderOptions)}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -1144,7 +1775,17 @@ function InterpolatorCard({
                       }}>{label.slice(1, 2).toUpperCase()}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary }}>{label}</span>
+                          <button
+                            type="button"
+                            className="interactive-link-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void navigateToProfile(label);
+                            }}
+                            style={{ fontSize: typeScale.bodySm[0], fontWeight: 600, color: intTokens.text.secondary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                          >
+                            {label}
+                          </button>
                           {!blurb && (
                             <span style={{
                               padding: '2px 8px', borderRadius: radius.full,
@@ -1161,7 +1802,9 @@ function InterpolatorCard({
                           )}
                         </div>
                         {blurb && (
-                          <p style={{ fontSize: typeScale.metaLg[0], color: intTokens.text.meta, margin: '2px 0 0', lineHeight: '1.4' }}>{blurb}</p>
+                          <p style={{ fontSize: typeScale.metaLg[0], color: intTokens.text.meta, margin: '2px 0 0', lineHeight: '1.4' }}>
+                            {renderSummaryText(blurb, summaryRenderOptions)}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -1198,7 +1841,7 @@ function InterpolatorCard({
 }
 
 // ─── ThreadControls ───────────────────────────────────────────────────────
-const THREAD_FILTERS: ThreadFilter[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Source-backed', 'Open Story'];
+const THREAD_FILTERS: ThreadFilterOption[] = ['Top', 'Latest', 'Clarifying', 'New angles', 'Source-backed', 'Open Story'];
 
 function ThreadControls({
   active,
@@ -1353,44 +1996,64 @@ function BranchSummaryPill({
 }
 
 function ContributionCard({
-  node, score, rootUri, featured, nested, isOp,
+  node, score, rootUri, session, featured, nested, isOp,
   onFeedback, onQuoteComment, isFollowed, onReplyComment,
 }: {
-  node: ThreadNode;
+  node: ThreadNode & { isOptimistic?: boolean };
   score?: ContributionScores;
   rootUri: string;
+  session?: ConversationSession | null;
   featured?: boolean;
   nested?: boolean;
   /** True if the reply author is also the root post author */
   isOp?: boolean;
   isFollowed?: boolean;
-  onFeedback: (uri: string, fb: ContributionScores['userFeedback']) => void;
-  onQuoteComment?: (node: ThreadNode) => void;
-  onReplyComment?: (node: ThreadNode) => void;
+  onFeedback: (uri: string, fb?: ContributionScores['userFeedback']) => void;
+  onQuoteComment?: (node: ThreadNode & { isOptimistic?: boolean }) => void;
+  onReplyComment?: (node: ThreadNode & { isOptimistic?: boolean }) => void;
 }) {
-  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(score?.userFeedback);
+  const [feedbackGiven, setFeedbackGiven] = useState<ContributionScores['userFeedback']>(
+    getExplicitContributionFeedback(score),
+  );
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(node.likeCount);
   const [reposted, setReposted] = useState(false);
   const [repostCount, setRepostCount] = useState(node.repostCount);
-  const [bookmarked, setBookmarked] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [showAllReplies, setShowAllReplies] = useState(false);
-  const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const { openProfile, openExploreSearch } = useUiStore();
+  const sessionDid = useSessionStore((state) => state.session?.did ?? '');
+  const emptyBookmarkedUris = useMemo<string[]>(() => [], []);
+  const bookmarked = useBookmarksStore((state) => (
+    sessionDid
+      ? (state.bookmarksByDid[sessionDid] ?? emptyBookmarkedUris).includes(node.uri)
+      : false
+  ));
+  const addBookmark = useBookmarksStore((state) => state.addBookmark);
+  const removeBookmark = useBookmarksStore((state) => state.removeBookmark);
+  const translationPolicy = useTranslationStore((state) => state.policy);
+  const translation = useTranslationStore((state) => state.byId[node.uri]);
+  const upsertTranslation = useTranslationStore((state) => state.upsertTranslation);
+  const openProfile = useUiStore((state) => state.openProfile);
+  const openExploreSearch = useUiStore((state) => state.openExploreSearch);
   const navigateToProfile = useProfileNavigation();
-  const translation = translationById[node.uri];
   const detectedReplyLanguage = useMemo(() => heuristicDetectLanguage(node.text), [node.text]);
   const hasRenderableTranslation = !!translation && hasMeaningfulTranslation(node.text, translation.translatedText);
+  const hasReplyTranslatableSignal = useMemo(() => hasTranslatableLanguageSignal(node.text), [node.text]);
   const shouldOfferTranslation = hasRenderableTranslation
-    || detectedReplyLanguage.language === 'und'
-    || !isLikelySameLanguage(detectedReplyLanguage.language, translationPolicy.userLanguage);
+    || (hasReplyTranslatableSignal
+      && (detectedReplyLanguage.language === 'und'
+        || !isLikelySameLanguage(detectedReplyLanguage.language, translationPolicy.userLanguage)));
+
+  React.useEffect(() => {
+    setFeedbackGiven(getExplicitContributionFeedback(score));
+  }, [score?.userFeedback, score?.userFeedbackSource]);
 
   const handleFeedback = (fb: ContributionScores['userFeedback']) => {
-    setFeedbackGiven(fb);
-    onFeedback(node.uri, fb);
+    const nextFeedback = feedbackGiven === fb ? undefined : fb;
+    setFeedbackGiven(nextFeedback);
+    onFeedback(node.uri, nextFeedback);
   };
 
   const handleLike = (e: React.MouseEvent) => {
@@ -1408,7 +2071,13 @@ function ContributionCard({
 
   const handleBookmark = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setBookmarked(v => !v);
+    if (!sessionDid) return;
+    const wasBookmarked = useBookmarksStore.getState().isBookmarked(sessionDid, node.uri);
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, node.uri);
+    } else {
+      addBookmark(sessionDid, node.uri);
+    }
   };
 
   const handleTranslate = async (e: React.MouseEvent) => {
@@ -1460,6 +2129,26 @@ function ContributionCard({
     : score?.role === 'useful_counterpoint' ? 'counterpoint'
     : null;
   const bodyText = hasRenderableTranslation && !showOriginal ? translation.translatedText : node.text;
+  const threadProfileCardData = useMemo<ProfileCardData | null>(() => {
+    const roleLabel = score?.role && score.role !== 'unknown'
+      ? score.role.replace(/_/g, ' ')
+      : undefined;
+    const notableAction = score?.sourceSupport && score.sourceSupport > 0.5
+      ? 'Introduced supporting evidence'
+      : score?.clarificationValue && score.clarificationValue > 0.5
+        ? 'Added useful clarification'
+        : undefined;
+
+    return projectThreadScopedProfileCardDataForNode({
+      ...(session ? { session } : {}),
+      node,
+      rootUri,
+      focusUri: node.uri,
+      ...(typeof isFollowed === 'boolean' ? { isFollowing: isFollowed } : {}),
+      ...(roleLabel ? { roleLabel } : {}),
+      ...(notableAction ? { notableAction } : {}),
+    });
+  }, [isFollowed, node, rootUri, score?.clarificationValue, score?.role, score?.sourceSupport, session]);
 
   const handleHashtagClick = (tag: string) => {
     const normalized = tag.replace(/^#/, '').trim();
@@ -1471,26 +2160,29 @@ function ContributionCard({
     <div style={cardStyle}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: contTokens.gap }}>
-        <div
-          role="button"
-          tabIndex={0}
-          className="interactive-link-surface"
-          onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
-          style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0, cursor: 'pointer' }}
-        >
-          {node.authorAvatar
-            ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
-          }
-        </div>
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
-          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
-        >
+        <ProfileCardTrigger data={threadProfileCardData} disabled={!threadProfileCardData}>
+          <div
+            role="button"
+            tabIndex={0}
+            className="interactive-link-surface"
+            onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
+            style={{ width: contTokens.avatar.size, height: contTokens.avatar.size, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceNested, flexShrink: 0, cursor: 'pointer' }}
+          >
+            {node.authorAvatar
+              ? <img src={node.authorAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `hsl(${((node.authorHandle ?? 'x').charCodeAt(0) * 37) % 360}, 55%, 42%)`, color: '#fff', fontSize: 15, fontWeight: 700 }}>{((node.authorName ?? node.authorHandle ?? '').trim().charAt(0) || '?').toUpperCase()}</div>
+            }
+          </div>
+        </ProfileCardTrigger>
+        <ProfileCardTrigger data={threadProfileCardData} disabled={!threadProfileCardData}>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); openProfile(node.authorDid); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openProfile(node.authorDid); } }}
+            style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+          >
           {/* Only distinction between replies: followed accounts get fontWeight 800 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
             <p style={{
@@ -1515,9 +2207,25 @@ function ContributionCard({
                 letterSpacing: '0.04em',
               }}>OP</span>
             )}
+            {node.isOptimistic && (
+              <span style={{
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                height: 17,
+                padding: '0 6px',
+                borderRadius: 4,
+                background: 'rgba(124,233,255,0.16)',
+                color: accent.cyan400,
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+              }}>Sending</span>
+            )}
           </div>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.authorDid || node.authorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, margin: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.authorHandle}</button>
-        </div>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(node.authorDid || node.authorHandle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, margin: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{node.authorHandle}</button>
+          </div>
+        </ProfileCardTrigger>
         {score && score.role !== 'unknown' && <RolePill role={score.role} />}
         {score && score.usefulnessScore > 0.7 && (
           <div style={{
@@ -1582,27 +2290,42 @@ function ContributionCard({
       )}
 
       {/* Embed */}
-      {node.embed?.kind === 'external' && node.embed.external && (
-        <a
-          href={node.embed.external.uri}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          style={{
-            display: 'block', marginBottom: contTokens.gap,
-            background: disc.surfaceCard2, borderRadius: radius[16],
-            padding: `${space[6]}px ${space[8]}px`,
-            textDecoration: 'none',
-            border: `0.5px solid ${disc.lineSubtle}`,
-          }}
-        >
-          {node.embed.external.thumb && <img src={node.embed.external.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
-          {node.embed.external.title && <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{node.embed.external.title}</p>}
-          <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
-            {node.embed.external.domain}
-          </p>
-        </a>
-      )}
+      {node.embed?.kind === 'external' && node.embed.external && (() => {
+        const ext = node.embed.external;
+        const isGif = ext.uri.includes('tenor.com') || ext.uri.includes('klipy.com');
+        if (isGif) {
+          return (
+            <div style={{ marginBottom: contTokens.gap }}>
+              <Gif
+                url={ext.uri}
+                {...(ext.title ? { title: ext.title } : {})}
+                {...(ext.thumb ? { thumbnail: ext.thumb } : {})}
+              />
+            </div>
+          );
+        }
+        return (
+          <a
+            href={ext.uri}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginBottom: contTokens.gap,
+              background: disc.surfaceCard2, borderRadius: radius[16],
+              padding: `${space[6]}px ${space[8]}px`,
+              textDecoration: 'none',
+              border: `0.5px solid ${disc.lineSubtle}`,
+            }}
+          >
+            {ext.thumb && <img src={ext.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: radius[12], marginBottom: 6 }} />}
+            {ext.title && <p style={{ fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary, marginBottom: 2 }}>{ext.title}</p>}
+            <p style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+              {ext.domain}
+            </p>
+          </a>
+        );
+      })()}
 
       {/* Quote post embed */}
       {(() => {
@@ -1611,6 +2334,22 @@ function ContributionCard({
           : null;
         if (!quoteEmbed?.quotedText) return null;
         const profileTarget = quoteEmbed.quotedAuthorHandle || quoteEmbed.quotedAuthorDid;
+        const quotedThreadProfileCardData: ProfileCardData | null = (() => {
+          return buildQuotedSnippetThreadScopedProfileCardData({
+            threadUri: rootUri,
+            did: quoteEmbed.quotedAuthorDid ?? '',
+            handle: quoteEmbed.quotedAuthorHandle ?? '',
+            ...(quoteEmbed.quotedAuthorDisplayName
+              ? { displayName: quoteEmbed.quotedAuthorDisplayName }
+              : {}),
+            text: quoteEmbed.quotedText,
+            createdAt: node.createdAt,
+            uri: quoteEmbed.quotedExternal?.uri ?? `${rootUri}#quoted:${quoteEmbed.quotedAuthorDid ?? 'unknown'}`,
+            hasMedia: Boolean(quoteEmbed.quotedExternal),
+            ...(quoteEmbed.quotedExternal ? { mediaType: 'external' as const } : {}),
+            roleSummary: 'Quoted in thread context',
+          });
+        })();
         return (
           <div style={{
             marginBottom: contTokens.gap,
@@ -1638,63 +2377,80 @@ function ContributionCard({
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (profileTarget) void navigateToProfile(profileTarget); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: profileTarget ? 'pointer' : 'default' }}>
-                {quoteEmbed.quotedAuthorDisplayName || quoteEmbed.quotedAuthorHandle || 'Unknown'}
-              </button>
-              {quoteEmbed.quotedAuthorHandle && (
-                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); const handle = quoteEmbed.quotedAuthorHandle; if (handle) void navigateToProfile(handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                  @{quoteEmbed.quotedAuthorHandle}
+              <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); if (profileTarget) void navigateToProfile(profileTarget); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: profileTarget ? 'pointer' : 'default' }}>
+                  {quoteEmbed.quotedAuthorDisplayName || quoteEmbed.quotedAuthorHandle || 'Unknown'}
                 </button>
+              </ProfileCardTrigger>
+              {quoteEmbed.quotedAuthorHandle && (
+                <ProfileCardTrigger data={quotedThreadProfileCardData} disabled={!quotedThreadProfileCardData}>
+                  <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); const handle = quoteEmbed.quotedAuthorHandle; if (handle) void navigateToProfile(handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                    @{quoteEmbed.quotedAuthorHandle}
+                  </button>
+                </ProfileCardTrigger>
               )}
             </div>
             <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textSecondary, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               <RichText text={quoteEmbed.quotedText} baseColor={disc.textSecondary} onHashtag={handleHashtagClick} />
             </p>
             {quoteEmbed.quotedExternal && (
-              <a
-                href={quoteEmbed.quotedExternal.uri}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                style={{
-                  display: 'block',
-                  marginTop: 10,
-                  background: 'var(--quote-preview-surface)',
-                  borderRadius: radius[12],
-                  border: '1px solid var(--quote-preview-border)',
-                  textDecoration: 'none',
-                  overflow: 'hidden',
-                }}
-              >
-                {quoteEmbed.quotedExternal.thumb && (
-                  <img src={quoteEmbed.quotedExternal.thumb} alt="" style={{ width: '100%', height: 96, objectFit: 'cover' }} />
-                )}
-                <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-                  {quoteEmbed.quotedExternal.title && (
-                    <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>
-                      {quoteEmbed.quotedExternal.title}
-                    </p>
-                  )}
-                  <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
-                    {quoteEmbed.quotedExternal.domain}
-                  </p>
-                  {quoteEmbed.quotedExternal.description && (
-                    <p style={{
-                      margin: '6px 0 0',
-                      fontSize: typeScale.metaSm[0],
-                      lineHeight: '18px',
-                      color: disc.textTertiary,
-                      opacity: 0.88,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }}>
-                      {quoteEmbed.quotedExternal.description}
-                    </p>
-                  )}
+              parseYouTubeUrl(quoteEmbed.quotedExternal.uri) ? (
+                <div style={{ marginTop: 10 }}>
+                  <YouTubeEmbedCard
+                    url={quoteEmbed.quotedExternal.uri}
+                    title={quoteEmbed.quotedExternal.title}
+                    description={quoteEmbed.quotedExternal.description}
+                    thumb={quoteEmbed.quotedExternal.thumb}
+                    domain={quoteEmbed.quotedExternal.domain}
+                    compact
+                  />
                 </div>
-              </a>
+              ) : (
+                <a
+                  href={quoteEmbed.quotedExternal.uri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    display: 'block',
+                    marginTop: 10,
+                    background: 'var(--quote-preview-surface)',
+                    borderRadius: radius[12],
+                    border: '1px solid var(--quote-preview-border)',
+                    textDecoration: 'none',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {quoteEmbed.quotedExternal.thumb && (
+                    <img src={quoteEmbed.quotedExternal.thumb} alt="" style={{ width: '100%', height: 96, objectFit: 'cover' }} />
+                  )}
+                  <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+                    {quoteEmbed.quotedExternal.title && (
+                      <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>
+                        {quoteEmbed.quotedExternal.title}
+                      </p>
+                    )}
+                    <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+                      {quoteEmbed.quotedExternal.domain}
+                    </p>
+                    {quoteEmbed.quotedExternal.description && (
+                      <p style={{
+                        margin: '6px 0 0',
+                        fontSize: typeScale.metaSm[0],
+                        lineHeight: '18px',
+                        color: disc.textTertiary,
+                        opacity: 0.88,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}>
+                        {quoteEmbed.quotedExternal.description}
+                      </p>
+                    )}
+                  </div>
+                </a>
+              )
             )}
           </div>
         );
@@ -1702,28 +2458,41 @@ function ContributionCard({
 
       {/* Link preview card from recordWithMedia external media */}
       {node.embed?.kind === 'recordWithMedia' && node.embed.mediaExternal && (
-        <a
-          href={node.embed.mediaExternal.uri}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          style={{
-            display: 'block', marginBottom: contTokens.gap,
-            background: disc.surfaceCard2, borderRadius: radius[12],
-            textDecoration: 'none', overflow: 'hidden',
-            border: `0.5px solid ${disc.lineSubtle}`,
-          }}
-        >
-          {node.embed.mediaExternal.thumb && (
-            <img src={node.embed.mediaExternal.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover' }} />
-          )}
-          <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
-            {node.embed.mediaExternal.title && (
-              <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>{node.embed.mediaExternal.title}</p>
-            )}
-            <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{node.embed.mediaExternal.domain}</p>
+        parseYouTubeUrl(node.embed.mediaExternal.uri) ? (
+          <div style={{ marginBottom: contTokens.gap }}>
+            <YouTubeEmbedCard
+              url={node.embed.mediaExternal.uri}
+              title={node.embed.mediaExternal.title}
+              description={node.embed.mediaExternal.description}
+              thumb={node.embed.mediaExternal.thumb}
+              domain={node.embed.mediaExternal.domain}
+              compact
+            />
           </div>
-        </a>
+        ) : (
+          <a
+            href={node.embed.mediaExternal.uri}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginBottom: contTokens.gap,
+              background: disc.surfaceCard2, borderRadius: radius[12],
+              textDecoration: 'none', overflow: 'hidden',
+              border: `0.5px solid ${disc.lineSubtle}`,
+            }}
+          >
+            {node.embed.mediaExternal.thumb && (
+              <img src={node.embed.mediaExternal.thumb} alt="" style={{ width: '100%', height: 100, objectFit: 'cover' }} />
+            )}
+            <div style={{ padding: `${space[4]}px ${space[6]}px` }}>
+              {node.embed.mediaExternal.title && (
+                <p style={{ margin: '0 0 2px', fontSize: typeScale.chip[0], fontWeight: 600, color: disc.textPrimary }}>{node.embed.mediaExternal.title}</p>
+              )}
+              <p style={{ margin: 0, fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{node.embed.mediaExternal.domain}</p>
+            </div>
+          </a>
+        )
       )}
 
       {/* Signal chips */}
@@ -1744,6 +2513,7 @@ function ContributionCard({
               key={child.uri}
               node={child}
               rootUri={rootUri}
+              {...(session !== undefined ? { session } : {})}
               nested
               onFeedback={onFeedback}
             />
@@ -1796,7 +2566,9 @@ function ContributionCard({
             return (
               <button
                 key={fb}
+                type="button"
                 onClick={() => handleFeedback(fb)}
+                aria-pressed={isActive}
                 style={{
                   height: 28, padding: '0 12px',
                   borderRadius: 14,
@@ -2127,9 +2899,53 @@ function RelatedFooter({ onClose }: { onClose: () => void }) {
 }
 
 // ─── Main component ────────────────────────────────────────────────────────
-export default function StoryMode({ entry, onClose }: Props) {
-  const { agent, session, profile } = useSessionStore();
-  const { openComposeReply } = useUiStore();
+export default function StoryMode(props: Props) {
+  if (props.entry.type === 'post' && !isAtUri(props.entry.id)) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 24 }}
+        transition={transitions.storyEntry}
+        style={{
+          position: 'fixed', inset: 0,
+          background: disc.bgBase,
+          display: 'flex', flexDirection: 'column',
+          zIndex: 200,
+        }}
+      >
+        <HostBar onClose={props.onClose} />
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 20px',
+          textAlign: 'center',
+        }}>
+          <div>
+            <p style={{ margin: 0, fontSize: typeScale.bodySm[0], color: disc.textPrimary, fontWeight: 700 }}>
+              This thread could not be opened.
+            </p>
+            <p style={{ margin: '8px 0 0', fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
+              The post link is invalid or incomplete.
+            </p>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  return <StoryModeContent {...props} />;
+}
+
+function StoryModeContent({ entry, onClose }: Props) {
+  const storyViewStartedAtRef = React.useRef(nowMs());
+  const uiReadyRecordedByRootRef = React.useRef<Record<string, boolean>>({});
+  const agent = useSessionStore((state) => state.agent);
+  const session = useSessionStore((state) => state.session);
+  const profile = useSessionStore((state) => state.profile);
+  const openComposeReply = useUiStore((state) => state.openComposeReply);
   const translationPolicy = useTranslationStore((state) => state.policy);
   const conversationSession = useConversationSession(entry.id);
   const [activeFilter, setActiveFilter] = useState<ThreadFilterOption>('Top');
@@ -2138,7 +2954,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const conversationMeta = useConversationMeta(entry.id);
   const interpolatedState = useConversationInterpolatedState(entry.id);
   const actions = useConversationActions(entry.id);
-  const rootComposerContext = useComposerContextProjection(entry.id, threadVm?.hero.rootNode?.uri, '');
+  const rootComposerContext = useComposerContextProjection(entry.id, threadVm?.hero?.rootNode?.uri, '');
   const verificationCache = React.useRef(new InMemoryVerificationCache());
   const [quoteTarget, setQuoteTarget] = useState<ThreadNode | null>(null);
   // Set of DIDs the current user follows — used only for bold username treatment
@@ -2147,6 +2963,7 @@ export default function StoryMode({ entry, onClose }: Props) {
   const [activeEntity, setActiveEntity] = useState<WriterEntity | null>(null);
 
   useEffect(() => {
+    storyViewStartedAtRef.current = nowMs();
     if (!session?.did || !agent) return;
     // Fetch the viewer's follows once, quietly — used only for name bolding
     atpCall(() => agent.getFollows({ actor: session.did, limit: 100 }))
@@ -2155,11 +2972,30 @@ export default function StoryMode({ entry, onClose }: Props) {
         setFollowedDids(dids);
       })
       .catch(() => {}); // non-critical, fail silently
-  }, [session?.did]);
+  }, [agent, session?.did]);
+
+  useEffect(() => {
+    storyViewStartedAtRef.current = nowMs();
+  }, [entry.id]);
   const loading = conversationMeta?.status === 'loading';
   const error = conversationMeta?.error ?? null;
+  useEffect(() => {
+    if (uiReadyRecordedByRootRef.current[entry.id]) return;
+    const writerSummary = interpolatedState?.writerResult?.collapsedSummary?.trim() ?? '';
+    const heuristicSummary = threadVm?.interpolator?.summaryText?.trim() ?? '';
+    if (!writerSummary && !heuristicSummary) return;
+    if (conversationMeta?.status !== 'ready') return;
+
+    uiReadyRecordedByRootRef.current[entry.id] = true;
+    recordInterpolatorStageTiming('ui.story_interpolator_ready', nowMs() - storyViewStartedAtRef.current);
+  }, [
+    conversationMeta?.status,
+    entry.id,
+    interpolatedState?.writerResult?.collapsedSummary,
+    threadVm?.interpolator?.summaryText,
+  ]);
   const rootPost = useMemo(() => {
-    if (!threadVm?.hero.rootNode) return null;
+    if (!threadVm?.hero?.rootNode) return null;
 
     const root = threadVm.hero.rootNode;
     return {
@@ -2182,7 +3018,7 @@ export default function StoryMode({ entry, onClose }: Props) {
     };
   }, [threadVm]);
   const replies = useMemo(() => {
-    return threadVm?.contributions.map((contribution) => ({
+    return threadVm?.contributions?.map((contribution) => ({
       uri: contribution.uri,
       cid: '',
       authorDid: contribution.authorDid,
@@ -2199,6 +3035,7 @@ export default function StoryMode({ entry, onClose }: Props) {
       labels: [],
       depth: contribution.depth,
       replies: (contribution.replies ?? []) as ThreadNode[],
+      ...(contribution.isOptimistic ? { isOptimistic: true } : {}),
       ...(contribution.parentAuthorHandle
         ? { parentAuthorHandle: contribution.parentAuthorHandle }
         : {}),
@@ -2237,47 +3074,32 @@ export default function StoryMode({ entry, onClose }: Props) {
 
   // Hydration and polling are delegated to the shared ConversationSession subsystem.
   const providersRef = React.useRef(createVerificationProviders());
+  useConversationHydration({
+    enabled: !!session && !!agent,
+    sessionId: entry.id,
+    rootUri: entry.id,
+    mode: 'story',
+    agent: agent!,
+    translationPolicy,
+    providers: providersRef.current,
+    cache: verificationCache.current,
+    mutationRevision: conversationSession?.mutations.revision ?? 0,
+    lastMutationAt: conversationSession?.mutations.lastMutationAt,
+    lastHydratedAt: conversationSession?.meta.lastHydratedAt,
+    // Remote thread watch now handles the fast path; keep a slow poll as a
+    // self-healing backstop in case the live invalidation stream drops.
+    pollIntervalMs: 180_000,
+    onError: (error, phase) => {
+      console.warn(
+        phase === 'initial'
+          ? '[StoryMode] hydrateConversationSession failed:'
+          : '[StoryMode] background hydrate failed:',
+        error,
+      );
+    },
+  });
 
-  useEffect(() => {
-    if (!session || !agent) return;
-
-    const controller = new AbortController();
-
-    void hydrateConversationSession({
-      sessionId: entry.id,
-      rootUri: entry.id,
-      agent,
-      translationPolicy,
-      providers: providersRef.current,
-      cache: verificationCache.current,
-      signal: controller.signal,
-    }).catch((err) => {
-      if (err instanceof Error && err.name === 'AbortError') return;
-      console.warn('[StoryMode] hydrateConversationSession failed:', err);
-    });
-
-    const pollInterval = window.setInterval(() => {
-      void hydrateConversationSession({
-        sessionId: entry.id,
-        rootUri: entry.id,
-        agent,
-        translationPolicy,
-        providers: providersRef.current,
-        cache: verificationCache.current,
-        signal: controller.signal,
-      }).catch((err) => {
-        if (err instanceof Error && err.name === 'AbortError') return;
-        console.warn('[StoryMode] background hydrate failed:', err);
-      });
-    }, 60_000);
-
-    return () => {
-      window.clearInterval(pollInterval);
-      controller.abort();
-    };
-  }, [entry.id, session, agent, translationPolicy.localOnlyMode, translationPolicy.userLanguage]);
-
-  const handleFeedback = useCallback((replyUri: string, fb: ContributionScores['userFeedback']) => {
+  const handleFeedback = useCallback((replyUri: string, fb?: ContributionScores['userFeedback']) => {
     actions.onUserFeedback(replyUri, fb);
   }, [actions]);
   const revealedWarnUris = conversationSession?.structure.revealedWarnUris ?? [];
@@ -2310,7 +3132,10 @@ export default function StoryMode({ entry, onClose }: Props) {
     return Object.values(contributionModeration).filter((item) => item.decision === 'warn').length;
   }, [contributionModeration]);
 
-  const rootNodeSession = conversationSession?.graph.nodesByUri[conversationSession.graph.rootUri];
+  const rootGraph = conversationSession?.graph;
+  const rootNodeSession = rootGraph?.rootUri
+    ? rootGraph.nodesByUri[rootGraph.rootUri]
+    : undefined;
   const rootMatches = rootPost ? (threadFilterResults[rootPost.id] ?? []) : [];
   const rootModeration = projectModerationDecision({
     hasUserHide: false,
@@ -2365,6 +3190,18 @@ export default function StoryMode({ entry, onClose }: Props) {
     openComposeReply(getReplyComposerPayload(node));
   }, [getReplyComposerPayload, onClose, openComposeReply]);
 
+  const handleCloseEntity = useCallback(() => {
+    setActiveEntity(null);
+  }, []);
+
+  const entitySheetRelatedPosts = useMemo(() => 
+    replies.map(r => ({
+      id: r.uri, content: r.text,
+      author: { handle: r.authorHandle ?? '', displayName: r.authorName ?? '', did: r.authorDid ?? '', ...(r.authorAvatar != null ? { avatar: r.authorAvatar } : {}) },
+      likeCount: r.likeCount ?? 0, repostCount: r.repostCount ?? 0, replyCount: r.replyCount ?? 0,
+      bookmarkCount: 0, createdAt: '', chips: [] as ChipType[],
+    })), [replies]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 32 }}
@@ -2382,13 +3219,8 @@ export default function StoryMode({ entry, onClose }: Props) {
       {/* Entity sheet — Narwhal v3 Phase C */}
       <WriterEntitySheet
         entity={activeEntity}
-        relatedPosts={replies.map(r => ({
-          id: r.uri, content: r.text,
-          author: { handle: r.authorHandle ?? '', displayName: r.authorName ?? '', did: r.authorDid ?? '', ...(r.authorAvatar != null ? { avatar: r.authorAvatar } : {}) },
-          likeCount: r.likeCount ?? 0, repostCount: r.repostCount ?? 0, replyCount: r.replyCount ?? 0,
-          bookmarkCount: 0, createdAt: '', chips: [] as ChipType[],
-        }))}
-        onClose={() => setActiveEntity(null)}
+        relatedPosts={entitySheetRelatedPosts}
+        onClose={handleCloseEntity}
       />
 
       {/* HostBar */}
@@ -2414,7 +3246,7 @@ export default function StoryMode({ entry, onClose }: Props) {
             ) : rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
               <PromptHeroCard
                 post={rootPost}
-                participantCount={threadVm?.hero.participantCount ?? replies.length}
+                participantCount={threadVm?.hero?.participantCount ?? replies.length}
                 {...(interpolatedState?.rootVerification !== undefined
                   ? { rootVerification: interpolatedState.rootVerification }
                   : {})}
@@ -2424,34 +3256,45 @@ export default function StoryMode({ entry, onClose }: Props) {
             {rootPost && rootModeration.decision === 'hide' ? null : rootPost ? (
               <>
                 {/* InterpolatorCard */}
-                <InterpolatorCard
-                  rootUri={entry.id}
-                  summaryText={threadVm?.interpolator.summaryText ?? ''}
-                  writerSummary={threadVm?.interpolator.writerSummary}
-                  summaryMode={(threadVm?.interpolator.summaryMode ?? undefined) as SummaryMode | undefined}
-                  writerWhatChanged={interpolatedState?.writerResult?.whatChanged}
-                  writerContributorBlurbs={interpolatedState?.writerResult?.contributorBlurbs}
-                  safeEntities={interpolatedState?.writerEntities}
-                  clarifications={interpolatedState?.interpolator?.clarificationsAdded ?? []}
-                  newAngles={interpolatedState?.interpolator?.newAnglesAdded ?? []}
-                  heatLevel={threadVm?.interpolator.heatLevel ?? 0}
-                  repetitionLevel={threadVm?.interpolator.repetitionLevel ?? 0}
-                  sourceSupportPresent={threadVm?.interpolator.sourceSupportPresent ?? false}
-                  replyCount={threadVm?.hero.participantCount ?? replies.length}
-                  updatedAt={conversationSession?.interpretation.lastComputedAt ?? new Date().toISOString()}
-                  topContributors={threadVm?.interpolator.topContributors ?? []}
-                  entityLandscape={threadVm?.interpolator.entityLandscape ?? []}
-                  factualSignalPresent={threadVm?.interpolator.factualSignalPresent ?? false}
-                  onEntityTap={setActiveEntity}
-                />
+                {threadVm?.interpolator?.shouldRender !== false && (
+                  <InterpolatorCard
+                    rootUri={entry.id}
+                    summaryText={threadVm?.interpolator?.summaryText ?? ''}
+                    writerSummary={threadVm?.interpolator?.writerSummary}
+                    summaryMode={(threadVm?.interpolator?.summaryMode ?? undefined) as SummaryMode | undefined}
+                    writerWhatChanged={
+                      threadVm?.interpolator?.latestContinuity?.whatChanged
+                      ?? interpolatedState?.writerResult?.whatChanged
+                    }
+                    writerContributorBlurbs={interpolatedState?.writerResult?.contributorBlurbs}
+                    safeEntities={interpolatedState?.writerEntities}
+                    clarifications={interpolatedState?.interpolator?.clarificationsAdded ?? []}
+                    newAngles={interpolatedState?.interpolator?.newAnglesAdded ?? []}
+                    heatLevel={threadVm?.interpolator?.heatLevel ?? 0}
+                    repetitionLevel={threadVm?.interpolator?.repetitionLevel ?? 0}
+                    sourceSupportPresent={threadVm?.interpolator?.sourceSupportPresent ?? false}
+                    replyCount={threadVm?.hero?.participantCount ?? replies.length}
+                    updatedAt={
+                      threadVm?.interpolator?.latestContinuity?.recordedAt
+                      ?? conversationSession?.interpretation.lastComputedAt
+                      ?? new Date().toISOString()
+                    }
+                    topContributors={threadVm?.interpolator?.topContributors ?? []}
+                    entityLandscape={threadVm?.interpolator?.entityLandscape ?? []}
+                    factualSignalPresent={threadVm?.interpolator?.factualSignalPresent ?? false}
+                    basePerspectiveGaps={threadVm?.interpolator?.perspectiveGaps ?? []}
+                    premium={threadVm?.interpolator?.premium ?? { status: 'idle', isEntitled: false }}
+                    onEntityTap={setActiveEntity}
+                  />
+                )}
 
                 {/* ThreadControls */}
-                {(threadVm?.hero.participantCount ?? replies.length) > 0 && (
+                {(threadVm?.hero?.participantCount ?? replies.length) > 0 && (
                   <ThreadControls
                     active={activeFilter}
                     onChange={setActiveFilter}
                     available={[
-                      ...((threadVm?.filters.available ?? []) as ThreadFilter[]),
+                      ...((threadVm?.filters?.available ?? []) as ThreadFilter[]),
                       'Open Story',
                     ]}
                   />
@@ -2471,6 +3314,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                       node={featuredNode}
                       {...(featuredScore !== undefined ? { score: featuredScore } : {})}
                       rootUri={entry.id}
+                      session={conversationSession}
                       featured
                       isOp={featured.isOp}
                       {...(followedDids.has(featured.authorDid ?? '') ? { isFollowed: true } : {})}
@@ -2529,6 +3373,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                           node={node}
                           {...(nodeScore !== undefined ? { score: nodeScore } : {})}
                           rootUri={entry.id}
+                          session={conversationSession}
                           isOp={contribution.isOp}
                           {...(followedDids.has(contribution.authorDid ?? '') ? { isFollowed: true } : {})}
                           onFeedback={handleFeedback}
@@ -2540,7 +3385,7 @@ export default function StoryMode({ entry, onClose }: Props) {
                   });
                 })()}
 
-                {(threadVm?.hero.participantCount ?? replies.length) === 0 && !loading && (
+                {(threadVm?.hero?.participantCount ?? replies.length) === 0 && !loading && (
                   <div style={{ padding: '24px 0', textAlign: 'center' }}>
                     <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No replies yet. Be the first to contribute.</p>
                   </div>

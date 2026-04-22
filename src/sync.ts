@@ -12,12 +12,13 @@
 
 import { BskyAgent } from '@atproto/api';
 import { paperDB } from './db';
-import { inferenceClient } from './workers/InferenceClient';
 import { atpCall, atpMutate } from './lib/atproto/client';
 import { resolveEmbed, resolveFacets, extractClusterSignals } from './lib/resolver/atproto';
 import { extractRecordDisplayText } from './lib/atproto/recordContent';
 import { z } from 'zod';
-import { AppBskyFeedDefs } from '@atproto/api';
+import { embeddingPipeline } from './intelligence/embeddingPipeline';
+import { recordEmbeddingVector } from './perf/embeddingTelemetry';
+import { extractMediaSignalsFromJson } from './lib/media/extractMediaSignals';
 
 // ─── Zod schema for ATProto post validation ────────────────────────────────
 const FeedViewPostSchema = z.object({
@@ -41,6 +42,7 @@ const FeedViewPostSchema = z.object({
       embed: z.any().optional(),
       facets: z.any().optional(),
     }).passthrough(),
+    embed: z.any().optional(),
   }),
   reply: z.object({
     root: z.object({ uri: z.string() }).passthrough().optional(),
@@ -89,32 +91,72 @@ export class PaperSync {
       }
 
       const textsToEmbed = postsToProcess.map(item => sanitize(item.extractedContent));
-      const embeddings = await inferenceClient.embedBatch(textsToEmbed);
+      const embeddings = await embeddingPipeline.embedBatch(textsToEmbed, { mode: 'ingest', batchSize: 12 });
 
       await pg.transaction(async (trx) => {
         for (let i = 0; i < postsToProcess.length; i++) {
           const { post, reply } = postsToProcess[i];
           const embedding = embeddings[i] ?? [];
+          if (embedding.length > 0) recordEmbeddingVector('ingest', embedding);
           const sanitizedContent = textsToEmbed[i] ?? '';
 
           const facets = resolveFacets(post.record.facets);
-          const embed = resolveEmbed(post.record.embed);
-          const signals = extractClusterSignals(sanitizedContent, facets, embed, []);
+          const previewEmbed = resolveEmbed((post as { embed?: unknown }).embed ?? post.record.embed);
+          const signals = extractClusterSignals(sanitizedContent, facets, previewEmbed, []);
+          const rawEmbed = post.record.embed && typeof post.record.embed === 'object'
+            ? post.record.embed
+            : {};
+          const embedJson = JSON.stringify({
+            ...rawEmbed,
+            _signals: signals,
+            ...(previewEmbed ? { _preview: previewEmbed } : {}),
+          });
+          const mediaSignals = extractMediaSignalsFromJson(embedJson);
 
           await trx.query(
-            `INSERT INTO posts (id, uri, author_did, content, created_at, embedding, embed, reply_to, reply_root)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             ON CONFLICT (id) DO NOTHING`,
+            `INSERT INTO posts (
+               id,
+               uri,
+               author_did,
+               content,
+               created_at,
+               reply_to,
+               reply_root,
+               embedding,
+               embed,
+               has_images,
+               has_video,
+               has_link,
+               image_alt_text
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             ON CONFLICT (id) DO UPDATE SET
+               uri = COALESCE(posts.uri, EXCLUDED.uri),
+               author_did = EXCLUDED.author_did,
+               content = EXCLUDED.content,
+               created_at = EXCLUDED.created_at,
+               reply_to = COALESCE(EXCLUDED.reply_to, posts.reply_to),
+               reply_root = COALESCE(EXCLUDED.reply_root, posts.reply_root),
+               embedding = COALESCE(EXCLUDED.embedding, posts.embedding),
+               embed = COALESCE(EXCLUDED.embed, posts.embed),
+               has_images = EXCLUDED.has_images,
+               has_video = EXCLUDED.has_video,
+               has_link = EXCLUDED.has_link,
+               image_alt_text = COALESCE(NULLIF(EXCLUDED.image_alt_text, ''), posts.image_alt_text)`,
             [
               post.cid,
               post.uri,
               post.author.did,
               sanitizedContent,
               post.record.createdAt || post.record.publishedAt || new Date().toISOString(),
-              embedding.length ? `[${embedding.join(',')}]` : null,
-              JSON.stringify({ ...post.record.embed, _signals: signals }),
               reply?.parent?.uri ?? null,
               reply?.root?.uri ?? null,
+              embedding.length ? `[${embedding.join(',')}]` : null,
+              embedJson,
+              mediaSignals.hasImages ? 1 : 0,
+              mediaSignals.hasVideo ? 1 : 0,
+              mediaSignals.hasLink ? 1 : 0,
+              mediaSignals.imageAltText || null,
             ]
           );
         }
@@ -140,22 +182,48 @@ export class PaperSync {
     })) ?? (() => { throw new Error('Failed to post'); })();
 
     const pg = paperDB.getPG();
-    const embedding = await inferenceClient.embed(sanitizedText);
+    const embedding = await embeddingPipeline.embed(sanitizedText, { mode: 'ingest' });
+    if (embedding.length > 0) recordEmbeddingVector('ingest', embedding);
+
+    // For user-created posts (no embed), media signals are all 0
+    const mediaSignals = {
+      hasImages: false,
+      hasVideo: false,
+      hasLink: false,
+      imageAltText: null,
+    };
 
     await pg.query(
-      // NOTE: This assumes the 'posts' table has been migrated to include 'uri', 'reply_to', and 'reply_root' columns.
-      `INSERT INTO posts (id, uri, author_did, content, created_at, embedding, embed, reply_to, reply_root)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO posts (
+         id,
+         uri,
+         author_did,
+         content,
+         created_at,
+         reply_to,
+         reply_root,
+         embedding,
+         embed,
+         has_images,
+         has_video,
+         has_link,
+         image_alt_text
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         response.cid,
         response.uri,
         this.agent.session?.did ?? '',
         sanitizedText,
         new Date().toISOString(),
+        null,
+        null,
         embedding.length ? `[${embedding.join(',')}]` : null,
         null, // embed
-        null, // reply_to
-        null, // reply_root
+        mediaSignals.hasImages ? 1 : 0,
+        mediaSignals.hasVideo ? 1 : 0,
+        mediaSignals.hasLink ? 1 : 0,
+        mediaSignals.imageAltText,
       ]
     );
 

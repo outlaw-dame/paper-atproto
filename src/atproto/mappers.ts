@@ -11,7 +11,7 @@ import {
 } from '@atproto/api';
 import type { MockPost, ChipType } from '../data/mockData';
 import { resolveFacets } from '../lib/resolver/atproto';
-import { detectSensitiveMedia, mapRawLabelValues } from '../lib/moderation/sensitiveMedia';
+import { detectSensitiveMedia, mapRawLabelDetails, mapRawLabelValues } from '../lib/moderation/sensitiveMedia';
 import {
   asTrimmedString,
   contentUnionToText,
@@ -55,6 +55,10 @@ function isVideoUrl(url: string): boolean {
   return pattern.test(url);
 }
 
+export function isAudioUrl(url: string): boolean {
+  return /\.(mp3|ogg|wav|flac|aac|m4a|opus)(\?.*)?$/i.test(url);
+}
+
 function readBlobRef(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
   const ref = (value as any).ref;
@@ -73,6 +77,46 @@ function buildBlobCdnUrl(did: string, blobLike: unknown): string | undefined {
   return `https://cdn.bsky.app/img/feed_fullsize/plain/${did}/${cid}@jpeg`;
 }
 
+function buildBlobSyncUrl(did: string, blobLike: unknown): string | undefined {
+  const cid = readBlobRef(blobLike);
+  if (!cid) return undefined;
+  return `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
+}
+
+function languageLabelFromCode(lang: string): string {
+  const normalized = lang.trim();
+  if (!normalized) return 'Captions';
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' }).of(normalized) || normalized.toUpperCase();
+  } catch {
+    return normalized.toUpperCase();
+  }
+}
+
+function extractRawVideoEmbed(record: any): any | null {
+  if (record?.embed?.$type === 'app.bsky.embed.video') return record.embed;
+  if (record?.embed?.media?.$type === 'app.bsky.embed.video') return record.embed.media;
+  return null;
+}
+
+function mapRawVideoCaptions(authorDid: string, rawVideoEmbed: any): Array<{ lang: string; url: string; label?: string }> | undefined {
+  const rawCaptions = Array.isArray(rawVideoEmbed?.captions) ? rawVideoEmbed.captions : [];
+  const captions = rawCaptions
+    .map((entry: any) => {
+      const lang = typeof entry?.lang === 'string' ? entry.lang.trim() : '';
+      const url = buildBlobSyncUrl(authorDid, entry?.file);
+      if (!lang || !url) return null;
+      return {
+        lang,
+        url,
+        label: languageLabelFromCode(lang),
+      };
+    })
+    .filter((entry: { lang: string; url: string; label?: string } | null): entry is { lang: string; url: string; label?: string } => Boolean(entry));
+
+  return captions.length > 0 ? captions : undefined;
+}
+
 function summarizeText(text: string, maxChars = 320): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= maxChars) return clean;
@@ -88,15 +132,21 @@ function mapImageViewToMedia(embed: AppBskyEmbedImages.View): NonNullable<MockPo
   }));
 }
 
-function mapVideoViewToEmbed(embed: AppBskyEmbedVideo.View): Extract<NonNullable<MockPost['embed']>, { type: 'video' }> {
+function mapVideoViewToEmbed(
+  embed: AppBskyEmbedVideo.View,
+  rawVideoEmbed: any,
+  authorDid: string,
+): Extract<NonNullable<MockPost['embed']>, { type: 'video' }> {
   const aspectRatio = embed.aspectRatio ? embed.aspectRatio.width / embed.aspectRatio.height : undefined;
   const domain = extractDomain(embed.playlist);
+  const captions = mapRawVideoCaptions(authorDid, rawVideoEmbed);
   return {
     type: 'video',
     url: embed.playlist,
     ...(embed.thumbnail ? { thumb: embed.thumbnail } : {}),
     ...(embed.alt ? { description: embed.alt } : {}),
     ...(aspectRatio ? { aspectRatio } : {}),
+    ...(captions ? { captions } : {}),
     domain: domain === 'video.bsky.app' ? 'bsky.app' : domain,
   };
 }
@@ -122,6 +172,7 @@ function buildExternalEmbedData(embed: AppBskyEmbedExternal.View): Extract<NonNu
 function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<MockPost, 'replyTo' | 'threadRoot'> {
   let media: MockPost['media'];
   let embed: MockPost['embed'];
+  const rawVideoEmbed = extractRawVideoEmbed(record.value);
 
   for (const quotedEmbed of record.embeds ?? []) {
     if (!media && AppBskyEmbedImages.isView(quotedEmbed)) {
@@ -139,7 +190,7 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     }
 
     if (!embed && AppBskyEmbedVideo.isView(quotedEmbed)) {
-      embed = mapVideoViewToEmbed(quotedEmbed);
+      embed = mapVideoViewToEmbed(quotedEmbed, rawVideoEmbed, record.author.did);
       continue;
     }
 
@@ -176,7 +227,8 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     }
   }
 
-  const quotedLabelValues = mapRawLabelValues((record as any).labels);
+  const quotedLabelDetails = mapRawLabelDetails((record as any).labels);
+  const quotedLabelValues = quotedLabelDetails.filter((label) => !label.neg).map((label) => label.val);
 
   const mapped: Omit<MockPost, 'replyTo' | 'threadRoot'> = {
     id: record.uri,
@@ -196,13 +248,20 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
     bookmarkCount: 0,
     chips: [],
     ...(quotedLabelValues.length > 0 ? { contentLabels: quotedLabelValues } : {}),
+    ...(quotedLabelDetails.length > 0 ? { labelDetails: quotedLabelDetails } : {}),
     ...(media ? { media } : {}),
     ...(embed ? { embed } : {}),
   };
 
   const sensitiveResult = detectSensitiveMedia(mapped as MockPost);
   if (sensitiveResult.isSensitive) {
-    mapped.sensitiveMedia = { isSensitive: true, reasons: sensitiveResult.reasons };
+    mapped.sensitiveMedia = {
+      isSensitive: true,
+      reasons: sensitiveResult.reasons,
+      action: sensitiveResult.action,
+      allowReveal: sensitiveResult.allowReveal,
+      ...(sensitiveResult.rationale ? { rationale: sensitiveResult.rationale } : {}),
+    };
   }
 
   return mapped;
@@ -213,8 +272,12 @@ function mapQuotedRecordToMockPost(record: AppBskyEmbedRecord.ViewRecord): Omit<
 export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost {
   const record = post.record as any; // Cast to access text, etc.
   const embed = post.embed as any;
+  const rawVideoEmbed = extractRawVideoEmbed(record);
+  const postLabelDetails = mapRawLabelDetails((post as any).labels);
+  const recordLabelDetails = mapRawLabelDetails(record?.labels?.values);
   const postLabelValues = mapRawLabelValues((post as any).labels);
   const recordLabelValues = mapRawLabelValues(record?.labels?.values);
+  const labelDetails = [...postLabelDetails, ...recordLabelDetails].slice(0, 20);
   const contentLabels = [...new Set([...postLabelValues, ...recordLabelValues])].slice(0, 20);
   const $type = record?.$type;
 
@@ -290,7 +353,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
       embedData = buildExternalEmbedData(embed);
     }
   } else if (AppBskyEmbedVideo.isView(embed)) {
-    embedData = mapVideoViewToEmbed(embed);
+    embedData = mapVideoViewToEmbed(embed, rawVideoEmbed, post.author.did);
   } else if (AppBskyEmbedRecord.isView(embed) && AppBskyFeedDefs.isPostView((embed as any).record)) {
     embedData = {
       type: 'quote' as const,
@@ -308,11 +371,17 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
   ) {
     const quotedPost = mapPostViewToMockPost((embed as any).record.record as AppBskyFeedDefs.PostView);
     let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+    let quotedPostWithMedia = quotedPost;
     if (AppBskyEmbedExternal.isView((embed as any).media)) {
       const ext = (embed as any).media.external;
       externalLink = { url: ext.uri, title: ext.title, description: ext.description, thumb: ext.thumb, domain: extractDomain(ext.uri) };
+    } else if (AppBskyEmbedVideo.isView((embed as any).media) && !quotedPost.embed) {
+      quotedPostWithMedia = {
+        ...quotedPost,
+        embed: mapVideoViewToEmbed((embed as any).media, rawVideoEmbed, post.author.did),
+      };
     }
-    embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
+    embedData = { type: 'quote' as const, post: quotedPostWithMedia, ...(externalLink ? { externalLink } : {}) };
   } else if (
     AppBskyEmbedRecordWithMedia.isView(embed) &&
     AppBskyEmbedRecord.isView((embed as any).record) &&
@@ -320,6 +389,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
   ) {
     const quotedPost = mapQuotedRecordToMockPost((embed as any).record.record as AppBskyEmbedRecord.ViewRecord);
     let externalLink: { url: string; title?: string; description?: string; thumb?: string; domain: string } | undefined;
+    let quotedPostWithMedia = quotedPost;
     if (AppBskyEmbedExternal.isView((embed as any).media)) {
       const ext = (embed as any).media.external;
       externalLink = {
@@ -329,8 +399,13 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
         thumb: ext.thumb,
         domain: extractDomain(ext.uri),
       };
+    } else if (AppBskyEmbedVideo.isView((embed as any).media) && !quotedPost.embed) {
+      quotedPostWithMedia = {
+        ...quotedPost,
+        embed: mapVideoViewToEmbed((embed as any).media, rawVideoEmbed, post.author.did),
+      };
     }
-    embedData = { type: 'quote' as const, post: quotedPost, ...(externalLink ? { externalLink } : {}) };
+    embedData = { type: 'quote' as const, post: quotedPostWithMedia, ...(externalLink ? { externalLink } : {}) };
   }
 
   const author: MockPost['author'] = {
@@ -364,6 +439,7 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     ...(article ? { article } : {}),
     viewer,
     ...(contentLabels.length > 0 ? { contentLabels } : {}),
+    ...(labelDetails.length > 0 ? { labelDetails } : {}),
     ...(embedData ? { embed: embedData } : {}),
   };
 
@@ -372,6 +448,9 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
     mapped.sensitiveMedia = {
       isSensitive: true,
       reasons: sensitiveMedia.reasons,
+      action: sensitiveMedia.action,
+      allowReveal: sensitiveMedia.allowReveal,
+      ...(sensitiveMedia.rationale ? { rationale: sensitiveMedia.rationale } : {}),
     };
   }
 
@@ -380,20 +459,45 @@ export function mapPostViewToMockPost(post: AppBskyFeedDefs.PostView): MockPost 
 
 // ─── Feed Item Mapper ──────────────────────────────────────────────────────
 
+function hasRenderableContext(post: MockPost): boolean {
+  if (post.content.trim().length > 0) return true;
+  if ((post.media?.length ?? 0) > 0) return true;
+  if (post.embed) return true;
+  if (post.article) return true;
+  return false;
+}
+
 export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
   const mockPost = mapPostViewToMockPost(item.post);
   
   // Set context-specific chips
   mockPost.chips = deriveChips(item);
 
-  // Map Reply Context
-  if (item.reply) {
+  const recordReply = (item.post.record as any)?.reply;
+  const hasAuthoritativeReplyRef = Boolean(
+    typeof recordReply?.parent?.uri === 'string'
+    || typeof recordReply?.root?.uri === 'string',
+  );
+
+  // Map reply/thread context only when the current post record itself confirms
+  // it is a reply. This avoids false "Earlier reply" cards on original posts
+  // when feed payloads include incidental context.
+  if (item.reply && hasAuthoritativeReplyRef) {
+    const currentUri = item.post.uri;
     // Map Parent (Immediate Reply)
     const parent = item.reply.parent;
     if (AppBskyFeedDefs.isPostView(parent)) {
-      mockPost.replyTo = mapPostViewToMockPost(parent);
-      // Parent is technically part of a thread context
-      mockPost.replyTo.chips = deriveChips(parent, true);
+      // Guard against malformed/self-referential payloads that point a post to itself.
+      if (parent.uri !== currentUri) {
+        const mappedParent = mapPostViewToMockPost(parent);
+        // Skip non-renderable context rows (e.g. blocked/deleted/empty payload stubs)
+        // to avoid misleading "Earlier reply" chips without visible context.
+        if (hasRenderableContext(mappedParent)) {
+          mockPost.replyTo = mappedParent;
+          // Parent is technically part of a thread context
+          mockPost.replyTo.chips = deriveChips(parent, true);
+        }
+      }
     }
 
     // Map Root (Thread Start)
@@ -401,10 +505,14 @@ export function mapFeedViewPost(item: AppBskyFeedDefs.FeedViewPost): MockPost {
     // to avoid showing the same post twice in the UI stack.
     const root = item.reply.root;
     if (AppBskyFeedDefs.isPostView(root)) {
-      // Only set root if it differs from parent to avoid visual duplication
-      if (root.uri !== (parent as any)?.uri) {
-        mockPost.threadRoot = mapPostViewToMockPost(root);
-        mockPost.threadRoot.chips = deriveChips(root, true);
+      // Only set root if it differs from parent/current post to avoid visual duplication
+      // and false "thread start" context cards.
+      if (root.uri !== (parent as any)?.uri && root.uri !== currentUri) {
+        const mappedRoot = mapPostViewToMockPost(root);
+        if (hasRenderableContext(mappedRoot)) {
+          mockPost.threadRoot = mappedRoot;
+          mockPost.threadRoot.chips = deriveChips(root, true);
+        }
       }
     }
   }

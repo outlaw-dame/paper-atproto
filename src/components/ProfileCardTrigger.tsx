@@ -1,7 +1,11 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import type { AppBskyActorDefs } from '@atproto/api';
 import ProfileCard from './ProfileCard';
 import type { ProfileCardData } from '../types/profileCard';
+import { useSessionStore } from '../store/sessionStore';
+import { atpCall } from '../lib/atproto/client';
+import { buildProfileCardDataFromFullProfile } from '../lib/profileCardData';
 
 /**
  * Wraps any element (avatar, handle link) and shows a ProfileCard on:
@@ -17,6 +21,8 @@ const LONG_PRESS_MS = 480;  // ms for long-press trigger on touch
 
 interface ProfileCardTriggerProps {
   data: ProfileCardData | null | undefined;
+  /** ATProto DID — when provided, the full profile is lazily fetched on hover/press */
+  did?: string | undefined;
   /** Called lazily when the card is about to open — lets you fetch full data */
   onWillOpen?: (() => void) | undefined;
   onFollow?: (() => void) | undefined;
@@ -46,18 +52,50 @@ function computeCardPos(
 
 export default function ProfileCardTrigger({
   data,
+  did,
   onWillOpen,
   onFollow,
   onBlock,
   children,
   disabled = false,
 }: ProfileCardTriggerProps) {
+  const agent          = useSessionStore((s) => s.agent);
   const anchorRef      = useRef<HTMLSpanElement>(null);
   const hoverTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStart     = useRef<{ x: number; y: number; t: number } | null>(null);
   const lastTap        = useRef<number>(0);
   const cardRef        = useRef<HTMLDivElement>(null);
+  const fetchedDid     = useRef<string | null>(null);
+  const [fetchedProfile, setFetchedProfile] = useState<AppBskyActorDefs.ProfileViewDetailed | null>(null);
+  const targetDid = did ?? data?.identity.did ?? '';
+
+  useEffect(() => {
+    fetchedDid.current = null;
+    setFetchedProfile((current) => {
+      if (!current) return current;
+      return current.did === targetDid ? current : null;
+    });
+  }, [targetDid]);
+
+  const displayData = useMemo<ProfileCardData | null | undefined>(() => {
+    if (!fetchedProfile) return data;
+    return buildProfileCardDataFromFullProfile(fetchedProfile, data);
+  }, [data, fetchedProfile]);
+
+  const maybeLoadFullProfile = useCallback(() => {
+    if (!did || !agent) return;
+    if (fetchedDid.current === did) return; // already fetched or in-flight
+    if (displayData && !displayData.social.isPartial) return; // already have real data
+    fetchedDid.current = did;
+    atpCall(() => agent.getProfile({ actor: did }))
+      .then((res) => {
+        setFetchedProfile(res.data);
+      })
+      .catch(() => {
+        fetchedDid.current = null; // allow retry on next open
+      });
+  }, [did, agent, displayData]);
 
   const [cardPos, setCardPos] = useState<{ top: number; left: number; flip: boolean } | null>(null);
 
@@ -76,8 +114,9 @@ export default function ProfileCardTrigger({
   const handleMouseEnter = useCallback(() => {
     if (disabled) return;
     onWillOpen?.();
+    maybeLoadFullProfile();
     hoverTimer.current = setTimeout(open, HOVER_DELAY);
-  }, [disabled, onWillOpen, open]);
+  }, [disabled, onWillOpen, maybeLoadFullProfile, open]);
 
   const handleMouseLeave = useCallback((e: React.MouseEvent) => {
     if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
@@ -97,6 +136,7 @@ export default function ProfileCardTrigger({
     const t = e.touches[0];
     if (!t) return;
     touchStart.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+    maybeLoadFullProfile();
 
     longPressTimer.current = setTimeout(() => {
       longPressTimer.current = null;
@@ -104,7 +144,7 @@ export default function ProfileCardTrigger({
       // Prevent the click from firing after a long press
       touchStart.current = null;
     }, LONG_PRESS_MS);
-  }, [disabled, open]);
+  }, [disabled, open, maybeLoadFullProfile]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (longPressTimer.current) {
@@ -168,7 +208,7 @@ export default function ProfileCardTrigger({
         {children}
       </span>
 
-      {cardPos && data && createPortal(
+      {cardPos && displayData && createPortal(
         <div
           ref={cardRef}
           onMouseEnter={() => {
@@ -186,7 +226,7 @@ export default function ProfileCardTrigger({
           }}
         >
           <ProfileCard
-            data={data}
+            data={displayData}
             onFollow={onFollow}
             onBlock={onBlock}
             onClose={close}

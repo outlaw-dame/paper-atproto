@@ -22,6 +22,7 @@ import type { LiveNotification } from '../../atproto/mappers';
 import { AtUri } from '@atproto/syntax';
 import { useModerationStore } from '../../store/moderationStore';
 import type { AppBskyFeedDefs, AppBskyGraphDefs } from '@atproto/api';
+import { normalizeAtprotoSearchQuery } from '../searchQuery';
 
 // ─── Query key factory ─────────────────────────────────────────────────────
 export const qk = {
@@ -40,6 +41,7 @@ export const qk = {
   suggestions:   ()                      => ['suggestions'] as const,
   suggestedFeeds: ()                     => ['suggestedFeeds'] as const,
   preferences:    ()                     => ['preferences'] as const,
+  labelerServices: (didsKey: string)     => ['labelerServices', didsKey] as const,
   mutes:          ()                     => ['mutes'] as const,
   blocks:         ()                     => ['blocks'] as const,
 };
@@ -58,15 +60,15 @@ export function useTimelineFeed(mode: 'Following' | 'Discover' | 'Feeds') {
       let _cursor: string | undefined;
 
       if (mode === 'Following') {
-        const res = await atpCall(s => agent.getTimeline({ limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.getTimeline({ limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       } else if (mode === 'Discover') {
-        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_URI, limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_URI, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       } else {
-        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       }
@@ -146,12 +148,12 @@ export function useLikes(actor: string | undefined) {
   return useQuery({
     queryKey: qk.likes(actor ?? ''),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(s => agent.listRecords({
+      const res = await atpCall(() => agent.com.atproto.repo.listRecords({
         repo: actor!,
         collection: 'app.bsky.feed.like',
         limit: 50,
       }), { signal });
-      return res.data.records;
+      return (res as any).data.records;
     },
     enabled: !!session && !!actor,
     staleTime: 1000 * 60 * 5,
@@ -182,8 +184,8 @@ export function useSavedFeeds() {
   return useQuery<AppBskyFeedDefs.GeneratorView[], Error>({
     queryKey: qk.savedFeeds(),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(
-        s => agent.app.bsky.feed.getSavedFeeds({ limit: 100 }),
+      const res: any = await atpCall(
+        () => (agent.app.bsky.feed as any).getSavedFeeds({ limit: 100 }),
         { signal, maxAttempts: 4, baseDelayMs: 250, capDelayMs: 8_000 },
       );
       return res.data.feeds ?? [];
@@ -229,14 +231,15 @@ export function useSubscribedLists() {
 // ─── Search posts ──────────────────────────────────────────────────────────
 export function useSearchPosts(query: string) {
   const { agent, session } = useSessionStore();
+  const normalizedQuery = normalizeAtprotoSearchQuery(query);
 
   return useQuery({
-    queryKey: qk.search(query),
+    queryKey: qk.search(normalizedQuery),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: query, limit: 25 }), { signal });
-      return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post, reply: undefined, reason: undefined }));
+      const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: normalizedQuery, limit: 25 }), { signal });
+      return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post }));
     },
-    enabled: !!session && query.trim().length > 1,
+    enabled: !!session && normalizedQuery.length > 1,
     staleTime: 1000 * 60,
     gcTime: 1000 * 60 * 5,
   });
@@ -295,6 +298,76 @@ export function usePreferences() {
     enabled: !!session,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 30,
+  });
+}
+
+export function useLabelerServices(dids: string[]) {
+  const { agent, session } = useSessionStore();
+  const sortedDids = [...dids].sort();
+  const didsKey = sortedDids.join(',');
+
+  return useQuery({
+    queryKey: qk.labelerServices(didsKey),
+    queryFn: () => atpCall(() => agent.app.bsky.labeler.getServices({ dids: sortedDids, detailed: true })),
+    enabled: !!session && sortedDids.length > 0,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
+  });
+}
+
+export function useSetContentLabelPref() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      label,
+      visibility,
+      labelerDid,
+    }: {
+      label: string;
+      visibility: 'hide' | 'warn' | 'ignore';
+      labelerDid?: string;
+    }) => atpCall(
+      () => agent.setContentLabelPref(label, visibility, labelerDid),
+      {
+        // Explicit jittered retry configuration for transient policy write failures.
+        maxAttempts: 3,
+        baseDelayMs: 250,
+        capDelayMs: 3_000,
+      },
+    ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useAddLabeler() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ did }: { did: string }) => atpCall(() => agent.addLabeler(did)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useRemoveLabeler() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ did }: { did: string }) => atpCall(() => agent.removeLabeler(did)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useRemoveLabelers() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ dids }: { dids: string[] }) => atpCall(() => Promise.all(dids.map((did) => agent.removeLabeler(did)))),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
   });
 }
 

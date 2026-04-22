@@ -12,14 +12,23 @@
 // The three signals are blended into a 0–100 composite score per tag.
 // Both Bluesky API responses are short-lived cached in memory.
 
-import type { BskyAgent } from '@atproto/api';
+import type { Agent } from '@atproto/api';
 import { atpCall } from '../atproto/client';
-import { inferenceClient } from '../../workers/InferenceClient';
+import { embeddingPipeline } from '../../intelligence/embeddingPipeline';
 
 // ─── Cache ─────────────────────────────────────────────────────────────────
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
+  sessionToken: string;
+}
+
+// Session token changes when the user's identity changes (logout/login).
+// All cache entries store the token at write time; stale-session entries are
+// rejected at read time without requiring an explicit cache flush.
+let _sessionToken = '';
+export function setHashtagInsightsSessionToken(token: string): void {
+  _sessionToken = token;
 }
 
 let trendingCacheEntry: CacheEntry<TrendingTopic[]> | null = null;
@@ -27,7 +36,7 @@ const volumeCache = new Map<string, CacheEntry<number>>();
 
 const TRENDING_TTL_MS = 10 * 60_000; //  10 minutes
 const VOLUME_TTL_MS = 5 * 60_000;    //   5 minutes
-const VOLUME_ERROR_TTL_MS = 60_000;  //   1 minute (brief cache on failures)
+const VOLUME_ERROR_TTL_MS = 15_000;  //  15 seconds (short window so real results surface quickly)
 
 // ─── Public types ──────────────────────────────────────────────────────────
 export interface TrendingTopic {
@@ -84,8 +93,9 @@ function normalizeVolume(hits: number): number {
  * Fetches Bluesky's live trending topics.
  * Results are cached for TRENDING_TTL_MS. On failure returns [].
  */
-export async function fetchTrendingTopics(agent: BskyAgent): Promise<TrendingTopic[]> {
-  if (trendingCacheEntry && Date.now() < trendingCacheEntry.expiresAt) {
+export async function fetchTrendingTopics(agent: Agent): Promise<TrendingTopic[]> {
+  const token = _sessionToken;
+  if (trendingCacheEntry && Date.now() < trendingCacheEntry.expiresAt && trendingCacheEntry.sessionToken === token) {
     return trendingCacheEntry.value;
   }
 
@@ -103,11 +113,11 @@ export async function fetchTrendingTopics(agent: BskyAgent): Promise<TrendingTop
       link: t.link ?? undefined,
     })).filter((t) => t.slug.length > 0);
 
-    trendingCacheEntry = { value: topics, expiresAt: Date.now() + TRENDING_TTL_MS };
+    trendingCacheEntry = { value: topics, expiresAt: Date.now() + TRENDING_TTL_MS, sessionToken: token };
     return topics;
   } catch {
     // Cache an empty result briefly to avoid hammering a failing endpoint
-    trendingCacheEntry = { value: [], expiresAt: Date.now() + VOLUME_ERROR_TTL_MS };
+    trendingCacheEntry = { value: [], expiresAt: Date.now() + VOLUME_ERROR_TTL_MS, sessionToken: token };
     return [];
   }
 }
@@ -117,10 +127,11 @@ export async function fetchTrendingTopics(agent: BskyAgent): Promise<TrendingTop
  * `searchPosts` for `#tag` and using the `hitsTotal` from the response.
  * Results are cached per tag for VOLUME_TTL_MS.
  */
-export async function fetchHashtagVolume(agent: BskyAgent, tag: string): Promise<number> {
+export async function fetchHashtagVolume(agent: Agent, tag: string): Promise<number> {
+  const token = _sessionToken;
   const key = tag.toLowerCase();
   const cached = volumeCache.get(key);
-  if (cached && Date.now() < cached.expiresAt) return cached.value;
+  if (cached && Date.now() < cached.expiresAt && cached.sessionToken === token) return cached.value;
 
   try {
     const res = await atpCall(
@@ -131,13 +142,13 @@ export async function fetchHashtagVolume(agent: BskyAgent, tag: string): Promise
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const hits: number = (res.data as any).hitsTotal ?? res.data.posts.length;
     const score = normalizeVolume(hits);
-    volumeCache.set(key, { value: score, expiresAt: Date.now() + VOLUME_TTL_MS });
+    volumeCache.set(key, { value: score, expiresAt: Date.now() + VOLUME_TTL_MS, sessionToken: token });
     return score;
   } catch {
     // Fall back to a deterministic score derived from the tag string so the UI
     // always has something to show; cache briefly to avoid rapid retries.
     const fallback = 42 + (Math.abs(hashStr(key)) % 30);
-    volumeCache.set(key, { value: fallback, expiresAt: Date.now() + VOLUME_ERROR_TTL_MS });
+    volumeCache.set(key, { value: fallback, expiresAt: Date.now() + VOLUME_ERROR_TTL_MS, sessionToken: token });
     return fallback;
   }
 }
@@ -170,8 +181,8 @@ async function computeRelevanceScores(
 
   try {
     const [postEmbedding, tagEmbeddings] = await Promise.all([
-      inferenceClient.embed(postText),
-      inferenceClient.embedBatch(tags.map((t) => `#${t} hashtag`)),
+      embeddingPipeline.embed(postText, { mode: 'query' }),
+      embeddingPipeline.embedBatch(tags.map((t) => `#${t} hashtag`), { mode: 'query' }),
     ]);
 
     for (let i = 0; i < tags.length; i++) {
@@ -201,7 +212,7 @@ async function computeRelevanceScores(
  *   15% trending bonus (flat boost when tag is in live trending topics)
  */
 export async function getHashtagInsights(
-  agent: BskyAgent,
+  agent: Agent,
   tags: string[],
   postText: string
 ): Promise<HashtagInsight[]> {

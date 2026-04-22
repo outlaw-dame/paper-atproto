@@ -1,5 +1,7 @@
 {
   "typescript.tsserver.experimental.enableProjectDiagnostics": false,
+  "python.terminal.useEnvFile": true,
+  "python.envFile": "${workspaceFolder}/.env",
   "problems.exclude": {
     "**/node_modules/**": true
   }

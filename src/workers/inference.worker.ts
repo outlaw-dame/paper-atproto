@@ -3,6 +3,7 @@
 // Composer guidance models are kept local-first and lazy-loaded on demand.
 
 import { pipeline, env } from '@xenova/transformers';
+import { assertLocalModelIntegrity } from '../runtime/modelIntegrity';
 import type {
   AbuseModelLabel,
   AbuseModelResult,
@@ -32,6 +33,10 @@ import type { ToneModelLabel, ToneModelResult, ToneModelScores } from '../lib/to
 env.backends.onnx.wasm.numThreads = 1;
 env.backends.onnx.wasm.proxy = false;
 env.localModelPath = '/models/';
+env.allowLocalModels = true;
+if ('allowRemoteModels' in env) {
+  env.allowRemoteModels = false;
+}
 
 // Detect mobile/low-memory environments. Workers have access to navigator.
 // iOS Safari and Android Chrome both report touch UA strings.
@@ -65,7 +70,8 @@ type WorkerMsg = {
     | 'classify_emotion'
     | 'classify_targeted_tone'
     | 'classify_quality'
-    | 'status';
+    | 'status'
+    | 'smoke';
   payload?: any;
 };
 
@@ -219,6 +225,7 @@ async function ensureModel(): Promise<void> {
   modelStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity('Xenova/all-MiniLM-L6-v2', { basePath: '/models' });
       extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
         quantized: true,
       });
@@ -243,6 +250,7 @@ async function ensureCaptionModel(): Promise<void> {
   captionStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity('Xenova/vit-gpt2-image-captioning', { basePath: '/models' });
       captioner = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning', {
         quantized: true,
       });
@@ -265,6 +273,7 @@ async function ensureToneModel(): Promise<void> {
   toneStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity(TONE_MODEL_NAME, { basePath: '/models' });
       toneClassifier = await pipeline('zero-shot-classification', TONE_MODEL_NAME, {
         quantized: true,
       });
@@ -287,6 +296,7 @@ async function ensureAbuseModel(): Promise<void> {
   abuseStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity(ABUSE_MODEL_NAME, { basePath: '/models' });
       abuseClassifier = await pipeline('text-classification', ABUSE_MODEL_NAME, {
         quantized: true,
       });
@@ -309,6 +319,7 @@ async function ensureSentimentModel(): Promise<void> {
   sentimentStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity(SENTIMENT_MODEL_NAME, { basePath: '/models' });
       sentimentClassifier = await pipeline('text-classification', SENTIMENT_MODEL_NAME, {
         quantized: true,
       });
@@ -331,6 +342,7 @@ async function ensureEmotionModel(): Promise<void> {
   emotionStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity(EMOTION_MODEL_NAME, { basePath: '/models' });
       emotionClassifier = await pipeline('text-classification', EMOTION_MODEL_NAME, {
         quantized: true,
       });
@@ -353,6 +365,7 @@ async function ensureTargetedToneModel(): Promise<void> {
   targetedToneStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity(TARGETED_TONE_MODEL_NAME, { basePath: '/models' });
       targetedToneClassifier = await pipeline('text-classification', TARGETED_TONE_MODEL_NAME, {
         quantized: true,
       });
@@ -375,6 +388,7 @@ async function ensureQualityHead(): Promise<void> {
   qualityStatus = 'loading';
   await enqueueModelLoad(async () => {
     try {
+      await assertLocalModelIntegrity(QUALITY_MODEL_NAME, { basePath: '/models' });
       const response = await fetch(localModelUrl(`${QUALITY_MODEL_NAME}/model.json`));
       if (!response.ok) {
         throw new Error(`Failed to fetch quality classifier head: ${response.status} ${response.statusText}`);
@@ -598,7 +612,7 @@ function dotProduct(left: number[], right: number[]): number {
   const length = Math.min(left.length, right.length);
   let total = 0;
   for (let index = 0; index < length; index += 1) {
-    total += left[index] * right[index];
+    total += (left[index] ?? 0) * (right[index] ?? 0);
   }
   return total;
 }
@@ -796,6 +810,30 @@ self.addEventListener('message', async (event: MessageEvent<WorkerMsg>) => {
         targetedToneError,
         qualityStatus,
         qualityError,
+      };
+      self.postMessage(reply);
+      return;
+    }
+
+    if (type === 'smoke') {
+      let assetIntegrityOk = false;
+      let assetError: string | null = null;
+
+      try {
+        await assertLocalModelIntegrity('Xenova/all-MiniLM-L6-v2', { basePath: '/models' });
+        assetIntegrityOk = true;
+      } catch (error: any) {
+        assetIntegrityOk = false;
+        assetError = error?.message ?? 'Unknown model integrity error';
+      }
+
+      reply.result = {
+        status: modelStatus,
+        crossOriginIsolated: self.crossOriginIsolated === true,
+        allowLocalModels: env.allowLocalModels === true,
+        allowRemoteModels: 'allowRemoteModels' in env ? env.allowRemoteModels === true : true,
+        assetIntegrityOk,
+        assetError,
       };
       self.postMessage(reply);
       return;

@@ -4,10 +4,12 @@ import { Agent } from '@atproto/api';
 import { useQueryClient } from '@tanstack/react-query';
 import PostCard from '../components/PostCard';
 import ContextPost from '../components/ContextPost';
-import TranslationSettingsSheet from '../components/TranslationSettingsSheet';
+import LazyModuleBoundary from '../components/LazyModuleBoundary';
+import TranslationSettingsSheetFallback from '../components/TranslationSettingsSheetFallback';
 import { hasFollowingFeedScope } from '../atproto/oauthClient';
 import { useSessionStore } from '../store/sessionStore';
-import { useUiStore } from '../store/uiStore';
+import { useBookmarksStore } from '../store/bookmarksStore';
+import { useUiStore, type HomeFeedMode } from '../store/uiStore';
 import { useTranslationStore } from '../store/translationStore';
 import { useFeedCacheStore } from '../store/feedCacheStore';
 import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
@@ -16,12 +18,11 @@ import { qk } from '../lib/atproto/queries';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
-import { isAtUri } from '../lib/resolver/atproto';
-import { createVerificationProviders } from '../intelligence/verification/providerFactory';
-import { InMemoryVerificationCache } from '../intelligence/verification/cache';
-import { hydrateConversationSession } from '../conversation/sessionAssembler';
-import { useConversationSessionStore } from '../conversation/sessionStore';
-import { projectTimelineConversationHint } from '../conversation/projections/timelineProjection';
+import { useConversationBatchHydration } from '../conversation/sessionHydration';
+import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
+import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
+import { countNewPostsAboveAnchor } from '../lib/feedResume';
+import { lazyWithRetry } from '../lib/lazyWithRetry';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
 
@@ -30,11 +31,15 @@ interface Props {
 }
 
 const MODES = ['Following', 'Discover', 'Feeds'] as const;
-type Mode = typeof MODES[number];
+type Mode = HomeFeedMode;
 
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 const PUBLIC_APPVIEW_SERVICE = 'https://public.api.bsky.app';
 const LIMITED_SCOPE_BANNER_COPY = 'This session does not include Following feed access yet. Discover and public author feeds still work here, but Following needs the Bluesky timeline permission from the HTTPS sign-in.';
+const TranslationSettingsSheet = lazyWithRetry(
+  () => import('../components/TranslationSettingsSheet'),
+  'TranslationSettingsSheet',
+);
 
 function dedupePostsById(items: MockPost[]): MockPost[] {
   const seen = new Set<string>();
@@ -74,7 +79,7 @@ function EmptyState({ label }: { label: string }) {
 
 export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
-  const { openProfile, openComposeReply } = useUiStore();
+  const { openProfile, openComposeReply, homeFeedMode, setHomeFeedMode } = useUiStore();
   const translationPolicy = useTranslationStore((state) => state.policy);
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
@@ -82,7 +87,7 @@ export default function HomeTab({ onOpenStory }: Props) {
   const topModePillPaddingX = platform.prefersCoarsePointer ? 14 : 12;
   const topModePillBadgeSize = platform.prefersCoarsePointer ? 18 : 16;
   const qc = useQueryClient();
-  const [mode, setMode] = useState<Mode>('Following');
+  const mode = homeFeedMode as Mode;
   const [posts, setPosts] = useState<MockPost[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -90,89 +95,33 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
-  const conversationSessions = useConversationSessionStore((state) => state.byId);
   const publicReadAgent = useMemo(() => new Agent({ service: PUBLIC_APPVIEW_SERVICE }), []);
   const hasLimitedScopeSession = !hasFollowingFeedScope(session?.scope);
   const visibleModes = useMemo(
     () => MODES.filter((item) => !hasLimitedScopeSession || item !== 'Following') as Mode[],
     [hasLimitedScopeSession],
   );
-  const conversationProvidersRef = useRef(createVerificationProviders());
-  const conversationCacheRef = useRef(new InMemoryVerificationCache());
-  const hydratedSessionRootsRef = useRef<Set<string>>(new Set());
-  const hydrationInFlightRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollCleanupRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingRestoreRef = useRef<{ mode: Mode; scrollPosition: number; topVisiblePostId?: string } | null>(null);
   const autoRedirectedLimitedScopeRef = useRef(false);
   const filterResults = usePostFilterResults(posts, 'home');
+  const hydrationAgent = hasLimitedScopeSession ? publicReadAgent : agent;
+  const conversationHydrationRoots = useMemo(
+    () => posts.map((post) => post.threadRoot?.id ?? post.id),
+    [posts],
+  );
 
-  const timelineHintByPostId = useMemo(() => {
-    const hints: Record<string, ReturnType<typeof projectTimelineConversationHint>> = {};
-    for (const post of posts) {
-      const rootUri = post.threadRoot?.id ?? post.id;
-      if (!rootUri) continue;
-      const sessionState = conversationSessions[rootUri];
-      if (!sessionState) continue;
-      const hint = projectTimelineConversationHint(sessionState, post.id);
-      if (hint) hints[post.id] = hint;
-    }
-    return hints;
-  }, [conversationSessions, posts]);
+  const timelineHintByPostId = useTimelineConversationHintsProjection(posts);
 
-  useEffect(() => {
-    if (!agent || !session || posts.length === 0) return;
-
-    const hydrationAgent = hasLimitedScopeSession ? publicReadAgent : agent;
-
-    const controller = new AbortController();
-    const targets = Array.from(new Set(
-      posts
-        .map((post) => post.threadRoot?.id ?? post.id)
-        .filter((uri): uri is string => !!uri && isAtUri(uri)),
-    )).slice(0, 8);
-
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    const backoffMs = (attempt: number) => {
-      const base = Math.min(4_000, 350 * (2 ** attempt));
-      return Math.floor(base * (0.75 + Math.random() * 0.5));
-    };
-
-    const hydrateWithRetry = async (rootUri: string) => {
-      if (hydratedSessionRootsRef.current.has(rootUri)) return;
-      if (hydrationInFlightRef.current.has(rootUri)) return;
-      hydrationInFlightRef.current.add(rootUri);
-
-      try {
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          try {
-            await hydrateConversationSession({
-              sessionId: rootUri,
-              rootUri,
-              agent: hydrationAgent,
-              translationPolicy,
-              providers: conversationProvidersRef.current,
-              cache: conversationCacheRef.current,
-              signal: controller.signal,
-            });
-            hydratedSessionRootsRef.current.add(rootUri);
-            return;
-          } catch (error) {
-            if (error instanceof Error && error.name === 'AbortError') return;
-            if (attempt >= 2) return;
-            await sleep(backoffMs(attempt));
-          }
-        }
-      } finally {
-        hydrationInFlightRef.current.delete(rootUri);
-      }
-    };
-
-    void Promise.all(targets.map((target) => hydrateWithRetry(target)));
-
-    return () => {
-      controller.abort();
-    };
-  }, [agent, hasLimitedScopeSession, posts, publicReadAgent, session, translationPolicy]);
+  useConversationBatchHydration({
+    enabled: Boolean(hydrationAgent && session && posts.length > 0),
+    rootUris: conversationHydrationRoots,
+    mode: 'thread',
+    agent: hydrationAgent ?? publicReadAgent,
+    translationPolicy,
+    maxTargets: 8,
+  });
 
   useEffect(() => {
     if (!hasLimitedScopeSession) {
@@ -185,14 +134,13 @@ export default function HomeTab({ onOpenStory }: Props) {
     }
 
     autoRedirectedLimitedScopeRef.current = true;
-    setMode('Discover');
-  }, [hasLimitedScopeSession, mode]);
+    setHomeFeedMode('Discover');
+  }, [hasLimitedScopeSession, mode, setHomeFeedMode]);
   
   // Feed cache integration
   const getFeedCache = useFeedCacheStore((state) => state.getCache);
   const saveFeedCache = useFeedCacheStore((state) => state.saveCache);
-  const incrementFeedUnreadCount = useFeedCacheStore((state) => state.incrementUnreadCount);
-  const resetFeedUnreadCount = useFeedCacheStore((state) => state.resetUnreadCount);
+  const setFeedUnreadCount = useFeedCacheStore((state) => state.setUnreadCount);
   const updateFeedScrollPosition = useFeedCacheStore((state) => state.updateScrollPosition);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
 
@@ -221,6 +169,16 @@ export default function HomeTab({ onOpenStory }: Props) {
     return topIndex;
   }, []);
 
+  const viewResumeKey = useMemo(() => {
+    if (!session) return null;
+    return `home:${session.did}:${mode}`;
+  }, [session, mode]);
+
+  const buildViewResumeKey = useCallback((feedMode: Mode) => {
+    if (!session) return null;
+    return `home:${session.did}:${feedMode}`;
+  }, [session]);
+
   /**
    * Persist scroll position and visible index periodically
    */
@@ -229,7 +187,16 @@ export default function HomeTab({ onOpenStory }: Props) {
       if (!session || !scrollRef.current) return;
       
       const topIndex = getTopVisibleIndex();
-      updateFeedScrollPosition(session.did, mode, scrollRef.current.scrollTop, topIndex);
+      updateFeedScrollPosition(
+        session.did,
+        mode,
+        scrollRef.current.scrollTop,
+        topIndex,
+        posts[topIndex]?.id,
+      );
+      if (viewResumeKey) {
+        writeViewScrollPosition(viewResumeKey, scrollRef.current.scrollTop);
+      }
     };
 
     // Clean up previous interval
@@ -245,7 +212,38 @@ export default function HomeTab({ onOpenStory }: Props) {
         clearInterval(scrollCleanupRef.current);
       }
     };
-  }, [session, mode, updateFeedScrollPosition, getTopVisibleIndex]);
+  }, [session, mode, updateFeedScrollPosition, getTopVisibleIndex, posts, viewResumeKey]);
+
+  useEffect(() => {
+    const pending = pendingRestoreRef.current;
+    if (!pending || pending.mode !== mode || posts.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      const current = pendingRestoreRef.current;
+      const container = scrollRef.current;
+      if (!current || current.mode !== mode || !container) return;
+
+      let restored = false;
+      if (current.topVisiblePostId) {
+        const candidates = Array.from(container.querySelectorAll<HTMLElement>('[data-post-id]'));
+        const target = candidates.find((node) => node.dataset.postId === current.topVisiblePostId);
+        if (target) {
+          container.scrollTop = Math.max(0, target.offsetTop);
+          restored = true;
+        }
+      }
+
+      if (!restored && current.scrollPosition > 0) {
+        container.scrollTop = current.scrollPosition;
+      }
+
+      pendingRestoreRef.current = null;
+    }, 50);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [mode, posts]);
 
   /**
    * Restore feed from cache when mode changes
@@ -264,13 +262,13 @@ export default function HomeTab({ onOpenStory }: Props) {
       // Restore from cache
       setPosts(cached.posts);
       setCursor(cached.cursor);
-      
-      // Schedule scroll restoration (needs DOM to be ready)
-      setTimeout(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = cached.scrollPosition;
-        }
-      }, 50);
+
+      const fallbackTop = viewResumeKey ? readViewScrollPosition(viewResumeKey) : 0;
+      pendingRestoreRef.current = {
+        mode,
+        scrollPosition: cached.scrollPosition > 0 ? cached.scrollPosition : fallbackTop,
+        ...(cached.topVisiblePostId ? { topVisiblePostId: cached.topVisiblePostId } : {}),
+      };
 
       // Load the unread count for this mode
       setUnreadCounts((prev) => ({
@@ -278,7 +276,12 @@ export default function HomeTab({ onOpenStory }: Props) {
         [mode]: cached.unreadCount,
       }));
 
-      return; // Don't fetch, use cache
+      void fetchFeed(mode, undefined, {
+        backgroundRefresh: true,
+        cached,
+      });
+
+      return;
     }
 
     // No cache, fetch fresh
@@ -286,35 +289,55 @@ export default function HomeTab({ onOpenStory }: Props) {
     setCursor(undefined);
     setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
     fetchFeed(mode);
-  }, [mode, session, getFeedCache, hasLimitedScopeSession]);
+  }, [mode, session, getFeedCache, hasLimitedScopeSession, viewResumeKey]);
 
   /**
    * Save cache after posts change
    */
   useEffect(() => {
     if (!session) return;
-    
+    const topVisibleIndex = getTopVisibleIndex();
+    const topVisiblePostId = posts[topVisibleIndex]?.id;
+
     saveFeedCache(session.did, mode, {
       posts,
       ...(cursor !== undefined ? { cursor } : {}),
       scrollPosition: scrollRef.current?.scrollTop ?? 0,
-      topVisibleIndex: getTopVisibleIndex(),
+      topVisibleIndex,
+      ...(topVisiblePostId ? { topVisiblePostId } : {}),
       unreadCount: unreadCounts[mode] ?? 0,
       savedAt: Date.now(),
       isInvalidated: false,
     });
   }, [posts, cursor, session, mode, saveFeedCache, unreadCounts, getTopVisibleIndex]);
 
-  const fetchFeed = useCallback(async (m: Mode, cur?: string) => {
+  const fetchFeed = useCallback(async (
+    m: Mode,
+    cur?: string,
+    options?: {
+      backgroundRefresh?: boolean;
+      cached?: ReturnType<typeof getFeedCache>;
+    },
+  ) => {
     if (!session) return;
     const isInitial = !cur;
-    if (isInitial) setLoading(true); else setLoadingMore(true);
-    setError(null);
+    const backgroundRefresh = options?.backgroundRefresh === true && isInitial;
+    if (isInitial) {
+      if (!backgroundRefresh) {
+        setLoading(true);
+        setError(null);
+      }
+    } else {
+      setLoadingMore(true);
+      setError(null);
+    }
     try {
       if (m === 'Following' && hasLimitedScopeSession) {
         setPosts([]);
         setCursor(undefined);
-        setError(LIMITED_SCOPE_BANNER_COPY);
+        if (!backgroundRefresh) {
+          setError(LIMITED_SCOPE_BANNER_COPY);
+        }
         return;
       }
 
@@ -342,30 +365,54 @@ export default function HomeTab({ onOpenStory }: Props) {
       const mapped = feed
         .filter((item: any) => hasDisplayableRecordContent(item.post?.record))
         .map(mapFeedViewPost);
+      const freshPosts = dedupePostsById(mapped);
 
       if (isInitial) {
-        const cached = getFeedCache(session.did, m);
-        const newCount = cached ? mapped.length : 0;
-        
-        setPosts(dedupePostsById(mapped));
-        scrollRef.current?.scrollTo({ top: 0 });
-        
-        // If there was cached data and new posts arrived, track as unread
-        if (newCount > 0) {
-          setUnreadCounts((prev) => ({ ...prev, [m]: newCount }));
-          incrementFeedUnreadCount(session.did, m, newCount);
+        const cached = options?.cached ?? getFeedCache(session.did, m);
+        const restoreKey = buildViewResumeKey(m);
+        const fallbackTop = restoreKey ? readViewScrollPosition(restoreKey) : 0;
+        const unreadCount = cached
+          ? countNewPostsAboveAnchor(freshPosts, cached.posts, cached.topVisiblePostId)
+          : 0;
+
+        setPosts((currentPosts) => {
+          if (backgroundRefresh && currentPosts.length > 0 && freshPosts.length === 0) {
+            return currentPosts;
+          }
+          return freshPosts;
+        });
+
+        if (cached && (cached.topVisiblePostId || cached.scrollPosition || fallbackTop > 0)) {
+          pendingRestoreRef.current = {
+            mode: m,
+            scrollPosition: cached.scrollPosition > 0 ? cached.scrollPosition : fallbackTop,
+            ...(cached.topVisiblePostId ? { topVisiblePostId: cached.topVisiblePostId } : {}),
+          };
+        } else {
+          scrollRef.current?.scrollTo({ top: 0 });
+        }
+
+        setUnreadCounts((prev) => ({ ...prev, [m]: unreadCount }));
+        if (cached) {
+          setFeedUnreadCount(session.did, m, unreadCount);
         }
       } else {
-        setPosts(prev => dedupePostsById([...prev, ...mapped]));
+        setPosts(prev => dedupePostsById([...prev, ...freshPosts]));
       }
       setCursor(nextCursor);
     } catch (err: any) {
-      setError(err?.message ?? 'Failed to load feed');
+      if (!backgroundRefresh) {
+        setError(err?.message ?? 'Failed to load feed');
+      }
     } finally {
-      setLoading(false);
-      setLoadingMore(false);
+      if (!backgroundRefresh) {
+        setLoading(false);
+      }
+      if (!isInitial) {
+        setLoadingMore(false);
+      }
     }
-  }, [agent, session, getFeedCache, incrementFeedUnreadCount, hasLimitedScopeSession, publicReadAgent]);
+  }, [agent, session, getFeedCache, hasLimitedScopeSession, publicReadAgent, buildViewResumeKey, setFeedUnreadCount]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -380,10 +427,14 @@ export default function HomeTab({ onOpenStory }: Props) {
     if (el.scrollTop < 100 && unreadCounts[mode]) {
       setUnreadCounts((prev) => ({ ...prev, [mode]: 0 }));
       if (session) {
-        resetFeedUnreadCount(session.did, mode);
+        setFeedUnreadCount(session.did, mode, 0);
       }
     }
-  }, [fetchFeed, mode, cursor, loadingMore, unreadCounts, session, resetFeedUnreadCount]);
+
+    if (viewResumeKey) {
+      writeViewScrollPosition(viewResumeKey, el.scrollTop);
+    }
+  }, [fetchFeed, mode, cursor, loadingMore, unreadCounts, session, setFeedUnreadCount]);
 
   const avatarInitial = profile?.displayName?.[0] ?? profile?.handle?.[0] ?? 'Y';
 
@@ -470,18 +521,74 @@ export default function HomeTab({ onOpenStory }: Props) {
     }
   }, [agent, session]);
 
+  const sessionDid = session?.did ?? '';
+  // Create a memoized default empty array to prevent new references on every render
+  const emptyArray = useMemo(() => [], []);
+  // Select bookmarked URIs - use memoized fallback to prevent infinite loops
+  const bookmarkedUris = useBookmarksStore((state) =>
+    sessionDid && state.bookmarksByDid[sessionDid]
+      ? state.bookmarksByDid[sessionDid]
+      : emptyArray
+  );
+
+  // Sync bookmark state from store to posts when bookmarks change.
+  // Only depends on bookmarkedUris — using setPosts functional form avoids
+  // adding `posts` as a dep, which would create a setState→posts→effect cycle.
+  useEffect(() => {
+    const uriSet = new Set(bookmarkedUris);
+
+    setPosts((prev) => {
+      if (prev.length === 0) return prev;
+
+      const hasChanges = prev.some((post) => {
+        const isBookmarked = uriSet.has(post.id);
+        const hasBookmarkState = !!post.viewer?.bookmark;
+        return isBookmarked !== hasBookmarkState;
+      });
+
+      if (!hasChanges) return prev;
+
+      return prev.map((post) => {
+        const isBookmarked = uriSet.has(post.id);
+        const hasBookmarkState = !!post.viewer?.bookmark;
+
+        if (isBookmarked === hasBookmarkState) {
+          return post;
+        }
+
+        const viewer = post.viewer ?? {};
+        if (isBookmarked) {
+          return {
+            ...post,
+            viewer: { ...viewer, bookmark: 'bookmarked' },
+          };
+        }
+
+        const { bookmark: _bookmark, ...restViewer } = viewer;
+        return {
+          ...post,
+          viewer: restViewer,
+        };
+      });
+    });
+  }, [bookmarkedUris]);
+
+  const { addBookmark, removeBookmark } = useBookmarksStore();
+
   const handleBookmark = useCallback(async (p: MockPost) => {
-    // Placeholder for bookmark functionality
-    // For now, just toggle the state locally
-    setPosts(prev => prev.map(item => {
+    if (!sessionDid) return;
+    const postUri = p.id;
+    const wasBookmarked = useBookmarksStore.getState().isBookmarked(sessionDid, postUri);
+
+    // Update local state
+    setPosts((prev) => prev.map((item) => {
       if (item.id !== p.id) return item;
       const viewer = item.viewer ?? {};
-      const isBookmarked = !!viewer.bookmark;
-      if (isBookmarked) {
+      if (wasBookmarked) {
         const { bookmark: _bookmark, ...restViewer } = viewer;
         return {
           ...item,
-          bookmarkCount: item.bookmarkCount - 1,
+          bookmarkCount: Math.max(0, item.bookmarkCount - 1),
           viewer: restViewer,
         };
       }
@@ -491,7 +598,14 @@ export default function HomeTab({ onOpenStory }: Props) {
         viewer: { ...viewer, bookmark: 'bookmarked' },
       };
     }));
-  }, []);
+
+    // Persist to account-scoped store
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, postUri);
+    } else {
+      addBookmark(sessionDid, postUri);
+    }
+  }, [sessionDid, addBookmark, removeBookmark]);
 
   const handleMore = useCallback((p: MockPost) => {
     // Placeholder for more menu
@@ -587,7 +701,7 @@ export default function HomeTab({ onOpenStory }: Props) {
             return (
               <button
                 key={m}
-                onClick={() => setMode(m)}
+                  onClick={() => setHomeFeedMode(m)}
                 style={{
                   minHeight: topModePillHeight,
                   padding: `0 ${topModePillPaddingX}px`,
@@ -712,14 +826,23 @@ export default function HomeTab({ onOpenStory }: Props) {
                   });
                 };
 
+                const hasDistinctThreadRoot = !!post.threadRoot && post.threadRoot.id !== post.id;
+                const hasDistinctReplyParent = !!post.replyTo
+                  && post.replyTo.id !== post.id
+                  && post.replyTo.id !== post.threadRoot?.id;
+
                 // A reply-in-thread gets a subtle tinted background so it reads as
-                // a distinct unit from adjacent standalone posts
-                const isReply = !!(post.threadRoot ?? post.replyTo);
+                // a distinct unit from adjacent standalone posts.
+                const isReply = hasDistinctThreadRoot || hasDistinctReplyParent;
+                const timelineHint = timelineHintByPostId[post.id];
+                const replyingToHandle = isReply
+                  ? (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)
+                  : undefined;
                 return (
-                <div key={post.id} data-post-index={i}>
-                  {post.threadRoot && <ContextPost post={post.threadRoot} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
+                <div key={post.id} data-post-index={i} data-post-id={post.id}>
+                  {hasDistinctThreadRoot && <ContextPost post={post.threadRoot!} type="thread" onClick={() => openContextTarget(post.threadRoot)} />}
                   {/* Only show direct parent if it's not the same as the thread root */}
-                  {post.replyTo && post.replyTo.id !== post.threadRoot?.id && <ContextPost post={post.replyTo} type="reply" onClick={() => openContextTarget(post.replyTo)} />}
+                  {hasDistinctReplyParent && <ContextPost post={post.replyTo!} type="reply" onClick={() => openContextTarget(post.replyTo)} />}
                   <PostCard
                     post={post}
                     onOpenStory={onOpenStory}
@@ -730,9 +853,9 @@ export default function HomeTab({ onOpenStory }: Props) {
                     onMore={handleMore}
                     onReply={openComposeReply}
                     index={i}
-                    timelineHint={timelineHintByPostId[post.id] ?? undefined}
+                    {...(timelineHint ? { timelineHint } : {})}
                     hasContextAbove={isReply}
-                    replyingTo={isReply ? undefined : (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)}
+                    {...(replyingToHandle ? { replyingTo: replyingToHandle } : {})}
                   />
                 </div>
                 );
@@ -755,7 +878,33 @@ export default function HomeTab({ onOpenStory }: Props) {
         </AnimatePresence>
       </div>
 
-      <TranslationSettingsSheet open={showTranslationSettings} onClose={() => setShowTranslationSettings(false)} />
+      {showTranslationSettings ? (
+        <LazyModuleBoundary
+          resetKey={`home-settings:${showTranslationSettings ? 'open' : 'closed'}`}
+          fallback={
+            <TranslationSettingsSheetFallback
+              open={showTranslationSettings}
+              onClose={() => setShowTranslationSettings(false)}
+              title="Settings unavailable"
+              message="The settings module could not finish loading. Close this sheet and try again."
+            />
+          }
+        >
+          <React.Suspense
+            fallback={
+              <TranslationSettingsSheetFallback
+                open={showTranslationSettings}
+                onClose={() => setShowTranslationSettings(false)}
+              />
+            }
+          >
+            <TranslationSettingsSheet
+              open={showTranslationSettings}
+              onClose={() => setShowTranslationSettings(false)}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      ) : null}
     </div>
   );
 }

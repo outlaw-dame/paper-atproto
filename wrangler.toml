@@ -1,0 +1,29 @@
+# ─── Cloudflare Pages – Glimpse ───────────────────────────────────────────────
+# https://developers.cloudflare.com/pages/platform/wrangler-configuration/
+#
+# Deployment workflow:
+#   1. Build for Cloudflare:   pnpm run build:cf
+#   2. Deploy to Pages:        pnpm run deploy:cf
+#   3. Local preview:          pnpm run cf:dev
+#
+# The Pages catch-all Function in functions/[[path]].ts handles:
+#   • Accept-Encoding negotiation for precompressed .gz / .zst bundles
+#   • Immutable Cache-Control for content-hashed bundles (/assets/*)
+#   • Long cache TTL for ML model weights (/models/*)
+#   • HSTS + additional security headers on every response
+#   • CSP as an HTTP response header (stronger than <meta> tag)
+#
+# Static header declarations live in public/_headers (copied to dist/_headers).
+# That file sets conservative defaults; the Function adds per-route precision.
+
+name = "glimpse"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Vite output directory produced by `pnpm run build:cf`
+pages_build_output_dir = "dist"
+
+[placement]
+# "smart" routes each request to the closest datacenter that has a warm
+# isolate, minimising cold-start latency for authenticated users.
+mode = "smart"

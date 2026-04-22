@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import type { AtUri, ContributionScores, ThreadInterpolatorState } from '../intelligence/interpolatorTypes';
+import {
+  applyContributionFeedbackSelection,
+  type AtUri,
+  type ContributionScores,
+  type ThreadInterpolatorState,
+} from '../intelligence/interpolatorTypes';
 import type { VerificationOutcome } from '../intelligence/verification';
 import type { ConfidenceState, SummaryMode, InterpolatorWriteResult } from '../intelligence/llmContracts';
 
@@ -146,10 +151,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
             ...current,
             scores: {
               ...current.scores,
-              [replyUri]: {
-                ...score,
-                ...(feedback !== undefined ? { userFeedback: feedback } : {}),
-              },
+              [replyUri]: applyContributionFeedbackSelection(score, feedback),
             },
           },
         },

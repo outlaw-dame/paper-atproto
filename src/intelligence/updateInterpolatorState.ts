@@ -15,7 +15,15 @@ import type {
   InterpolatorTrigger,
   InterpolatorTriggerKind,
   ContributionScore,
+  InterpolatorDecisionScore,
 } from './interpolatorTypes';
+import { mergeContributionFeedbackState } from './interpolatorTypes';
+import { type ThreadStateSnapshot } from './algorithms';
+import { computeConversationDeltaDecision } from './conversationDelta';
+
+// ─── Thread snapshot tracking ────────────────────────────────────────────
+// Cache to store previous snapshots per thread URI for change detection
+const threadSnapshotCache = new Map<string, { snapshot: ThreadStateSnapshot; timestamp: number }>();
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 
@@ -30,6 +38,65 @@ function makeTrigger(
     ...(payload !== undefined ? { payload } : {}),
     triggeredAt: new Date().toISOString(),
   };
+}
+
+function buildThreadStateSnapshot(
+  threadUri: string,
+  state: InterpolatorState,
+): ThreadStateSnapshot {
+  const contributorRoles = new Map<string, number>();
+  for (const contributor of state.topContributors.slice(0, 5)) {
+    contributorRoles.set(
+      contributor.dominantRole,
+      (contributorRoles.get(contributor.dominantRole) ?? 0) + 1,
+    );
+  }
+
+  const dominantStance = [...contributorRoles.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown';
+  const replyScoreList = Object.values(state.replyScores);
+  const sourceBackedClarity = replyScoreList.length > 0
+    ? replyScoreList.reduce((sum, score) => sum + (score.factualContribution ?? 0), 0) / replyScoreList.length
+    : 0;
+
+  const replyCount = replyScoreList.length;
+  const maturity: ThreadStateSnapshot['threadMaturity'] =
+    replyCount < 5 ? 'forming' : replyCount < 20 ? 'developing' : 'settled';
+
+  const topEntityIds = [...state.entityLandscape]
+    .sort((a, b) => b.mentionCount - a.mentionCount)
+    .slice(0, 5)
+    .map((entity) => entity.canonicalEntityId ?? entity.entityText.toLowerCase());
+
+  const averageContributorImpact = state.topContributors.length > 0
+    ? state.topContributors.reduce((sum, contributor) => sum + contributor.avgUsefulnessScore, 0) / state.topContributors.length
+    : 0;
+
+  return {
+    timestamp: new Date().toISOString(),
+    threadUri,
+    rootAuthorDid: state.topContributors[0]?.did ?? 'unknown',
+    replyCount,
+    topContributorDids: state.topContributors.slice(0, 5).map((contributor) => contributor.did),
+    dominantStance,
+    minorityStancesPresent: contributorRoles.size > 1,
+    hasFactualContent: state.factualSignalPresent,
+    sourceBackedClarity,
+    heat: Math.max(0, Math.min(1, state.heatLevel)),
+    threadMaturity: maturity,
+    topEntityIds,
+    entityCount: state.entityLandscape.length,
+    overallConfidence: Math.max(0, Math.min(1, averageContributorImpact)),
+  };
+}
+
+export function recordThreadSnapshot(
+  threadUri: string,
+  state: InterpolatorState,
+): void {
+  threadSnapshotCache.set(threadUri, {
+    snapshot: buildThreadStateSnapshot(threadUri, state),
+    timestamp: Date.now(),
+  });
 }
 
 // ─── detectTrigger ────────────────────────────────────────────────────────
@@ -91,14 +158,91 @@ export function applyTriggerToState(
   trigger: InterpolatorTrigger,
 ): InterpolatorState {
   const triggerHistory = [...existing.triggerHistory, trigger].slice(-20);
+  const mergedReplyScores = { ...existing.replyScores };
+  for (const [uri, score] of Object.entries(patch.replyScores ?? {})) {
+    mergedReplyScores[uri] = mergeContributionFeedbackState(existing.replyScores[uri], score);
+  }
   return {
     ...existing,
     ...patch,
-    // Merge reply scores rather than replacing so userFeedback on old replies is preserved
-    replyScores: { ...existing.replyScores, ...(patch.replyScores ?? {}) },
+    // Merge reply scores per-uri so explicit user feedback survives rescoring.
+    replyScores: mergedReplyScores,
     lastTrigger: trigger,
     triggerHistory,
     updatedAt: new Date().toISOString(),
     version: existing.version + 1,
+  };
+}
+
+// ─── Enhanced change detection with algorithm layer ─────────────────────────
+
+/**
+ * Detect meaningful thread changes using heuristic signals.
+ * Enhanced version with rate limiting and change confidence tracking.
+ *
+ * Returns { shouldUpdate, confidence, reasons } for informed decision making.
+ */
+export function detectMeaningfulChange(
+  threadUri: string,
+  previousState: InterpolatorState | null,
+  currentState: InterpolatorState,
+  scores: Record<string, InterpolatorDecisionScore>,
+  newRepliesCount: number,
+  rateLimitThreshold: number = 30000, // 30 seconds
+): { shouldUpdate: boolean; confidence: number; reasons: string[] } {
+  try {
+    // Check rate limiting first
+    const cached = threadSnapshotCache.get(threadUri);
+    const now = Date.now();
+
+    if (cached && (now - cached.timestamp < rateLimitThreshold)) {
+      return { shouldUpdate: false, confidence: 0, reasons: ['rate_limited'] };
+    }
+
+    const deltaDecision = computeConversationDeltaDecision({
+      previous: previousState,
+      current: currentState,
+      scores,
+    });
+
+    const reasons: string[] = [...deltaDecision.changeReasons];
+    if (newRepliesCount >= 3 && reasons.length === 0) {
+      reasons.push('new_replies');
+    }
+
+    const shouldUpdate = deltaDecision.didMeaningfullyChange || (cached == null && newRepliesCount > 0);
+    const confidence = Math.max(
+      deltaDecision.changeMagnitude,
+      Math.min(1, newRepliesCount / 6),
+    );
+
+    return {
+      shouldUpdate,
+      confidence,
+      reasons: reasons.slice(0, 3), // Top 3 reasons
+    };
+  } catch (err) {
+    console.error('[detectMeaningfulChange] Error during change detection');
+    // Graceful fallback: allow update if algorithm fails
+    return { shouldUpdate: true, confidence: 0.5, reasons: ['fallback_heuristic'] };
+  }
+}
+
+/**
+ * Clear cached snapshots for a thread (useful for testing or memory cleanup).
+ */
+export function clearThreadSnapshot(threadUri: string): void {
+  threadSnapshotCache.delete(threadUri);
+}
+
+/**
+ * Get cached snapshot info (for debugging or monitoring).
+ */
+export function getThreadSnapshotInfo(threadUri: string): { age: number; exists: boolean } | null {
+  const cached = threadSnapshotCache.get(threadUri);
+  if (!cached) return null;
+  return {
+    exists: true,
+    age: Date.now() - cached.timestamp,
   };
 }

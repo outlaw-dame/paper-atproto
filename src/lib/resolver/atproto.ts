@@ -16,6 +16,7 @@
 import {
   AppBskyEmbedExternal,
   AppBskyEmbedRecordWithMedia,
+  AppBskyEmbedVideo,
 } from '@atproto/api';
 import type {
   AppBskyFeedDefs,
@@ -144,7 +145,7 @@ export function resolveLabels(labels: ComAtprotoLabelDefs.Label[] | undefined): 
 }
 
 // ─── Embeds ───────────────────────────────────────────────────────────────
-export type EmbedKind = 'images' | 'external' | 'record' | 'recordWithMedia';
+export type EmbedKind = 'images' | 'external' | 'record' | 'recordWithMedia' | 'video';
 
 export interface ResolvedEmbed {
   kind: EmbedKind;
@@ -152,6 +153,8 @@ export interface ResolvedEmbed {
   images?: { url: string; alt: string; aspectRatio?: { width: number; height: number } }[];
   // external
   external?: { uri: string; domain: string; title?: string; description?: string; thumb?: string };
+  // video
+  video?: { uri: string; domain: string; thumb?: string; alt?: string; aspectRatio?: { width: number; height: number } };
   // record (quote post)
   quotedUri?: string;
   quotedAuthorDid?: string;
@@ -162,6 +165,7 @@ export interface ResolvedEmbed {
   // recordWithMedia: both images/external and record
   mediaImages?: { url: string; alt: string }[];
   mediaExternal?: { uri: string; domain: string; title?: string; description?: string; thumb?: string };
+  mediaVideo?: { uri: string; domain: string; thumb?: string; alt?: string; aspectRatio?: { width: number; height: number } };
 }
 
 function resolveExternalPreview(externalEmbed: any): { uri: string; domain: string; title?: string; description?: string; thumb?: string } | undefined {
@@ -193,10 +197,11 @@ function resolveQuotedExternalPreview(recordView: any): ResolvedEmbed['quotedExt
 export function resolveEmbed(embed: any): ResolvedEmbed | null {
   if (!embed) return null;
 
-  const type = embed.$type as string;
+  const rawEmbed = embed as Record<string, any>;
+  const type = rawEmbed.$type as string;
 
   if (type === 'app.bsky.embed.images#view' || type === 'app.bsky.embed.images') {
-    const imgs = (embed.images ?? []) as any[];
+    const imgs = (rawEmbed.images ?? []) as any[];
     return {
       kind: 'images',
       images: imgs.map(i => ({
@@ -208,7 +213,7 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
   }
 
   if (type === 'app.bsky.embed.external#view' || type === 'app.bsky.embed.external') {
-    const ext = embed.external ?? embed;
+    const ext = rawEmbed.external ?? rawEmbed;
     const uri = ext.uri ?? '';
     return {
       kind: 'external',
@@ -222,8 +227,22 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
     };
   }
 
+  if (type === 'app.bsky.embed.video#view' || type === 'app.bsky.embed.video' || AppBskyEmbedVideo.isView(rawEmbed)) {
+    const uri = (rawEmbed.playlist ?? rawEmbed.uri ?? '') as string;
+    return {
+      kind: 'video',
+      video: {
+        uri,
+        domain: uri ? canonicalDomain(uri) : 'bsky.app',
+        thumb: rawEmbed.thumbnail,
+        alt: rawEmbed.alt,
+        aspectRatio: rawEmbed.aspectRatio,
+      },
+    };
+  }
+
   if (type === 'app.bsky.embed.record#view' || type === 'app.bsky.embed.record') {
-    const rec = embed.record ?? embed;
+    const rec = rawEmbed.record ?? rawEmbed;
     const quotedRecord = (rec.value ?? rec.record) as unknown;
     const quotedExternal = resolveQuotedExternalPreview(rec);
     return {
@@ -238,11 +257,12 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
   }
 
   if (type === 'app.bsky.embed.recordWithMedia#view' || type === 'app.bsky.embed.recordWithMedia') {
-    const rec = embed.record?.record ?? {};
-    const media = embed.media ?? {};
+    const rec = rawEmbed.record?.record ?? {};
+    const media = rawEmbed.media ?? {};
     const mediaType = media.$type as string ?? '';
     const imgs = (media.images ?? []) as any[];
     const ext = media.external ?? null;
+    const mediaVideoUri = (media.playlist ?? media.uri ?? '') as string;
     const quotedExternal = resolveQuotedExternalPreview(rec);
     return {
       kind: 'recordWithMedia',
@@ -260,6 +280,15 @@ export function resolveEmbed(embed: any): ResolvedEmbed | null {
           title: ext.title,
           description: ext.description,
           thumb: ext.thumb,
+        },
+      } : {}),
+      ...(mediaVideoUri && (mediaType.includes('video') || AppBskyEmbedVideo.isView(media)) ? {
+        mediaVideo: {
+          uri: mediaVideoUri,
+          domain: canonicalDomain(mediaVideoUri),
+          thumb: media.thumbnail,
+          alt: media.alt,
+          aspectRatio: media.aspectRatio,
         },
       } : {}),
     };

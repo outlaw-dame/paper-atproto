@@ -10,42 +10,19 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AtpProvider, useAtp } from './atproto/AtpContext';
 import { scheduleRuntimePrefetches } from './prefetch/runtimePrefetch';
 import { useUiStore } from './store/uiStore';
+import LazyModuleBoundary from './components/LazyModuleBoundary';
 import TabBar from './shell/TabBar';
 import LoginScreen from './components/LoginScreen';
 import { MiniPlayerProvider } from './context/MiniPlayerContext';
 import MiniPlayer from './components/MiniPlayer';
 import HomeTab from './tabs/HomeTab';
-import OverlayHost from './shell/OverlayHost';
 import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge';
 import PlatformBanners from './shell/PlatformBanners';
 import BadgeSyncBridge from './components/BadgeSyncBridge';
 import PushLifecycleBridge from './components/PushLifecycleBridge';
 import AppleEnhancementBridge from './components/AppleEnhancementBridge';
-
-function lazyWithRetry<T extends React.ComponentType<any>>(
-  loader: () => Promise<{ default: T }>,
-  label: string,
-): React.LazyExoticComponent<T> {
-  return React.lazy(async () => {
-    try {
-      return await loader();
-    } catch (error) {
-      console.warn(`[Lazy] ${label} failed to load on first attempt; retrying once.`, error);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      return loader();
-    }
-  });
-}
-
-type LazyModuleBoundaryProps = {
-  children: React.ReactNode;
-  fallback?: React.ReactNode;
-  resetKey?: string | number;
-};
-
-type LazyModuleBoundaryState = {
-  hasError: boolean;
-};
+import AndroidEnhancementBridge from './components/AndroidEnhancementBridge';
+import { lazyWithRetry } from './lib/lazyWithRetry';
 
 type RuntimeBoundaryProps = {
   children: React.ReactNode;
@@ -54,31 +31,6 @@ type RuntimeBoundaryProps = {
 type RuntimeBoundaryState = {
   hasError: boolean;
 };
-
-class LazyModuleBoundary extends React.Component<LazyModuleBoundaryProps, LazyModuleBoundaryState> {
-  state: LazyModuleBoundaryState = { hasError: false };
-
-  static getDerivedStateFromError(): LazyModuleBoundaryState {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: unknown) {
-    console.error('[AppShell] Lazy module failed to render', error);
-  }
-
-  componentDidUpdate(prevProps: LazyModuleBoundaryProps) {
-    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
-      this.setState({ hasError: false });
-    }
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return this.props.fallback ?? null;
-    }
-    return this.props.children;
-  }
-}
 
 class AppRuntimeBoundary extends React.Component<RuntimeBoundaryProps, RuntimeBoundaryState> {
   state: RuntimeBoundaryState = { hasError: false };
@@ -184,10 +136,14 @@ function ShellModuleRecovery({
 const ExploreTab = lazyWithRetry(() => import('./tabs/ExploreTab'), 'ExploreTab');
 const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab'), 'ActivityTab');
 const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab'), 'ProfileTab');
+const OverlayHost = lazyWithRetry(() => import('./shell/OverlayHost'), 'OverlayHost');
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
 export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; name: string; reason: string }
+
+// Visual left→right order of tabs — used to compute slide direction.
+const TAB_ORDER: readonly TabId[] = ['home', 'explore', 'activity', 'profile'] as const;
 
 // ─── Bootstrap error banner ────────────────────────────────────────────────
 // Shown when IndexedDB is unavailable (e.g. iOS Private Browsing) or storage
@@ -218,7 +174,10 @@ function BootstrapErrorBanner() {
         display: 'flex',
         alignItems: 'center',
         gap: 10,
-        padding: '10px 14px',
+        paddingTop: 'calc(var(--safe-top, 0px) + 10px)',
+        paddingBottom: 10,
+        paddingLeft: 14,
+        paddingRight: 14,
         background: 'var(--yellow, #ff9f0a)',
         color: '#000',
         fontSize: 13,
@@ -258,6 +217,7 @@ export default function App() {
           <BadgeSyncBridge />
           <PushLifecycleBridge />
           <AppleEnhancementBridge />
+          <AndroidEnhancementBridge />
           <MiniPlayerProvider>
             <AppShell />
             <Suspense fallback={null}>
@@ -330,7 +290,19 @@ function FloatingComposeFab({ onCompose, onPromptComposer }: { onCompose: () => 
 // ─── AppShell ──────────────────────────────────────────────────────────────
 function AppShell() {
   const { session, isLoading } = useAtp();
-  const { activeTab, prevTab, openStory, profileDid, openCompose, openPromptComposer } = useUiStore();
+  const {
+    activeTab,
+    prevTab,
+    openStory,
+    profileDid,
+    openCompose,
+    openPromptComposer,
+    showCompose,
+    showPromptComposer,
+    story,
+    searchStoryQuery,
+    replyTarget,
+  } = useUiStore();
   const [isTabBarHidden, setIsTabBarHidden] = React.useState(false);
   const [shellRetryKey, setShellRetryKey] = React.useState(0);
   const [loadingTimedOut, setLoadingTimedOut] = React.useState(false);
@@ -355,6 +327,13 @@ function AppShell() {
   }, [session]);
 
   React.useEffect(() => {
+    // Only hide the tab bar for touch-initiated scrolls (coarse-pointer devices).
+    // On desktop (fine pointer / hover capable) the tab bar is always visible,
+    // matching the macOS Catalyst / iPad multitasking convention.
+    const isTouch = window.matchMedia('(pointer: coarse)').matches ||
+      window.matchMedia('(any-pointer: coarse)').matches;
+    if (!isTouch) return;
+
     const markScrolling = () => {
       setIsTabBarHidden(true);
 
@@ -362,21 +341,18 @@ function AppShell() {
         clearTimeout(scrollIdleTimerRef.current);
       }
 
-      // Show the bar again shortly after scrolling stops.
+      // Show the bar again after scrolling stops. 400ms feels native — short
+      // enough to be responsive, long enough to avoid flickering on slow flings.
       scrollIdleTimerRef.current = setTimeout(() => {
         setIsTabBarHidden(false);
         scrollIdleTimerRef.current = null;
-      }, 180);
+      }, 400);
     };
 
-    window.addEventListener('wheel', markScrolling, { passive: true });
     window.addEventListener('touchmove', markScrolling, { passive: true });
-    window.addEventListener('scroll', markScrolling, { capture: true, passive: true });
 
     return () => {
-      window.removeEventListener('wheel', markScrolling);
       window.removeEventListener('touchmove', markScrolling);
-      window.removeEventListener('scroll', markScrolling, { capture: true });
       if (scrollIdleTimerRef.current) {
         clearTimeout(scrollIdleTimerRef.current);
       }
@@ -445,9 +421,9 @@ function AppShell() {
           <motion.div
             key={activeTab}
             style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}
-            initial={{ opacity: 0, x: activeTab > prevTab ? 20 : -20 }}
+            initial={{ opacity: 0, x: TAB_ORDER.indexOf(activeTab) > TAB_ORDER.indexOf(prevTab) ? 20 : -20 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: activeTab > prevTab ? -20 : 20 }}
+            exit={{ opacity: 0, x: TAB_ORDER.indexOf(activeTab) > TAB_ORDER.indexOf(prevTab) ? -20 : 20 }}
             transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
           >
             <LazyModuleBoundary
@@ -480,7 +456,20 @@ function AppShell() {
       <TabBar hidden={isTabBarHidden} />
 
       {/* Overlays: ComposeSheet + StoryMode */}
-      <LazyModuleBoundary resetKey={`overlay:${shellRetryKey}`}>
+      <LazyModuleBoundary
+        resetKey={`overlay:${shellRetryKey}:${showCompose ? replyTarget?.id ?? 'new' : 'closed'}:${showPromptComposer ? 'prompt' : 'prompt-closed'}:${story?.id ?? 'story-closed'}:${searchStoryQuery ?? 'search-closed'}`}
+        fallback={(
+          <ShellModuleRecovery
+            title="Overlay layer needs a clean retry"
+            body="The thread or composer overlay failed to render. Reloading restores the interaction layer without affecting your signed-in session."
+            buttonLabel="Reload overlays"
+            onReload={() => {
+              setShellRetryKey((value) => value + 1);
+              window.location.reload();
+            }}
+          />
+        )}
+      >
         <Suspense fallback={null}>
           <OverlayHost />
         </Suspense>

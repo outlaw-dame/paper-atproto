@@ -12,7 +12,7 @@
 //   • maxAttempts:1 prevents retry storms on autocomplete requests.
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { BskyAgent } from '@atproto/api';
+import type { Agent } from '@atproto/api';
 import { atpCall } from '../lib/atproto/client';
 
 // ─── Public types ───────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ export interface HashtagCandidate {
 export type AutocompleteCandidate = MentionCandidate | HashtagCandidate;
 
 export interface UseComposerAutocompleteOptions {
-  agent: BskyAgent;
+  agent: Agent;
   /** Trending topic slugs (no # prefix) loaded from the Bluesky API. */
   trendingTopics: string[];
   /** Recently-used hashtags from localStorage. */

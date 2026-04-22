@@ -33,6 +33,9 @@ export function onServiceWorkerMessage(
 
   const listener = (event: MessageEvent) => {
     try {
+      const controller = navigator.serviceWorker?.controller;
+      if (controller && event.source !== controller) return;
+
       const msg = event.data;
       if (!msg || typeof msg.type !== 'string') return;
       handler(msg as SwToAppMessage);

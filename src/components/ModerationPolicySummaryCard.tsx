@@ -45,12 +45,16 @@ export default function ModerationPolicySummaryCard() {
   // Top triggered rules — join counts back to rule phrases
   const topTriggeredRules = useMemo(() => {
     const ruleMap = new Map(rules.map((r) => [r.id, r]));
-    return Object.entries(filteredCountByRuleId)
+
+    const entries = Object.entries(filteredCountByRuleId)
       .map(([ruleId, count]) => {
         const rule = ruleMap.get(ruleId);
-        return rule ? { phrase: rule.phrase, action: rule.action, count } : null;
+        if (!rule) return null;
+        return { phrase: rule.phrase, action: rule.action, count };
       })
-      .filter((entry): entry is { phrase: string; action: string; count: number } => entry !== null)
+      .filter((entry): entry is { phrase: string; action: KeywordFilterRule['action']; count: number } => entry !== null);
+
+    return entries
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
   }, [filteredCountByRuleId, rules]);

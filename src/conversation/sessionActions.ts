@@ -3,13 +3,15 @@ import type { AtUri, ContributionScores } from '../intelligence/interpolatorType
 import type { ThreadNode } from '../lib/resolver/atproto';
 import {
   insertOptimisticReply,
+  reconcileOptimisticReply,
+  rollbackOptimisticReply,
   revealWarnedPost,
   setConversationUserFeedback,
   setFocusedBranch,
 } from './sessionMutations';
 
 export function useConversationActions(sessionId: string) {
-  const onUserFeedback = useCallback((replyUri: AtUri, feedback: ContributionScores['userFeedback']) => {
+  const onUserFeedback = useCallback((replyUri: AtUri, feedback?: ContributionScores['userFeedback']) => {
     setConversationUserFeedback({
       sessionId,
       replyUri,
@@ -39,6 +41,21 @@ export function useConversationActions(sessionId: string) {
     });
   }, [sessionId]);
 
+  const onReconcileOptimisticReply = useCallback((optimisticUri: AtUri, persistedNode: ThreadNode) => {
+    reconcileOptimisticReply({
+      sessionId,
+      optimisticUri,
+      persistedNode,
+    });
+  }, [sessionId]);
+
+  const onRollbackOptimisticReply = useCallback((optimisticUri: AtUri) => {
+    rollbackOptimisticReply({
+      sessionId,
+      optimisticUri,
+    });
+  }, [sessionId]);
+
   return {
     onUserFeedback,
     onRevealWarnedPost,
@@ -46,5 +63,7 @@ export function useConversationActions(sessionId: string) {
     onRevealModeratedPost: onRevealWarnedPost,
     onFocusBranch,
     onInsertOptimisticReply,
+    onReconcileOptimisticReply,
+    onRollbackOptimisticReply,
   };
 }

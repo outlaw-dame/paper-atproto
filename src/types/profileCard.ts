@@ -1,5 +1,10 @@
 // ─── Profile Card Types ────────────────────────────────────────────────────
 
+/**
+ * Variant contract:
+ * - standard: identity-first cards for timeline/discovery surfaces.
+ * - thread_scoped: contribution-first cards for thread/conversation surfaces.
+ */
 export type ProfileCardVariant = 'standard' | 'thread_scoped';
 
 export interface CompactPostPreview {
@@ -38,6 +43,8 @@ export interface ProfileCardData {
     isFollowing: boolean;
     canFollow: boolean;
     canBlock?: boolean;
+    /** Partial cards hide relationship controls until real social data is available. */
+    isPartial?: boolean;
   };
 
   starterPacks: StarterPackRef[];
@@ -47,6 +54,10 @@ export interface ProfileCardData {
     popularPosts: CompactPostPreview[];
   };
 
+  /**
+   * Only present for thread_scoped cards.
+   * Timeline/discovery cards should keep this undefined.
+   */
   threadContext?: {
     threadUri: string;
     compactPosts: CompactPostPreview[];

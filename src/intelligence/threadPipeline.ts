@@ -19,6 +19,7 @@ import type {
   ThreadInterpolatorState,
   ThreadPost,
 } from './interpolatorTypes';
+import { normalizeContributionFeedbackList } from './interpolatorTypes';
 import type { VerificationEntityHint, VerificationMediaItem, VerificationOutcome, VerificationProviders, VerificationRequest } from './verification/types';
 import type { ThreadNode } from '../lib/resolver/atproto';
 import type { ConfidenceState, SummaryMode } from './llmContracts';
@@ -27,8 +28,11 @@ import { InMemoryVerificationCache, type VerificationCache } from './verificatio
 import { mergeVerificationIntoContributionScore } from './verification/mergeVerificationIntoScore';
 import { verifyEvidence } from './verification/verifyEvidence';
 import { withRetry } from './verification/retry';
-import { computeConfidenceState } from './confidence';
-import { chooseSummaryMode } from './routing';
+import {
+  computeConversationDeltaDecision,
+  type ConversationDeltaDecision,
+} from './conversationDelta';
+import { type ChangeReason } from './changeDetection';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -38,10 +42,16 @@ export interface ThreadPipelineResult {
   verificationByPost: Record<AtUri, VerificationOutcome>;
   rootVerification: VerificationOutcome | null;
   didMeaningfullyChange: boolean;
+  /** 0–1 magnitude of the meaningful change. 0 when no change detected. */
+  changeMagnitude: number;
+  /** Structured reasons for why the thread changed, if it did. */
+  changeReasons: ChangeReason[];
   /** Three-axis confidence state computed after scoring and verification. */
   confidence: ConfidenceState;
   /** Summary mode derived from confidence — used to build writer input and choose fallback. */
   summaryMode: SummaryMode;
+  /** Canonical rolling decision for thread change, confidence, and summary mode. */
+  deltaDecision: ConversationDeltaDecision;
 }
 
 export interface RunThreadPipelineOptions {
@@ -67,17 +77,23 @@ function toContributionScores(score: ContributionScore): ContributionScores {
   const citationStrength = score.evidenceSignals
     .filter(s => s.kind === 'citation')
     .reduce((sum, s) => sum + s.confidence, 0);
+  const normalizedCitationStrength = Math.max(0, Math.min(1, citationStrength));
 
   const clarificationValue = score.role === 'clarifying'
     ? Math.max(score.usefulnessScore, 0.6)
     : Math.min(1, citationStrength * 0.4);
+  const sourceSupport = Math.max(
+    score.factualContribution,
+    normalizedCitationStrength,
+    score.role === 'rule_source' ? 0.82 : 0,
+  );
 
   return {
     uri: score.uri,
     role: score.role,
     finalInfluenceScore: score.usefulnessScore,
     clarificationValue,
-    sourceSupport: score.factualContribution,
+    sourceSupport,
     visibleChips: [],
     factual: null,
     usefulnessScore: score.usefulnessScore,
@@ -86,6 +102,10 @@ function toContributionScores(score: ContributionScore): ContributionScores {
     entityImpacts: score.entityImpacts,
     scoredAt: score.scoredAt,
     ...(score.userFeedback !== undefined ? { userFeedback: score.userFeedback } : {}),
+    ...(score.userFeedbackSource !== undefined ? { userFeedbackSource: score.userFeedbackSource } : {}),
+    ...(score.suggestedFeedback !== undefined
+      ? { suggestedFeedback: normalizeContributionFeedbackList(score.suggestedFeedback) }
+      : {}),
   };
 }
 
@@ -228,15 +248,10 @@ export async function runVerifiedThreadPipeline(
     }
   }
 
-  const didMeaningfullyChange =
-    options.previous == null ||
-    interpolator.version > (options.previous.version ?? 0) ||
-    candidates.length > 0;
-
-  const confidence = computeConfidenceState(interpolator, scores);
-  const summaryMode = chooseSummaryMode({
-    surfaceConfidence: confidence.surfaceConfidence,
-    interpretiveConfidence: confidence.interpretiveConfidence,
+  const deltaDecision = computeConversationDeltaDecision({
+    previous: options.previous ?? null,
+    current: interpolator,
+    scores,
   });
 
   return {
@@ -244,8 +259,11 @@ export async function runVerifiedThreadPipeline(
     scores,
     verificationByPost,
     rootVerification,
-    didMeaningfullyChange,
-    confidence,
-    summaryMode,
+    didMeaningfullyChange: deltaDecision.didMeaningfullyChange,
+    changeMagnitude: deltaDecision.changeMagnitude,
+    changeReasons: deltaDecision.changeReasons,
+    confidence: deltaDecision.confidence,
+    summaryMode: deltaDecision.summaryMode,
+    deltaDecision,
   };
 }

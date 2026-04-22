@@ -4,6 +4,7 @@ import { normalizeLanguageTag } from './normalize';
 const cjkRegex = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 const arabicRegex = /[\u0600-\u06ff]/;
 const cyrillicRegex = /[\u0400-\u04ff]/;
+const translatableCharRegex = /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04ff\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u3040-\u30ff\u3400-\u9fff]/g;
 const latinRegex = /[a-z]/i;
 const ptRegex = /[ãõáàâêôç]/i;
 const esRegex = /[ñ¡¿]/i;
@@ -47,12 +48,23 @@ function detectLatinLanguage(content: string): LanguageDetectionResult {
     return { language: best.language, confidence: Math.min(0.92, 0.45 + best.score * 0.08) };
   }
 
-  return { language: 'en', confidence: 0.35 };
+  // Keep low-signal Latin text as unknown so translation UI can still offer
+  // manual translation instead of forcing an incorrect English guess.
+  return { language: 'und', confidence: 0.2 };
+}
+
+export function hasTranslatableLanguageSignal(text: string): boolean {
+  const content = text.trim();
+  if (!content) return false;
+  const matches = content.match(translatableCharRegex);
+  if (!matches) return false;
+  return matches.length >= 2;
 }
 
 export function heuristicDetectLanguage(text: string): LanguageDetectionResult {
   const content = text.trim();
   if (!content) return { language: 'und', confidence: 0 };
+  if (!hasTranslatableLanguageSignal(content)) return { language: 'und', confidence: 0.05 };
 
   if (cjkRegex.test(content)) return { language: 'ja', confidence: 0.65 };
   if (arabicRegex.test(content)) return { language: 'ar', confidence: 0.8 };

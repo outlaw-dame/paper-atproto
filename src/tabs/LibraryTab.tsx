@@ -202,10 +202,12 @@ function CompactSavedCard({ post, index, onOpenStory, touchLike }: { post: MockP
           </div>
           {externalEmbed ? (
             <>
-              {externalEmbed.authorName && (
+              {'authorName' in externalEmbed && typeof externalEmbed.authorName === 'string' && externalEmbed.authorName.length > 0 && (
                 <p style={{ fontSize: 12, color: 'var(--label-3)', marginBottom: 4 }}>
                   <span style={{ fontWeight: 700, color: 'var(--teal)' }}>Featured author:</span> {externalEmbed.authorName}
-                  {externalEmbed.publisher && <span style={{ marginLeft: 8, color: 'var(--label-4)' }}>· {externalEmbed.publisher}</span>}
+                  {'publisher' in externalEmbed && typeof externalEmbed.publisher === 'string' && externalEmbed.publisher.length > 0
+                    ? <span style={{ marginLeft: 8, color: 'var(--label-4)' }}>· {externalEmbed.publisher}</span>
+                    : null}
                 </p>
               )}
               <p style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.3, letterSpacing: -0.4, color: 'var(--label-1)', marginBottom: 4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{externalEmbed.title}</p>

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { ValidationError, AppError } from '../lib/errors.js';
-import { isSafeHttpUrl } from '../lib/sanitize.js';
+import { sanitizeRemoteProcessingUrl } from '../lib/sanitize.js';
 import { checkUrlAgainstSafeBrowsing } from '../services/safeBrowsing.js';
 
 const UrlSafetyCheckSchema = z.object({
@@ -20,12 +20,12 @@ safetyRouter.post('/url-check', async (c) => {
     throw new ValidationError('Invalid safety payload', parsed.error.flatten());
   }
 
-  const url = parsed.data.url.trim();
-  if (!isSafeHttpUrl(url)) {
-    throw new ValidationError('url must be a valid http(s) URL');
+  const sanitizedUrl = sanitizeRemoteProcessingUrl(parsed.data.url);
+  if (!sanitizedUrl) {
+    throw new ValidationError('url must be a valid public http(s) URL');
   }
 
-  const result = await checkUrlAgainstSafeBrowsing(url);
+  const result = await checkUrlAgainstSafeBrowsing(sanitizedUrl);
   return c.json({ ok: true, result });
 });
 

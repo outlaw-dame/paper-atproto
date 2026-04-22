@@ -1,5 +1,13 @@
-import type { ConversationSession } from '../sessionTypes';
+import type {
+  ConversationContinuitySnapshot,
+  ConversationSession,
+} from '../sessionTypes';
 import type { ProjectionPolicy } from '../sessionPolicies';
+import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
+import type { PremiumThreadProjection } from '../../intelligence/premiumContracts';
+import {
+  resolveCurrentContinuitySnapshot,
+} from '../continuitySnapshots';
 
 export type ThreadFilter =
   | 'Top'
@@ -31,6 +39,7 @@ export interface ThreadProjectionContribution {
   isWarned: boolean;
   isRevealedWarn: boolean;
   isOp: boolean;
+  isOptimistic: boolean;
 
   contributionRole?: string;
   conversationalRole?: string;
@@ -62,18 +71,34 @@ export interface ThreadProjection {
     } | null;
   };
   interpolator: {
+    shouldRender: boolean;
     summaryText: string;
     writerSummary?: string;
     summaryMode?: string | null;
+    confidence?: {
+      surfaceConfidence: number;
+      entityConfidence: number;
+      interpretiveConfidence: number;
+    } | null;
+    explanation?: {
+      interpretiveMode: string;
+      primarySupports: string[];
+      primaryLimits: string[];
+    };
     heatLevel: number;
     repetitionLevel: number;
     direction: string;
     threadState: string;
     sourceSupportPresent: boolean;
     factualSignalPresent: boolean;
+    perspectiveGaps: string[];
     topContributors: any[];
     entityLandscape: any[];
     writerEntities: any[];
+    hasMentalHealthCrisis: boolean;
+    mentalHealthCategory?: string;
+    latestContinuity: ConversationContinuitySnapshot | null;
+    premium: PremiumThreadProjection;
   };
   filters: {
     active: ThreadFilter;
@@ -93,6 +118,8 @@ export function projectThreadView(
 ): ThreadProjection {
   const root = session.graph.nodesByUri[session.graph.rootUri];
   const rootAuthorDid = root?.authorDid;
+  const interpolatorSurface = buildInterpolatorSurfaceProjection(session);
+  const continuity = resolveCurrentContinuitySnapshot(session);
 
   const allContributions: ThreadProjectionContribution[] = Object.values(session.graph.nodesByUri)
     .filter((node) => node.uri !== session.graph.rootUri)
@@ -118,6 +145,7 @@ export function projectThreadView(
       isWarned: !!node.warnedByModeration,
       isRevealedWarn: session.structure.revealedWarnUris.includes(node.uri),
       isOp: node.authorDid === rootAuthorDid,
+      isOptimistic: !!node.isOptimistic,
       ...(node.contributionRole ? { contributionRole: node.contributionRole } : {}),
       ...(node.contributionSignal?.role ? { conversationalRole: node.contributionSignal.role } : {}),
       ...(node.contributionSignal?.qualityScore !== undefined
@@ -171,12 +199,19 @@ export function projectThreadView(
         : null,
     },
     interpolator: {
-      summaryText: session.interpretation.interpolator?.summaryText ?? '',
-      ...(session.interpretation.writerResult?.collapsedSummary
-        ? { writerSummary: session.interpretation.writerResult.collapsedSummary }
+      shouldRender: interpolatorSurface.shouldRender,
+      summaryText: interpolatorSurface.summaryText,
+      ...(interpolatorSurface.writerSummary
+        ? { writerSummary: interpolatorSurface.writerSummary }
         : {}),
-      ...(session.interpretation.summaryMode !== null
-        ? { summaryMode: session.interpretation.summaryMode }
+      ...(interpolatorSurface.summaryMode !== undefined
+        ? { summaryMode: interpolatorSurface.summaryMode }
+        : {}),
+      ...(interpolatorSurface.confidence
+        ? { confidence: interpolatorSurface.confidence }
+        : {}),
+      ...(interpolatorSurface.explanation
+        ? { explanation: interpolatorSurface.explanation }
         : {}),
       heatLevel: session.trajectory.heatLevel,
       repetitionLevel: session.trajectory.repetitionLevel,
@@ -184,9 +219,29 @@ export function projectThreadView(
       threadState: session.interpretation.threadState?.dominantTone ?? 'forming',
       sourceSupportPresent: session.interpretation.interpolator?.sourceSupportPresent ?? false,
       factualSignalPresent: session.interpretation.interpolator?.factualSignalPresent ?? false,
+      perspectiveGaps: session.interpretation.interpolator?.perspectiveGaps ?? [],
       topContributors: session.contributors.contributors,
       entityLandscape: session.entities.entityLandscape,
       writerEntities: session.entities.writerEntities,
+      hasMentalHealthCrisis: interpolatorSurface.hasMentalHealthCrisis,
+      ...(interpolatorSurface.mentalHealthCategory
+        ? { mentalHealthCategory: interpolatorSurface.mentalHealthCategory }
+        : {}),
+      latestContinuity: continuity,
+      premium: {
+        status: session.interpretation.premium.status,
+        isEntitled: (session.interpretation.premium.entitlements?.capabilities ?? [])
+          .includes('deep_interpolator'),
+        ...(session.interpretation.premium.entitlements
+          ? { entitlements: session.interpretation.premium.entitlements }
+          : {}),
+        ...(session.interpretation.premium.deepInterpolator
+          ? { deepInterpolator: session.interpretation.premium.deepInterpolator }
+          : {}),
+        ...(session.interpretation.premium.lastError
+          ? { lastError: session.interpretation.premium.lastError }
+          : {}),
+      },
     },
     filters: {
       active: activeFilter,
@@ -205,41 +260,58 @@ function applyThreadFilter(
   activeFilter: ThreadFilter,
 ): ThreadProjectionContribution[] {
   const next = [...contributions];
+  const prependOptimistic = (
+    filtered: ThreadProjectionContribution[],
+  ): ThreadProjectionContribution[] => {
+    const optimistic = next.filter((contribution) => contribution.isOptimistic);
+    if (optimistic.length === 0) return filtered;
+
+    const merged: ThreadProjectionContribution[] = [];
+    const seen = new Set<string>();
+    for (const contribution of [...optimistic, ...filtered]) {
+      if (seen.has(contribution.uri)) continue;
+      seen.add(contribution.uri);
+      merged.push(contribution);
+    }
+    return merged;
+  };
 
   switch (activeFilter) {
     case 'Top':
-      return next.sort((a, b) => {
+      return prependOptimistic(next.sort((a, b) => {
+        const optimisticDelta = Number(b.isOptimistic) - Number(a.isOptimistic);
+        if (optimisticDelta !== 0) return optimisticDelta;
         const bScore = b.finalInfluenceScore ?? b.qualityScore ?? 0;
         const aScore = a.finalInfluenceScore ?? a.qualityScore ?? 0;
         return bScore - aScore;
-      });
+      }));
 
     case 'Latest':
-      return next.sort(
+      return prependOptimistic(next.sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      );
+      ));
 
     case 'Clarifying':
-      return next.filter(
+      return prependOptimistic(next.filter(
         (contribution) => contribution.contributionRole === 'clarifying'
           || contribution.conversationalRole === 'clarification',
-      );
+      ));
 
     case 'New angles':
-      return next.filter(
+      return prependOptimistic(next.filter(
         (contribution) => contribution.contributionRole === 'new_information'
           || contribution.contributionRole === 'useful_counterpoint'
           || contribution.conversationalRole === 'new_information',
-      );
+      ));
 
     case 'Source-backed':
-      return next.filter(
+      return prependOptimistic(next.filter(
         (contribution) => contribution.evidencePresent === true
           || (contribution.factualContributionScore ?? 0) > 0.4,
-      );
+      ));
 
     default:
-      return next;
+      return prependOptimistic(next);
   }
 }
 

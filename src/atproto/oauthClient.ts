@@ -27,6 +27,7 @@ const OAUTH_CLIENT_STORAGE_RECOVERY_STACK_FRAGMENTS = [
   'browser-oauth-database',
   'indexed-db/db',
 ];
+const OAUTH_RECOVERY_LISTENER_KEY = '__paperOAuthRecoveryListenerInstalled__';
 
 let oauthClientPromise: Promise<BrowserOAuthClient> | null = null;
 let oauthClientInstance: BrowserOAuthClient | null = null;
@@ -100,6 +101,12 @@ async function disposeOAuthClient(client: BrowserOAuthClient | null): Promise<vo
 function installOAuthClientRecovery(): void {
   if (hasInstalledOAuthClientRecovery || typeof window === 'undefined') return;
 
+  const globalScope = globalThis as Record<string, unknown>;
+  if (globalScope[OAUTH_RECOVERY_LISTENER_KEY] === true) {
+    hasInstalledOAuthClientRecovery = true;
+    return;
+  }
+
   window.addEventListener('unhandledrejection', (event) => {
     if (!isRecoverableOAuthClientError(event.reason)) {
       return;
@@ -110,6 +117,7 @@ function installOAuthClientRecovery(): void {
     void resetOAuthClient('browser-storage-closed');
   });
 
+  globalScope[OAUTH_RECOVERY_LISTENER_KEY] = true;
   hasInstalledOAuthClientRecovery = true;
 }
 
@@ -171,7 +179,6 @@ async function buildOAuthClient(): Promise<BrowserOAuthClient> {
 
   return new BrowserOAuthClient({
     // Loopback mode for local development when a public client_id is not configured.
-    clientMetadata: undefined,
     handleResolver: OAUTH_HANDLE_RESOLVER,
     responseMode: 'query',
   });

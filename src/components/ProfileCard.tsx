@@ -411,6 +411,7 @@ function StandardFront({
   flipKey: number;
 }) {
   const { identity, social, activity } = data;
+  const showRelationshipUi = !social.isPartial;
   return (
     <div key={flipKey} className="profile-card-face profile-card-face--front">
       <Banner src={identity.banner} />
@@ -424,11 +425,13 @@ function StandardFront({
       }}>
         <Avatar src={identity.avatar} handle={identity.handle} size={60} />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 2 }}>
-          <FollowButton
-            isFollowing={social.isFollowing}
-            canFollow={social.canFollow}
-            onFollow={onFollow}
-          />
+          {showRelationshipUi ? (
+            <FollowButton
+              isFollowing={social.isFollowing}
+              canFollow={social.canFollow}
+              onFollow={onFollow}
+            />
+          ) : null}
           <InfoFlipButton onClick={onFlip} />
         </div>
       </div>
@@ -467,13 +470,15 @@ function StandardFront({
       )}
 
       {/* Social row */}
-      <div style={{ padding: '8px 14px 0' }}>
-        <SocialRow
-          followersCount={social.followersCount}
-          mutualsCount={social.mutualsCount}
-          followingCount={social.followingCount}
-        />
-      </div>
+      {showRelationshipUi ? (
+        <div style={{ padding: '8px 14px 0' }}>
+          <SocialRow
+            followersCount={social.followersCount}
+            mutualsCount={social.mutualsCount}
+            followingCount={social.followingCount}
+          />
+        </div>
+      ) : null}
 
       {/* Activity preview */}
       {(activity.recentPosts.length > 0 || activity.popularPosts.length > 0) && (
@@ -549,6 +554,7 @@ function ThreadFront({
   flipKey: number;
 }) {
   const { identity, social, threadContext } = data;
+  const showRelationshipUi = !social.isPartial;
   return (
     <div key={flipKey} className="profile-card-face profile-card-face--front">
       <Banner src={identity.banner} />
@@ -562,12 +568,14 @@ function ThreadFront({
       }}>
         <Avatar src={identity.avatar} handle={identity.handle} size={60} />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 2 }}>
-          <FollowButton
-            isFollowing={social.isFollowing}
-            canFollow={social.canFollow}
-            onFollow={onFollow}
-          />
-          {social.canBlock && <BlockButton onBlock={onBlock} />}
+          {showRelationshipUi ? (
+            <FollowButton
+              isFollowing={social.isFollowing}
+              canFollow={social.canFollow}
+              onFollow={onFollow}
+            />
+          ) : null}
+          {showRelationshipUi && social.canBlock ? <BlockButton onBlock={onBlock} /> : null}
           <InfoFlipButton onClick={onFlip} />
         </div>
       </div>
@@ -699,6 +707,7 @@ function ThreadBack({
   flipKey: number;
 }) {
   const { identity, social, starterPacks, activity } = data;
+  const showRelationshipUi = !social.isPartial;
   return (
     <div key={flipKey} className="profile-card-face profile-card-face--back">
       {/* Back header */}
@@ -728,13 +737,15 @@ function ThreadBack({
       )}
 
       {/* Social row */}
-      <div style={{ padding: '8px 14px 0' }}>
-        <SocialRow
-          followersCount={social.followersCount}
-          mutualsCount={social.mutualsCount}
-          followingCount={social.followingCount}
-        />
-      </div>
+      {showRelationshipUi ? (
+        <div style={{ padding: '8px 14px 0' }}>
+          <SocialRow
+            followersCount={social.followersCount}
+            mutualsCount={social.mutualsCount}
+            followingCount={social.followingCount}
+          />
+        </div>
+      ) : null}
 
       {/* Starter Packs */}
       {starterPacks.length > 0 && (
