@@ -2,6 +2,7 @@ import React from 'react';
 import { detectAppleEnhancementAvailability } from '../apple/availability';
 import { initializeCloudKit } from '../apple/cloudkit/auth';
 import { hydrateMirroredPreferences } from '../apple/cloudkit/mirror/preferenceMirror';
+import { REMOTE_USER_DATA_SYNC_ALLOWED } from '../privacy/localUserDataPolicy';
 import { useAppleEnhancementStore } from '../store/appleEnhancementStore';
 import { useSessionStore } from '../store/sessionStore';
 
@@ -33,6 +34,7 @@ export default function AppleEnhancementBridge() {
   const availability = useAppleEnhancementStore((state) => state.availability);
   const cloudKitEnabled = useAppleEnhancementStore((state) => state.cloudKitEnabled);
   const setAvailability = useAppleEnhancementStore((state) => state.setAvailability);
+  const setCloudKitEnabled = useAppleEnhancementStore((state) => state.setCloudKitEnabled);
   const setCloudKitSyncState = useAppleEnhancementStore((state) => state.setCloudKitSyncState);
   const setCloudKitRetryAttempt = useAppleEnhancementStore((state) => state.setCloudKitRetryAttempt);
   const recordCloudKitSync = useAppleEnhancementStore((state) => state.recordCloudKitSync);
@@ -51,6 +53,14 @@ export default function AppleEnhancementBridge() {
     if (retryTimerRef.current !== null) {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
+    }
+
+    if (!REMOTE_USER_DATA_SYNC_ALLOWED) {
+      retryAttemptRef.current = 0;
+      setCloudKitEnabled(false);
+      setCloudKitRetryAttempt(0);
+      setCloudKitSyncState('unavailable', 'local-only-policy');
+      return;
     }
 
     if (!availability || !cloudKitEnabled) {
@@ -125,7 +135,7 @@ export default function AppleEnhancementBridge() {
         retryTimerRef.current = null;
       }
     };
-  }, [availability, cloudKitEnabled, sessionDid, setCloudKitSyncState, setCloudKitRetryAttempt, recordCloudKitSync]);
+  }, [availability, cloudKitEnabled, sessionDid, setCloudKitEnabled, setCloudKitSyncState, setCloudKitRetryAttempt, recordCloudKitSync]);
 
   return null;
 }

@@ -3,9 +3,13 @@ import type { ConversationDeltaDecision } from '../../intelligence/conversationD
 import type {
   ConversationSession,
   InterpolatorConfidence,
+  InterpretiveFactorId,
   MentalHealthCrisisCategory,
 } from '../sessionTypes';
-import { humanizeInterpretiveReason } from '../interpretive/interpretiveExplanation';
+import {
+  humanizeInterpretiveFactorId,
+  humanizeInterpretiveReason,
+} from '../interpretive/interpretiveExplanation';
 import { useInterpolatorSettingsStore } from '../../store/interpolatorSettingsStore';
 import { resolveConversationDeltaDecision } from '../deltaDecision';
 import { recordInterpolatorSummaryProjectionFallback } from '../../perf/interpolatorTelemetry';
@@ -14,6 +18,8 @@ export interface InterpolatorProjectionExplanation {
   interpretiveMode: SummaryMode;
   primarySupports: string[];
   primaryLimits: string[];
+  primaryReasons: InterpretiveFactorId[];
+  primaryReasonLabels: string[];
 }
 
 export interface InterpolatorSurfaceProjection {
@@ -45,6 +51,7 @@ export function buildInterpolatorSurfaceProjection(
   session: ConversationSession,
 ): InterpolatorSurfaceProjection {
   const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
+  const showPrimaryReasons = useInterpolatorSettingsStore.getState().showPrimaryReasons;
   const mhSignal = session.interpretation.mentalHealthSignal;
   const hasMentalHealthCrisis = mhSignal?.detected ?? false;
   const mentalHealthCategory = mhSignal?.category;
@@ -102,6 +109,14 @@ export function buildInterpolatorSurfaceProjection(
             primaryLimits: session.interpretation.interpretiveExplanation.degradedBy
               .slice(0, 3)
               .map(humanizeInterpretiveReason),
+            primaryReasons: showPrimaryReasons
+              ? session.interpretation.interpretiveExplanation.v2?.primaryReasons.slice(0, 3) ?? []
+              : [],
+            primaryReasonLabels: showPrimaryReasons
+              ? session.interpretation.interpretiveExplanation.v2?.primaryReasons
+                .slice(0, 3)
+                .map(humanizeInterpretiveFactorId) ?? []
+              : [],
           },
         }
       : {}),

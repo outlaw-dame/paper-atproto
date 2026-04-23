@@ -33,6 +33,7 @@ import {
   rootUriForStoryPost,
   type StoryProjectedPost,
   type StoryProjection,
+  type StoryProjectionBadge,
 } from '../conversation/projections/storyProjection';
 import { useConversationBatchHydration } from '../conversation/sessionHydration';
 import { useStoryProjection } from '../conversation/sessionSelectors';
@@ -83,6 +84,48 @@ function LabelChipRow({ chips }: { chips: LabelChip[] }) {
           }}
         >
           {chip.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+const coverageBadgeLabels: Record<StoryProjectionBadge, string> = {
+  'divergent-coverage': 'Divergent Coverage',
+  'high-divergence': 'Highly Divergent Coverage',
+};
+
+function CoverageBadgeRow({
+  badges,
+  coverageGap,
+}: {
+  badges: StoryProjectionBadge[];
+  coverageGap?: number | undefined;
+}) {
+  if (badges.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '-2px 0 12px' }}>
+      {badges.map((badge) => (
+        <span
+          key={badge}
+          title={typeof coverageGap === 'number' ? `Coverage divergence ${Math.round(coverageGap * 100)}%` : undefined}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 10px',
+            borderRadius: radius.full,
+            background: badge === 'high-divergence'
+              ? 'rgba(255,149,0,0.20)'
+              : 'rgba(255,189,89,0.16)',
+            border: '0.5px solid rgba(255,189,89,0.26)',
+            color: '#ffbd59',
+            fontSize: typeScale.metaSm[0],
+            fontWeight: 800,
+            letterSpacing: '0.01em',
+          }}
+        >
+          {coverageBadgeLabels[badge]}
         </span>
       ))}
     </div>
@@ -224,6 +267,8 @@ function OverviewCard({
   aiShortInsight,
   aiInsightProvider,
   aiInsightLoading,
+  coverageBadges,
+  coverageGap,
 }: {
   overview: StoryProjectedPost | null;
   resultCount: number;
@@ -232,6 +277,8 @@ function OverviewCard({
   aiShortInsight: string | null;
   aiInsightProvider: string | null;
   aiInsightLoading: boolean;
+  coverageBadges: StoryProjectionBadge[];
+  coverageGap?: number | undefined;
 }) {
   const navigateToProfile = useProfileNavigation();
   if (!overview) return null;
@@ -289,6 +336,8 @@ function OverviewCard({
             Glympse Synopsis
           </span>
         </div>
+
+        <CoverageBadgeRow badges={coverageBadges} coverageGap={coverageGap} />
 
         {/* Title */}
         <p style={{
@@ -1017,6 +1066,8 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
       aiShortInsight={aiShortInsight}
       aiInsightProvider={aiInsightProvider}
       aiInsightLoading={aiInsightLoading}
+      coverageBadges={storyProjection.badges}
+      coverageGap={storyProjection.coverageGap}
     />,
     <BestSourceCard key="source" source={storyProjection.bestSource} showAtprotoLabelChips={showAtprotoLabelChips} />,
     <RelatedEntitiesCard key="entities" entities={storyProjection.relatedEntities} />,

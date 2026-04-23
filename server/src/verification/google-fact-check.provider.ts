@@ -41,12 +41,18 @@ function normalizeMatch(claim: Claim, review: ClaimReview, matchConfidence: numb
 function scoreMatch(query: string, claimText: string): number {
   const q = query.toLowerCase();
   const c = claimText.toLowerCase();
+  if (!q || !c) return 0.5;
   if (q === c) return 0.98;
   if (c.includes(q) || q.includes(c)) return 0.9;
   const qTokens = new Set(q.split(/\W+/).filter(Boolean));
   const cTokens = new Set(c.split(/\W+/).filter(Boolean));
   const overlap = [...qTokens].filter((t) => cTokens.has(t)).length;
   return Math.min(0.89, overlap / Math.max(qTokens.size, cTokens.size, 1));
+}
+
+function normalizePageSize(value: number): string {
+  if (!Number.isFinite(value)) return '10';
+  return String(Math.max(1, Math.min(20, Math.floor(value))));
 }
 
 export class GoogleFactCheckProvider {
@@ -56,13 +62,13 @@ export class GoogleFactCheckProvider {
     this.apiKey = apiKey;
   }
 
-  async searchClaims(query: string, languageCode = 'en'): Promise<FactCheckMatch[]> {
+  async searchClaims(query: string, languageCode = 'en', pageSize = 10): Promise<FactCheckMatch[]> {
     if (!this.apiKey || !query.trim()) return [];
 
     const url = new URL('https://factchecktools.googleapis.com/v1alpha1/claims:search');
     url.searchParams.set('query', query);
     url.searchParams.set('languageCode', languageCode);
-    url.searchParams.set('pageSize', '10');
+    url.searchParams.set('pageSize', normalizePageSize(pageSize));
     url.searchParams.set('key', this.apiKey);
 
     const data = await fetchJson<ClaimSearchResponse>(url.toString(), { method: 'GET' });
@@ -78,11 +84,13 @@ export class GoogleFactCheckProvider {
     return out.sort((a, b) => b.matchConfidence - a.matchConfidence);
   }
 
-  async imageSearch(imageUri: string): Promise<FactCheckMatch[]> {
+  async imageSearch(imageUri: string, languageCode = 'en', pageSize = 10): Promise<FactCheckMatch[]> {
     if (!this.apiKey || !imageUri.trim()) return [];
 
     const url = new URL('https://factchecktools.googleapis.com/v1alpha1/claims:imageSearch');
     url.searchParams.set('imageUri', imageUri);
+    url.searchParams.set('languageCode', languageCode);
+    url.searchParams.set('pageSize', normalizePageSize(pageSize));
     url.searchParams.set('key', this.apiKey);
 
     const data = await fetchJson<ImageSearchResponse>(url.toString(), { method: 'GET' });

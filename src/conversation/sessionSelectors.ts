@@ -69,11 +69,12 @@ export function useThreadProjection(
 ) {
   const session = useConversationSession(sessionId);
   const interpolatorEnabled = useInterpolatorSettingsStore((state) => state.enabled);
+  const showPrimaryReasons = useInterpolatorSettingsStore((state) => state.showPrimaryReasons);
 
   return useMemo(() => {
     if (!session) return null;
     return projectThreadView(session, defaultAnchorLinearPolicy, activeFilter);
-  }, [session, activeFilter, interpolatorEnabled]);
+  }, [session, activeFilter, interpolatorEnabled, showPrimaryReasons]);
 }
 
 export function useTimelineConversationHintsProjection(

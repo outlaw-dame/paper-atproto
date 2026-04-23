@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-04-23T13:50:39.203Z",
+  "mode": "recorded",
+  "baseUrl": null,
+  "summary": {
+    "fixtureCount": 3,
+    "scoredCount": 3,
+    "errorCount": 0,
+    "averageScore": 94.7
+  },
+  "fixtures": [
+    {
+      "id": "covid-microchip-claim",
+      "description": "Widely fact-checked vaccine microchip misinformation claim.",
+      "mode": "recorded",
+      "quality": {
+        "score": 92.1,
+        "grade": "excellent",
+        "components": [
+          {
+            "id": "match_calibration",
+            "label": "Match calibration",
+            "weight": 0.3,
+            "score": 1,
+            "evidence": {
+              "expectedMatch": true,
+              "actualMatched": true
+            }
+          },
+          {
+            "id": "hit_relevance",
+            "label": "Hit relevance",
+            "weight": 0.25,
+            "score": 1,
+            "evidence": {
+              "expectedTermHits": 2,
+              "expectedTerms": 2
+            }
+          },
+          {
+            "id": "rating_signal",
+            "label": "Rating signal",
+            "weight": 0.15,
+            "score": 0.5,
+            "evidence": {
+              "ratingTermHits": 1,
+              "expectedRatingTerms": 2
+            }
+          },
+          {
+            "id": "hit_depth",
+            "label": "Hit depth",
+            "weight": 0.1,
+            "score": 1,
+            "evidence": {
+              "hitCount": 1,
+              "minimumHitCount": 1
+            }
+          },
+          {
+            "id": "source_diversity",
+            "label": "Source diversity",
+            "weight": 0.1,
+            "score": 1,
+            "evidence": {
+              "publisherCount": 1,
+              "hitCount": 1
+            }
+          },
+          {
+            "id": "confidence_calibration",
+            "label": "Confidence calibration",
+            "weight": 0.05,
+            "score": 0.92,
+            "evidence": {
+              "averageConfidence": 0.92
+            }
+          },
+          {
+            "id": "disallowed_noise",
+            "label": "Disallowed noise",
+            "weight": 0.05,
+            "score": 1,
+            "evidence": {
+              "disallowedHits": 0
+            }
+          }
+        ]
+      },
+      "result": {
+        "matched": true,
+        "hitCount": 1,
+        "model": "recorded-google-fact-check-shape",
+        "latencyMs": 0
+      }
+    },
+    {
+      "id": "eiffel-tower-location",
+      "description": "Ordinary true claim should not create noisy fact-check matches.",
+      "mode": "recorded",
+      "quality": {
+        "score": 100,
+        "grade": "excellent",
+        "components": [
+          {
+            "id": "match_calibration",
+            "label": "Match calibration",
+            "weight": 0.3,
+            "score": 1,
+            "evidence": {
+              "expectedMatch": false,
+              "actualMatched": false
+            }
+          },
+          {
+            "id": "hit_relevance",
+            "label": "Hit relevance",
+            "weight": 0.25,
+            "score": 1,
+            "evidence": {
+              "expectedTermHits": 0,
+              "expectedTerms": 0
+            }
+          },
+          {
+            "id": "rating_signal",
+            "label": "Rating signal",
+            "weight": 0.15,
+            "score": 1,
+            "evidence": {
+              "ratingTermHits": 0,
+              "expectedRatingTerms": 0
+            }
+          },
+          {
+            "id": "hit_depth",
+            "label": "Hit depth",
+            "weight": 0.1,
+            "score": 1,
+            "evidence": {
+              "hitCount": 0,
+              "minimumHitCount": 0
+            }
+          },
+          {
+            "id": "source_diversity",
+            "label": "Source diversity",
+            "weight": 0.1,
+            "score": 1,
+            "evidence": {
+              "publisherCount": 0,
+              "hitCount": 0
+            }
+          },
+          {
+            "id": "confidence_calibration",
+            "label": "Confidence calibration",
+            "weight": 0.05,
+            "score": 1,
+            "evidence": {
+              "averageConfidence": 0
+            }
+          },
+          {
+            "id": "disallowed_noise",
+            "label": "Disallowed noise",
+            "weight": 0.05,
+            "score": 1,
+            "evidence": {
+              "disallowedHits": 0
+            }
+          }
+        ]
+      },
+      "result": {
+        "matched": false,
+        "hitCount": 0,
+        "model": "recorded-google-fact-check-shape",
+        "latencyMs": 0
+      }
+    },
+    {
+      "id": "moon-landing-hoax-claim",
+      "description": "Classic conspiracy claim should retrieve fact-check context when live providers are healthy.",
+      "mode": "recorded",
+      "quality": {
+        "score": 91.9,
+        "grade": "excellent",
+        "components": [
+          {
+            "id": "match_calibration",
+            "label": "Match calibration",
+            "weight": 0.3,
+            "score": 1,
+            "evidence": {
+              "expectedMatch": true,
+              "actualMatched": true
+            }
+          },
+          {
+            "id": "hit_relevance",
+            "label": "Hit relevance",
+            "weight": 0.25,
+            "score": 1,
+            "evidence": {
+              "expectedTermHits": 2,
+              "expectedTerms": 2
+            }
+          },
+          {
+            "id": "rating_signal",
+            "label": "Rating signal",
+            "weight": 0.15,
+            "score": 0.5,
+            "evidence": {
+              "ratingTermHits": 1,
+              "expectedRatingTerms": 2
+            }
+          },
+          {
+            "id": "hit_depth",
+            "label": "Hit depth",
+            "weight": 0.1,
+            "score": 1,
+            "evidence": {
+              "hitCount": 1,
+              "minimumHitCount": 1
+            }
+          },
+          {
+            "id": "source_diversity",
+            "label": "Source diversity",
+            "weight": 0.1,
+            "score": 1,
+            "evidence": {
+              "publisherCount": 1,
+              "hitCount": 1
+            }
+          },
+          {
+            "id": "confidence_calibration",
+            "label": "Confidence calibration",
+            "weight": 0.05,
+            "score": 0.88,
+            "evidence": {
+              "averageConfidence": 0.88
+            }
+          },
+          {
+            "id": "disallowed_noise",
+            "label": "Disallowed noise",
+            "weight": 0.05,
+            "score": 1,
+            "evidence": {
+              "disallowedHits": 0
+            }
+          }
+        ]
+      },
+      "result": {
+        "matched": true,
+        "hitCount": 1,
+        "model": "recorded-google-fact-check-shape",
+        "latencyMs": 0
+      }
+    }
+  ],
+  "artifact": "/Users/damonoutlaw/paper-atproto/artifacts/evals/fact-check-quality.json"
+}

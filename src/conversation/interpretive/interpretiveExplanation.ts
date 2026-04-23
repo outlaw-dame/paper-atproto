@@ -2,11 +2,38 @@ import type { SummaryMode } from '../../intelligence/llmContracts';
 import type {
   InterpretiveConfidenceExplanation,
   InterpretiveConfidenceFactors,
+  InterpretiveFactorContribution,
+  InterpretiveFactorId,
 } from '../sessionTypes';
 import type {
   AppliedInterpretiveGate,
   InterpretiveGateReason,
 } from './interpretiveGates';
+
+const INTERPRETIVE_FACTOR_IDS: InterpretiveFactorId[] = [
+  'semanticCoherence',
+  'evidenceAdequacy',
+  'contextCompleteness',
+  'perspectiveBreadth',
+  'ambiguityPenalty',
+  'contradictionPenalty',
+  'repetitionPenalty',
+  'heatPenalty',
+  'coverageGapPenalty',
+  'freshnessPenalty',
+  'sourceIntegritySupport',
+  'userLabelSupport',
+  'signalAgreement',
+];
+
+const PENALTY_FACTORS = new Set<InterpretiveFactorId>([
+  'ambiguityPenalty',
+  'contradictionPenalty',
+  'repetitionPenalty',
+  'heatPenalty',
+  'coverageGapPenalty',
+  'freshnessPenalty',
+]);
 
 const POSITIVE_FACTOR_LABELS: Record<
   keyof Pick<
@@ -17,7 +44,7 @@ const POSITIVE_FACTOR_LABELS: Record<
     | 'perspectiveBreadth'
     | 'sourceIntegritySupport'
     | 'userLabelSupport'
-    | 'modelAgreement'
+    | 'signalAgreement'
   >,
   { code: string; label: string }
 > = {
@@ -27,7 +54,23 @@ const POSITIVE_FACTOR_LABELS: Record<
   perspectiveBreadth: { code: 'perspective_breadth', label: 'multiple perspectives' },
   sourceIntegritySupport: { code: 'source_integrity', label: 'credible source support' },
   userLabelSupport: { code: 'user_labels', label: 'aligned user feedback' },
-  modelAgreement: { code: 'model_agreement', label: 'consistent signals' },
+  signalAgreement: { code: 'signal_agreement', label: 'consistent signals' },
+};
+
+const FACTOR_LABELS: Record<InterpretiveFactorId, string> = {
+  semanticCoherence: 'Coherent theme',
+  evidenceAdequacy: 'Strong evidence',
+  contextCompleteness: 'Good context',
+  perspectiveBreadth: 'Multiple perspectives',
+  ambiguityPenalty: 'Ambiguous discussion',
+  contradictionPenalty: 'Conflicting claims',
+  repetitionPenalty: 'Repeated points',
+  heatPenalty: 'Heated tone',
+  coverageGapPenalty: 'Limited coverage',
+  freshnessPenalty: 'Still developing',
+  sourceIntegritySupport: 'Credible sources',
+  userLabelSupport: 'User feedback aligned',
+  signalAgreement: 'Consistent signals',
 };
 
 const GATE_DEGRADATIONS: Record<InterpretiveGateReason, { code: string; label: string }> = {
@@ -48,6 +91,7 @@ const DEGRADATION_LABELS: Record<string, string> = {
   coverage_gap: 'coverage gaps',
   fresh_context: 'fast-moving context',
   shallow_thread: 'shallow thread depth',
+  model_agreement: 'consistent signals',
 };
 
 export function buildInterpretiveExplanation(params: {
@@ -55,8 +99,9 @@ export function buildInterpretiveExplanation(params: {
   mode: SummaryMode;
   factors: InterpretiveConfidenceFactors;
   gates: AppliedInterpretiveGate[];
+  weights: Record<string, number>;
 }): InterpretiveConfidenceExplanation {
-  const { score, mode, factors, gates } = params;
+  const { score, mode, factors, gates, weights } = params;
 
   const boostedBy = rankPositiveFactors(factors)
     .filter((entry) => entry.value >= 0.58)
@@ -85,6 +130,9 @@ export function buildInterpretiveExplanation(params: {
 
   rationale.push(modeRationale(mode, score));
 
+  const contributions = buildFactorContributions(factors, weights);
+  const primaryReasons = derivePrimaryReasons(contributions, gates);
+
   return {
     score,
     mode,
@@ -92,6 +140,14 @@ export function buildInterpretiveExplanation(params: {
     rationale,
     boostedBy,
     degradedBy,
+    schemaVersion: 2,
+    contributions,
+    primaryReasons,
+    v2: {
+      schemaVersion: 2,
+      contributions,
+      primaryReasons,
+    },
   };
 }
 
@@ -99,6 +155,60 @@ export function humanizeInterpretiveReason(code: string): string {
   return DEGRADATION_LABELS[code]
     ?? Object.values(POSITIVE_FACTOR_LABELS).find((entry) => entry.code === code)?.label
     ?? code.replace(/_/g, ' ');
+}
+
+export function humanizeInterpretiveFactorId(factor: InterpretiveFactorId): string {
+  return FACTOR_LABELS[factor] ?? factor.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+export function buildFactorContributions(
+  factors: InterpretiveConfidenceFactors,
+  weights: Record<string, number>,
+): InterpretiveFactorContribution[] {
+  return INTERPRETIVE_FACTOR_IDS.map((factor) => {
+    const value = factorValue(factors, factor);
+    const weight = weights[factor] ?? 0;
+    const centered = PENALTY_FACTORS.has(factor)
+      ? 0.5 - value
+      : value - 0.5;
+    const delta = clamp(-1, 1, centered * weight * 2);
+
+    return {
+      factor,
+      delta,
+      direction: directionFromDelta(delta),
+      severity: severityFromDelta(delta),
+      evidence: {
+        magnitude: magnitudeFromValue(value),
+      },
+    };
+  });
+}
+
+export function derivePrimaryReasons(
+  contributions: InterpretiveFactorContribution[],
+  gates: AppliedInterpretiveGate[] = [],
+): InterpretiveFactorId[] {
+  const gateReasons = gates
+    .map((gate): InterpretiveFactorId | null => {
+      switch (gate.reason) {
+        case 'insufficient_context':
+        case 'shallow_thread':
+          return 'contextCompleteness';
+        case 'low_evidence_high_ambiguity':
+          return 'ambiguityPenalty';
+        case 'rapid_contradiction_without_support':
+          return 'contradictionPenalty';
+      }
+    })
+    .filter((factor): factor is InterpretiveFactorId => factor !== null);
+
+  const ranked = contributions
+    .filter((contribution) => contribution.severity !== 'minor')
+    .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+    .map((contribution) => contribution.factor);
+
+  return [...new Set([...gateReasons, ...ranked])].slice(0, 3);
 }
 
 function rankPositiveFactors(
@@ -109,7 +219,7 @@ function rankPositiveFactors(
   >)
     .map(([key, value]) => ({
       code: value.code,
-      value: factors[key],
+      value: factorValue(factors, key),
     }))
     .sort((left, right) => right.value - left.value);
 }
@@ -130,6 +240,38 @@ function rankNegativeFactors(
   ];
 
   return candidates.sort((left, right) => right.value - left.value);
+}
+
+function factorValue(
+  factors: InterpretiveConfidenceFactors,
+  factor: InterpretiveFactorId,
+): number {
+  if (factor === 'signalAgreement') {
+    return factors.signalAgreement ?? factors.modelAgreement ?? 0;
+  }
+  return factors[factor];
+}
+
+function severityFromDelta(delta: number): 'minor' | 'moderate' | 'major' {
+  const abs = Math.abs(delta);
+  if (abs >= 0.25) return 'major';
+  if (abs >= 0.12) return 'moderate';
+  return 'minor';
+}
+
+function directionFromDelta(delta: number): 'support' | 'limit' {
+  return delta >= 0 ? 'support' : 'limit';
+}
+
+function magnitudeFromValue(value: number): 'low' | 'medium' | 'high' {
+  if (value > 0.75) return 'high';
+  if (value > 0.5) return 'medium';
+  return 'low';
+}
+
+function clamp(min: number, max: number, value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(min, Math.min(max, value));
 }
 
 function modeRationale(mode: SummaryMode, score: number): string {

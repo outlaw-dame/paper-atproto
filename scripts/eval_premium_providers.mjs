@@ -3,6 +3,7 @@
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { evaluateConversationModelQuality } from '../src/evals/aiQualityRubric.ts';
 import { PREMIUM_PROVIDER_EVAL_FIXTURES } from '../src/evals/premiumProviderFixtures.ts';
 
 const DEFAULT_BASE_URL = process.env.PREMIUM_EVAL_BASE_URL?.trim() || 'http://127.0.0.1:3011';
@@ -323,6 +324,7 @@ function evaluateTargetOutput(fixture, target, result) {
     passed,
     total: checks.length,
     checks,
+    quality: evaluateConversationModelQuality(fixture, result),
     result,
     handleMentions,
     topicKeywordHits,
@@ -534,7 +536,7 @@ async function getRawLocalWriterRunner() {
   return rawLocalWriterRunnerPromise;
 }
 
-async function runTargetEvaluation(baseUrl, target, fixture) {
+export async function runTargetEvaluation(baseUrl, target, fixture) {
   if (PREMIUM_TARGETS.has(target)) {
     const payload = await postPremiumEvaluation(baseUrl, target, fixture.request);
     return {
@@ -610,7 +612,7 @@ function printHumanReport(report) {
         console.log(`  ${targetLabel(result.target)}: ERROR - ${result.error}`);
         continue;
       }
-      console.log(`  ${targetLabel(result.target)}: ${result.passed}/${result.total}`);
+      console.log(`  ${targetLabel(result.target)}: ${result.passed}/${result.total} checks • quality ${result.quality?.score ?? 0}/100 ${result.quality?.grade ?? 'n/a'}`);
       console.log(`    summary: ${sanitizeText(result.result.summary)}`);
       if (result.result.groundedContext) {
         console.log(`    context: ${sanitizeText(result.result.groundedContext)}`);
@@ -643,7 +645,10 @@ function printHumanReport(report) {
 
   console.log('overall:');
   for (const [target, aggregate] of Object.entries(report.overall)) {
-    console.log(`  ${targetLabel(target)}: ${aggregate.passed}/${aggregate.total}`);
+    const qualityAverage = aggregate.qualityCount > 0
+      ? Math.round((aggregate.qualityTotal / aggregate.qualityCount) * 10) / 10
+      : 0;
+    console.log(`  ${targetLabel(target)}: ${aggregate.passed}/${aggregate.total} checks • quality ${qualityAverage}/100`);
   }
 }
 
@@ -675,9 +680,11 @@ async function main() {
         const evaluation = evaluateTargetOutput(fixture, target, normalized);
         evaluation.telemetry = telemetry;
         fixtureReport.results.push(evaluation);
-        const aggregate = report.overall[target] ?? { passed: 0, total: 0 };
+        const aggregate = report.overall[target] ?? { passed: 0, total: 0, qualityTotal: 0, qualityCount: 0 };
         aggregate.passed += evaluation.passed;
         aggregate.total += evaluation.total;
+        aggregate.qualityTotal += evaluation.quality.score;
+        aggregate.qualityCount += 1;
         report.overall[target] = aggregate;
       } catch (error) {
         hadErrors = true;

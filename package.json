@@ -27,6 +27,8 @@
     "eval:conversation-os:review-pack": "node --import tsx scripts/export_conversation_os_human_review.mjs",
     "eval:conversation-os:review-score": "node --import tsx scripts/score_conversation_os_human_review.mjs",
     "eval:premium-providers": "node --import tsx scripts/eval_premium_providers.mjs",
+    "eval:fact-check-quality": "node --import tsx scripts/eval_fact_check_quality.mjs",
+    "proof:ai-architecture": "node --import tsx scripts/proof_ai_architecture.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "typecheck:cf": "tsc --noEmit --project functions/tsconfig.json",

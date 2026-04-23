@@ -199,7 +199,10 @@ function createSession(): ConversationSession {
 
 describe('buildInterpolatorSurfaceProjection', () => {
   afterEach(() => {
-    useInterpolatorSettingsStore.setState({ enabled: true });
+    useInterpolatorSettingsStore.setState({
+      enabled: true,
+      showPrimaryReasons: true,
+    });
   });
 
   it('uses cleaner sparse-thread wording for fallback summaries', () => {
@@ -231,5 +234,55 @@ describe('buildInterpolatorSurfaceProjection', () => {
     const projection = buildInterpolatorSurfaceProjection(session);
 
     expect(projection.summaryMode).toBe('minimal_fallback');
+  });
+
+  it('projects primary interpretive reasons behind the user setting', () => {
+    useInterpolatorSettingsStore.setState({
+      enabled: true,
+      showPrimaryReasons: true,
+    });
+    const session = createSession();
+    session.interpretation.interpretiveExplanation = {
+      score: 0.62,
+      mode: 'descriptive_fallback',
+      factors: {
+        semanticCoherence: 0.72,
+        evidenceAdequacy: 0.81,
+        contextCompleteness: 0.68,
+        perspectiveBreadth: 0.55,
+        ambiguityPenalty: 0.2,
+        contradictionPenalty: 0.18,
+        repetitionPenalty: 0.1,
+        heatPenalty: 0.12,
+        coverageGapPenalty: 0.22,
+        freshnessPenalty: 0.06,
+        sourceIntegritySupport: 0.7,
+        userLabelSupport: 0.25,
+        signalAgreement: 0.76,
+      },
+      rationale: [],
+      boostedBy: ['evidence_adequacy'],
+      degradedBy: ['coverage_gap'],
+      v2: {
+        schemaVersion: 2,
+        contributions: [],
+        primaryReasons: ['evidenceAdequacy', 'signalAgreement'],
+      },
+    };
+
+    const visibleProjection = buildInterpolatorSurfaceProjection(session);
+    expect(visibleProjection.explanation?.primaryReasons).toEqual([
+      'evidenceAdequacy',
+      'signalAgreement',
+    ]);
+    expect(visibleProjection.explanation?.primaryReasonLabels).toEqual([
+      'Strong evidence',
+      'Consistent signals',
+    ]);
+
+    useInterpolatorSettingsStore.setState({ showPrimaryReasons: false });
+    const hiddenProjection = buildInterpolatorSurfaceProjection(session);
+    expect(hiddenProjection.explanation?.primaryReasons).toEqual([]);
+    expect(hiddenProjection.explanation?.primaryReasonLabels).toEqual([]);
   });
 });

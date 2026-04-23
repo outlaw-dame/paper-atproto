@@ -22,6 +22,7 @@ import BadgeSyncBridge from './components/BadgeSyncBridge';
 import PushLifecycleBridge from './components/PushLifecycleBridge';
 import AppleEnhancementBridge from './components/AppleEnhancementBridge';
 import AndroidEnhancementBridge from './components/AndroidEnhancementBridge';
+import { InterpretiveInspector } from './components/dev/InterpretiveInspector';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 
 type RuntimeBoundaryProps = {
@@ -223,6 +224,7 @@ export default function App() {
             <Suspense fallback={null}>
               <MiniPlayer />
             </Suspense>
+            <InterpretiveInspector />
           </MiniPlayerProvider>
         </AtpProvider>
       </AppRuntimeBoundary>

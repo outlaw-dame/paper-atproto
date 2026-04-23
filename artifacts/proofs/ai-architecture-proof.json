@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-04-23T14:33:46.563Z",
+  "architecture": {
+    "substrate": "deterministic-signals",
+    "scoringAuthority": "session-interpretive-stack",
+    "projectionPolicy": "sanitized-derived-state"
+  },
+  "summary": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0
+  },
+  "proofs": [
+    {
+      "id": "verification.boundary.safe_browsing_is_not_fact_check",
+      "invariant": "Safe Browsing may preflight media URLs, but factual match state must come only from Fact Check provider hits.",
+      "passed": true,
+      "evidence": {
+        "factCheckRouteLength": 1354,
+        "factCheckContainsDirectSafeBrowsingVerdict": false,
+        "factCheckUsesMediaSanitizer": true,
+        "factCheckUsesFactCheckProvider": true,
+        "factCheckMatchedFromHits": true,
+        "factCheckHitsFromProviderMatches": true,
+        "mediaContainsSafeBrowsing": true,
+        "evidenceContainsSafeBrowsing": true
+      }
+    },
+    {
+      "id": "interpretive.fact_check_monotonicity",
+      "invariant": "Known Fact Check matches must strengthen evidence/source factors, while contested outcomes must increase contradiction pressure.",
+      "passed": true,
+      "evidence": {
+        "baseline": {
+          "evidenceAdequacy": 0.6129,
+          "sourceIntegritySupport": 0,
+          "contradictionPenalty": 0,
+          "signalAgreement": 0.7975
+        },
+        "knownFactCheckMatch": {
+          "evidenceAdequacy": 0.825,
+          "sourceIntegritySupport": 1,
+          "contradictionPenalty": 0.025,
+          "signalAgreement": 1
+        },
+        "contested": {
+          "evidenceAdequacy": 0.7407,
+          "sourceIntegritySupport": 0.695,
+          "contradictionPenalty": 0.65,
+          "signalAgreement": 1
+        },
+        "deltas": {
+          "evidenceKnownMinusBaseline": 0.2121,
+          "sourceKnownMinusBaseline": 1,
+          "contradictionContestedMinusKnown": 0.625
+        }
+      }
+    },
+    {
+      "id": "interpretive.explanation_v2_is_sanitized_projection",
+      "invariant": "Explanation v2 must expose structured factor evidence only, not raw post text, DIDs, URLs, or domains.",
+      "passed": true,
+      "evidence": {
+        "schemaVersion": 2,
+        "contributionCount": 13,
+        "primaryReasons": [
+          "contextCompleteness"
+        ],
+        "interpretiveConfidence": 0.45,
+        "explanationScore": 0.45,
+        "containsRaw": false
+      }
+    },
+    {
+      "id": "discovery.coverage_gap_is_structural_and_sanitized",
+      "invariant": "Coverage gap must report structural divergence only and must not expose raw domains, DIDs, or ideology labels.",
+      "passed": true,
+      "evidence": {
+        "signal": {
+          "magnitude": 1,
+          "kind": "divergent_sources",
+          "comparisonCount": 2,
+          "schemaVersion": 1
+        },
+        "containsRaw": false,
+        "hasIdeologyKeys": false
+      }
+    },
+    {
+      "id": "discovery.canonical_story_identity_is_deterministic",
+      "invariant": "Canonical story identity must be stable across signal ordering and preserve only protocol-family metadata.",
+      "passed": true,
+      "evidence": {
+        "leftId": "story:905988e9",
+        "rightId": "story:905988e9",
+        "identityId": "story:905988e9",
+        "protocols": [
+          "activitypub",
+          "atproto"
+        ],
+        "sourceThreadCount": 2
+      }
+    },
+    {
+      "id": "discovery.story_clustering_requires_strong_anchors",
+      "invariant": "Story clustering must not merge on shared domain alone, but must merge exact cross-protocol link anchors.",
+      "passed": true,
+      "evidence": {
+        "sameDomainClusterCount": 2,
+        "sameDomainPostGroups": [
+          1,
+          1
+        ],
+        "crossProtocolClusterCount": 1,
+        "crossProtocolPostCount": 2,
+        "crossProtocolExternalUrls": [
+          "https://example.com/report"
+        ]
+      }
+    },
+    {
+      "id": "projection.canonical_story_projection_is_sanitized",
+      "invariant": "Story projection may expose canonical identity metadata, but not raw canonical story source URLs or DIDs.",
+      "passed": true,
+      "evidence": {
+        "canonicalStory": {
+          "id": "story:5f3c3b2e",
+          "protocols": [
+            "atproto"
+          ],
+          "sourceThreadCount": 2,
+          "confidence": 0.30666666666666664,
+          "signalCounts": {
+            "externalUrls": 1,
+            "entityIds": 0,
+            "quotedUris": 0,
+            "rootUris": 2
+          }
+        },
+        "containsRaw": false
+      }
+    },
+    {
+      "id": "ranking.ethical_engagement_is_bounded_by_interpretive_quality",
+      "invariant": "Adaptive ranking may reorder within bounded guardrails, but engagement must not overpower interpretive quality or feed back into confidence.",
+      "passed": true,
+      "evidence": {
+        "highConfidenceLowEngagement": {
+          "score": 0.6032,
+          "interpretiveContribution": 0.432,
+          "engagementEffect": -0.144
+        },
+        "lowConfidenceHighEngagement": {
+          "score": 0.3443,
+          "interpretiveContribution": 0.216,
+          "engagementEffect": 0.072
+        },
+        "weakGuardedStory": {
+          "score": 0.3207,
+          "appliedGuardrails": [
+            "low_diversity",
+            "coverage_gap",
+            "confidence_floor"
+          ],
+          "diversityAdjustment": -0.0524,
+          "coverageGapAdjustment": -0.0707,
+          "confidenceFloorAdjustment": -0.0802
+        },
+        "policy": {
+          "interpretiveWeight": 0.6,
+          "engagementWeight": 0.2,
+          "maxEngagementInfluenceRate": 0.2
+        }
+      }
+    },
+    {
+      "id": "ranking.local_personalization_is_local_bounded_and_non_identifying",
+      "invariant": "Personalization may be local and user-controlled, but it must store only preference weights and remain secondary to interpretive quality.",
+      "passed": true,
+      "evidence": {
+        "highConfidencePoorFit": {
+          "score": 0.5312,
+          "personalizationAdjustment": -0.072,
+          "maxInfluence": 0.072
+        },
+        "lowConfidenceStrongFit": {
+          "score": 0.3803,
+          "personalizationAdjustment": 0.036,
+          "maxInfluence": 0.036
+        },
+        "disabledAdjustment": {
+          "adjustment": 0,
+          "enabled": false
+        },
+        "storedKeys": [
+          "breadth",
+          "depth",
+          "enabled",
+          "recency",
+          "sampleCount",
+          "schemaVersion",
+          "updatedAt"
+        ],
+        "containsRawOrIdeology": false
+      }
+    },
+    {
+      "id": "privacy.local_user_data_is_browser_local_only",
+      "invariant": "App-owned content history, preferences, personalization, and diagnostic history must remain browser-local, bounded, resettable, and excluded from remote user-data sync.",
+      "passed": true,
+      "evidence": {
+        "policyValid": true,
+        "failures": [],
+        "surfaceCount": 7,
+        "categories": {
+          "content_history": 2,
+          "local_personalization": 1,
+          "local_preference": 1,
+          "ui_resume": 1,
+          "diagnostic_history": 2
+        },
+        "remoteUserDataSyncAllowed": false,
+        "mirroredManifestKeys": [],
+        "preferenceMirrorIsNoop": true,
+        "recoveryMirrorIsNoop": true,
+        "bridgeUsesLocalOnlyPolicy": true
+      }
+    }
+  ]
+}

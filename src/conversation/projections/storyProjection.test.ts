@@ -208,7 +208,7 @@ function createSession(): ConversationSession {
           freshnessPenalty: 0.05,
           sourceIntegritySupport: 0.63,
           userLabelSupport: 0.2,
-          modelAgreement: 0.68,
+          signalAgreement: 0.68,
         },
         rationale: [],
         boostedBy: ['semanticCoherence'],
@@ -308,6 +308,11 @@ describe('story projection', () => {
 
     expect(projection.query).toBe('ai policy');
     expect(projection.resultCount).toBe(2);
+    expect(projection.presentationMode).toBe('glanceable');
+    expect(projection.badges).toEqual([]);
+    expect(projection.canonicalStory?.id).toMatch(/^story:[0-9a-f]{8}$/);
+    expect(projection.canonicalStory?.protocols).toEqual(['atproto']);
+    expect(projection.canonicalStory?.sourceThreadCount).toBe(1);
     expect(projection.overview?.text).toContain('[translated]');
     expect(projection.overview?.domain).toBe('time.com');
     expect(projection.bestSource?.profileCardData?.variant).toBe('standard');
@@ -346,6 +351,10 @@ describe('story projection', () => {
     });
 
     expect(projection.sessionBackedCount).toBe(2);
+    expect(projection.presentationMode).toBe('descriptive');
+    expect(projection.clusterConfidence).toBeGreaterThan(0.4);
+    expect(projection.canonicalStory?.signalCounts.rootUris).toBe(1);
+    expect(projection.canonicalStory?.sourceThreadCount).toBe(2);
     expect(projection.overview?.isSessionBacked).toBe(true);
     expect(projection.overview?.synopsisText).toBe(
       'The thread centers on sourcing requests and clarifications around the claim.',
@@ -357,5 +366,50 @@ describe('story projection', () => {
     );
     expect(projection.relatedEntities.actors[0]?.label).toBe('Jane Doe');
     expect(projection.relatedEntities.topics[0]?.label).toBe('Policy Enforcement');
+  });
+
+  it('projects coverage-gap signals into discovery presentation policy', () => {
+    const posts = [
+      createPost({
+        id: ROOT_URI,
+        content: 'A sourced policy thread with wider coverage gaps.',
+      }),
+      createPost({
+        id: REPLY_URI,
+        content: 'A related reply.',
+        threadRoot: createPost({ id: ROOT_URI, content: 'A sourced policy thread with wider coverage gaps.' }),
+      }),
+    ];
+    const session = createSession();
+
+    const projection = projectStoryView({
+      query: 'policy enforcement',
+      posts,
+      getTranslatedText: (post) => post.content,
+      sessionsByRootUri: {
+        [ROOT_URI]: {
+          ...session,
+          interpretation: {
+            ...session.interpretation,
+            confidence: {
+              surfaceConfidence: 0.8,
+              entityConfidence: 0.72,
+              interpretiveConfidence: 0.82,
+            },
+          },
+        },
+      },
+      coverageGapSignal: {
+        magnitude: 0.7,
+        kind: 'divergent_sources',
+        comparisonCount: 3,
+        schemaVersion: 1,
+      },
+    });
+
+    expect(projection.coverageGap).toBe(0.7);
+    expect(projection.divergenceIndicator).toBe('divergent_sources');
+    expect(projection.badges).toEqual(['divergent-coverage']);
+    expect(projection.presentationMode).toBe('glanceable');
   });
 });

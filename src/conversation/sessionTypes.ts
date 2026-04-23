@@ -82,7 +82,43 @@ export interface InterpretiveConfidenceFactors {
   freshnessPenalty: number;
   sourceIntegritySupport: number;
   userLabelSupport: number;
-  modelAgreement: number;
+  signalAgreement: number;
+  /** Legacy serialized name. Prefer signalAgreement. */
+  modelAgreement?: number;
+}
+
+export type InterpretiveFactorId =
+  | 'semanticCoherence'
+  | 'evidenceAdequacy'
+  | 'contextCompleteness'
+  | 'perspectiveBreadth'
+  | 'ambiguityPenalty'
+  | 'contradictionPenalty'
+  | 'repetitionPenalty'
+  | 'heatPenalty'
+  | 'coverageGapPenalty'
+  | 'freshnessPenalty'
+  | 'sourceIntegritySupport'
+  | 'userLabelSupport'
+  | 'signalAgreement';
+
+export interface InterpretiveFactorContribution {
+  factor: InterpretiveFactorId;
+  /** Centered factor contribution to the final score, bounded to [-1, 1]. */
+  delta: number;
+  direction: 'support' | 'limit';
+  severity: 'minor' | 'moderate' | 'major';
+  evidence?: {
+    postCount?: number;
+    contributorCount?: number;
+    magnitude?: 'low' | 'medium' | 'high';
+  };
+}
+
+export interface InterpretiveConfidenceExplanationV2 {
+  schemaVersion: 2;
+  contributions: InterpretiveFactorContribution[];
+  primaryReasons: InterpretiveFactorId[];
 }
 
 export interface InterpretiveConfidenceExplanation {
@@ -92,6 +128,10 @@ export interface InterpretiveConfidenceExplanation {
   rationale: string[];
   boostedBy: string[];
   degradedBy: string[];
+  schemaVersion?: 2;
+  contributions?: InterpretiveFactorContribution[];
+  primaryReasons?: InterpretiveFactorId[];
+  v2?: InterpretiveConfidenceExplanationV2;
 }
 
 export interface InterpretiveState {

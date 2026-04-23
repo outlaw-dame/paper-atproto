@@ -42,7 +42,7 @@ export const INTERPRETIVE_CONFIDENCE_WEIGHTS = {
   perspectiveBreadth: 0.12,
   sourceIntegritySupport: 0.10,
   userLabelSupport: 0.08,
-  modelAgreement: 0.06,
+  signalAgreement: 0.06,
   ambiguityPenalty: 0.04,
   contradictionPenalty: 0.03,
   repetitionPenalty: 0.01,
@@ -65,7 +65,7 @@ export const INTERPRETIVE_CONFIDENCE_GATES = {
   evidenceAdequacyFloor: 0.25,
   ambiguityCeiling: 0.70,
   contradictionCeiling: 0.75,
-  modelAgreementFloor: 0.30,
+  signalAgreementFloor: 0.30,
   shallowThreadNodeCount: 4,
 } as const;
 

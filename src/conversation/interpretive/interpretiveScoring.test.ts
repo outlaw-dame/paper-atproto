@@ -182,6 +182,12 @@ describe('interpretive scoring', () => {
     expect(session.interpretation.interpretiveExplanation?.mode).toBe('normal');
     expect(session.interpretation.confidence?.interpretiveConfidence ?? 0).toBeGreaterThanOrEqual(0.72);
     expect(session.interpretation.interpretiveExplanation?.boostedBy).toContain('evidence_adequacy');
+    expect(session.interpretation.interpretiveExplanation?.schemaVersion).toBe(2);
+    expect(session.interpretation.interpretiveExplanation?.primaryReasons?.length).toBeGreaterThan(0);
+    expect(session.interpretation.interpretiveExplanation?.contributions?.some((contribution) => {
+      return contribution.factor === 'signalAgreement'
+        && contribution.evidence?.magnitude !== undefined;
+    })).toBe(true);
     expect(session.interpretation.threadState?.interpretiveState?.contextCompleteness).toBe('high');
   });
 
@@ -234,6 +240,178 @@ describe('interpretive scoring', () => {
     expect(session.interpretation.confidence?.interpretiveConfidence ?? 1).toBeLessThanOrEqual(0.35);
     expect(session.interpretation.interpretiveExplanation?.degradedBy).toContain('high_ambiguity');
     expect(session.interpretation.interpretiveExplanation?.degradedBy).toContain('limited_evidence');
+  });
+
+  it('uses Google Fact Check verification matches to strengthen evidence and source factors', () => {
+    const factChecked = finalizeSession(createFixtureSession({
+      replies: [
+        {
+          uri: 'at://did:plc:fact/app.bsky.feed.post/1',
+          authorDid: 'did:plc:fact',
+          authorHandle: 'fact.test',
+          text: 'The inspection report was fact checked and the source confirms the Friday closure timeline.',
+          score: createScore({
+            role: 'source_bringer',
+            usefulnessScore: 0.7,
+            finalInfluenceScore: 0.72,
+            sourceSupport: 0.72,
+            factualContributionScore: 0.68,
+            factualConfidence: 0.7,
+          }),
+          verification: createVerification({
+            factCheck: {
+              matched: true,
+              hits: [{
+                url: 'https://factcheck.example/review',
+                matchConfidence: 0.92,
+              }],
+            },
+            factualState: 'known-fact-check-match',
+            reasons: ['known-fact-check-match', 'multiple-reputable-sources'],
+            sourcePresence: 0.72,
+            sourceQuality: 0.76,
+            corroborationLevel: 0.7,
+            factualContributionScore: 0.68,
+          }),
+        },
+      ],
+      interpolator: createInterpolator({
+        summaryText: 'Replies discuss the inspection report timeline.',
+        sourceSupportPresent: true,
+        factualSignalPresent: true,
+      }),
+      confidence: {
+        surfaceConfidence: 0.7,
+        entityConfidence: 0.62,
+        interpretiveConfidence: 0.4,
+      },
+      heatLevel: 0.1,
+      repetitionLevel: 0.1,
+      rootText: 'Is City Hall closing Friday because of the inspection report?',
+    }));
+    const unsupported = finalizeSession(createFixtureSession({
+      replies: [
+        {
+          uri: 'at://did:plc:weak/app.bsky.feed.post/1',
+          authorDid: 'did:plc:weak',
+          authorHandle: 'weak.test',
+          text: 'The inspection report supposedly proves the Friday closure, but there is not much sourcing here.',
+          score: createScore({
+            role: 'source_bringer',
+            usefulnessScore: 0.7,
+            finalInfluenceScore: 0.72,
+            sourceSupport: 0.72,
+            factualContributionScore: 0.68,
+            factualConfidence: 0.7,
+          }),
+          verification: createVerification({
+            factualState: 'unsupported-so-far',
+            reasons: ['no-strong-evidence-yet'],
+            sourcePresence: 0.2,
+            sourceQuality: 0.18,
+            corroborationLevel: 0.1,
+            factualContributionScore: 0.2,
+          }),
+        },
+      ],
+      interpolator: createInterpolator({
+        summaryText: 'Replies discuss the inspection report timeline.',
+        sourceSupportPresent: true,
+        factualSignalPresent: true,
+      }),
+      confidence: {
+        surfaceConfidence: 0.7,
+        entityConfidence: 0.62,
+        interpretiveConfidence: 0.4,
+      },
+      heatLevel: 0.1,
+      repetitionLevel: 0.1,
+      rootText: 'Is City Hall closing Friday because of the inspection report?',
+    }));
+
+    expect(factChecked.interpretation.interpretiveExplanation?.factors.evidenceAdequacy ?? 0)
+      .toBeGreaterThan(unsupported.interpretation.interpretiveExplanation?.factors.evidenceAdequacy ?? 0);
+    expect(factChecked.interpretation.interpretiveExplanation?.factors.sourceIntegritySupport ?? 0)
+      .toBeGreaterThan(unsupported.interpretation.interpretiveExplanation?.factors.sourceIntegritySupport ?? 0);
+  });
+
+  it('reduces blunt contradiction penalty for well-sourced corrective disagreement', () => {
+    const contested = finalizeSession(createFixtureSession({
+      replies: [
+        {
+          uri: 'at://did:plc:contested/app.bsky.feed.post/1',
+          authorDid: 'did:plc:contested',
+          authorHandle: 'contested.test',
+          text: 'I disagree; the report says the opposite, but no one has resolved which version is current.',
+          score: createScore({
+            role: 'useful_counterpoint',
+            usefulnessScore: 0.64,
+            finalInfluenceScore: 0.66,
+            factualContributionScore: 0.45,
+            factualConfidence: 0.45,
+          }),
+          verification: createVerification({
+            factualState: 'contested',
+            reasons: ['conflicting-reputable-sources'],
+            contradictionLevel: 0.62,
+            corroborationLevel: 0.25,
+            sourcePresence: 0.3,
+          }),
+        },
+      ],
+      interpolator: createInterpolator({
+        summaryText: 'Replies disagree about which report version is current.',
+        factualSignalPresent: true,
+      }),
+      confidence: {
+        surfaceConfidence: 0.55,
+        entityConfidence: 0.45,
+        interpretiveConfidence: 0.35,
+      },
+      heatLevel: 0.12,
+      repetitionLevel: 0.08,
+      rootText: 'The current report appears to contradict the earlier city statement.',
+    }));
+    const corrective = finalizeSession(createFixtureSession({
+      replies: [
+        {
+          uri: 'at://did:plc:corrective/app.bsky.feed.post/1',
+          authorDid: 'did:plc:corrective',
+          authorHandle: 'corrective.test',
+          text: 'I disagree, but two reputable sources show one report is newer and clarify why the earlier quote is incomplete.',
+          score: createScore({
+            role: 'useful_counterpoint',
+            usefulnessScore: 0.64,
+            finalInfluenceScore: 0.66,
+            factualContributionScore: 0.45,
+            factualConfidence: 0.45,
+          }),
+          verification: createVerification({
+            factualState: 'contested',
+            reasons: ['multiple-reputable-sources', 'corrective-context'],
+            contradictionLevel: 0.62,
+            corroborationLevel: 0.72,
+            correctionValue: 0.7,
+            sourcePresence: 0.8,
+          }),
+        },
+      ],
+      interpolator: createInterpolator({
+        summaryText: 'Replies disagree about which report version is current.',
+        factualSignalPresent: true,
+      }),
+      confidence: {
+        surfaceConfidence: 0.55,
+        entityConfidence: 0.45,
+        interpretiveConfidence: 0.35,
+      },
+      heatLevel: 0.12,
+      repetitionLevel: 0.08,
+      rootText: 'The current report appears to contradict the earlier city statement.',
+    }));
+
+    expect(corrective.interpretation.interpretiveExplanation?.factors.contradictionPenalty ?? 1)
+      .toBeLessThan(contested.interpretation.interpretiveExplanation?.factors.contradictionPenalty ?? 0);
   });
 });
 
@@ -760,7 +938,7 @@ function createVerification(overrides: Partial<VerificationOutcome>): Verificati
     extractedClaims: {
       claims: [],
     },
-    factCheck: null,
+    factCheck: overrides.factCheck ?? null,
     grounding: null,
     media: null,
     claimType: overrides.claimType ?? 'factual_assertion',

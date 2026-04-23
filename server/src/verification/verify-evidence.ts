@@ -118,6 +118,20 @@ const emptyGrounding = {
   contradictionLevel: 0, quoteFidelity: 0, contextValue: 0, correctionValue: 0,
 };
 
+function dedupeFactCheckMatches(matches: VerificationResult['factCheckMatches']): VerificationResult['factCheckMatches'] {
+  const seen = new Set<string>();
+  const deduped: VerificationResult['factCheckMatches'] = [];
+
+  for (const match of matches) {
+    const key = `${match.reviewUrl}\u0000${match.claimText}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(match);
+  }
+
+  return deduped.sort((a, b) => b.matchConfidence - a.matchConfidence);
+}
+
 export async function verifyEvidence(input: VerificationInput): Promise<VerificationResult> {
   const factCheck = new GoogleFactCheckProvider();
   const grounding = new GeminiGroundingProvider();
@@ -134,8 +148,15 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
   const checkability = extractedClaim ? 0.75 : 0;
   const specificity = /\b\d|\bsection\b|\brule\b|\barticle\b/i.test(input.text) ? 0.65 : 0.4;
 
-  const [factMatches, grounded, mediaResult, linkedEntities] = await Promise.all([
+  const [claimFactMatches, imageFactMatches, grounded, mediaResult, linkedEntities] = await Promise.all([
     extractedClaim ? factCheck.searchClaims(extractedClaim, input.languageCode ?? 'en') : Promise.resolve([]),
+    input.imageUrls?.length
+      ? Promise.all(
+          input.imageUrls
+            .slice(0, env.VERIFY_MAX_URLS)
+            .map((imageUrl) => factCheck.imageSearch(imageUrl, input.languageCode ?? 'en').catch(() => [])),
+        ).then((matches) => matches.flat())
+      : Promise.resolve([]),
     extractedClaim
       ? grounding.groundClaim({
           claim: extractedClaim,
@@ -146,6 +167,7 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
     input.imageUrls?.[0] ? media.verifyImage(input.imageUrls[0]).catch(() => null) : Promise.resolve(null),
     entityLinking.linkEntities(input.text, input.topicHints ?? []).catch(() => []),
   ]);
+  const factMatches = dedupeFactCheckMatches([...claimFactMatches, ...imageFactMatches]);
 
   const entityGrounding = computeEntityGrounding(input.topicHints ?? [], linkedEntities);
 

@@ -1,6 +1,7 @@
 import type {
   ConversationContinuitySnapshot,
   ConversationSession,
+  InterpretiveFactorId,
 } from '../sessionTypes';
 import type { ProjectionPolicy } from '../sessionPolicies';
 import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
@@ -84,6 +85,8 @@ export interface ThreadProjection {
       interpretiveMode: string;
       primarySupports: string[];
       primaryLimits: string[];
+      primaryReasons: InterpretiveFactorId[];
+      primaryReasonLabels: string[];
     };
     heatLevel: number;
     repetitionLevel: number;

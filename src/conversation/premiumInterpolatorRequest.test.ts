@@ -267,7 +267,7 @@ describe('buildPremiumInterpolatorRequest', () => {
           freshnessPenalty: 0.19,
           sourceIntegritySupport: 0.78,
           userLabelSupport: 0.2,
-          modelAgreement: 0.61,
+          signalAgreement: 0.61,
         },
         rationale: [],
         boostedBy: ['source_integrity', 'perspective_breadth'],

@@ -8,7 +8,8 @@
 //   2. Extract entity impacts (persons, orgs, concepts, claims)
 //   3. Compute factualContribution as a POSITIVE evidence-derived signal
 //   4. Assign ContributionRole via a richer decision tree
-//   5. Derive knownFactCheckMatch from local thread evidence only (Phase 1)
+//   5. Derive a conservative local knownFactCheckMatch baseline. The verified
+//      thread pipeline can upgrade this via Google Fact Check Tools.
 //
 // abuseScore is kept at 0 — it is a Phase 2 concern (Detoxify / moderation
 // service) and must remain separate from usefulness ranking.
@@ -137,7 +138,8 @@ function computeFactualContribution(signals: EvidenceSignal[]): number {
 // ─── Conservative local fact-check match (Phase 1) ───────────────────────
 // Derived from convergent sourcing (same URL cited by ≥2 replies) and
 // high root-text claim overlap with citation present.
-// Phase 2: replace with live external fact-check lookup.
+// The server-backed verification lane can replace this baseline with live
+// Google Fact Check Tools matches.
 
 function deriveLocalFactCheckMatch(
   text: string,

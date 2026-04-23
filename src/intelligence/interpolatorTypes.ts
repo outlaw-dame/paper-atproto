@@ -171,10 +171,9 @@ export interface ContributionScore {
   // Phase 2: augment with live retrieval/verification layer.
   factualContribution: number;  // 0–1
 
-  // These three fields are present in the contract but are NOT yet
-  // populated from a live external verification service.
-  // Phase 1: derived conservatively from local thread evidence only.
-  // Phase 2: replace with server-side fact-check lookup + media provenance.
+  // Baseline scoring derives these conservatively from local thread evidence.
+  // runVerifiedThreadPipeline can upgrade them with server-side Google Fact
+  // Check Tools matches and media provenance.
   knownFactCheckMatch: boolean;
   factCheckMatchConfidence: number;  // 0–1
   mediaContextConfidence: number;    // 0–1

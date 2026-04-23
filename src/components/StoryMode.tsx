@@ -84,11 +84,12 @@ import {
   buildQuotedThreadScopedProfileCardData,
   projectThreadScopedProfileCardDataForNode,
 } from '../conversation/projections/profileCardProjection';
-import type { ConversationSession } from '../conversation/sessionTypes';
+import type { ConversationSession, InterpretiveFactorId } from '../conversation/sessionTypes';
 import ProfileCardTrigger from './ProfileCardTrigger';
 import type { ProfileCardData } from '../types/profileCard';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 import { Markdown } from './Markdown';
+import { InterpolatorReasons } from './interpolator/InterpolatorReasons';
 import { recordInterpolatorStageTiming } from '../perf/interpolatorTelemetry';
 import { renderSummaryText as renderSummaryTextCore } from './storyModeSummaryText';
 
@@ -1226,7 +1227,7 @@ function InterpolatorCard({
   heatLevel, repetitionLevel, sourceSupportPresent,
   replyCount, updatedAt,
   topContributors, entityLandscape, factualSignalPresent, basePerspectiveGaps,
-  premium,
+  premium, primaryReasons,
   onEntityTap,
 }: {
   rootUri: string;
@@ -1253,6 +1254,7 @@ function InterpolatorCard({
   factualSignalPresent: boolean;
   basePerspectiveGaps: string[];
   premium: PremiumThreadProjection;
+  primaryReasons?: InterpretiveFactorId[];
   onEntityTap?: (entity: WriterEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -1387,6 +1389,8 @@ function InterpolatorCard({
           {summaryMode === 'descriptive_fallback' ? 'Observable thread summary' : 'Early thread summary'}
         </p>
       )}
+
+      <InterpolatorReasons reasons={primaryReasons} />
 
       {/* Evidence row */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: expanded ? 16 : 0 }}>
@@ -3284,6 +3288,7 @@ function StoryModeContent({ entry, onClose }: Props) {
                     factualSignalPresent={threadVm?.interpolator?.factualSignalPresent ?? false}
                     basePerspectiveGaps={threadVm?.interpolator?.perspectiveGaps ?? []}
                     premium={threadVm?.interpolator?.premium ?? { status: 'idle', isEntitled: false }}
+                    primaryReasons={threadVm?.interpolator?.explanation?.primaryReasons ?? []}
                     onEntityTap={setActiveEntity}
                   />
                 )}

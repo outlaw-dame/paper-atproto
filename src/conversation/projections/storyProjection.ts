@@ -9,6 +9,19 @@ import {
   type TimelineConversationHint,
 } from './timelineProjection';
 import { buildInterpolatorSurfaceProjection } from '../adapters/interpolatorAdapter';
+import type { CoverageGapSignal } from '../discovery/coverageGap';
+import {
+  canonicalStoryIdentityFromCluster,
+  type StoryProtocol,
+} from '../discovery/canonicalStory';
+import { buildStoryClustersFromPosts } from '../discovery/storyClustering';
+import {
+  selectDiscoveryPresentationMode,
+  type DiscoveryPresentationMode,
+  type DiscoveryPresentationPolicyInput,
+} from './discoveryModePolicy';
+
+export type StoryProjectionBadge = 'divergent-coverage' | 'high-divergence';
 
 export interface StoryProjectedPost {
   post: MockPost;
@@ -33,10 +46,29 @@ export interface StoryEntityProjection {
   aliasCount: number;
 }
 
+export interface CanonicalStoryProjection {
+  id: string;
+  protocols: StoryProtocol[];
+  sourceThreadCount: number;
+  confidence: number;
+  signalCounts: {
+    externalUrls: number;
+    entityIds: number;
+    quotedUris: number;
+    rootUris: number;
+  };
+}
+
 export interface StoryProjection {
   query: string;
   resultCount: number;
   sessionBackedCount: number;
+  presentationMode: DiscoveryPresentationMode;
+  clusterConfidence: number;
+  coverageGap?: number;
+  divergenceIndicator?: CoverageGapSignal['kind'];
+  badges: StoryProjectionBadge[];
+  canonicalStory: CanonicalStoryProjection | null;
   overview: StoryProjectedPost | null;
   bestSource: StoryProjectedPost | null;
   relatedEntities: {
@@ -172,6 +204,67 @@ function mergeEntityLists(
   return merged;
 }
 
+function clusterSizeBucket(count: number): DiscoveryPresentationPolicyInput['clusterSize'] {
+  if (count <= 1) return 'single';
+  if (count <= 3) return 'small';
+  if (count <= 8) return 'medium';
+  return 'large';
+}
+
+function computeClusterConfidence(params: {
+  posts: StoryProjectedPost[];
+  sessions: ConversationSession[];
+  clusterSignalConfidence: number;
+}): number {
+  const sessionConfidence = average(
+    params.sessions
+      .map((session) => session.interpretation.confidence?.interpretiveConfidence)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
+    0,
+  );
+  const sessionBackedRatio = ratio(
+    params.posts.filter((post) => post.isSessionBacked).length,
+    params.posts.length,
+    0,
+  );
+  const resultDepth = Math.min(1, params.posts.length / 5);
+
+  return clamp01(
+    sessionConfidence > 0
+      ? 0.60 * sessionConfidence
+        + 0.15 * sessionBackedRatio
+        + 0.15 * resultDepth
+        + 0.10 * params.clusterSignalConfidence
+      : 0.45 * params.clusterSignalConfidence + 0.35 * resultDepth,
+  );
+}
+
+function buildCoverageBadges(coverageGapMagnitude: number): StoryProjectionBadge[] {
+  if (coverageGapMagnitude > 0.7) return ['high-divergence'];
+  if (coverageGapMagnitude > 0.5) return ['divergent-coverage'];
+  return [];
+}
+
+function projectCanonicalStory(
+  cluster: ReturnType<typeof buildStoryClustersFromPosts>[number] | undefined,
+): CanonicalStoryProjection | null {
+  if (!cluster) return null;
+  const identity = canonicalStoryIdentityFromCluster(cluster);
+
+  return {
+    id: identity.id,
+    protocols: identity.protocols,
+    sourceThreadCount: identity.sourceThreads.length,
+    confidence: identity.confidence,
+    signalCounts: {
+      externalUrls: identity.rootSignals.externalUrls.length,
+      entityIds: identity.rootSignals.entityIds.length,
+      quotedUris: identity.rootSignals.quotedUris.length,
+      rootUris: identity.rootSignals.rootUris.length,
+    },
+  };
+}
+
 export function rootUriForStoryPost(post: MockPost): string {
   return post.threadRoot?.id ?? post.id;
 }
@@ -223,6 +316,9 @@ export function projectStoryView(params: {
   posts: MockPost[];
   getTranslatedText: (post: MockPost) => string;
   sessionsByRootUri?: Record<string, ConversationSession | null | undefined>;
+  coverageGapSignal?: CoverageGapSignal;
+  userPresentationPreference?: DiscoveryPresentationPolicyInput['userPreference'];
+  surface?: DiscoveryPresentationPolicyInput['surface'];
 }): StoryProjection {
   const { query, posts, getTranslatedText, sessionsByRootUri = {} } = params;
   const projectedPosts = posts.map((post) =>
@@ -236,16 +332,44 @@ export function projectStoryView(params: {
     posts,
     getTranslatedText,
   });
-  const sessionEntities = toSessionEntityLists(
-    Object.values(sessionsByRootUri).filter(
-      (session): session is ConversationSession => session != null,
-    ),
+  const sessions = Object.values(sessionsByRootUri).filter(
+    (session): session is ConversationSession => session != null,
   );
+  const sessionEntities = toSessionEntityLists(sessions);
+  const coverageGapMagnitude = params.coverageGapSignal?.magnitude ?? 0;
+  const storyClusters = buildStoryClustersFromPosts(posts);
+  const primaryCluster = storyClusters.find(
+    (cluster) => overview?.post.id && cluster.postUris.includes(overview.post.id),
+  ) ?? storyClusters[0];
+  const clusterSignalConfidence = storyClusters.reduce(
+    (max, cluster) => Math.max(max, cluster.confidence),
+    0,
+  );
+  const clusterConfidence = computeClusterConfidence({
+    posts: projectedPosts,
+    sessions,
+    clusterSignalConfidence,
+  });
+  const presentationMode = selectDiscoveryPresentationMode({
+    clusterConfidence,
+    clusterSize: clusterSizeBucket(posts.length),
+    coverageGapMagnitude,
+    userPreference: params.userPresentationPreference ?? 'auto',
+    surface: params.surface ?? 'explore_home',
+  });
 
   return {
     query,
     resultCount: posts.length,
     sessionBackedCount: projectedPosts.filter((post) => post.isSessionBacked).length,
+    presentationMode,
+    clusterConfidence,
+    ...(params.coverageGapSignal ? { coverageGap: coverageGapMagnitude } : {}),
+    ...(params.coverageGapSignal && params.coverageGapSignal.kind !== 'none'
+      ? { divergenceIndicator: params.coverageGapSignal.kind }
+      : {}),
+    badges: buildCoverageBadges(coverageGapMagnitude),
+    canonicalStory: projectCanonicalStory(primaryCluster),
     overview,
     bestSource: overview,
     relatedEntities: {
@@ -254,4 +378,19 @@ export function projectStoryView(params: {
     },
     relatedConversations: projectedPosts.slice(1, 6),
   };
+}
+
+function average(values: number[], fallback = 0): number {
+  if (values.length === 0) return fallback;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function ratio(numerator: number, denominator: number, fallback = 0): number {
+  if (denominator <= 0) return fallback;
+  return clamp01(numerator / denominator);
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }

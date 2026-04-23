@@ -1,13 +1,10 @@
 // ─── Apple Settings Section ───────────────────────────────────────────────────
-// Settings section for push notification preferences and iCloud convenience sync.
+// Settings section for push notification preferences.
 // Rendered inside a settings/profile page — not a standalone route.
 //
 // Visibility:
 //   • Push section: shown whenever push is supported (not denied)
-//   • iCloud section: shown only when likelyAppleWebKit is true
-//
-// The iCloud disclosure copy explicitly explains what IS and IS NOT synced,
-// so users can make an informed opt-in decision.
+//   • iCloud user-data sync remains unavailable under the local-only data policy
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -16,6 +13,7 @@ import { usePushPreferencesStore } from '../pwa/push/pushPreferencesStore';
 import { getPushCapability } from '../pwa/push/pushCapability';
 import { ensurePushSubscription, disablePushSubscription } from '../pwa/push/pushSubscription';
 import { initializeCloudKit } from '../apple/cloudkit/auth';
+import { REMOTE_USER_DATA_SYNC_ALLOWED } from '../privacy/localUserDataPolicy';
 
 // ─── Toggle switch ────────────────────────────────────────────────────────────
 
@@ -241,6 +239,12 @@ export default function AppleSettingsSection() {
         return;
       }
 
+      if (!REMOTE_USER_DATA_SYNC_ALLOWED) {
+        setCloudKitEnabled(false);
+        setCloudKitSyncState('unavailable', 'local-only-policy');
+        return;
+      }
+
       setCloudKitLoading(true);
       setCloudKitEnabled(true);
 
@@ -265,7 +269,7 @@ export default function AppleSettingsSection() {
   );
 
   const showPush = cap.supported && cap.permission !== 'denied';
-  const showApple = availability?.likelyAppleWebKit === true;
+  const showApple = availability?.likelyAppleWebKit === true && REMOTE_USER_DATA_SYNC_ALLOWED;
 
   if (!showPush && !showApple) return null;
 

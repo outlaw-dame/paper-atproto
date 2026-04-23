@@ -1,6 +1,6 @@
 import { extractClusterSignals } from '../../lib/resolver/atproto';
 import { getExplicitContributionFeedback } from '../../intelligence/interpolatorTypes';
-import type { VerificationOutcome } from '../../intelligence/verification/types';
+import type { VerificationOutcome, VerificationReason } from '../../intelligence/verification/types';
 import type {
   ConversationNode,
   ConversationSession,
@@ -110,13 +110,16 @@ export function computeInterpretiveFactors(
   });
   const evidenceContributionCount = evidenceNodes.length;
   const averageEvidenceStrength = average(
-    evidenceNodes.map(({ node, verification }) => clamp01(
-      0.20 * (node.contributionSignal?.qualityScore ?? 0)
-      + 0.25 * (node.contributionSignal?.evidencePresent ? 1 : 0)
-      + 0.20 * (verification?.sourcePresence ?? 0)
-      + 0.20 * (verification?.factualContributionScore ?? 0)
-      + 0.15 * (verification?.sourceQuality ?? 0)
-    )),
+    evidenceNodes.map(({ node, verification }) => {
+      const base = clamp01(
+        0.20 * (node.contributionSignal?.qualityScore ?? 0)
+        + 0.25 * (node.contributionSignal?.evidencePresent ? 1 : 0)
+        + 0.20 * (verification?.sourcePresence ?? 0)
+        + 0.20 * (verification?.factualContributionScore ?? 0)
+        + 0.15 * (verification?.sourceQuality ?? 0),
+      );
+      return applyFactCheckAdjustment(base, verification);
+    }),
     0,
   );
   const independentEvidenceAuthors = evidenceNodes.length === 0
@@ -195,7 +198,10 @@ export function computeInterpretiveFactors(
     .map(({ verification }) => verification)
     .filter((verification): verification is VerificationOutcome => verification !== undefined);
   const contradictionPenalty = clamp01(
-    0.50 * average(visibleVerification.map((verification) => verification.contradictionLevel), 0)
+    0.50 * average(
+      visibleVerification.map((verification) => adjustContradictionPenalty(verification.contradictionLevel, verification)),
+      0,
+    )
     + 0.30 * ratio(
       visibleContributions.filter((node) => {
         if (!isDisagreementLike(node)) return false;
@@ -243,6 +249,8 @@ export function computeInterpretiveFactors(
   const singleSourceDominance = sourceDomainTotal === 0
     ? 0
     : Math.max(...Object.values(sourceDomainCounts)) / sourceDomainTotal;
+  // Session-local proxy. Discovery/story clustering can provide a richer
+  // cross-thread coverage-gap signal without changing this scoring authority.
   const coverageGapPenalty = clamp01(
     0.45 * (1 - perspectiveBreadth)
     + 0.30 * singleSourceDominance
@@ -275,7 +283,8 @@ export function computeInterpretiveFactors(
     ...(session.evidence.rootVerification ? [session.evidence.rootVerification] : []),
   ];
   const sourceIntegritySupport = clamp01(
-    0.45 * average(allVerification.map((verification) => verification.sourceQuality), 0)
+    applyVerificationReasonBoost(
+      0.45 * average(allVerification.map((verification) => verification.sourceQuality), 0)
     + 0.25 * ratio(
       allVerification.filter((verification) => TRANSPARENT_SOURCE_TYPES.has(verification.sourceType)).length,
       allVerification.length,
@@ -283,6 +292,8 @@ export function computeInterpretiveFactors(
     )
     + 0.20 * average(allVerification.map((verification) => verification.corroborationLevel), 0)
     + 0.10 * average(allVerification.map((verification) => verification.correctionValue), 0),
+      allVerification.flatMap((verification) => verification.reasons),
+    ),
   );
 
   const feedbackNodes = visibleContributions.filter((node) => {
@@ -342,7 +353,7 @@ export function computeInterpretiveFactors(
       ),
     ),
   );
-  const modelAgreement = clamp01(
+  const signalAgreement = clamp01(
     0.45 * evidenceAgreement
     + 0.30 * heatAgreement
     + 0.25 * repetitionAgreement,
@@ -362,7 +373,7 @@ export function computeInterpretiveFactors(
       freshnessPenalty,
       sourceIntegritySupport,
       userLabelSupport,
-      modelAgreement,
+      signalAgreement,
     },
     diagnostics: {
       hasRoot: Boolean(root),
@@ -486,6 +497,88 @@ function isQuestionDominated(node: ConversationNode): boolean {
   const questionMarks = (text.match(/\?/g) ?? []).length;
   return questionMarks > 0
     && (node.contributionSignal?.role === 'question' || tokenize(text).length <= 6);
+}
+
+function applyFactCheckAdjustment(
+  base: number,
+  outcome?: VerificationOutcome,
+): number {
+  if (!outcome) return base;
+  if (outcome.factCheck?.matched || outcome.factualState === 'known-fact-check-match') {
+    return Math.min(1, base + 0.12);
+  }
+
+  let adjusted = base;
+  switch (outcome.factualState) {
+    case 'well-supported':
+      adjusted += 0.08;
+      break;
+    case 'source-backed-clarification':
+      adjusted += 0.06;
+      break;
+    case 'partially-supported':
+      adjusted += 0.04;
+      break;
+    case 'contested':
+      adjusted -= 0.08;
+      break;
+    case 'unsupported-so-far':
+      adjusted -= 0.05;
+      break;
+    default:
+      break;
+  }
+
+  if (outcome.contradictionLevel > 0.55 && outcome.corroborationLevel < 0.35) {
+    adjusted -= 0.06;
+  }
+
+  return clamp01(adjusted);
+}
+
+function applyVerificationReasonBoost(
+  base: number,
+  reasons: VerificationReason[],
+): number {
+  let adjusted = base;
+  if (reasons.includes('known-fact-check-match')) adjusted += 0.10;
+  if (reasons.includes('multiple-reputable-sources')) adjusted += 0.08;
+  if (reasons.includes('corrective-context')) adjusted += 0.05;
+  return clamp01(adjusted);
+}
+
+function adjustContradictionPenalty(
+  base: number,
+  outcome?: VerificationOutcome,
+): number {
+  if (!outcome) return base;
+  let adjusted = base;
+
+  if (outcome.factualState === 'contested') {
+    adjusted += 0.15;
+  } else if (
+    outcome.factualState === 'unsupported-so-far'
+    && outcome.contradictionLevel > 0.4
+    && outcome.sourcePresence < 0.35
+  ) {
+    adjusted += 0.06;
+  }
+
+  if (
+    outcome.reasons.includes('multiple-reputable-sources')
+    && outcome.contradictionLevel > 0.4
+  ) {
+    adjusted -= 0.08;
+  }
+
+  if (
+    outcome.reasons.includes('corrective-context')
+    && outcome.corroborationLevel >= 0.55
+  ) {
+    adjusted -= 0.05;
+  }
+
+  return clamp01(adjusted);
 }
 
 function feedbackScore(feedback: ConversationSession['interpretation']['scoresByUri'][string]['userFeedback']): number {

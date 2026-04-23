@@ -264,6 +264,24 @@ and whether external linking is currently enabled.
 
 If external calls fail or time out, the pipeline safely falls back to deterministic heuristics.
 
+## Google Fact Check Integration
+
+Google Fact Check Tools sits in the conversation OS verification lane, not the
+URL safety lane.
+
+What it does:
+
+* Calls Google Fact Check Tools `claims:search` from `POST /api/verify/fact-check` for extracted text claims.
+* Calls Google Fact Check Tools `claims:imageSearch` for public media URLs after URL sanitization and Safe Browsing preflight.
+* Feeds matches into `knownFactCheckMatch`, fact-check chips, factual confidence, and cited review URLs.
+* Sharpens the session-level interpretive stack through evidence adequacy, source integrity support, contradiction handling, and structured confidence explanations.
+
+Configure:
+
+1. Set `GOOGLE_FACT_CHECK_API_KEY` in `server/.env`.
+2. Ensure `VITE_GLYMPSE_VERIFY_BASE_URL` points to the verify-server base.
+3. Check `curl http://localhost:3001/api/verify/status` for the `factCheck` provider block.
+
 ## Safe Browsing Integration
 
 Paper now integrates Google Safe Browsing Lookup API v4 through the local verify-server.
@@ -273,12 +291,29 @@ What it does:
 * Checks external URLs via `POST /api/safety/url-check` before rich link previews are shown.
 * Blocks opening links from hover previews when the URL is flagged unsafe.
 * Composer preview warns when a link is flagged and skips creating an external embed card for that URL.
+* Preflights remote media URLs before they are sent to verification providers.
+
+What it does not do:
+
+* It does not decide whether a claim is true or false.
+* It does not replace Google Fact Check Tools, Gemini grounding, or source corroboration.
 
 Configure:
 
 1. Set `GOOGLE_SAFE_BROWSING_API_KEY` in `server/.env`.
 2. Start the server (`npm --prefix ./server run dev`) and app (`pnpm dev`).
 3. Ensure `VITE_GLYMPSE_VERIFY_BASE_URL` points to the verify-server base (default local fallback is `http://localhost:3001`).
+
+## Interpretive Confidence and Discovery Coverage
+
+The canonical interpretive confidence layer lives in `src/conversation/interpretive/*`.
+It now emits a schema-v2 structured explanation with bounded factor
+contributions and uses verification outputs, including Google Fact Check, to
+refine evidence/source/contradiction factors.
+
+Discovery coverage-gap analysis lives in `src/conversation/discovery/coverageGap.ts`
+and feeds presentation mode policy in `src/conversation/projections/discoveryModePolicy.ts`.
+It fails soft to a zero-gap signal and does not create a second thread-confidence model.
 
 ## Current Status
 

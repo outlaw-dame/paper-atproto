@@ -34,8 +34,12 @@ function labelForPremiumProvider(value: PremiumAiProviderPreference | undefined)
 
 export default function InterpolatorSettingsSection() {
   const enabled = useInterpolatorSettingsStore((state) => state.enabled);
+  const showPrimaryReasons = useInterpolatorSettingsStore((state) => state.showPrimaryReasons);
+  const showInterpretiveInspector = useInterpolatorSettingsStore((state) => state.showInterpretiveInspector);
   const premiumProviderPreference = useInterpolatorSettingsStore((state) => state.premiumProviderPreference);
   const setEnabled = useInterpolatorSettingsStore((state) => state.setEnabled);
+  const setShowPrimaryReasons = useInterpolatorSettingsStore((state) => state.setShowPrimaryReasons);
+  const setShowInterpretiveInspector = useInterpolatorSettingsStore((state) => state.setShowInterpretiveInspector);
   const setPremiumProviderPreference = useInterpolatorSettingsStore((state) => state.setPremiumProviderPreference);
   const sessionDid = useSessionStore((state) => state.session?.did ?? null);
   const [premiumEntitlements, setPremiumEntitlements] = React.useState<PremiumAiEntitlements | null>(null);
@@ -131,6 +135,44 @@ export default function InterpolatorSettingsSection() {
           AI Interpolator is off. Conversation summaries will be hidden until re-enabled.
         </p>
       )}
+
+      <div style={{ marginTop: 10, borderTop: '1px solid var(--sep)', paddingTop: 10, display: 'grid', gap: 9 }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={showPrimaryReasons}
+            onChange={(event) => setShowPrimaryReasons(event.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }}>
+              Show confidence reason chips
+            </span>
+            <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }}>
+              Surface the top bounded interpretive factors, like evidence strength or unresolved contradiction, on Interpolator cards.
+            </span>
+          </span>
+        </label>
+
+        {import.meta.env.DEV && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showInterpretiveInspector}
+              onChange={(event) => setShowInterpretiveInspector(event.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }}>
+                Show interpretive inspector
+              </span>
+              <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: 'var(--label-3)', lineHeight: 1.35 }}>
+                Development-only factor inspector. It shows scores and buckets without raw post text, URLs, or DIDs.
+              </span>
+            </span>
+          </label>
+        )}
+      </div>
 
       <div style={{ marginTop: 10, borderTop: '1px solid var(--sep)', paddingTop: 10 }}>
         <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--label-2)' }}>

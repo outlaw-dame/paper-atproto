@@ -335,6 +335,10 @@ Primary files:
 
 - Zod-backed input parsing and output validation gate model I/O.
 - URL sanitization, Safe Browsing checks, and no-store headers protect remote processing and sensitive data paths.
+- Google Fact Check Tools belongs to the conversation OS verification lane: extracted text claims use `claims:search`, public media evidence can use `claims:imageSearch`, and matches flow into `knownFactCheckMatch`, fact-check chips, and factual confidence.
+- Google Safe Browsing remains a URL threat preflight only. It can block unsafe URLs before link previews or remote media processing, but it is not treated as factual corroboration.
+- Session-level interpretive confidence remains authoritative in `src/conversation/interpretive/*`; Google Fact Check and grounding outputs sharpen evidence adequacy, source integrity, contradiction handling, and structured explanation reasons there rather than creating a parallel epistemic stack.
+- Discovery coverage-gap analysis is cluster context, not a second thread score. It feeds discovery presentation policy while session scoring keeps its local coverage-gap proxy as a bounded fallback.
 - Writer and multimodal outputs are filtered before use.
 
 Primary files:
@@ -343,6 +347,11 @@ Primary files:
 - `server/src/llm/policyGateway.ts`
 - `server/src/lib/sanitize.ts`
 - `server/src/services/safetyFilters.ts`
+- `server/src/routes/verification.ts`
+- `server/src/verification/google-fact-check.provider.ts`
+- `src/conversation/interpretive/*`
+- `src/conversation/discovery/coverageGap.ts`
+- `src/conversation/projections/discoveryModePolicy.ts`
 - `src/lib/safety/*`
 
 ### Retry, backoff, and bounded failure

@@ -42,6 +42,7 @@ export function computeInterpretiveConfidenceForSession(
 ): InterpretiveConfidenceComputation {
   const factorComputation = computeInterpretiveFactors(session);
   const factors = factorComputation.factors;
+  const signalAgreement = factors.signalAgreement ?? factors.modelAgreement ?? 0;
 
   const weightedScore = clamp01(
     INTERPRETIVE_CONFIDENCE_WEIGHTS.semanticCoherence * factors.semanticCoherence
@@ -50,7 +51,7 @@ export function computeInterpretiveConfidenceForSession(
     + INTERPRETIVE_CONFIDENCE_WEIGHTS.perspectiveBreadth * factors.perspectiveBreadth
     + INTERPRETIVE_CONFIDENCE_WEIGHTS.sourceIntegritySupport * factors.sourceIntegritySupport
     + INTERPRETIVE_CONFIDENCE_WEIGHTS.userLabelSupport * factors.userLabelSupport
-    + INTERPRETIVE_CONFIDENCE_WEIGHTS.modelAgreement * factors.modelAgreement
+    + INTERPRETIVE_CONFIDENCE_WEIGHTS.signalAgreement * signalAgreement
     - INTERPRETIVE_CONFIDENCE_WEIGHTS.ambiguityPenalty * factors.ambiguityPenalty
     - INTERPRETIVE_CONFIDENCE_WEIGHTS.contradictionPenalty * factors.contradictionPenalty
     - INTERPRETIVE_CONFIDENCE_WEIGHTS.repetitionPenalty * factors.repetitionPenalty
@@ -65,7 +66,7 @@ export function computeInterpretiveConfidenceForSession(
     evidenceAdequacy: factors.evidenceAdequacy,
     ambiguityPenalty: factors.ambiguityPenalty,
     contradictionPenalty: factors.contradictionPenalty,
-    modelAgreement: factors.modelAgreement,
+    signalAgreement,
     visibleContributionCount: factorComputation.diagnostics.visibleContributionCount,
   });
 
@@ -75,6 +76,7 @@ export function computeInterpretiveConfidenceForSession(
     mode,
     factors,
     gates: gated.gates,
+    weights: INTERPRETIVE_CONFIDENCE_WEIGHTS,
   });
 
   const baseConfidence = session.interpretation.confidence;

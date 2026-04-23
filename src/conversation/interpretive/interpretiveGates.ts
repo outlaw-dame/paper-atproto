@@ -12,7 +12,7 @@ export interface InterpretiveGateInputs {
   evidenceAdequacy: number;
   ambiguityPenalty: number;
   contradictionPenalty: number;
-  modelAgreement: number;
+  signalAgreement: number;
   visibleContributionCount: number;
 }
 
@@ -46,7 +46,7 @@ export function applyInterpretiveCaps(
 
   if (
     input.contradictionPenalty > INTERPRETIVE_CONFIDENCE_GATES.contradictionCeiling
-    && input.modelAgreement < INTERPRETIVE_CONFIDENCE_GATES.modelAgreementFloor
+    && input.signalAgreement < INTERPRETIVE_CONFIDENCE_GATES.signalAgreementFloor
   ) {
     gates.push({
       reason: 'rapid_contradiction_without_support',
