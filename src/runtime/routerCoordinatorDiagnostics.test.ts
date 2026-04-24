@@ -24,7 +24,7 @@ const LOW_CAPABILITY: RuntimeCapability = {
   hardwareConcurrency: 4,
 };
 
-function policyFor(task: 'hot_path_scoring' | 'text_generation', capability: RuntimeCapability = HIGH_CAPABILITY) {
+function policyFor(task: 'hot_path_scoring' | 'text_generation' | 'multimodal_analysis', capability: RuntimeCapability = HIGH_CAPABILITY) {
   return chooseModelForTask({ capability, settingsMode: 'best_quality', task });
 }
 
@@ -105,7 +105,7 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
     expect(snapshot.stack.coordinatorModel).toBe('none');
   });
 
-  it('surfaces consent blockers without granting execution authority', () => {
+  it('surfaces consent blockers without granting coordinator shadow readiness', () => {
     const policyDecision = policyFor('text_generation');
     const stackProfile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'best_quality',
@@ -124,5 +124,26 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
     expect(snapshot.stack.coordinatorRequiresConsent).toBe(true);
     expect(snapshot.blockers).toContain('large_model_requires_consent');
     expect(snapshot.readiness).toBe('router_shadow_ready');
+  });
+
+  it('blocks shadow readiness when deterministic policy requires explicit user action', () => {
+    const policyDecision = policyFor('multimodal_analysis');
+    const stackProfile = selectAiStackProfile(HIGH_CAPABILITY, {
+      settingsMode: 'best_quality',
+      allowLiteRt: true,
+      preferLiteRt: true,
+      userConsentedToLargeModels: true,
+      availableStorageGiB: 16,
+    });
+
+    const snapshot = buildRouterCoordinatorDiagnosticsSnapshot({
+      policyDecision,
+      stackProfile,
+      nowEpochMs: 1_000,
+    });
+
+    expect(snapshot.policy.requiresExplicitUserAction).toBe(true);
+    expect(snapshot.blockers).toContain('explicit_user_action_required');
+    expect(snapshot.readiness).toBe('blocked');
   });
 });
