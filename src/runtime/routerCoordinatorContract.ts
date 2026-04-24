@@ -249,11 +249,12 @@ function isValidRetryCount(value: unknown): value is 0 | 1 {
 }
 
 function selectSafeFallbackRoute(contract: CoordinationContract): CoordinationRouteOption {
-  return (
+  const route =
     contract.allowedRoutes.find((route) => route.id === contract.fallbackRouteId)
     ?? contract.allowedRoutes.find((route) => route.id === contract.defaultRouteId)
-    ?? contract.allowedRoutes[0]
-  );
+    ?? contract.allowedRoutes[0];
+  if (!route) throw new Error('CoordinationContract invariant violated: allowedRoutes must be non-empty');
+  return route;
 }
 
 function findAllowedRoute(contract: CoordinationContract, routeId: CoordinationRouteId): CoordinationRouteOption | null {
