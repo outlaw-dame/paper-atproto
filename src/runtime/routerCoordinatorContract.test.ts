@@ -135,6 +135,36 @@ describe('validateRouterDecision', () => {
       ttlMs: 2_000,
     }, 20_000).reasonCodes).toEqual(['validator_rejected_ttl']);
   });
+
+  it('rejects router reason codes outside the contract enum', () => {
+    const contract = createContract();
+    const result = validateRouterDecision(contract, {
+      schemaVersion: 1,
+      decisionType: 'route',
+      selectedRouteId: 'model:qwen3_4b',
+      confidence: 0.8,
+      reasonCodes: ['arbitrary_model_text'],
+      ttlMs: 2_000,
+    }, 1_500);
+
+    expect(result.accepted).toBe(false);
+    expect(result.reasonCodes).toEqual(['validator_rejected_schema']);
+  });
+
+  it('deduplicates accepted router reason codes before returning telemetry-safe output', () => {
+    const contract = createContract();
+    const result = validateRouterDecision(contract, {
+      schemaVersion: 1,
+      decisionType: 'route',
+      selectedRouteId: 'model:qwen3_4b',
+      confidence: 0.8,
+      reasonCodes: ['policy_selected_primary', 'policy_selected_primary'],
+      ttlMs: 2_000,
+    }, 1_500);
+
+    expect(result.accepted).toBe(true);
+    expect(result.reasonCodes).toEqual(['policy_selected_primary']);
+  });
 });
 
 describe('validateCoordinatorRecommendation', () => {
@@ -180,7 +210,7 @@ describe('validateCoordinatorRecommendation', () => {
     expect(result.reasonCodes).toEqual(['validator_rejected_disallowed_route']);
   });
 
-  it('rejects coordinator recommendations with more than one retry', () => {
+  it('rejects coordinator recommendations with more than one retry as schema violations', () => {
     const contract = createContract();
     const result = validateCoordinatorRecommendation(contract, {
       schemaVersion: 1,
@@ -197,6 +227,45 @@ describe('validateCoordinatorRecommendation', () => {
     }, 1_500);
 
     expect(result.accepted).toBe(false);
-    expect(result.reasonCodes).toEqual(['validator_rejected_constraints']);
+    expect(result.reasonCodes).toEqual(['validator_rejected_schema']);
+  });
+
+  it('rejects coordinator recommendations with missing maxRetries as schema violations', () => {
+    const contract = createContract();
+    const result = validateCoordinatorRecommendation(contract, {
+      schemaVersion: 1,
+      recommendation: 'accept_route',
+      selectedRouteId: 'model:qwen3_4b',
+      confidence: 0.74,
+      reasonCodes: [],
+      monitoringPlan: {
+        watchFlags: ['model_error'],
+        fallbackRouteId: 'model:smollm3_3b',
+      },
+      ttlMs: 2_000,
+    }, 1_500);
+
+    expect(result.accepted).toBe(false);
+    expect(result.reasonCodes).toEqual(['validator_rejected_schema']);
+  });
+
+  it('rejects coordinator reason codes outside the contract enum', () => {
+    const contract = createContract();
+    const result = validateCoordinatorRecommendation(contract, {
+      schemaVersion: 1,
+      recommendation: 'accept_route',
+      selectedRouteId: 'model:qwen3_4b',
+      confidence: 0.74,
+      reasonCodes: ['freeform_model_reason'],
+      monitoringPlan: {
+        watchFlags: ['model_error'],
+        maxRetries: 1,
+        fallbackRouteId: 'model:smollm3_3b',
+      },
+      ttlMs: 2_000,
+    }, 1_500);
+
+    expect(result.accepted).toBe(false);
+    expect(result.reasonCodes).toEqual(['validator_rejected_schema']);
   });
 });
