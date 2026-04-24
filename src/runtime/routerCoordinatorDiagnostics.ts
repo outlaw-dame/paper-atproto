@@ -32,6 +32,7 @@ export interface RouterCoordinatorDiagnosticsSnapshot {
     kind: CoordinationRouteOption['kind'];
     model: CoordinationRouteOption['model'];
     source: CoordinationRouteOption['source'];
+    allowed: boolean;
     requiresExplicitUserAction: boolean;
     remoteFallbackAllowed: boolean;
   }>;
@@ -64,7 +65,7 @@ function deriveBlockers(params: {
   const blockers: RouterCoordinatorBlocker[] = [];
   const { contract, stackProfile, policyDecision } = params;
 
-  if (contract.allowedRoutes.length === 0) blockers.push('no_allowed_routes');
+  if (!contract.allowedRoutes.some((route) => route.allowed)) blockers.push('no_allowed_routes');
   if (stackProfile.tier === 'baseline') blockers.push('stack_baseline');
   if (stackProfile.coordinator.id === 'none') blockers.push('coordinator_unavailable');
   if (stackProfile.coordinator.requiresExplicitConsent) blockers.push('large_model_requires_consent');
@@ -116,6 +117,7 @@ export function buildRouterCoordinatorDiagnosticsSnapshot(params: {
       kind: route.kind,
       model: route.model,
       source: route.source,
+      allowed: route.allowed,
       requiresExplicitUserAction: route.requiresExplicitUserAction,
       remoteFallbackAllowed: route.remoteFallbackAllowed,
     })),
