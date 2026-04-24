@@ -96,7 +96,7 @@ export function buildRouterCoordinatorDiagnosticsSnapshot(params: {
     policyDecision: params.policyDecision,
     stackProfile: params.stackProfile,
     nowEpochMs,
-    ttlMs: params.ttlMs,
+    ...(params.ttlMs !== undefined ? { ttlMs: params.ttlMs } : {}),
   });
   const blockers = deriveBlockers({
     contract,
