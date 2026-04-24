@@ -54,8 +54,14 @@ interface RuntimeStoreState {
   lastCapabilityProbeAt: number | null;
   lastActiveAt: number | null;
   runtimeSmoke: RuntimeSmokeSnapshot;
+  allowLiteRt: boolean;
+  preferLiteRt: boolean;
+  userConsentedToLargeModels: boolean;
 
   setSettingsMode: (mode: RuntimeMode) => void;
+  setAllowLiteRt: (allowed: boolean) => void;
+  setPreferLiteRt: (preferred: boolean) => void;
+  setUserConsentedToLargeModels: (consented: boolean) => void;
   startCapabilityProbe: () => void;
   finishCapabilityProbe: (capability: RuntimeCapability) => void;
   setActiveModel: (model: ModelChoice | null) => void;
@@ -86,8 +92,22 @@ export const useRuntimeStore = create<RuntimeStoreState>()(
       lastCapabilityProbeAt: null,
       lastActiveAt: null,
       runtimeSmoke: createInitialSmokeSnapshot(),
+      allowLiteRt: false,
+      preferLiteRt: false,
+      userConsentedToLargeModels: false,
 
       setSettingsMode: (mode) => set({ settingsMode: mode }),
+      setAllowLiteRt: (allowed) => set((state) => ({
+        allowLiteRt: allowed,
+        preferLiteRt: allowed ? state.preferLiteRt : false,
+        userConsentedToLargeModels: allowed ? state.userConsentedToLargeModels : false,
+      })),
+      setPreferLiteRt: (preferred) => set((state) => ({
+        preferLiteRt: state.allowLiteRt ? preferred : false,
+      })),
+      setUserConsentedToLargeModels: (consented) => set((state) => ({
+        userConsentedToLargeModels: state.allowLiteRt ? consented : false,
+      })),
       startCapabilityProbe: () => set({ loadState: 'probing', lastError: null }),
       finishCapabilityProbe: (capability) => set({
         capability,
@@ -157,6 +177,9 @@ export const useRuntimeStore = create<RuntimeStoreState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         settingsMode: state.settingsMode,
+        allowLiteRt: state.allowLiteRt,
+        preferLiteRt: state.preferLiteRt,
+        userConsentedToLargeModels: state.userConsentedToLargeModels,
       }),
       onRehydrateStorage: () => (_state, error) => {
         if (error) {

@@ -41,8 +41,8 @@ const FeedsSettingsPage = lazyWithRetry(
   'FeedsSettingsPage',
 );
 const LocalAiRuntimeSection = lazyWithRetry(
-  () => import('./LocalAiRuntimeSection'),
-  'LocalAiRuntimeSection',
+  () => import('./LocalAiRuntimeSettingsPanel'),
+  'LocalAiRuntimeSettingsPanel',
 );
 
 interface ComposeDebugSnapshot {
