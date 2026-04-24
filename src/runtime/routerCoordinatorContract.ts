@@ -111,6 +111,20 @@ export interface CoordinationValidationResult<TDecision> {
 const DEFAULT_CONTRACT_TTL_MS = 15_000;
 const MAX_DECISION_TTL_MS = 15_000;
 
+const VALID_REASON_CODES = new Set<CoordinationReasonCode>([
+  'policy_selected_primary',
+  'policy_selected_fallback',
+  'policy_requires_explicit_action',
+  'policy_disallows_local',
+  'policy_allows_remote_fallback',
+  'validator_rejected_unknown_route',
+  'validator_rejected_disallowed_route',
+  'validator_rejected_schema',
+  'validator_rejected_confidence',
+  'validator_rejected_ttl',
+  'validator_rejected_constraints',
+]);
+
 function routeIdForModel(model: ModelChoice): CoordinationRouteId {
   return model === 'worker_local_only' ? 'worker_local_only' : `model:${model}`;
 }
@@ -119,6 +133,14 @@ function pathKindForTask(task: TaskKind, model: ModelChoice): CoordinationPathKi
   if (model === 'worker_local_only') return task === 'hot_path_scoring' ? 'deterministic_only' : 'local_worker';
   if (task === 'multimodal_analysis') return 'local_multimodal';
   return 'local_generation';
+}
+
+function isValidReasonCode(value: unknown): value is CoordinationReasonCode {
+  return typeof value === 'string' && VALID_REASON_CODES.has(value as CoordinationReasonCode);
+}
+
+function isValidReasonCodeArray(value: unknown): value is CoordinationReasonCode[] {
+  return Array.isArray(value) && value.every(isValidReasonCode);
 }
 
 function uniqueReasonCodes(codes: CoordinationReasonCode[]): CoordinationReasonCode[] {
@@ -222,6 +244,10 @@ function isValidTtl(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= MAX_DECISION_TTL_MS;
 }
 
+function isValidRetryCount(value: unknown): value is 0 | 1 {
+  return value === 0 || value === 1;
+}
+
 function selectSafeFallbackRoute(contract: CoordinationContract): CoordinationRouteOption {
   return (
     contract.allowedRoutes.find((route) => route.id === contract.fallbackRouteId)
@@ -251,7 +277,7 @@ export function validateRouterDecision(
   if (
     candidate.schemaVersion !== 1
     || (candidate.decisionType !== 'route' && candidate.decisionType !== 'fallback' && candidate.decisionType !== 'abstain')
-    || !Array.isArray(candidate.reasonCodes)
+    || !isValidReasonCodeArray(candidate.reasonCodes)
   ) {
     return { accepted: false, decision: null, selectedRoute: fallback, reasonCodes: ['validator_rejected_schema'] };
   }
@@ -279,7 +305,7 @@ export function validateRouterDecision(
     accepted: true,
     decision: candidate as RouterDecisionEnvelope,
     selectedRoute: requestedRoute,
-    reasonCodes: candidate.reasonCodes.length > 0 ? candidate.reasonCodes : requestedRoute.reasonCodes,
+    reasonCodes: candidate.reasonCodes.length > 0 ? uniqueReasonCodes(candidate.reasonCodes) : requestedRoute.reasonCodes,
   };
 }
 
@@ -305,9 +331,10 @@ export function validateCoordinatorRecommendation(
       && candidate.recommendation !== 'abstain'
       && candidate.recommendation !== 'flag_for_review'
     )
-    || !Array.isArray(candidate.reasonCodes)
+    || !isValidReasonCodeArray(candidate.reasonCodes)
     || !candidate.monitoringPlan
     || !Array.isArray(candidate.monitoringPlan.watchFlags)
+    || !isValidRetryCount(candidate.monitoringPlan.maxRetries)
   ) {
     return { accepted: false, decision: null, selectedRoute: fallback, reasonCodes: ['validator_rejected_schema'] };
   }
@@ -316,9 +343,6 @@ export function validateCoordinatorRecommendation(
   }
   if (!isValidTtl(candidate.ttlMs)) {
     return { accepted: false, decision: null, selectedRoute: fallback, reasonCodes: ['validator_rejected_ttl'] };
-  }
-  if (candidate.monitoringPlan.maxRetries !== 0 && candidate.monitoringPlan.maxRetries !== 1) {
-    return { accepted: false, decision: null, selectedRoute: fallback, reasonCodes: ['validator_rejected_constraints'] };
   }
 
   const requestedRoute = candidate.recommendation === 'prefer_fallback'
@@ -338,6 +362,6 @@ export function validateCoordinatorRecommendation(
     accepted: true,
     decision: candidate as CoordinatorRecommendationEnvelope,
     selectedRoute: requestedRoute,
-    reasonCodes: candidate.reasonCodes.length > 0 ? candidate.reasonCodes : requestedRoute.reasonCodes,
+    reasonCodes: candidate.reasonCodes.length > 0 ? uniqueReasonCodes(candidate.reasonCodes) : requestedRoute.reasonCodes,
   };
 }
