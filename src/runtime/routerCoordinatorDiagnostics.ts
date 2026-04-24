@@ -14,7 +14,6 @@ export type RouterCoordinatorReadiness =
   | 'blocked';
 
 export type RouterCoordinatorBlocker =
-  | 'contract_expired'
   | 'no_allowed_routes'
   | 'stack_baseline'
   | 'coordinator_unavailable'
@@ -61,12 +60,10 @@ function deriveBlockers(params: {
   contract: CoordinationContract;
   stackProfile: AiStackProfile;
   policyDecision: ModelPolicyDecision;
-  nowEpochMs: number;
 }): RouterCoordinatorBlocker[] {
   const blockers: RouterCoordinatorBlocker[] = [];
-  const { contract, stackProfile, policyDecision, nowEpochMs } = params;
+  const { contract, stackProfile, policyDecision } = params;
 
-  if (nowEpochMs > contract.expiresAtEpochMs) blockers.push('contract_expired');
   if (contract.allowedRoutes.length === 0) blockers.push('no_allowed_routes');
   if (stackProfile.tier === 'baseline') blockers.push('stack_baseline');
   if (stackProfile.coordinator.id === 'none') blockers.push('coordinator_unavailable');
@@ -81,11 +78,9 @@ function deriveReadiness(params: {
   stackProfile: AiStackProfile;
 }): RouterCoordinatorReadiness {
   const { blockers, stackProfile } = params;
-  if (blockers.includes('contract_expired') || blockers.includes('no_allowed_routes')) return 'blocked';
+  if (blockers.includes('no_allowed_routes') || blockers.includes('explicit_user_action_required')) return 'blocked';
   if (blockers.includes('stack_baseline') || blockers.includes('coordinator_unavailable')) return 'deterministic_only';
-  if (stackProfile.coordinator.id !== 'none' && !stackProfile.coordinator.requiresExplicitConsent) {
-    return 'coordinator_shadow_ready';
-  }
+  if (!blockers.includes('large_model_requires_consent')) return 'coordinator_shadow_ready';
   if (stackProfile.router.id !== 'deterministic_policy') return 'router_shadow_ready';
   return 'deterministic_only';
 }
@@ -107,7 +102,6 @@ export function buildRouterCoordinatorDiagnosticsSnapshot(params: {
     contract,
     stackProfile: params.stackProfile,
     policyDecision: params.policyDecision,
-    nowEpochMs,
   });
 
   return {
