@@ -98,7 +98,9 @@ describe('selectAiStackProfile', () => {
     expect(profile.runtime).toBe('litert');
     expect(profile.router.id).toBe('functiongemma_270m');
     expect(profile.coordinator.id).toBe('gemma4_e4b');
+    expect(profile.coordinator.requiresExplicitConsent).toBe(false);
     expect(profile.fallbackCoordinator.id).toBe('gemma4_e2b');
+    expect(profile.fallbackCoordinator.requiresExplicitConsent).toBe(false);
   });
 
   it('uses Gemma 4 E2B on mid-tier LiteRT only after large-model consent', () => {
@@ -112,6 +114,7 @@ describe('selectAiStackProfile', () => {
 
     expect(profile.tier).toBe('edge_strong');
     expect(profile.coordinator.id).toBe('gemma4_e2b');
+    expect(profile.coordinator.requiresExplicitConsent).toBe(false);
   });
 
   it('falls back to deterministic baseline when storage cannot fit the browser coordinator', () => {
