@@ -27,20 +27,33 @@ The app uses a **Dual Pipeline** architecture for content processing:
 
 ## Getting Started
 
+1. **Install and Setup:**
 ```bash
+# Install dependencies
 pnpm install
-pnpm dev
+
+# Setup server environment
+cd server && npm install
+cp .env.example .env
+cd ..
 ```
 
-Run the auth/retry hardening checks with:
+2. **Run the Project:**
+You need to run the app, the verify-server, and an HTTPS tunnel (required for full permissions) in separate terminals:
 
-```bash
-pnpm test
-```
+*   **Terminal 1 (App):** `pnpm dev` (Runs on `http://localhost:5180`)
+*   **Terminal 2 (Server):** `npm --prefix ./server run dev`
+*   **Terminal 3 (Tunnel):** An HTTPS tunnel is required for full ATProto permissions. **Cloudflare Tunnel** is recommended, but you can also use `ngrok`, `zrok`, or `localtunnel`:
+    *   *Recommended:* `npx cloudflared tunnel --url http://127.0.0.1:5180`
+    *   *Alternative (ngrok):* `ngrok http 5180`
 
-For GIF search, create a `.env` file from `.env.example` and set `VITE_TENOR_API_KEY` to a valid Tenor API key.
+3. **Access the App:**
+Copy the HTTPS URL from your tunnel output (e.g., `https://...trycloudflare.com`), update your root `.env` with it, and open it in your browser.
 
-Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
+> [!IMPORTANT]
+> While you can open `http://localhost:5180` directly for basic exploration, ATProto OAuth will grant limited permissions. You **should** use an HTTPS tunnel to see your timeline and rich profile data.
+
+Open the tunnel URL and sign in with your Bluesky handle through OAuth.
 
 OAuth setup notes:
 

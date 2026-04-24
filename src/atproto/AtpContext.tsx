@@ -94,6 +94,18 @@ function hasRequiredGrantedScope(grantedScope: string | undefined, requestedScop
   if (!requested.size) return true;
 
   const granted = normalizeScopeSet(grantedScope);
+  
+  // For localhost development, allow atproto scope even if transition:generic was requested
+  // Loopback OAuth has limited permissions and may not grant transition:generic
+  const isLocalhost = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  
+  if (isLocalhost && granted.has('atproto') && requested.has('atproto')) {
+    // For localhost, if we have atproto scope, that's sufficient for development
+    console.log('[OAuth Debug] Localhost development: accepting atproto scope only');
+    return true;
+  }
+  
   for (const token of requested) {
     if (!granted.has(token)) {
       return false;
@@ -460,6 +472,8 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
         try {
           const tokenInfo = await oauthSession.getTokenInfo(false);
           if (!cancelled) {
+            console.log('[OAuth Debug] Requested scope:', requestedScope);
+            console.log('[OAuth Debug] Granted scope:', tokenInfo.scope);
             if (!hasRequiredGrantedScope(tokenInfo.scope, requestedScope)) {
               recordOAuthBootstrapDebug('bootstrap_error', {
                 kind: 'auth',
