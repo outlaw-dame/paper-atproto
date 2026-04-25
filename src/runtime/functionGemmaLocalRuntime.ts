@@ -206,7 +206,10 @@ function clampInteger(value: number | undefined, fallback: number, min: number, 
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(resolve, ms);
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
     const onAbort = () => {
       window.clearTimeout(timeout);
       reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
