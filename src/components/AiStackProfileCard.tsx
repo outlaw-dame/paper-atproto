@@ -93,11 +93,13 @@ function ModelBindingRow({ label, binding }: { label: string; binding: AiModelBi
 }
 
 export function summarizeAiStackProfile(profile: AiStackProfile): string {
+  const authority = formatModelId(profile.routerAuthority.id);
+  const advisoryRouter = formatModelId(profile.router.id);
   const coordinator = formatModelId(profile.coordinator.id);
   if (profile.tier === 'baseline') {
-    return 'Baseline deterministic profile. Router/coordinator model loading remains disabled.';
+    return 'Baseline deterministic profile. Advisory router/coordinator model loading remains disabled.';
   }
-  return `${profile.tier.replaceAll('_', ' ')} profile using ${coordinator} via ${formatRuntime(profile.runtime)}.`;
+  return `${profile.tier.replaceAll('_', ' ')} profile keeps ${authority} as routing authority, with ${advisoryRouter} as advisory router and ${coordinator} as coordinator via ${formatRuntime(profile.runtime)}.`;
 }
 
 export default function AiStackProfileCard() {
@@ -146,7 +148,7 @@ export default function AiStackProfileCard() {
           Router/coordinator stack
         </p>
         <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
-          Read-only profile selection for future router/coordinator models. This does not load models or change execution.
+          Read-only profile selection. Deterministic policy remains routing authority; advisory router/coordinator models are shadow-only until explicitly wired through the contract.
         </p>
       </div>
 
@@ -195,7 +197,8 @@ export default function AiStackProfileCard() {
       ) : (
         <>
           <div style={{ display: 'grid', gap: 8 }}>
-            <ModelBindingRow label="Router" binding={profile.router} />
+            <ModelBindingRow label="Router authority" binding={profile.routerAuthority} />
+            <ModelBindingRow label="Advisory router" binding={profile.router} />
             <ModelBindingRow label="Coordinator" binding={profile.coordinator} />
             {profile.fallbackCoordinator.id !== 'none' && (
               <ModelBindingRow label="Fallback coordinator" binding={profile.fallbackCoordinator} />
