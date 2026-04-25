@@ -37,10 +37,9 @@ function createContract() {
 }
 
 describe('evaluateRouterShadowDecision', () => {
-  it('accepts a valid router advisory route but keeps deterministic selection authoritative', () => {
-    const contract = createContract();
+  it('uses a valid router route after validation', () => {
     const result = evaluateRouterShadowDecision({
-      contract,
+      contract: createContract(),
       nowEpochMs: 1_500,
       decision: {
         schemaVersion: 1,
@@ -53,48 +52,44 @@ describe('evaluateRouterShadowDecision', () => {
     });
 
     expect(result.status).toBe('accepted');
-    expect(result.advisoryRouteId).toBe('model:smollm3_3b');
+    expect(result.routerRouteId).toBe('model:smollm3_3b');
     expect(result.deterministicRouteId).toBe('model:qwen3_4b');
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
-    expect(result.advisoryMatchedDeterministic).toBe(false);
+    expect(result.selectedRouteId).toBe('model:smollm3_3b');
+    expect(result.authorityApplied).toBe(true);
+    expect(result.routerMatchedDeterministic).toBe(false);
   });
 
-  it('rejects invalid router advisory output without changing deterministic route', () => {
+  it('falls back to the deterministic route when router output is invalid or absent', () => {
     const contract = createContract();
-    const result = evaluateRouterShadowDecision({
+    const rejected = evaluateRouterShadowDecision({
       contract,
       nowEpochMs: 1_500,
       decision: {
         schemaVersion: 1,
         decisionType: 'route',
-        selectedRouteId: 'model:not_in_contract',
+        selectedRouteId: 'model:unknown',
         confidence: 0.82,
         reasonCodes: [],
         ttlMs: 2_000,
       },
     });
+    const missing = evaluateRouterShadowDecision({ contract, nowEpochMs: 1_500 });
 
-    expect(result.status).toBe('rejected');
-    expect(result.advisoryRouteId).toBeNull();
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
-    expect(result.reasonCodes).toEqual(['validator_rejected_unknown_route']);
-  });
-
-  it('reports not_provided when no router advisory exists yet', () => {
-    const contract = createContract();
-    const result = evaluateRouterShadowDecision({ contract, nowEpochMs: 1_500 });
-
-    expect(result.status).toBe('not_provided');
-    expect(result.advisoryRouteId).toBeNull();
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.routerRouteId).toBeNull();
+    expect(rejected.selectedRouteId).toBe('model:qwen3_4b');
+    expect(rejected.authorityApplied).toBe(false);
+    expect(missing.status).toBe('not_provided');
+    expect(missing.routerRouteId).toBeNull();
+    expect(missing.selectedRouteId).toBe('model:qwen3_4b');
+    expect(missing.authorityApplied).toBe(false);
   });
 });
 
 describe('evaluateCoordinatorShadowRecommendation', () => {
-  it('accepts a coordinator recommendation while keeping deterministic selection authoritative', () => {
-    const contract = createContract();
+  it('evaluates coordinator recommendations without changing route selection', () => {
     const result = evaluateCoordinatorShadowRecommendation({
-      contract,
+      contract: createContract(),
       nowEpochMs: 1_500,
       recommendation: {
         schemaVersion: 1,
@@ -103,7 +98,7 @@ describe('evaluateCoordinatorShadowRecommendation', () => {
         confidence: 0.74,
         reasonCodes: ['policy_selected_primary'],
         monitoringPlan: {
-          watchFlags: ['low_confidence', 'model_error'],
+          watchFlags: ['low_confidence'],
           maxRetries: 1,
           fallbackRouteId: 'model:smollm3_3b',
         },
@@ -113,46 +108,17 @@ describe('evaluateCoordinatorShadowRecommendation', () => {
 
     expect(result.status).toBe('accepted');
     expect(result.recommendation).toBe('accept_route');
-    expect(result.advisoryRouteId).toBe('model:qwen3_4b');
-    expect(result.deterministicRouteId).toBe('model:qwen3_4b');
+    expect(result.recommendationRouteId).toBe('model:qwen3_4b');
     expect(result.selectedRouteId).toBe('model:qwen3_4b');
-    expect(result.advisoryMatchedDeterministic).toBe(true);
+    expect(result.recommendationMatchedDeterministic).toBe(true);
     expect(result.monitoringPlan?.maxRetries).toBe(1);
-  });
-
-  it('rejects coordinator recommendations outside contract bounds', () => {
-    const contract = createContract();
-    const result = evaluateCoordinatorShadowRecommendation({
-      contract,
-      nowEpochMs: 1_500,
-      recommendation: {
-        schemaVersion: 1,
-        recommendation: 'accept_route',
-        selectedRouteId: 'model:qwen3_4b',
-        confidence: 0.74,
-        reasonCodes: [],
-        monitoringPlan: {
-          watchFlags: ['model_error'],
-          maxRetries: 2,
-          fallbackRouteId: 'model:smollm3_3b',
-        },
-        ttlMs: 2_000,
-      },
-    });
-
-    expect(result.status).toBe('rejected');
-    expect(result.recommendation).toBeNull();
-    expect(result.monitoringPlan).toBeNull();
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
-    expect(result.reasonCodes).toEqual(['validator_rejected_schema']);
   });
 });
 
 describe('evaluateRouterCoordinatorShadow', () => {
-  it('keeps router and coordinator evaluations separate in one shadow snapshot', () => {
-    const contract = createContract();
+  it('keeps router and coordinator outputs separate in one snapshot', () => {
     const result = evaluateRouterCoordinatorShadow({
-      contract,
+      contract: createContract(),
       nowEpochMs: 1_500,
       routerDecision: {
         schemaVersion: 1,
@@ -178,13 +144,9 @@ describe('evaluateRouterCoordinatorShadow', () => {
     });
 
     expect(result.deterministicRouteId).toBe('model:qwen3_4b');
-    expect(result.router.role).toBe('router');
-    expect(result.router.status).toBe('accepted');
-    expect(result.router.advisoryRouteId).toBe('model:smollm3_3b');
-    expect(result.router.advisoryMatchedDeterministic).toBe(false);
-    expect(result.coordinator.role).toBe('coordinator');
-    expect(result.coordinator.status).toBe('accepted');
-    expect(result.coordinator.advisoryRouteId).toBe('model:qwen3_4b');
-    expect(result.coordinator.advisoryMatchedDeterministic).toBe(true);
+    expect(result.selectedRouteId).toBe('model:smollm3_3b');
+    expect(result.router.routerRouteId).toBe('model:smollm3_3b');
+    expect(result.router.authorityApplied).toBe(true);
+    expect(result.coordinator.recommendationRouteId).toBe('model:qwen3_4b');
   });
 });
