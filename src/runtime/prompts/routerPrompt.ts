@@ -1,3 +1,5 @@
+import type { JSONSchema } from 'zod';
+import { routerPromptOutputJsonSchema } from './promptJsonSchemas';
 import {
   ROUTER_PROMPT_ID,
   ROUTER_PROMPT_VERSION,
@@ -65,6 +67,7 @@ export interface RuntimePromptDefinition<TInput, TOutput> {
   maxOutputTokens: number;
   temperature: number;
   outputSchema: typeof routerPromptOutputSchema;
+  outputJsonSchema: JSONSchema.BaseSchema;
   buildInput: (input: TInput) => TInput;
   parseOutput: (value: unknown) => TOutput;
 }
@@ -78,6 +81,7 @@ export const functionGemmaRouterPromptV1: RuntimePromptDefinition<RouterPromptIn
   maxOutputTokens: 256,
   temperature: 0,
   outputSchema: routerPromptOutputSchema,
+  outputJsonSchema: routerPromptOutputJsonSchema,
   buildInput: (input) => input,
   parseOutput: (value) => routerPromptOutputSchema.parse(value),
 };
