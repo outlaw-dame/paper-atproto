@@ -58,6 +58,9 @@ export interface AiStackConstraints {
 export interface AiStackProfile {
   tier: AiStackTier;
   runtime: AiRuntimeId;
+  /** Deterministic authority for routing. Advisory models may never replace this. */
+  routerAuthority: AiModelBinding;
+  /** Advisory router model selected for shadow evaluation where available. */
   router: AiModelBinding;
   coordinator: AiModelBinding;
   fallbackCoordinator: AiModelBinding;
@@ -104,24 +107,28 @@ const DEFAULT_BACKGROUND_DOWNLOAD_LIMIT_GIB = 2;
 const SAFE_STORAGE_HEADROOM_GIB = 1;
 const LATENCY_DEGRADE_THRESHOLD_MS = 2_000;
 
-function routerBinding(runtime: AiRuntimeId): AiModelBinding {
-  if (runtime === 'litert') {
-    return {
-      id: 'functiongemma_270m',
-      runtime,
-      role: 'router',
-      estimatedSizeGiB: FUNCTIONGEMMA_270M_SIZE_GIB,
-      loadPolicy: 'eager',
-      requiresExplicitConsent: false,
-    };
-  }
-
+function routerAuthorityBinding(): AiModelBinding {
   return {
     id: 'deterministic_policy',
     runtime: 'deterministic',
     role: 'router',
     estimatedSizeGiB: 0,
     loadPolicy: 'disabled',
+    requiresExplicitConsent: false,
+  };
+}
+
+function advisoryRouterBinding(runtime: AiRuntimeId, loadPolicy: AiModelBinding['loadPolicy']): AiModelBinding {
+  if (runtime === 'deterministic') {
+    return routerAuthorityBinding();
+  }
+
+  return {
+    id: 'functiongemma_270m',
+    runtime,
+    role: 'router',
+    estimatedSizeGiB: FUNCTIONGEMMA_270M_SIZE_GIB,
+    loadPolicy,
     requiresExplicitConsent: false,
   };
 }
@@ -242,6 +249,7 @@ function baseProfile(params: {
   return {
     tier: params.tier,
     runtime: params.runtime,
+    routerAuthority: routerAuthorityBinding(),
     router: params.router,
     coordinator: params.coordinator,
     fallbackCoordinator: params.fallbackCoordinator,
@@ -279,7 +287,7 @@ export function selectAiStackProfile(
       tier: 'baseline',
       runtime: 'deterministic',
       capability,
-      router: routerBinding('deterministic'),
+      router: routerAuthorityBinding(),
       coordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       options,
@@ -300,7 +308,7 @@ export function selectAiStackProfile(
         tier: 'edge_premium',
         runtime: 'litert',
         capability,
-        router: routerBinding('litert'),
+        router: advisoryRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
           id: 'gemma4_e4b',
           runtime: 'litert',
@@ -324,7 +332,7 @@ export function selectAiStackProfile(
         tier: 'edge_strong',
         runtime: 'litert',
         capability,
-        router: routerBinding('litert'),
+        router: advisoryRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
           id: 'gemma4_e2b',
           runtime: 'litert',
@@ -348,7 +356,7 @@ export function selectAiStackProfile(
         tier: 'edge_strong',
         runtime: 'litert',
         capability,
-        router: routerBinding('litert'),
+        router: advisoryRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
           id: 'gemma4_e2b',
           runtime: 'litert',
@@ -371,7 +379,7 @@ export function selectAiStackProfile(
       tier: 'baseline',
       runtime: 'deterministic',
       capability,
-      router: routerBinding('deterministic'),
+      router: routerAuthorityBinding(),
       coordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       options,
@@ -383,7 +391,7 @@ export function selectAiStackProfile(
     tier: 'browser_default',
     runtime: 'webllm',
     capability,
-    router: routerBinding('deterministic'),
+    router: advisoryRouterBinding('webllm', 'lazy'),
     coordinator: coordinatorBinding({ id: 'smollm2_1_7b', runtime: 'webllm', loadPolicy: 'lazy', requiresExplicitConsent: false }),
     fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
     options,
