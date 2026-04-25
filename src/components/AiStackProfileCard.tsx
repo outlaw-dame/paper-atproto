@@ -61,6 +61,13 @@ function formatReasons(reasons: readonly string[]): string {
   return reasons.map((reason) => reason.replaceAll('_', ' ')).join(' • ');
 }
 
+function formatAuthorityMode(profile: AiStackProfile): string {
+  if (profile.diagnostics.authorityMode === 'deterministic_only') {
+    return 'Deterministic policy only';
+  }
+  return 'Deterministic policy + FunctionGemma';
+}
+
 function ModelBindingRow({ label, binding }: { label: string; binding: AiModelBinding }) {
   return (
     <div
@@ -93,13 +100,11 @@ function ModelBindingRow({ label, binding }: { label: string; binding: AiModelBi
 }
 
 export function summarizeAiStackProfile(profile: AiStackProfile): string {
-  const authority = formatModelId(profile.routerAuthority.id);
-  const advisoryRouter = formatModelId(profile.router.id);
   const coordinator = formatModelId(profile.coordinator.id);
   if (profile.tier === 'baseline') {
-    return 'Baseline deterministic profile. Advisory router/coordinator model loading remains disabled.';
+    return 'Baseline deterministic profile. Router authority is deterministic-only and coordinator model loading remains disabled.';
   }
-  return `${profile.tier.replaceAll('_', ' ')} profile keeps ${authority} as routing authority, with ${advisoryRouter} as advisory router and ${coordinator} as coordinator via ${formatRuntime(profile.runtime)}.`;
+  return `${profile.tier.replaceAll('_', ' ')} profile uses ${formatAuthorityMode(profile)} as router authority and ${coordinator} as coordinator via ${formatRuntime(profile.runtime)}.`;
 }
 
 export default function AiStackProfileCard() {
@@ -148,7 +153,7 @@ export default function AiStackProfileCard() {
           Router/coordinator stack
         </p>
         <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
-          Read-only profile selection. Deterministic policy remains routing authority; advisory router/coordinator models are shadow-only until explicitly wired through the contract.
+          Read-only profile selection. Deterministic policy gates the safe action space; FunctionGemma is a router authority only inside that validated contract.
         </p>
       </div>
 
@@ -197,8 +202,31 @@ export default function AiStackProfileCard() {
       ) : (
         <>
           <div style={{ display: 'grid', gap: 8 }}>
-            <ModelBindingRow label="Router authority" binding={profile.routerAuthority} />
-            <ModelBindingRow label="Advisory router" binding={profile.router} />
+            <div
+              style={{
+                border: '1px solid var(--sep)',
+                borderRadius: 10,
+                padding: '9px 10px',
+                display: 'grid',
+                gap: 6,
+                background: 'var(--surface, #fff)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--label-3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Router authority
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--label-3)' }}>
+                  {formatAuthorityMode(profile)}
+                </span>
+              </div>
+              {profile.routerAuthorities.map((authority) => (
+                <div key={`${authority.id}:${authority.runtime}`} style={{ fontSize: 11, color: 'var(--label-3)' }}>
+                  <strong style={{ color: 'var(--label-1)' }}>{formatModelId(authority.id)}</strong> • {formatRuntime(authority.runtime)} • {formatLoadPolicy(authority.loadPolicy)}
+                </div>
+              ))}
+            </div>
+            <ModelBindingRow label="Model router" binding={profile.router} />
             <ModelBindingRow label="Coordinator" binding={profile.coordinator} />
             {profile.fallbackCoordinator.id !== 'none' && (
               <ModelBindingRow label="Fallback coordinator" binding={profile.fallbackCoordinator} />
