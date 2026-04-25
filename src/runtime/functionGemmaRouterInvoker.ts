@@ -61,7 +61,10 @@ function createTimeoutController(timeoutMs: number, outerSignal?: AbortSignal): 
   cleanup: () => void;
 } {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort('timeout'), Math.max(1, timeoutMs));
+  const timeout: ReturnType<typeof setTimeout> = setTimeout(
+    () => controller.abort('timeout'),
+    Math.max(1, timeoutMs),
+  );
   const abortFromOuter = () => controller.abort(outerSignal?.reason ?? 'aborted');
 
   if (outerSignal) {
@@ -72,10 +75,24 @@ function createTimeoutController(timeoutMs: number, outerSignal?: AbortSignal): 
   return {
     controller,
     cleanup: () => {
-      window.clearTimeout(timeout);
+      clearTimeout(timeout);
       outerSignal?.removeEventListener('abort', abortFromOuter);
     },
   };
+}
+
+function rejectOnAbort(signal: AbortSignal): Promise<never> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error('Router invocation aborted.'));
+  }
+
+  return new Promise((_, reject) => {
+    signal.addEventListener(
+      'abort',
+      () => reject(signal.reason ?? new Error('Router invocation aborted.')),
+      { once: true },
+    );
+  });
 }
 
 function optionalNowEpochMsParam(nowEpochMs: number | undefined): { nowEpochMs?: number } {
@@ -131,7 +148,7 @@ export async function invokeFunctionGemmaRouter(
   );
 
   try {
-    const output = await options.runtime.route({
+    const routePromise = options.runtime.route({
       systemPrompt: functionGemmaRouterPromptV1.system,
       input: functionGemmaRouterPromptV1.buildInput(options.promptInput),
       outputJsonSchema: functionGemmaRouterPromptV1.outputJsonSchema,
@@ -140,6 +157,8 @@ export async function invokeFunctionGemmaRouter(
       temperature: 0,
       signal: controller.signal,
     });
+    routePromise.catch(() => undefined);
+    const output = await Promise.race([routePromise, rejectOnAbort(controller.signal)]);
     const execution = evaluateRouterPromptOutput({
       contract: options.contract,
       contractId: options.contractId,
