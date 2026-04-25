@@ -1,4 +1,3 @@
-import type { JSONSchema } from 'zod';
 import { routerPromptOutputJsonSchema } from './promptJsonSchemas';
 import {
   ROUTER_PROMPT_ID,
@@ -67,7 +66,7 @@ export interface RuntimePromptDefinition<TInput, TOutput> {
   maxOutputTokens: number;
   temperature: number;
   outputSchema: typeof routerPromptOutputSchema;
-  outputJsonSchema: JSONSchema.BaseSchema;
+  outputJsonSchema: typeof routerPromptOutputJsonSchema;
   buildInput: (input: TInput) => TInput;
   parseOutput: (value: unknown) => TOutput;
 }
