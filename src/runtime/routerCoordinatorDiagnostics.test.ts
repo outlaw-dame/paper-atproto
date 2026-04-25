@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeCapability } from './capabilityProbe';
+import type { ModelPolicyDecision } from './modelPolicy';
 import { selectAiStackProfile } from './aiStackProfile';
 import { chooseModelForTask } from './modelPolicy';
 import { buildRouterCoordinatorDiagnosticsSnapshot } from './routerCoordinatorDiagnostics';
@@ -57,6 +58,7 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
       'model:phi4_mini',
       'remote:fallback',
     ]);
+    expect(snapshot.allowedRoutes.every((route) => route.allowed)).toBe(true);
   });
 
   it('keeps hot path scoring deterministic even on high capability devices', () => {
@@ -80,6 +82,7 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
     expect(snapshot.allowedRoutes[0]).toMatchObject({
       id: 'worker_local_only',
       kind: 'deterministic_only',
+      allowed: true,
     });
   });
 
@@ -144,6 +147,40 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
 
     expect(snapshot.policy.requiresExplicitUserAction).toBe(true);
     expect(snapshot.blockers).toContain('explicit_user_action_required');
+    expect(snapshot.readiness).toBe('blocked');
+  });
+
+  it('reports no allowed routes when the contract retains a disallowed primary route for diagnostics', () => {
+    const policyDecision: ModelPolicyDecision = {
+      task: 'text_generation',
+      choice: 'qwen3_4b',
+      fallbackChoices: [],
+      localAllowed: false,
+      remoteFallbackAllowed: false,
+      requiresExplicitUserAction: false,
+      reason: 'Synthetic blocked policy for diagnostics coverage.',
+    };
+    const stackProfile = selectAiStackProfile(HIGH_CAPABILITY, {
+      settingsMode: 'best_quality',
+      allowLiteRt: true,
+      preferLiteRt: true,
+      userConsentedToLargeModels: true,
+      availableStorageGiB: 16,
+    });
+
+    const snapshot = buildRouterCoordinatorDiagnosticsSnapshot({
+      policyDecision,
+      stackProfile,
+      nowEpochMs: 1_000,
+    });
+
+    expect(snapshot.allowedRoutes).toEqual([
+      expect.objectContaining({
+        id: 'model:qwen3_4b',
+        allowed: false,
+      }),
+    ]);
+    expect(snapshot.blockers).toContain('no_allowed_routes');
     expect(snapshot.readiness).toBe('blocked');
   });
 });
