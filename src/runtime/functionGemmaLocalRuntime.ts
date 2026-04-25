@@ -44,15 +44,7 @@ export class FunctionGemmaLocalRouterRuntime implements FunctionGemmaRouterRunti
   constructor(options: FunctionGemmaLocalRouterRuntimeOptions) {
     const modelId = sanitizeModelId(options.modelId);
     this.maxJsonChars = clampInteger(options.maxJsonChars, DEFAULT_MAX_JSON_CHARS, 512, 16_384);
-    this.session = options.session ?? new LocalGenerationSession({
-      modelId,
-      label: 'FunctionGemma router',
-      device: options.device,
-      localOnly: options.localOnly ?? true,
-      loadTimeoutMs: options.loadTimeoutMs,
-      inferenceTimeoutMs: options.inferenceTimeoutMs,
-      quantized: options.quantized,
-    });
+    this.session = options.session ?? new LocalGenerationSession(buildLocalGenerationConfig(modelId, options));
   }
 
   async route(request: FunctionGemmaRouterRuntimeRequest): Promise<unknown> {
@@ -97,6 +89,22 @@ export function createFunctionGemmaLocalRouterRuntime(
   options: FunctionGemmaLocalRouterRuntimeOptions,
 ): FunctionGemmaRouterRuntime {
   return new FunctionGemmaLocalRouterRuntime(options);
+}
+
+function buildLocalGenerationConfig(
+  modelId: string,
+  options: FunctionGemmaLocalRouterRuntimeOptions,
+): LocalTextGenerationConfig {
+  const config: LocalTextGenerationConfig = {
+    modelId,
+    label: 'FunctionGemma router',
+    localOnly: options.localOnly ?? true,
+  };
+  if (options.device) config.device = options.device;
+  if (typeof options.loadTimeoutMs === 'number') config.loadTimeoutMs = options.loadTimeoutMs;
+  if (typeof options.inferenceTimeoutMs === 'number') config.inferenceTimeoutMs = options.inferenceTimeoutMs;
+  if (typeof options.quantized === 'boolean') config.quantized = options.quantized;
+  return config;
 }
 
 function buildRouterPrompt(request: FunctionGemmaRouterRuntimeRequest): string {
