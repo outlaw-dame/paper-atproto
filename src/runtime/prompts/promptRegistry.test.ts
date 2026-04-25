@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  coordinatorPromptOutputJsonSchema,
+  routerPromptOutputJsonSchema,
+} from './promptJsonSchemas';
+import {
   COORDINATOR_PROMPT_ID,
   COORDINATOR_PROMPT_VERSION,
   ROUTER_PROMPT_ID,
@@ -67,6 +71,44 @@ describe('runtime prompt registry', () => {
   it('accepts valid structured router and coordinator outputs', () => {
     expect(routerPromptOutputSchema.parse(routerFixture)).toEqual(routerFixture);
     expect(coordinatorPromptOutputSchema.parse(coordinatorFixture)).toEqual(coordinatorFixture);
+  });
+
+  it('exposes portable JSON Schema contracts for model boundaries', () => {
+    expect(runtimePromptRegistry.router.outputJsonSchema).toBe(routerPromptOutputJsonSchema);
+    expect(runtimePromptRegistry.coordinator.outputJsonSchema).toBe(coordinatorPromptOutputJsonSchema);
+    expect(routerPromptOutputJsonSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: expect.arrayContaining([
+        'schemaVersion',
+        'promptId',
+        'promptVersion',
+        'contractId',
+        'decisionType',
+        'selectedRouteId',
+        'confidence',
+        'reasonCodes',
+        'ttlMs',
+      ]),
+    });
+    expect(coordinatorPromptOutputJsonSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: expect.arrayContaining([
+        'schemaVersion',
+        'promptId',
+        'promptVersion',
+        'contractId',
+        'recommendation',
+        'selectedRouteId',
+        'confidence',
+        'reasonCodes',
+        'monitoringPlan',
+        'ttlMs',
+      ]),
+    });
+    expect(() => JSON.stringify(routerPromptOutputJsonSchema)).not.toThrow();
+    expect(() => JSON.stringify(coordinatorPromptOutputJsonSchema)).not.toThrow();
   });
 
   it('rejects random strings, extra fields, and invalid reason codes', () => {
