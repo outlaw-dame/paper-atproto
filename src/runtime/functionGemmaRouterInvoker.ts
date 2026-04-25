@@ -78,6 +78,10 @@ function createTimeoutController(timeoutMs: number, outerSignal?: AbortSignal): 
   };
 }
 
+function optionalNowEpochMsParam(nowEpochMs: number | undefined): { nowEpochMs?: number } {
+  return nowEpochMs === undefined ? {} : { nowEpochMs };
+}
+
 function fallbackExecution(params: {
   contract: CoordinationContract;
   contractId: string;
@@ -87,7 +91,7 @@ function fallbackExecution(params: {
     contract: params.contract,
     contractId: params.contractId,
     output: null,
-    nowEpochMs: params.nowEpochMs,
+    ...optionalNowEpochMsParam(params.nowEpochMs),
   });
 }
 
@@ -104,7 +108,7 @@ export async function invokeFunctionGemmaRouter(
     const execution = fallbackExecution({
       contract: options.contract,
       contractId: options.contractId,
-      nowEpochMs: options.nowEpochMs,
+      ...optionalNowEpochMsParam(options.nowEpochMs),
     });
     return {
       schemaVersion: 1,
@@ -133,14 +137,14 @@ export async function invokeFunctionGemmaRouter(
       outputJsonSchema: functionGemmaRouterPromptV1.outputJsonSchema,
       maxInputTokens: functionGemmaRouterPromptV1.maxInputTokens,
       maxOutputTokens: functionGemmaRouterPromptV1.maxOutputTokens,
-      temperature: functionGemmaRouterPromptV1.temperature,
+      temperature: 0,
       signal: controller.signal,
     });
     const execution = evaluateRouterPromptOutput({
       contract: options.contract,
       contractId: options.contractId,
       output: output as RouterPromptOutput,
-      nowEpochMs: options.nowEpochMs,
+      ...optionalNowEpochMsParam(options.nowEpochMs),
     });
 
     return {
@@ -162,7 +166,7 @@ export async function invokeFunctionGemmaRouter(
     const execution = fallbackExecution({
       contract: options.contract,
       contractId: options.contractId,
-      nowEpochMs: options.nowEpochMs,
+      ...optionalNowEpochMsParam(options.nowEpochMs),
     });
 
     return {
