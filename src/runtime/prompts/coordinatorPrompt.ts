@@ -43,20 +43,20 @@ Quality and health criteria:
 - Staleness: stale contracts or stale outputs should be refreshed or reviewed.
 - Safety: policy violations require fallback, abstain, or review behavior.
 
-Return JSON matching this shape exactly:
+Return JSON matching this exact object structure. Example:
 {
   "schemaVersion": 1,
   "promptId": "runtime-coordinator",
   "promptVersion": 1,
-  "contractId": "string",
-  "recommendation": "accept_route" | "prefer_fallback" | "abstain" | "flag_for_review",
-  "selectedRouteId": "string",
-  "confidence": 0.0,
+  "contractId": "example-contract-id",
+  "recommendation": "accept_route",
+  "selectedRouteId": "example-route-id",
+  "confidence": 0.9,
   "reasonCodes": ["policy_selected_primary"],
   "monitoringPlan": {
     "watchFlags": ["low_confidence"],
-    "maxRetries": 0,
-    "fallbackRouteId": "string"
+    "maxRetries": 1,
+    "fallbackRouteId": "example-fallback-route-id"
   },
   "ttlMs": 1000
 }`;
