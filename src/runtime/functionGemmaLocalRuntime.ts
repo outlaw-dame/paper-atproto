@@ -4,10 +4,7 @@ import {
   type GenerateTextResult,
   type LocalTextGenerationConfig,
 } from './generationSession';
-import type {
-  FunctionGemmaRouterRuntime,
-  FunctionGemmaRouterRuntimeRequest,
-} from './functionGemmaRouterInvoker';
+import type { FunctionGemmaRouterRuntime, FunctionGemmaRouterRuntimeRequest } from './functionGemmaRouterInvoker';
 
 export interface FunctionGemmaTextSession {
   load(signal?: AbortSignal): Promise<void>;
@@ -16,10 +13,6 @@ export interface FunctionGemmaTextSession {
 }
 
 export interface FunctionGemmaLocalRouterRuntimeOptions {
-  /**
-   * Caller-owned model id or local model directory. Intentionally required so we
-   * do not hardcode or silently download an unverified FunctionGemma artifact.
-   */
   modelId: string;
   device?: LocalTextGenerationConfig['device'];
   localOnly?: boolean;
@@ -49,16 +42,14 @@ export class FunctionGemmaLocalRouterRuntime implements FunctionGemmaRouterRunti
 
   async route(request: FunctionGemmaRouterRuntimeRequest): Promise<unknown> {
     await this.ensureLoaded(request.signal);
-    const prompt = buildRouterPrompt(request);
     const result = await this.session.generate({
       systemPrompt: request.systemPrompt,
-      prompt,
+      prompt: buildRouterPrompt(request),
       maxNewTokens: request.maxOutputTokens,
       temperature: request.temperature,
       topP: 1,
       signal: request.signal,
     });
-
     return parseRouterJson(result.text, this.maxJsonChars);
   }
 
@@ -75,7 +66,7 @@ export class FunctionGemmaLocalRouterRuntime implements FunctionGemmaRouterRunti
         try {
           await this.session.dispose?.();
         } catch {
-          // Best-effort cleanup only. The original load error is the useful one.
+          // Preserve the original load failure.
         }
         throw error;
       });
@@ -85,21 +76,12 @@ export class FunctionGemmaLocalRouterRuntime implements FunctionGemmaRouterRunti
   }
 }
 
-export function createFunctionGemmaLocalRouterRuntime(
-  options: FunctionGemmaLocalRouterRuntimeOptions,
-): FunctionGemmaRouterRuntime {
+export function createFunctionGemmaLocalRouterRuntime(options: FunctionGemmaLocalRouterRuntimeOptions): FunctionGemmaRouterRuntime {
   return new FunctionGemmaLocalRouterRuntime(options);
 }
 
-function buildLocalGenerationConfig(
-  modelId: string,
-  options: FunctionGemmaLocalRouterRuntimeOptions,
-): LocalTextGenerationConfig {
-  const config: LocalTextGenerationConfig = {
-    modelId,
-    label: 'FunctionGemma router',
-    localOnly: options.localOnly ?? true,
-  };
+function buildLocalGenerationConfig(modelId: string, options: FunctionGemmaLocalRouterRuntimeOptions): LocalTextGenerationConfig {
+  const config: LocalTextGenerationConfig = { modelId, label: 'FunctionGemma router', localOnly: options.localOnly ?? true };
   if (options.device) config.device = options.device;
   if (typeof options.loadTimeoutMs === 'number') config.loadTimeoutMs = options.loadTimeoutMs;
   if (typeof options.inferenceTimeoutMs === 'number') config.inferenceTimeoutMs = options.inferenceTimeoutMs;
@@ -108,14 +90,9 @@ function buildLocalGenerationConfig(
 }
 
 function buildRouterPrompt(request: FunctionGemmaRouterRuntimeRequest): string {
-  const body = JSON.stringify({
-    input: request.input,
-    outputJsonSchema: request.outputJsonSchema,
-  });
-
   return [
     'Route the following request. Return only a single JSON object matching outputJsonSchema.',
-    body,
+    JSON.stringify({ input: request.input, outputJsonSchema: request.outputJsonSchema }),
   ].join('\n\n');
 }
 
@@ -134,12 +111,8 @@ async function loadWithSingleRetry(session: FunctionGemmaTextSession, signal: Ab
 }
 
 function parseRouterJson(text: string, maxJsonChars: number): unknown {
-  const bounded = sanitizeModelText(text, maxJsonChars);
-  const jsonText = extractFirstJsonObject(bounded);
-  if (!jsonText) {
-    throw new Error('FunctionGemma router did not return a JSON object.');
-  }
-
+  const jsonText = extractFirstJsonObject(sanitizeModelText(text, maxJsonChars));
+  if (!jsonText) throw new Error('FunctionGemma router did not return a JSON object.');
   try {
     return JSON.parse(jsonText);
   } catch (error) {
@@ -150,60 +123,38 @@ function parseRouterJson(text: string, maxJsonChars: number): unknown {
 function extractFirstJsonObject(text: string): string | null {
   const start = text.indexOf('{');
   if (start < 0) return null;
-
   let depth = 0;
   let inString = false;
   let escaped = false;
-
   for (let index = start; index < text.length; index += 1) {
     const char = text[index];
-
     if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
       continue;
     }
-
-    if (char === '"') {
-      inString = true;
-    } else if (char === '{') {
-      depth += 1;
-    } else if (char === '}') {
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
       depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, index + 1);
-      }
+      if (depth === 0) return text.slice(start, index + 1);
       if (depth < 0) return null;
     }
   }
-
   return null;
 }
 
 function sanitizeModelId(value: string): string {
   const modelId = value.trim();
-  if (!modelId || modelId.length > 240) {
-    throw new Error('FunctionGemma modelId must be a non-empty string under 240 characters.');
-  }
-  if (!/^[A-Za-z0-9._/@:-]+$/.test(modelId)) {
-    throw new Error('FunctionGemma modelId contains unsupported characters.');
-  }
-  if (modelId.includes('..')) {
-    throw new Error('FunctionGemma modelId must not contain parent-directory segments.');
-  }
+  if (!modelId || modelId.length > 240) throw new Error('FunctionGemma modelId must be a non-empty string under 240 characters.');
+  if (!/^[A-Za-z0-9._/@:-]+$/.test(modelId)) throw new Error('FunctionGemma modelId contains unsupported characters.');
+  if (modelId.includes('..')) throw new Error('FunctionGemma modelId must not contain parent-directory segments.');
   return modelId;
 }
 
 function sanitizeModelText(value: string, maxLen: number): string {
-  return value
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
-    .trim()
-    .slice(0, maxLen);
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ').trim().slice(0, maxLen);
 }
 
 function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -214,15 +165,17 @@ function clampInteger(value: number | undefined, fallback: number, min: number, 
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   await new Promise<void>((resolve, reject) => {
-    let timeout: number | undefined;
-    const onAbort = () => {
-      if (typeof timeout === 'number') {
-        window.clearTimeout(timeout);
-      }
-      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-    };
-    timeout = window.setTimeout(() => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    function cleanup(): void {
       signal.removeEventListener('abort', onAbort);
+      if (timeout) clearTimeout(timeout);
+    }
+    function onAbort(): void {
+      cleanup();
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    }
+    timeout = setTimeout(() => {
+      cleanup();
       resolve();
     }, ms);
     signal.addEventListener('abort', onAbort, { once: true });
@@ -231,7 +184,5 @@ async function delay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) {
-    throw signal.reason ?? new DOMException('Aborted', 'AbortError');
-  }
+  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
 }
