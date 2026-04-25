@@ -1,4 +1,3 @@
-import type { JSONSchema } from 'zod';
 import { coordinatorPromptOutputJsonSchema } from './promptJsonSchemas';
 import {
   COORDINATOR_PROMPT_ID,
@@ -71,7 +70,7 @@ export interface CoordinatorPromptDefinition<TInput, TOutput> {
   maxOutputTokens: number;
   temperature: number;
   outputSchema: typeof coordinatorPromptOutputSchema;
-  outputJsonSchema: JSONSchema.BaseSchema;
+  outputJsonSchema: typeof coordinatorPromptOutputJsonSchema;
   buildInput: (input: TInput) => TInput;
   parseOutput: (value: unknown) => TOutput;
 }
