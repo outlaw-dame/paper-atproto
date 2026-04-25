@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { RuntimeCapability } from './capabilityProbe';
+import { selectAiStackProfile } from './aiStackProfile';
+import { chooseModelForTask } from './modelPolicy';
+import { buildCoordinationContract } from './routerCoordinatorContract';
 import type { FunctionGemmaRouterRuntimeRequest } from './functionGemmaRouterInvoker';
 import {
   FunctionGemmaLocalRouterRuntime,
@@ -6,46 +10,60 @@ import {
 } from './functionGemmaLocalRuntime';
 import { functionGemmaRouterPromptV1, type RouterPromptInput } from './prompts';
 
+const HIGH_CAPABILITY: RuntimeCapability = {
+  webgpu: true,
+  tier: 'high',
+  generationAllowed: true,
+  multimodalAllowed: true,
+  browserFamily: 'chromium',
+  deviceMemoryGiB: 16,
+  hardwareConcurrency: 12,
+};
+
+function createContract() {
+  const policyDecision = chooseModelForTask({
+    capability: HIGH_CAPABILITY,
+    settingsMode: 'best_quality',
+    task: 'text_generation',
+  });
+  const stackProfile = selectAiStackProfile(HIGH_CAPABILITY, {
+    settingsMode: 'best_quality',
+    allowLiteRt: true,
+    preferLiteRt: true,
+    userConsentedToLargeModels: true,
+    availableStorageGiB: 16,
+  });
+
+  return buildCoordinationContract({ policyDecision, stackProfile, nowEpochMs: 1_000, ttlMs: 10_000 });
+}
+
+function promptInput(): RouterPromptInput {
+  return {
+    contractId: 'contract:test',
+    contract: createContract(),
+    taskSummary: 'Route a test job.',
+    userVisibleIntent: 'Test routing.',
+    inputStats: {
+      textLength: 10,
+      estimatedPromptTokens: 8,
+      hasImages: false,
+      hasLinks: false,
+      hasCode: false,
+      hasSensitiveLocalData: false,
+    },
+    runtimeHealth: {
+      batterySaver: false,
+      thermalState: 'nominal',
+      sustainedLatencyMs: null,
+      storageAvailableGiB: 8,
+    },
+  };
+}
+
 function request(overrides: Partial<FunctionGemmaRouterRuntimeRequest> = {}): FunctionGemmaRouterRuntimeRequest {
   return {
     systemPrompt: functionGemmaRouterPromptV1.system,
-    input: {
-      contractId: 'contract:test',
-      contract: {
-        schemaVersion: 1,
-        contractId: 'contract:test',
-        generatedAtEpochMs: 1_000,
-        expiresAtEpochMs: 2_000,
-        allowedRoutes: [
-          {
-            routeId: 'model:test',
-            allowed: true,
-            priority: 1,
-            runtime: 'local_transformers_js',
-            modelId: 'test-model',
-            reasonCodes: ['policy_selected_primary'],
-          },
-        ],
-        defaultRouteId: 'model:test',
-        safetyGates: [],
-      },
-      taskSummary: 'Route a test job.',
-      userVisibleIntent: 'Test routing.',
-      inputStats: {
-        textLength: 10,
-        estimatedPromptTokens: 8,
-        hasImages: false,
-        hasLinks: false,
-        hasCode: false,
-        hasSensitiveLocalData: false,
-      },
-      runtimeHealth: {
-        batterySaver: false,
-        thermalState: 'nominal',
-        sustainedLatencyMs: null,
-        storageAvailableGiB: 8,
-      },
-    } as RouterPromptInput,
+    input: promptInput(),
     outputJsonSchema: functionGemmaRouterPromptV1.outputJsonSchema,
     maxInputTokens: 1024,
     maxOutputTokens: 128,
