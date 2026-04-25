@@ -39,33 +39,31 @@ export const coordinatorWatchFlagSchema = z.enum([
 
 const routeIdSchema = z.string().min(1).max(128);
 
-export const routerPromptOutputSchema = z.object({
+const basePromptOutputSchema = z.object({
   schemaVersion: z.literal(PROMPT_SCHEMA_VERSION),
+  contractId: z.string().min(1).max(160),
+  selectedRouteId: routeIdSchema,
+  confidence: z.number().min(0).max(1),
+  ttlMs: z.number().int().min(250).max(15_000),
+});
+
+export const routerPromptOutputSchema = basePromptOutputSchema.extend({
   promptId: z.literal(ROUTER_PROMPT_ID),
   promptVersion: z.literal(ROUTER_PROMPT_VERSION),
-  contractId: z.string().min(1).max(160),
   decisionType: routerDecisionTypeSchema,
-  selectedRouteId: routeIdSchema,
-  confidence: z.number().min(0).max(1),
   reasonCodes: z.array(coordinationReasonCodeSchema).min(1).max(4),
-  ttlMs: z.number().int().min(250).max(15_000),
 }).strict();
 
-export const coordinatorPromptOutputSchema = z.object({
-  schemaVersion: z.literal(PROMPT_SCHEMA_VERSION),
+export const coordinatorPromptOutputSchema = basePromptOutputSchema.extend({
   promptId: z.literal(COORDINATOR_PROMPT_ID),
   promptVersion: z.literal(COORDINATOR_PROMPT_VERSION),
-  contractId: z.string().min(1).max(160),
   recommendation: coordinatorRecommendationSchema,
-  selectedRouteId: routeIdSchema,
-  confidence: z.number().min(0).max(1),
   reasonCodes: z.array(coordinationReasonCodeSchema).min(1).max(5),
   monitoringPlan: z.object({
     watchFlags: z.array(coordinatorWatchFlagSchema).max(6),
     maxRetries: z.union([z.literal(0), z.literal(1)]),
     fallbackRouteId: routeIdSchema,
   }).strict(),
-  ttlMs: z.number().int().min(250).max(15_000),
 }).strict();
 
 export interface RouterPromptInput {
