@@ -44,15 +44,15 @@ Selection rules:
 11. Do not provide prose, markdown, comments, or chain-of-thought.
 12. Do not include fields outside the schema.
 
-Return JSON matching this shape exactly:
+Return JSON matching this exact object structure. Example:
 {
   "schemaVersion": 1,
   "promptId": "functiongemma-router",
   "promptVersion": 1,
-  "contractId": "string",
-  "decisionType": "route" | "fallback" | "abstain",
-  "selectedRouteId": "string",
-  "confidence": 0.0,
+  "contractId": "example-contract-id",
+  "decisionType": "route",
+  "selectedRouteId": "example-route-id",
+  "confidence": 0.9,
   "reasonCodes": ["policy_selected_primary"],
   "ttlMs": 1000
 }`;
@@ -60,7 +60,7 @@ Return JSON matching this shape exactly:
 export interface RuntimePromptDefinition<TInput, TOutput> {
   id: string;
   version: number;
-  role: 'router' | 'coordinator';
+  role: 'router';
   system: string;
   maxInputTokens: number;
   maxOutputTokens: number;
