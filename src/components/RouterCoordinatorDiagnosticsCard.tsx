@@ -85,20 +85,20 @@ export default function RouterCoordinatorDiagnosticsCard() {
 
               <div style={{ fontSize: 11, color: 'var(--label-3)', lineHeight: 1.45 }}>
                 <p style={{ margin: 0 }}>
-                  Default route: <strong>{snapshot.defaultRouteId}</strong> • fallback: <strong>{snapshot.fallbackRouteId}</strong>
+                  Default route: <strong>{formatEnum(snapshot.defaultRouteId)}</strong> • fallback: <strong>{formatEnum(snapshot.fallbackRouteId)}</strong>
                 </p>
                 <p style={{ margin: '4px 0 0' }}>
-                  Policy: {snapshot.policy.choice} • local {snapshot.policy.localAllowed ? 'allowed' : 'blocked'} • remote fallback {snapshot.policy.remoteFallbackAllowed ? 'allowed' : 'blocked'}
+                  Policy: {formatEnum(snapshot.policy.choice)} • local {snapshot.policy.localAllowed ? 'allowed' : 'blocked'} • remote fallback {snapshot.policy.remoteFallbackAllowed ? 'allowed' : 'blocked'}
                 </p>
                 <p style={{ margin: '4px 0 0' }}>
-                  Stack: {formatEnum(snapshot.stack.tier)} / {snapshot.stack.runtime} • router {snapshot.stack.routerModel} • coordinator {snapshot.stack.coordinatorModel}
+                  Stack: {formatEnum(snapshot.stack.tier)} / {formatEnum(snapshot.stack.runtime)} • router {formatEnum(snapshot.stack.routerModel)} • coordinator {formatEnum(snapshot.stack.coordinatorModel)}
                   {snapshot.stack.coordinatorRequiresConsent ? ' • coordinator requires consent' : ''}
                 </p>
                 <p style={{ margin: '4px 0 0' }}>
                   Blockers: {snapshot.blockers.length > 0 ? snapshot.blockers.map(formatEnum).join(' • ') : 'none'}
                 </p>
                 <p style={{ margin: '4px 0 0' }}>
-                  Routes: {snapshot.allowedRoutes.map((route) => `${route.id} (${formatRouteAllowed(route.allowed)})`).join(' • ')}
+                  Routes: {snapshot.allowedRoutes.map((route) => `${formatEnum(route.id)} (${formatRouteAllowed(route.allowed)})`).join(' • ')}
                 </p>
               </div>
             </div>
