@@ -36,6 +36,8 @@ export type AiStackUpgradeReason =
   | 'best_quality_mode'
   | 'healthy_latency_window';
 
+export type RouterAuthorityMode = 'deterministic_only' | 'deterministic_policy_and_functiongemma';
+
 export interface AiModelBinding {
   id: RouterModelId | CoordinatorModelId;
   runtime: AiRuntimeId;
@@ -58,12 +60,16 @@ export interface AiStackConstraints {
 export interface AiStackProfile {
   tier: AiStackTier;
   runtime: AiRuntimeId;
+  /** Authoritative router layers. Deterministic policy gates the safe action space; FunctionGemma may route only inside that contract. */
+  routerAuthorities: AiModelBinding[];
+  /** Concrete model-router binding for the selected profile; deterministic-only profiles use deterministic policy here. */
   router: AiModelBinding;
   coordinator: AiModelBinding;
   fallbackCoordinator: AiModelBinding;
   constraints: AiStackConstraints;
   diagnostics: {
     selectedBy: 'deterministic_policy';
+    authorityMode: RouterAuthorityMode;
     reasons: AiStackUpgradeReason[];
     degradeReasons: AiStackDegradeReason[];
     capabilityTier: RuntimeCapability['tier'];
@@ -104,18 +110,7 @@ const DEFAULT_BACKGROUND_DOWNLOAD_LIMIT_GIB = 2;
 const SAFE_STORAGE_HEADROOM_GIB = 1;
 const LATENCY_DEGRADE_THRESHOLD_MS = 2_000;
 
-function routerBinding(runtime: AiRuntimeId): AiModelBinding {
-  if (runtime === 'litert') {
-    return {
-      id: 'functiongemma_270m',
-      runtime,
-      role: 'router',
-      estimatedSizeGiB: FUNCTIONGEMMA_270M_SIZE_GIB,
-      loadPolicy: 'eager',
-      requiresExplicitConsent: false,
-    };
-  }
-
+function deterministicPolicyRouterBinding(): AiModelBinding {
   return {
     id: 'deterministic_policy',
     runtime: 'deterministic',
@@ -124,6 +119,35 @@ function routerBinding(runtime: AiRuntimeId): AiModelBinding {
     loadPolicy: 'disabled',
     requiresExplicitConsent: false,
   };
+}
+
+function functionGemmaRouterBinding(runtime: AiRuntimeId, loadPolicy: AiModelBinding['loadPolicy']): AiModelBinding {
+  if (runtime === 'deterministic') {
+    return deterministicPolicyRouterBinding();
+  }
+
+  return {
+    id: 'functiongemma_270m',
+    runtime,
+    role: 'router',
+    estimatedSizeGiB: FUNCTIONGEMMA_270M_SIZE_GIB,
+    loadPolicy,
+    requiresExplicitConsent: false,
+  };
+}
+
+function routerAuthoritiesFor(router: AiModelBinding): AiModelBinding[] {
+  const deterministicPolicy = deterministicPolicyRouterBinding();
+  if (router.id === 'deterministic_policy') {
+    return [deterministicPolicy];
+  }
+  return [deterministicPolicy, router];
+}
+
+function authorityModeFor(router: AiModelBinding): RouterAuthorityMode {
+  return router.id === 'deterministic_policy'
+    ? 'deterministic_only'
+    : 'deterministic_policy_and_functiongemma';
 }
 
 function coordinatorBinding(params: {
@@ -242,12 +266,14 @@ function baseProfile(params: {
   return {
     tier: params.tier,
     runtime: params.runtime,
+    routerAuthorities: routerAuthoritiesFor(params.router),
     router: params.router,
     coordinator: params.coordinator,
     fallbackCoordinator: params.fallbackCoordinator,
     constraints: constraintsForTier(params.tier, allowBackgroundUpgrade),
     diagnostics: {
       selectedBy: 'deterministic_policy',
+      authorityMode: authorityModeFor(params.router),
       reasons: params.reasons ?? [],
       degradeReasons: params.degradeReasons ?? [],
       capabilityTier: params.capability.tier,
@@ -279,7 +305,7 @@ export function selectAiStackProfile(
       tier: 'baseline',
       runtime: 'deterministic',
       capability,
-      router: routerBinding('deterministic'),
+      router: deterministicPolicyRouterBinding(),
       coordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       options,
@@ -300,7 +326,7 @@ export function selectAiStackProfile(
         tier: 'edge_premium',
         runtime: 'litert',
         capability,
-        router: routerBinding('litert'),
+        router: functionGemmaRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
           id: 'gemma4_e4b',
           runtime: 'litert',
@@ -324,7 +350,7 @@ export function selectAiStackProfile(
         tier: 'edge_strong',
         runtime: 'litert',
         capability,
-        router: routerBinding('litert'),
+        router: functionGemmaRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
           id: 'gemma4_e2b',
           runtime: 'litert',
@@ -348,7 +374,7 @@ export function selectAiStackProfile(
         tier: 'edge_strong',
         runtime: 'litert',
         capability,
-        router: routerBinding('litert'),
+        router: functionGemmaRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
           id: 'gemma4_e2b',
           runtime: 'litert',
@@ -371,7 +397,7 @@ export function selectAiStackProfile(
       tier: 'baseline',
       runtime: 'deterministic',
       capability,
-      router: routerBinding('deterministic'),
+      router: deterministicPolicyRouterBinding(),
       coordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
       options,
@@ -383,7 +409,7 @@ export function selectAiStackProfile(
     tier: 'browser_default',
     runtime: 'webllm',
     capability,
-    router: routerBinding('deterministic'),
+    router: functionGemmaRouterBinding('webllm', 'lazy'),
     coordinator: coordinatorBinding({ id: 'smollm2_1_7b', runtime: 'webllm', loadPolicy: 'lazy', requiresExplicitConsent: false }),
     fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
     options,
