@@ -47,13 +47,14 @@ describe('selectAiStackProfile', () => {
 
     expect(profile.tier).toBe('baseline');
     expect(profile.runtime).toBe('deterministic');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
     expect(profile.router.id).toBe('deterministic_policy');
     expect(profile.coordinator.id).toBe('none');
     expect(profile.diagnostics.degradeReasons).toContain('no_webgpu');
     expect(profile.diagnostics.degradeReasons).toContain('generation_disabled');
   });
 
-  it('selects the browser default coordinator when LiteRT is unavailable', () => {
+  it('selects the browser default coordinator and advisory FunctionGemma router when LiteRT is unavailable', () => {
     const profile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'balanced',
       allowLiteRt: false,
@@ -63,12 +64,14 @@ describe('selectAiStackProfile', () => {
 
     expect(profile.tier).toBe('browser_default');
     expect(profile.runtime).toBe('webllm');
-    expect(profile.router.id).toBe('deterministic_policy');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
+    expect(profile.router.id).toBe('functiongemma_270m');
+    expect(profile.router.runtime).toBe('webllm');
     expect(profile.coordinator.id).toBe('smollm2_1_7b');
     expect(profile.diagnostics.degradeReasons).toContain('litert_unavailable');
   });
 
-  it('selects Gemma 4 E2B on a high-capability LiteRT path without large-model consent', () => {
+  it('selects Gemma 4 E2B and advisory FunctionGemma on a high-capability LiteRT path without large-model consent', () => {
     const profile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'balanced',
       allowLiteRt: true,
@@ -79,7 +82,9 @@ describe('selectAiStackProfile', () => {
 
     expect(profile.tier).toBe('edge_strong');
     expect(profile.runtime).toBe('litert');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
     expect(profile.router.id).toBe('functiongemma_270m');
+    expect(profile.router.runtime).toBe('litert');
     expect(profile.coordinator.id).toBe('gemma4_e2b');
     expect(profile.coordinator.requiresExplicitConsent).toBe(true);
     expect(profile.diagnostics.degradeReasons).toContain('large_model_consent_missing');
@@ -96,7 +101,9 @@ describe('selectAiStackProfile', () => {
 
     expect(profile.tier).toBe('edge_premium');
     expect(profile.runtime).toBe('litert');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
     expect(profile.router.id).toBe('functiongemma_270m');
+    expect(profile.router.runtime).toBe('litert');
     expect(profile.coordinator.id).toBe('gemma4_e4b');
     expect(profile.coordinator.requiresExplicitConsent).toBe(false);
     expect(profile.fallbackCoordinator.id).toBe('gemma4_e2b');
@@ -113,6 +120,8 @@ describe('selectAiStackProfile', () => {
     });
 
     expect(profile.tier).toBe('edge_strong');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
+    expect(profile.router.id).toBe('functiongemma_270m');
     expect(profile.coordinator.id).toBe('gemma4_e2b');
     expect(profile.coordinator.requiresExplicitConsent).toBe(false);
   });
@@ -126,6 +135,8 @@ describe('selectAiStackProfile', () => {
     });
 
     expect(profile.tier).toBe('baseline');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
+    expect(profile.router.id).toBe('deterministic_policy');
     expect(profile.coordinator.id).toBe('none');
     expect(profile.diagnostics.degradeReasons).toContain('storage_constrained');
   });
@@ -140,6 +151,8 @@ describe('selectAiStackProfile', () => {
     });
 
     expect(profile.tier).toBe('baseline');
+    expect(profile.routerAuthority.id).toBe('deterministic_policy');
+    expect(profile.router.id).toBe('deterministic_policy');
     expect(profile.diagnostics.degradeReasons).toContain('settings_fast_mode');
   });
 });
