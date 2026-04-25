@@ -75,7 +75,7 @@ export function evaluateRouterShadowDecision(params: {
       selectedRouteId: deterministicRouteId,
       authorityApplied: false,
       routerMatchedDeterministic: false,
-      reasonCodes: ['validator_rejected_schema'],
+      reasonCodes: [],
     };
   }
 
@@ -112,7 +112,7 @@ export function evaluateCoordinatorShadowRecommendation(params: {
       deterministicRouteId,
       selectedRouteId: deterministicRouteId,
       recommendationMatchedDeterministic: false,
-      reasonCodes: ['validator_rejected_schema'],
+      reasonCodes: [],
       monitoringPlan: null,
     };
   }
