@@ -137,6 +137,10 @@ export function evaluateCoordinatorShadowRecommendation(params: {
   };
 }
 
+function optionalNowEpochMsParam(nowEpochMs: number | undefined): { nowEpochMs?: number } {
+  return nowEpochMs === undefined ? {} : { nowEpochMs };
+}
+
 export function evaluateRouterCoordinatorShadow(params: {
   contract: CoordinationContract;
   routerDecision?: unknown;
@@ -147,7 +151,7 @@ export function evaluateRouterCoordinatorShadow(params: {
   const router = evaluateRouterShadowDecision({
     contract: params.contract,
     decision: params.routerDecision,
-    nowEpochMs: params.nowEpochMs,
+    ...optionalNowEpochMsParam(params.nowEpochMs),
   });
 
   return {
@@ -156,7 +160,7 @@ export function evaluateRouterCoordinatorShadow(params: {
     coordinator: evaluateCoordinatorShadowRecommendation({
       contract: params.contract,
       recommendation: params.coordinatorRecommendation,
-      nowEpochMs: params.nowEpochMs,
+      ...optionalNowEpochMsParam(params.nowEpochMs),
     }),
     deterministicRouteId,
     selectedRouteId: router.selectedRouteId,
