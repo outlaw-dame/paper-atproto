@@ -5,7 +5,6 @@ import {
   type CoordinationReasonCode,
   type CoordinationRouteId,
   type CoordinatorRecommendationEnvelope,
-  type RouterDecisionEnvelope,
 } from './routerCoordinatorContract';
 
 export type ShadowEvaluatorRole = 'router' | 'coordinator';
@@ -15,10 +14,11 @@ export interface RouterShadowEvaluation {
   schemaVersion: 1;
   role: 'router';
   status: ShadowEvaluatorStatus;
-  advisoryRouteId: CoordinationRouteId | null;
+  routerRouteId: CoordinationRouteId | null;
   deterministicRouteId: CoordinationRouteId;
   selectedRouteId: CoordinationRouteId;
-  advisoryMatchedDeterministic: boolean;
+  authorityApplied: boolean;
+  routerMatchedDeterministic: boolean;
   reasonCodes: CoordinationReasonCode[];
 }
 
@@ -27,10 +27,10 @@ export interface CoordinatorShadowEvaluation {
   role: 'coordinator';
   status: ShadowEvaluatorStatus;
   recommendation: CoordinatorRecommendationEnvelope['recommendation'] | null;
-  advisoryRouteId: CoordinationRouteId | null;
+  recommendationRouteId: CoordinationRouteId | null;
   deterministicRouteId: CoordinationRouteId;
   selectedRouteId: CoordinationRouteId;
-  advisoryMatchedDeterministic: boolean;
+  recommendationMatchedDeterministic: boolean;
   reasonCodes: CoordinationReasonCode[];
   monitoringPlan: CoordinatorRecommendationEnvelope['monitoringPlan'] | null;
 }
@@ -40,6 +40,7 @@ export interface RouterCoordinatorShadowEvaluation {
   router: RouterShadowEvaluation;
   coordinator: CoordinatorShadowEvaluation;
   deterministicRouteId: CoordinationRouteId;
+  selectedRouteId: CoordinationRouteId;
   fallbackRouteId: CoordinationRouteId;
   contractExpiresAtEpochMs: number;
 }
@@ -51,11 +52,11 @@ function findDeterministicRoute(contract: CoordinationContract): CoordinationRou
   return route?.id ?? contract.defaultRouteId;
 }
 
-function advisoryMatchesDeterministic(
-  advisoryRouteId: CoordinationRouteId | null,
+function routeMatchesDeterministic(
+  routeId: CoordinationRouteId | null,
   deterministicRouteId: CoordinationRouteId,
 ): boolean {
-  return advisoryRouteId !== null && advisoryRouteId === deterministicRouteId;
+  return routeId !== null && routeId === deterministicRouteId;
 }
 
 export function evaluateRouterShadowDecision(params: {
@@ -69,25 +70,28 @@ export function evaluateRouterShadowDecision(params: {
       schemaVersion: 1,
       role: 'router',
       status: 'not_provided',
-      advisoryRouteId: null,
+      routerRouteId: null,
       deterministicRouteId,
       selectedRouteId: deterministicRouteId,
-      advisoryMatchedDeterministic: false,
+      authorityApplied: false,
+      routerMatchedDeterministic: false,
       reasonCodes: ['validator_rejected_schema'],
     };
   }
 
   const validation = validateRouterDecision(params.contract, params.decision, params.nowEpochMs);
-  const advisoryRouteId = validation.accepted ? validation.selectedRoute.id : null;
+  const routerRouteId = validation.accepted ? validation.selectedRoute.id : null;
+  const selectedRouteId = routerRouteId ?? deterministicRouteId;
 
   return {
     schemaVersion: 1,
     role: 'router',
     status: validation.accepted ? 'accepted' : 'rejected',
-    advisoryRouteId,
+    routerRouteId,
     deterministicRouteId,
-    selectedRouteId: deterministicRouteId,
-    advisoryMatchedDeterministic: advisoryMatchesDeterministic(advisoryRouteId, deterministicRouteId),
+    selectedRouteId,
+    authorityApplied: validation.accepted,
+    routerMatchedDeterministic: routeMatchesDeterministic(routerRouteId, deterministicRouteId),
     reasonCodes: validation.reasonCodes,
   };
 }
@@ -104,10 +108,10 @@ export function evaluateCoordinatorShadowRecommendation(params: {
       role: 'coordinator',
       status: 'not_provided',
       recommendation: null,
-      advisoryRouteId: null,
+      recommendationRouteId: null,
       deterministicRouteId,
       selectedRouteId: deterministicRouteId,
-      advisoryMatchedDeterministic: false,
+      recommendationMatchedDeterministic: false,
       reasonCodes: ['validator_rejected_schema'],
       monitoringPlan: null,
     };
@@ -117,17 +121,17 @@ export function evaluateCoordinatorShadowRecommendation(params: {
   const acceptedRecommendation = validation.accepted
     ? validation.decision as CoordinatorRecommendationEnvelope
     : null;
-  const advisoryRouteId = validation.accepted ? validation.selectedRoute.id : null;
+  const recommendationRouteId = validation.accepted ? validation.selectedRoute.id : null;
 
   return {
     schemaVersion: 1,
     role: 'coordinator',
     status: validation.accepted ? 'accepted' : 'rejected',
     recommendation: acceptedRecommendation?.recommendation ?? null,
-    advisoryRouteId,
+    recommendationRouteId,
     deterministicRouteId,
     selectedRouteId: deterministicRouteId,
-    advisoryMatchedDeterministic: advisoryMatchesDeterministic(advisoryRouteId, deterministicRouteId),
+    recommendationMatchedDeterministic: routeMatchesDeterministic(recommendationRouteId, deterministicRouteId),
     reasonCodes: validation.reasonCodes,
     monitoringPlan: acceptedRecommendation?.monitoringPlan ?? null,
   };
@@ -140,19 +144,22 @@ export function evaluateRouterCoordinatorShadow(params: {
   nowEpochMs?: number;
 }): RouterCoordinatorShadowEvaluation {
   const deterministicRouteId = findDeterministicRoute(params.contract);
+  const router = evaluateRouterShadowDecision({
+    contract: params.contract,
+    decision: params.routerDecision,
+    nowEpochMs: params.nowEpochMs,
+  });
+
   return {
     schemaVersion: 1,
-    router: evaluateRouterShadowDecision({
-      contract: params.contract,
-      decision: params.routerDecision,
-      nowEpochMs: params.nowEpochMs,
-    }),
+    router,
     coordinator: evaluateCoordinatorShadowRecommendation({
       contract: params.contract,
       recommendation: params.coordinatorRecommendation,
       nowEpochMs: params.nowEpochMs,
     }),
     deterministicRouteId,
+    selectedRouteId: router.selectedRouteId,
     fallbackRouteId: params.contract.fallbackRouteId,
     contractExpiresAtEpochMs: params.contract.expiresAtEpochMs,
   };
