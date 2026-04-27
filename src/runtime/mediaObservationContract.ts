@@ -90,7 +90,7 @@ export type MediaInterpretationMode = z.infer<typeof mediaInterpretationModeSche
 export type MediaObservationEnvelope = z.infer<typeof mediaObservationEnvelopeSchema>;
 
 export interface MediaObservationQuality {
-  schemaVersion: 1;
+  schemaVersion: typeof MEDIA_OBSERVATION_SCHEMA_VERSION;
   mode: MediaInterpretationMode;
   confidence: number;
   requiresFallback: boolean;
@@ -153,12 +153,11 @@ export function summarizeMediaObservationQuality(envelopes: readonly MediaObserv
     };
   }
 
-  const parsed = envelopes.map((envelope) => parseMediaObservationEnvelope(envelope));
-  const confidence = Math.min(...parsed.map((envelope) => clampMediaConfidence(envelope.confidence)));
-  const requiresFallback = parsed.some((envelope) => envelope.requiresFallback);
-  const uncertaintyFlags = unique(parsed.flatMap((envelope) => envelope.uncertaintyFlags));
-  const primaryReasonCodes = unique(parsed.flatMap((envelope) => envelope.reasonCodes)).slice(0, 8);
-  const modes = parsed.map(selectMediaInterpretationMode);
+  const confidence = Math.min(...envelopes.map((envelope) => clampMediaConfidence(envelope.confidence)));
+  const requiresFallback = envelopes.some((envelope) => envelope.requiresFallback);
+  const uncertaintyFlags = unique(envelopes.flatMap((envelope) => envelope.uncertaintyFlags));
+  const primaryReasonCodes = unique(envelopes.flatMap((envelope) => envelope.reasonCodes)).slice(0, 8);
+  const modes = envelopes.map(selectMediaInterpretationMode);
   const mode = modes.includes('minimal_fallback')
     ? 'minimal_fallback'
     : modes.includes('descriptive_fallback')
@@ -170,7 +169,7 @@ export function summarizeMediaObservationQuality(envelopes: readonly MediaObserv
     mode,
     confidence,
     requiresFallback: requiresFallback || mode !== 'normal',
-    primaryReasonCodes: primaryReasonCodes.length > 0 ? primaryReasonCodes : ['media_observation_partial'],
+    primaryReasonCodes,
     uncertaintyFlags,
   };
 }
