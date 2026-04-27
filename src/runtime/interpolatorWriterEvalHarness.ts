@@ -92,7 +92,9 @@ export function compareInterpolatorWriterCandidates(
     };
   }
 
-  const [winner, runnerUp] = passingCandidates;
+  // passingCandidates is guaranteed non-empty after the guard above.
+  const winner = passingCandidates[0]!;
+  const runnerUp = passingCandidates[1];
   const tied = Boolean(
     runnerUp
     && Math.abs(winner.result.scores.finalScore - runnerUp.result.scores.finalScore) <= scoreTieTolerance
