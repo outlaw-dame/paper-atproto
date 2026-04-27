@@ -4,10 +4,7 @@ import type {
   InterpolatorWriterEvalResult,
   InterpolatorWriterThinkingMode,
 } from './interpolatorWriterEvalContract';
-import {
-  evaluateInterpolatorWriterOutput,
-  rankInterpolatorWriterEvalResults,
-} from './interpolatorWriterEvalContract';
+import { evaluateInterpolatorWriterOutput } from './interpolatorWriterEvalContract';
 import type { InterpolatorWriterProviderId } from './interpolatorWriterRoutingPolicy';
 
 export const INTERPOLATOR_WRITER_EVAL_HARNESS_VERSION = 1 as const;
@@ -64,7 +61,7 @@ export function compareInterpolatorWriterCandidates(
 ): InterpolatorWriterEvalHarnessSummary {
   const scoreTieTolerance = sanitizeTieTolerance(input.scoreTieTolerance);
   const candidateResults = input.candidates.map((candidate, index) => evaluateCandidate(input.fixture, candidate, index));
-  const rankedCandidates = rankHarnessCandidates(candidateResults);
+  const rankedCandidates = rankHarnessCandidates(candidateResults, scoreTieTolerance);
 
   if (rankedCandidates.length === 0) {
     return {
@@ -92,14 +89,13 @@ export function compareInterpolatorWriterCandidates(
     };
   }
 
-  // passingCandidates is guaranteed non-empty after the guard above.
   const winner = passingCandidates[0]!;
   const runnerUp = passingCandidates[1];
-  const tied = Boolean(
+  const scoreWithinTolerance = Boolean(
     runnerUp
-    && Math.abs(winner.result.scores.finalScore - runnerUp.result.scores.finalScore) <= scoreTieTolerance
-    && winner.providerPriority === runnerUp.providerPriority,
+    && Math.abs(winner.result.scores.finalScore - runnerUp.result.scores.finalScore) <= scoreTieTolerance,
   );
+  const tied = Boolean(scoreWithinTolerance && runnerUp && winner.providerPriority === runnerUp.providerPriority);
 
   if (tied) {
     return {
@@ -122,9 +118,7 @@ export function compareInterpolatorWriterCandidates(
     winner,
     rankedCandidates,
     reasonCodes: unique([
-      runnerUp && winner.result.scores.finalScore === runnerUp.result.scores.finalScore
-        ? 'winner_selected_by_provider_priority'
-        : 'winner_selected_by_score',
+      scoreWithinTolerance ? 'winner_selected_by_provider_priority' : 'winner_selected_by_score',
       ...deriveThinkingComparisonReasonCodes(rankedCandidates),
     ]),
   };
@@ -152,21 +146,18 @@ function evaluateCandidate(
 
 function rankHarnessCandidates(
   candidates: readonly InterpolatorWriterEvalHarnessCandidateResult[],
+  scoreTieTolerance: number,
 ): InterpolatorWriterEvalHarnessCandidateResult[] {
-  const rankedEvalResults = rankInterpolatorWriterEvalResults(candidates.map((candidate) => candidate.result));
-  const byResultIdentity = new Map(rankedEvalResults.map((result, index) => [result, index]));
-
   return [...candidates].sort((a, b) => {
-    const passOrder = Number(b.result.passed) - Number(a.result.passed);
-    if (passOrder !== 0) return passOrder;
+    if (a.result.passed !== b.result.passed) return a.result.passed ? -1 : 1;
 
     const scoreOrder = b.result.scores.finalScore - a.result.scores.finalScore;
-    if (scoreOrder !== 0) return scoreOrder;
+    if (Math.abs(scoreOrder) > scoreTieTolerance) return scoreOrder;
 
     const priorityOrder = a.providerPriority - b.providerPriority;
     if (priorityOrder !== 0) return priorityOrder;
 
-    return (byResultIdentity.get(a.result) ?? 0) - (byResultIdentity.get(b.result) ?? 0);
+    return 0;
   });
 }
 
