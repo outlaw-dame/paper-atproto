@@ -97,9 +97,9 @@ describe('interpolator writer eval harness', () => {
     expect(summary.winner?.provider).toBe('qwen3_4b_ollama');
     expect(mismatchedCandidate).toBeDefined();
     expect(mismatchedCandidate?.result.passed).toBe(false);
-    expect(mismatchedCandidate?.result.failures).toEqual(
+    expect(mismatchedCandidate?.result.violations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'fixture_mismatch' }),
+        expect.objectContaining({ code: 'fixture_id_mismatch' }),
       ]),
     );
   });
