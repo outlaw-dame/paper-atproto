@@ -80,7 +80,7 @@ describe('interpolator writer eval harness', () => {
     expect(summary.reasonCodes).toContain('candidate_failed_contract');
   });
 
-  it('marks fixture-mismatched outputs and ranks them as failed', () => {
+  it('marks fixture-mismatched outputs as failed without depending on rank position', () => {
     const summary = compareInterpolatorWriterCandidates({
       fixture: fixture(),
       candidates: [
@@ -89,10 +89,19 @@ describe('interpolator writer eval harness', () => {
       ],
     });
 
+    const mismatchedCandidate = summary.rankedCandidates.find((candidate) => (
+      candidate.reasonCodes.includes('candidate_fixture_mismatch')
+    ));
+
     expect(summary.status).toBe('winner_selected');
     expect(summary.winner?.provider).toBe('qwen3_4b_ollama');
-    expect(summary.rankedCandidates[1]?.reasonCodes).toContain('candidate_fixture_mismatch');
-    expect(summary.rankedCandidates[1]?.result.passed).toBe(false);
+    expect(mismatchedCandidate).toBeDefined();
+    expect(mismatchedCandidate?.result.passed).toBe(false);
+    expect(mismatchedCandidate?.result.failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'fixture_mismatch' }),
+      ]),
+    );
   });
 
   it('selects the highest scoring passing candidate', () => {
