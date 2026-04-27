@@ -11,6 +11,7 @@ export type InterpolatorWriterThinkingMode = 'off' | 'provider_hidden' | 'explic
 export type InterpolatorWriterEvalSeverity = 'info' | 'warning' | 'error';
 
 export type InterpolatorWriterEvalViolationCode =
+  | 'fixture_id_mismatch'
   | 'invented_entity_id'
   | 'missing_required_entity_id'
   | 'unsupported_claim_id'
@@ -119,6 +120,15 @@ export function evaluateInterpolatorWriterOutput(
   const allowedEvidenceIds = new Set(fixture.allowedEvidence.map((evidence) => evidence.id));
   const requiredEvidenceIds = new Set(fixture.allowedEvidence.filter((evidence) => evidence.required).map((evidence) => evidence.id));
   const citedEvidenceIds = new Set(output.citedEvidenceIds);
+
+  if (output.fixtureId !== fixture.id) {
+    violations.push({
+      code: 'fixture_id_mismatch',
+      severity: 'error',
+      message: `Writer output fixtureId ${output.fixtureId} does not match fixture ${fixture.id}.`,
+      id: output.fixtureId,
+    });
+  }
 
   if (output.text.trim().length === 0) {
     violations.push({ code: 'missing_output_text', severity: 'error', message: 'Writer output text is empty.' });
