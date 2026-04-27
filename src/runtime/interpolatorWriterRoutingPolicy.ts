@@ -171,18 +171,7 @@ export function selectInterpolatorWriterRoute(input: InterpolatorWriterRoutingIn
     return true;
   });
 
-  if (allowedCandidates.length === 0) {
-    return buildPlan({
-      selected: DETERMINISTIC_FALLBACK,
-      allowedCandidates: [DETERMINISTIC_FALLBACK],
-      blockedCandidates,
-      reasonCodes: unique([...globalReasonCodes, 'fallback_to_deterministic_projection']),
-      localOnlyHonored: input.preference === 'local_only',
-      shouldInvokeEnhancer: false,
-    });
-  }
-
-  const selected = rankCandidates(allowedCandidates, input)[0] ?? DETERMINISTIC_FALLBACK;
+  const selected = rankCandidates(allowedCandidates, input)[0];
   const shouldInvokeEnhancer = input.writerQualityBelowThreshold && canInvokeEnhancer(input, allowedCandidates);
   const reasonCodes = unique([
     ...globalReasonCodes,
@@ -290,7 +279,7 @@ function getBlockedReason(
 function hasEnoughLocalResources(candidate: InterpolatorWriterRouteCandidate, device: InterpolatorWriterDeviceState): boolean {
   const memory = device.deviceMemoryGiB;
   const storage = device.storageAvailableGiB;
-  if (memory !== null && memory < Math.max(4, candidate.estimatedLocalSizeGiB * 1.5)) return false;
+  if (memory !== null && memory < Math.max(3.5, candidate.estimatedLocalSizeGiB * 1.5)) return false;
   if (storage !== null && storage < candidate.estimatedLocalSizeGiB + 1) return false;
   if (candidate.executionClass === 'browser_local' && !device.webgpu) return false;
   if (candidate.executionClass === 'device_edge_litert' && !device.liteRt) return false;
