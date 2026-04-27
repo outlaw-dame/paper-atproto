@@ -61,10 +61,16 @@ export const mediaInterpretationModeSchema = z.enum([
 ]);
 
 const boundedObservationStringSchema = z.string().trim().min(1).max(240);
+const mediaIdSchema = z.string()
+  .trim()
+  .min(1)
+  .max(160)
+  .regex(/^[A-Za-z0-9._:@/-]+$/)
+  .refine((value) => !value.includes('..'), 'mediaId must not contain parent-directory segments');
 
 export const mediaObservationEnvelopeSchema = z.object({
   schemaVersion: z.literal(MEDIA_OBSERVATION_SCHEMA_VERSION),
-  mediaId: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9._:@/-]+$/),
+  mediaId: mediaIdSchema,
   mediaKind: mediaKindSchema,
   observationKind: mediaObservationKindSchema,
   literalObservations: z.array(boundedObservationStringSchema).max(24),
