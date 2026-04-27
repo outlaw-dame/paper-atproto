@@ -171,7 +171,8 @@ export function selectInterpolatorWriterRoute(input: InterpolatorWriterRoutingIn
     return true;
   });
 
-  const selected = rankCandidates(allowedCandidates, input)[0];
+  // DETERMINISTIC_FALLBACK is always present in candidates and cannot be blocked.
+  const selected = rankCandidates(allowedCandidates, input)[0]!;
   const shouldInvokeEnhancer = input.writerQualityBelowThreshold && canInvokeEnhancer(input, allowedCandidates);
   const reasonCodes = unique([
     ...globalReasonCodes,
