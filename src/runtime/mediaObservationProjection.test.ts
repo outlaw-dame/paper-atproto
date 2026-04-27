@@ -127,7 +127,7 @@ describe('media observation projection', () => {
     });
   });
 
-  it('sanitizes invalid media counts and formats non-finite confidence conservatively', () => {
+  it('sanitizes invalid media counts and non-finite confidence conservatively', () => {
     const projection = projectMediaObservationQuality(
       quality({
         confidence: Number.NaN,
@@ -138,11 +138,13 @@ describe('media observation projection', () => {
       Number.NaN,
     );
 
-    expect(projection.confidence).toBeNaN();
+    expect(projection.confidence).toBe(0);
+    expect(projection.severity).toBe('high_uncertainty');
+    expect(projection.summary).toBe('Media context is insufficient; use only minimal, non-interpretive language.');
     expect(projection.evidence.mediaCount).toBe(0);
     expect(projection.factors[0]).toEqual({
       factorId: 'media.confidence',
-      severity: 'info',
+      severity: 'high_uncertainty',
       reasonCode: 'media_observation_partial',
       message: 'Media confidence is 0.00.',
     });
