@@ -146,6 +146,33 @@ describe('interpolator writer eval harness', () => {
     expect(summary.reasonCodes).toContain('winner_selected_by_provider_priority');
   });
 
+  it('uses provider priority when passing candidate scores are within tolerance', () => {
+    const summary = compareInterpolatorWriterCandidates({
+      fixture: fixture(),
+      scoreTieTolerance: 0.015,
+      candidates: [
+        { output: output({ provider: 'qwen3_4b_ollama', selfReportedQuality: 0.9 }), providerPriority: 2 },
+        {
+          output: output({
+            provider: 'cloudflare_workers_ai_writer',
+            route: {
+              provider: 'cloudflare_workers_ai_writer',
+              executionClass: 'cloud_edge_workers_ai',
+              remote: true,
+              requiresExplicitConsent: false,
+            },
+            selfReportedQuality: 0.895,
+          }),
+          providerPriority: 1,
+        },
+      ],
+    });
+
+    expect(summary.status).toBe('winner_selected');
+    expect(summary.winner?.provider).toBe('cloudflare_workers_ai_writer');
+    expect(summary.reasonCodes).toContain('winner_selected_by_provider_priority');
+  });
+
   it('requires review when equal passing candidates also share provider priority', () => {
     const summary = compareInterpolatorWriterCandidates({
       fixture: fixture(),
