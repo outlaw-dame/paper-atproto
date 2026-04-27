@@ -6,6 +6,7 @@ import type {
   MediaUncertaintyFlag,
 } from './mediaObservationContract';
 import {
+  clampMediaConfidence,
   MEDIA_OBSERVATION_SCHEMA_VERSION,
   summarizeMediaObservationQuality,
 } from './mediaObservationContract';
@@ -47,16 +48,17 @@ export function projectMediaObservationQuality(
   mediaCount: number,
 ): MediaObservationExplanationProjection {
   const safeMediaCount = sanitizeMediaCount(mediaCount);
-  const severity = selectProjectionSeverity(quality);
-  const factors = buildProjectionFactors(quality);
+  const confidence = clampMediaConfidence(quality.confidence);
+  const severity = selectProjectionSeverity(quality, safeMediaCount, confidence);
+  const factors = buildProjectionFactors(quality, safeMediaCount, confidence);
 
   return {
     schemaVersion: MEDIA_OBSERVATION_PROJECTION_SCHEMA_VERSION,
     sourceSchemaVersion: quality.schemaVersion,
     mode: quality.mode,
     severity,
-    confidence: quality.confidence,
-    summary: summarizeProjection(quality, safeMediaCount),
+    confidence,
+    summary: summarizeProjection(severity),
     factors,
     evidence: {
       mediaCount: safeMediaCount,
@@ -80,32 +82,41 @@ function sanitizeMediaCount(mediaCount: number): number {
   return Math.max(0, Math.floor(mediaCount));
 }
 
-function selectProjectionSeverity(quality: MediaObservationQuality): MediaObservationProjectionSeverity {
-  if (quality.mode === 'minimal_fallback' || quality.confidence < 0.35) return 'high_uncertainty';
-  if (quality.mode === 'descriptive_fallback' || quality.requiresFallback || quality.confidence < 0.7) return 'caution';
+function selectProjectionSeverity(
+  quality: MediaObservationQuality,
+  mediaCount: number,
+  confidence: number,
+): MediaObservationProjectionSeverity {
+  if (mediaCount === 0 || quality.mode === 'minimal_fallback' || confidence < 0.35) return 'high_uncertainty';
+  if (quality.mode === 'descriptive_fallback' || quality.requiresFallback || confidence < 0.7) return 'caution';
   return 'info';
 }
 
-function summarizeProjection(quality: MediaObservationQuality, mediaCount: number): string {
-  if (mediaCount === 0 || quality.mode === 'minimal_fallback') {
-    return 'Media context is insufficient; use only minimal, non-interpretive language.';
+function summarizeProjection(severity: MediaObservationProjectionSeverity): string {
+  switch (severity) {
+    case 'high_uncertainty':
+      return 'Media context is insufficient; use only minimal, non-interpretive language.';
+    case 'caution':
+      return 'Media context is partial or uncertain; describe visible evidence before making interpretations.';
+    case 'info':
+      return 'Media context is sufficiently supported for normal presentation.';
   }
-  if (quality.mode === 'descriptive_fallback') {
-    return 'Media context is partial or uncertain; describe visible evidence before making interpretations.';
-  }
-  return 'Media context is sufficiently supported for normal presentation.';
 }
 
-function buildProjectionFactors(quality: MediaObservationQuality): MediaObservationProjectionFactor[] {
+function buildProjectionFactors(
+  quality: MediaObservationQuality,
+  mediaCount: number,
+  confidence: number,
+): MediaObservationProjectionFactor[] {
   const factors: MediaObservationProjectionFactor[] = [];
-  const severity = selectProjectionSeverity(quality);
+  const severity = selectProjectionSeverity(quality, mediaCount, confidence);
   const primaryReasonCode = quality.primaryReasonCodes[0] ?? 'media_observation_partial';
 
   factors.push({
     factorId: 'media.confidence',
     severity,
     reasonCode: primaryReasonCode,
-    message: `Media confidence is ${formatConfidence(quality.confidence)}.`,
+    message: `Media confidence is ${formatConfidence(confidence)}.`,
   });
 
   if (quality.mode !== 'normal' || quality.requiresFallback) {
@@ -143,6 +154,5 @@ function firstReasonCodeForUncertainty(quality: MediaObservationQuality): MediaR
 }
 
 function formatConfidence(confidence: number): string {
-  if (!Number.isFinite(confidence)) return '0.00';
-  return Math.max(0, Math.min(1, confidence)).toFixed(2);
+  return confidence.toFixed(2);
 }
