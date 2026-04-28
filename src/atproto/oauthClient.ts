@@ -2,7 +2,7 @@ import { BrowserOAuthClient } from '@atproto/oauth-client-browser';
 import { withRetry } from '../lib/atproto/retry.js';
 
 const DEFAULT_HANDLE_RESOLVER = 'https://bsky.social';
-const DEFAULT_OAUTH_SCOPE = 'atproto';
+const DEFAULT_OAUTH_SCOPE = 'atproto transition:generic';
 const MAX_AUTH_IDENTIFIER_LENGTH = 512;
 
 const OAUTH_CLIENT_ID = parseConfiguredUrl(
