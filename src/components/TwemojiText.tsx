@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from 'react';
-import LinkPreviewTooltip from './LinkPreviewTooltip.js';
-import { Emoji } from './Emoji.js';
-import type { ResolvedFacet } from '../lib/resolver/atproto.js';
+import LinkPreviewTooltip from './LinkPreviewTooltip';
+import { Emoji } from './Emoji';
+import type { ResolvedFacet } from '../lib/resolver/atproto';
 
 type OnMention = (handle: string) => void;
 type OnHashtag = (tag: string) => void;

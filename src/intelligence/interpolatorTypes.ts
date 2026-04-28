@@ -9,7 +9,7 @@
 //     are present in the contract but Phase 1 populates them from local
 //     thread evidence only — not from a live external verifier service
 
-import type { ThreadNode } from '../lib/resolver/atproto.js';
+import type { ThreadNode } from '../lib/resolver/atproto';
 
 // ─── ContributionRole ─────────────────────────────────────────────────────
 export type ContributionRole =
@@ -23,6 +23,91 @@ export type ContributionRole =
   | 'rule_source'         // Phase 3: cites an official rule or policy source
   | 'source_bringer'      // Phase 3: brings a primary source or key evidence
   | 'unknown';            // not yet scored
+
+export type ContributionFeedback =
+  | 'clarifying'
+  | 'new_to_me'
+  | 'provocative'
+  | 'aha';
+
+export type ContributionFeedbackSource = 'user' | 'system_suggestion';
+
+export interface ContributionFeedbackState {
+  userFeedback?: ContributionFeedback;
+  userFeedbackSource?: ContributionFeedbackSource;
+  suggestedFeedback?: ContributionFeedback[];
+}
+
+const VALID_CONTRIBUTION_FEEDBACK = new Set<ContributionFeedback>([
+  'clarifying',
+  'new_to_me',
+  'provocative',
+  'aha',
+]);
+
+export function normalizeContributionFeedbackList(
+  feedback: readonly ContributionFeedback[] | null | undefined,
+): ContributionFeedback[] {
+  if (!Array.isArray(feedback)) return [];
+
+  const normalized: ContributionFeedback[] = [];
+  for (const value of feedback) {
+    if (!VALID_CONTRIBUTION_FEEDBACK.has(value)) continue;
+    if (normalized.includes(value)) continue;
+    normalized.push(value);
+  }
+
+  return normalized.slice(0, 4);
+}
+
+export function getExplicitContributionFeedback(
+  state: ContributionFeedbackState | null | undefined,
+): ContributionFeedback | undefined {
+  if (state?.userFeedbackSource !== 'user') return undefined;
+  return state.userFeedback;
+}
+
+export function applyContributionFeedbackSelection<T extends ContributionFeedbackState>(
+  score: T,
+  feedback: ContributionFeedback | undefined,
+): T {
+  const next = { ...score } as T & ContributionFeedbackState;
+
+  if (feedback === undefined) {
+    delete next.userFeedback;
+    delete next.userFeedbackSource;
+    return next as T;
+  }
+
+  next.userFeedback = feedback;
+  next.userFeedbackSource = 'user';
+  return next as T;
+}
+
+export function mergeContributionFeedbackState<T extends ContributionFeedbackState | null | undefined, U extends ContributionFeedbackState>(
+  existing: T,
+  next: U,
+): U {
+  const merged = { ...next } as U & ContributionFeedbackState;
+
+  if (merged.userFeedback === undefined && existing?.userFeedback !== undefined) {
+    merged.userFeedback = existing.userFeedback;
+  }
+  if (merged.userFeedbackSource === undefined && existing?.userFeedbackSource !== undefined) {
+    merged.userFeedbackSource = existing.userFeedbackSource;
+  }
+
+  const normalizedSuggested = normalizeContributionFeedbackList(
+    merged.suggestedFeedback ?? existing?.suggestedFeedback,
+  );
+  if (normalizedSuggested.length > 0) {
+    merged.suggestedFeedback = normalizedSuggested;
+  } else {
+    delete merged.suggestedFeedback;
+  }
+
+  return merged as U;
+}
 
 // ─── Evidence signals ─────────────────────────────────────────────────────
 export type EvidenceKind =
@@ -72,7 +157,9 @@ export interface ContributionScore {
   role: ContributionRole;
   usefulnessScore: number;   // 0–1
   abuseScore: number;        // 0–1, kept separate from ranking (Phase 2: Detoxify)
-  userFeedback?: 'clarifying' | 'new_to_me' | 'provocative' | 'aha';
+  userFeedback?: ContributionFeedback;
+  userFeedbackSource?: ContributionFeedbackSource;
+  suggestedFeedback?: ContributionFeedback[];
   scoredAt: string;          // ISO timestamp
 
   // ── Richer fields (this phase) ────────────────────────────────────────
@@ -125,6 +212,7 @@ export interface InterpolatorState {
   repetitionLevel: number;        // 0–1
   heatLevel: number;              // 0–1
   sourceSupportPresent: boolean;
+  perspectiveGaps?: string[];     // conservative adjacent context still missing from visible thread
   updatedAt: string;              // ISO timestamp
   version: number;
 
@@ -226,6 +314,22 @@ export interface FactualEvidence {
 }
 
 /**
+ * Lightweight score contract used by authoritative conversation-delta logic.
+ * Accepts either Phase 1 ContributionScore values or Phase 3 ContributionScores.
+ */
+export interface InterpolatorDecisionScore {
+  uri: AtUri;
+  role: ContributionRole;
+  usefulnessScore: number;
+  evidenceSignals: EvidenceSignal[];
+  finalInfluenceScore?: number;
+  clarificationValue?: number;
+  sourceSupport?: number;
+  factualContribution?: number;
+  factual?: Pick<FactualEvidence, 'factualConfidence'> | null;
+}
+
+/**
  * Phase 3 per-post score. Superset of ContributionScore — all legacy fields
  * are retained so existing UI code (ContributionCard, filter logic) continues
  * to work without changes. New fields are added alongside the old ones.
@@ -249,7 +353,9 @@ export interface ContributionScores {
   evidenceSignals: EvidenceSignal[];
   entityImpacts: EntityImpact[];
   scoredAt: string;
-  userFeedback?: 'clarifying' | 'new_to_me' | 'provocative' | 'aha';
+  userFeedback?: ContributionFeedback;
+  userFeedbackSource?: ContributionFeedbackSource;
+  suggestedFeedback?: ContributionFeedback[];
 }
 
 /** Phase 3 interpolator state — type alias to InterpolatorState for forward compatibility. */

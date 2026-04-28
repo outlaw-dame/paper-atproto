@@ -1,7 +1,7 @@
-import type { ComposerContext, ComposerGuidanceScores, ComposerGuidanceUi, ComposerGuidanceUiState } from './types.js';
-import type { ComposerMLSignals } from './classifierContracts.js';
-import type { AbuseModelResult } from '../../lib/abuseModel.js';
-import type { SentimentResult } from '../../lib/sentiment.js';
+import type { ComposerContext, ComposerGuidanceScores, ComposerGuidanceUi, ComposerGuidanceUiState } from './types';
+import type { ComposerMLSignals } from './classifierContracts';
+import type { AbuseModelResult } from '../../lib/abuseModel';
+import type { SentimentResult } from '../../lib/sentiment';
 
 function getTitle(mode: ComposerContext['mode'], state: ComposerGuidanceUiState): string {
   if (state === 'alert') return 'Content notice';
@@ -174,6 +174,7 @@ export function buildComposerGuidanceUi(
   const title = getTitle(context.mode, state);
   const badges = getBadges(context, heuristics, scores);
   const footnote = getFootnote(state, context);
+  const suggestion = getSuggestion(state, context, scores);
 
   let message = '';
   if (state === 'positive') {
@@ -194,7 +195,9 @@ export function buildComposerGuidanceUi(
     message,
     badges,
     footnote,
-    suggestion: getSuggestion(state, context, scores),
+    ...(suggestion !== undefined
+      ? { suggestion }
+      : {}),
     copySource: 'template',
   };
 }

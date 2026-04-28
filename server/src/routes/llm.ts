@@ -14,129 +14,260 @@ import { runInterpolatorWriter } from '../services/qwenWriter.js';
 import { runMediaAnalyzer } from '../services/qwenMultimodal.js';
 import { runComposerGuidanceWriter } from '../services/qwenComposerGuidanceWriter.js';
 import { env } from '../config/env.js';
-import { filterWriterResponse, filterMediaAnalyzerResponse, logSafetyFlag } from '../services/safetyFilters.js';
-export const llmRouter = new Hono();
+import {
+  filterWriterResponse,
+  filterMediaAnalyzerResponse,
+  filterComposerGuidanceResponse,
+  logSafetyFlag,
+} from '../services/safetyFilters.js';
+import { sanitizeRemoteProcessingUrl } from '../lib/sanitize.js';
+import {
+  checkUrlAgainstSafeBrowsing,
+  shouldBlockSafeBrowsingVerdict,
+} from '../services/safeBrowsing.js';
+import { AppError, ValidationError } from '../lib/errors.js';
+import { CircuitBreaker, CircuitOpenError } from '../lib/circuit-breaker.js';
+import {
+  ComposerGuidanceResponseSchema,
+  ComposerGuidanceSchema,
+  ExploreSynopsisResponseSchema,
+  ExploreSynopsisSchema,
+  MediaRequestSchema,
+  MediaResponseSchema,
+  ThreadStateSchema,
+  WriterResponseSchema,
+} from '../llm/schemas.js';
+import {
+  enforceNoToolsAuthorized,
+  finalizeLlmOutput,
+  prepareLlmInput,
+} from '../llm/policyGateway.js';
+import { assertTrustedBrowserOrigin, appendVaryHeader } from '../lib/originPolicy.js';
+import {
+  PREMIUM_AI_PROVIDER_HEADER,
+  parsePremiumAiProviderPreferenceHeader,
+} from '../ai/providerPreference.js';
+import {
+  getWriterDiagnostics,
+  recordWriterClientOutcome,
+  recordWriterSafetyFilterRun,
+  resetWriterDiagnostics,
+  type WriterClientReason,
+} from '../llm/writerDiagnostics.js';
+import {
+  getMultimodalDiagnostics,
+  resetMultimodalDiagnostics,
+} from '../llm/multimodalDiagnostics.js';
+import {
+  getPremiumDiagnostics,
+  resetPremiumDiagnostics,
+} from '../llm/premiumDiagnostics.js';
+import { getPremiumAiProviderHealthSnapshot, resetPremiumAiProviderHealth } from '../ai/premiumProviderHealth.js';
+import { getPremiumAiProviderReadinessSnapshot, resetPremiumAiProviderReadiness } from '../ai/premiumProviderReadiness.js';
 
-// ─── Shared schemas ────────────────────────────────────────────────────────
+type LlmRouterContext = {
+  Variables: {
+    requestId: string;
+  };
+};
 
-const ConfidenceSchema = z.object({
-  surfaceConfidence: z.number().min(0).max(1),
-  entityConfidence: z.number().min(0).max(1),
-  interpretiveConfidence: z.number().min(0).max(1),
-});
+export const llmRouter = new Hono<LlmRouterContext>();
 
-const WriterEntitySchema = z.object({
-  id: z.string(),
-  label: z.string().max(120),
-  type: z.string(),
-  confidence: z.number().min(0).max(1),
-  impact: z.number().min(0).max(1),
-});
+const REQUEST_ID_HEADER = 'X-Request-Id';
 
-const WriterCommentSchema = z.object({
-  uri: z.string(),
-  handle: z.string().max(100),
-  displayName: z.string().max(120).optional(),
-  text: z.string().max(300),
-  impactScore: z.number().min(0).max(1),
-  role: z.string().optional(),
-  liked: z.number().int().optional(),
-  replied: z.number().int().optional(),
-});
+const llmCircuitBreakers = {
+  interpolator: new CircuitBreaker({ failureThreshold: 4, openMs: 30_000, halfOpenMaxTrials: 1 }),
+  media: new CircuitBreaker({ failureThreshold: 3, openMs: 30_000, halfOpenMaxTrials: 1 }),
+  searchStory: new CircuitBreaker({ failureThreshold: 4, openMs: 30_000, halfOpenMaxTrials: 1 }),
+  composerGuidance: new CircuitBreaker({ failureThreshold: 4, openMs: 30_000, halfOpenMaxTrials: 1 }),
+} as const;
 
-const WriterContributorSchema = z.object({
-  did: z.string().optional(),
-  handle: z.string().max(100),
-  role: z.string(),
-  impactScore: z.number().min(0).max(1),
-  stanceSummary: z.string().max(200),
-});
+type LlmRouteKey = keyof typeof llmCircuitBreakers;
 
-const ThreadStateSchema = z.object({
-  threadId: z.string().max(300),
-  summaryMode: z.enum(['normal', 'descriptive_fallback', 'minimal_fallback']),
-  confidence: ConfidenceSchema,
-  rootPost: z.object({
-    uri: z.string(),
-    handle: z.string().max(100),
-    displayName: z.string().max(120).optional(),
-    text: z.string().max(600),
-    createdAt: z.string(),
-  }),
-  selectedComments: z.array(WriterCommentSchema).max(12),
-  topContributors: z.array(WriterContributorSchema).max(6),
-  safeEntities: z.array(WriterEntitySchema).max(10),
-  factualHighlights: z.array(z.string().max(200)).max(6),
-  whatChangedSignals: z.array(z.string().max(150)).max(8),
-  mediaFindings: z.array(z.object({
-    mediaType: z.string(),
-    summary: z.string().max(300),
-    confidence: z.number(),
-    extractedText: z.string().max(500).optional(),
-    cautionFlags: z.array(z.string()).optional(),
-  })).max(3).optional(),
-});
+function buildRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `llm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
-const MediaRequestSchema = z.object({
-  threadId: z.string().max(300),
-  mediaUrl: z.string().url().max(1000),
-  mediaAlt: z.string().max(300).optional(),
-  nearbyText: z.string().max(400),
-  candidateEntities: z.array(z.string().max(80)).max(10),
-  factualHints: z.array(z.string().max(120)).max(5),
-});
+function requestIdFromContext(c: any): string {
+  return (c.get('requestId') as string | undefined) ?? buildRequestId();
+}
 
-const ExploreSynopsisSchema = z.object({
-  storyId: z.string().max(300),
-  titleHint: z.string().max(200).optional(),
-  candidatePosts: z.array(z.object({
-    uri: z.string(),
-    handle: z.string().max(100),
-    text: z.string().max(300),
-    impactScore: z.number(),
-  })).max(10),
-  safeEntities: z.array(WriterEntitySchema).max(8),
-  factualHighlights: z.array(z.string().max(200)).max(5),
-  confidence: ConfidenceSchema,
-});
+function classifyProviderError(error: unknown): string {
+  if (error instanceof CircuitOpenError) return 'circuit_open';
+  const status = (error as { status?: unknown })?.status;
+  if (typeof status === 'number') {
+    if (status === 429) return 'provider_rate_limited';
+    if (status >= 500) return 'provider_5xx';
+    if (status >= 400) return 'provider_4xx';
+  }
 
-const ComposerGuidanceSchema = z.object({
-  mode: z.enum(['post', 'reply', 'hosted_thread']),
-  draftText: z.string().min(1).max(1200),
-  parentText: z.string().max(500).optional(),
-  uiState: z.enum(['positive', 'caution', 'warning']),
-  scores: z.object({
-    positiveSignal: z.number().min(0).max(1),
-    negativeSignal: z.number().min(0).max(1),
-    supportiveness: z.number().min(0).max(1),
-    constructiveness: z.number().min(0).max(1),
-    clarifying: z.number().min(0).max(1),
-    hostility: z.number().min(0).max(1),
-    dismissiveness: z.number().min(0).max(1),
-    escalation: z.number().min(0).max(1),
-    sentimentPositive: z.number().min(0).max(1),
-    sentimentNegative: z.number().min(0).max(1),
-    anger: z.number().min(0).max(1),
-    trust: z.number().min(0).max(1),
-    optimism: z.number().min(0).max(1),
-    targetedNegativity: z.number().min(0).max(1),
-    toxicity: z.number().min(0).max(1),
-  }),
-  constructiveSignals: z.array(z.string().max(200)).max(4),
-  supportiveSignals: z.array(z.string().max(200)).max(4),
-  parentSignals: z.array(z.string().max(200)).max(4),
-});
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  const statusMatch = message.match(/\b(4\d{2}|5\d{2})\b/);
+  if (statusMatch?.[1]) {
+    const parsedStatus = Number.parseInt(statusMatch[1], 10);
+    if (parsedStatus === 429) return 'provider_rate_limited';
+    if (parsedStatus >= 500) return 'provider_5xx';
+    if (parsedStatus >= 400) return 'provider_4xx';
+  }
+  if (message.includes('timed out') || message.includes('timeout')) return 'provider_timeout';
+  if (message.includes('invalid json')) return 'provider_invalid_json';
+  if (message.includes('abort')) return 'aborted';
+  if (message.includes('unsafe')) return 'unsafe_payload';
+  return 'unknown';
+}
+
+function logRouteEvent(level: 'info' | 'warn' | 'error', event: string, payload: Record<string, unknown>): void {
+  const logger = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
+  logger('[llm/router/audit]', {
+    event,
+    at: new Date().toISOString(),
+    ...payload,
+  });
+}
+
+async function withCircuitProtection<T>(
+  c: any,
+  route: LlmRouteKey,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const requestId = requestIdFromContext(c);
+  const breaker = llmCircuitBreakers[route];
+  const startedAt = Date.now();
+
+  try {
+    breaker.assertCanRequest();
+    const result = await operation();
+    breaker.recordSuccess();
+    logRouteEvent('info', 'llm_upstream_success', {
+      requestId,
+      route,
+      durationMs: Date.now() - startedAt,
+      circuitState: breaker.currentState(),
+    });
+    return result;
+  } catch (error) {
+    if (!(error instanceof CircuitOpenError)) {
+      breaker.recordFailure();
+    }
+
+    logRouteEvent(error instanceof CircuitOpenError ? 'warn' : 'error', 'llm_upstream_failure', {
+      requestId,
+      route,
+      durationMs: Date.now() - startedAt,
+      errorClass: classifyProviderError(error),
+      errorMessage: error instanceof Error ? error.message : String(error),
+      circuitState: breaker.currentState(),
+    });
+
+    throw error;
+  }
+}
 
 // ─── Helper ────────────────────────────────────────────────────────────────
 
-function llmDisabled(c: any) {
+function writerLlmDisabled(c: any) {
   return c.json({ error: 'LLM service is disabled', abstained: true, collapsedSummary: '' }, 503);
 }
 
-// ─── POST /write/interpolator ──────────────────────────────────────────────
+function degradedMediaAnalyzerPayload() {
+  return {
+    mediaCentrality: 0.3,
+    mediaType: 'unknown' as const,
+    mediaSummary: 'Media present — analysis unavailable.',
+    candidateEntities: [],
+    confidence: 0.15,
+    cautionFlags: [],
+    analysisStatus: 'degraded' as const,
+    moderationStatus: 'unavailable' as const,
+  };
+}
 
-llmRouter.post('/write/interpolator', async (c) => {
-  if (!env.LLM_ENABLED) return llmDisabled(c);
+function mediaLlmDisabled(c: any) {
+  return c.json({
+    error: 'LLM service is disabled',
+    ...degradedMediaAnalyzerPayload(),
+  }, 503);
+}
+
+function searchLlmDisabled(c: any) {
+  return c.json({ error: 'LLM service is disabled', synopsis: '', abstained: true }, 503);
+}
+
+function composerGuidanceLlmDisabled(c: any) {
+  return c.json({ error: 'LLM service is disabled' }, 503);
+}
+
+function validationIssues(error: ValidationError): unknown {
+  return (error.details as { issues?: unknown } | undefined)?.issues;
+}
+
+function requestedProviderFromRequest(c: any) {
+  return parsePremiumAiProviderPreferenceHeader(c.req.header(PREMIUM_AI_PROVIDER_HEADER));
+}
+
+function assertDiagnosticsAccess(c: any): void {
+  if (env.NODE_ENV !== 'production') return;
+
+  const configuredSecret = env.AI_SESSION_TELEMETRY_ADMIN_SECRET?.trim();
+  if (!configuredSecret) {
+    throw new AppError(403, 'FORBIDDEN', 'Diagnostics endpoint is disabled in production.');
+  }
+
+  const providedSecret = c.req.header('X-AI-Telemetry-Admin-Secret')?.trim();
+  if (!providedSecret || providedSecret !== configuredSecret) {
+    throw new AppError(403, 'FORBIDDEN', 'Diagnostics endpoint requires an admin secret.');
+  }
+}
+
+function applyDiagnosticsHeaders(c: any): void {
+  c.header('Cache-Control', 'no-store, private');
+  c.header('Pragma', 'no-cache');
+  c.header('X-Content-Type-Options', 'nosniff');
+  appendVaryHeader(c, 'Origin');
+}
+
+const WriterOutcomeTelemetrySchema = z.object({
+  outcome: z.enum(['model', 'fallback']),
+  reason: z.enum([
+    'success',
+    'abstained-response-fallback',
+    'root-only-response-fallback',
+    'failure-fallback',
+  ]),
+  telemetry: z.object({
+    attempted: z.number().int().min(0).max(1_000_000),
+    succeeded: z.number().int().min(0).max(1_000_000),
+    abstained: z.number().int().min(0).max(1_000_000),
+    failed: z.number().int().min(0).max(1_000_000),
+  }).optional(),
+});
+
+llmRouter.use('*', async (c, next) => {
+  const requestId = c.req.header(REQUEST_ID_HEADER) || buildRequestId();
+  c.set('requestId', requestId);
+  c.header(REQUEST_ID_HEADER, requestId);
+
+  const startedAt = Date.now();
+  try {
+    await next();
+  } finally {
+    logRouteEvent('info', 'llm_request_completed', {
+      requestId,
+      method: c.req.method,
+      path: c.req.path,
+      status: c.res.status,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+});
+
+// ─── POST /telemetry/writer-outcome ───────────────────────────────────────
+
+llmRouter.post('/telemetry/writer-outcome', async (c) => {
+  assertTrustedBrowserOrigin(c, 'Writer telemetry');
 
   let body: unknown;
   try {
@@ -145,17 +276,132 @@ llmRouter.post('/write/interpolator', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const parsed = ThreadStateSchema.safeParse(body);
+  const parsed = WriterOutcomeTelemetrySchema.safeParse(body);
   if (!parsed.success) {
-    return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+    return c.json({ error: 'Invalid telemetry payload', issues: parsed.error.issues }, 400);
+  }
+
+  recordWriterClientOutcome({
+    outcome: parsed.data.outcome,
+    reason: parsed.data.reason as WriterClientReason,
+  });
+
+  return c.body(null, 204);
+});
+
+// ─── GET/DELETE /admin/diagnostics ────────────────────────────────────────
+
+llmRouter.get('/admin/diagnostics', (c) => {
+  assertDiagnosticsAccess(c);
+  applyDiagnosticsHeaders(c);
+  return c.json({
+    writer: getWriterDiagnostics(),
+    multimodal: getMultimodalDiagnostics(),
+    premium: getPremiumDiagnostics(),
+    premiumProviders: {
+      health: getPremiumAiProviderHealthSnapshot(),
+      readiness: getPremiumAiProviderReadinessSnapshot(),
+    },
+  });
+});
+
+llmRouter.delete('/admin/diagnostics', (c) => {
+  assertDiagnosticsAccess(c);
+  resetWriterDiagnostics();
+  resetMultimodalDiagnostics();
+  resetPremiumDiagnostics();
+  resetPremiumAiProviderHealth();
+  resetPremiumAiProviderReadiness();
+  applyDiagnosticsHeaders(c);
+  return c.body(null, 204);
+});
+
+// ─── POST /write/interpolator ──────────────────────────────────────────────
+
+llmRouter.post('/write/interpolator', async (c) => {
+  if (!env.LLM_ENABLED) return writerLlmDisabled(c);
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const requestId = requestIdFromContext(c);
+  let prepared: { data: z.infer<typeof ThreadStateSchema> };
+  const preferredProvider = requestedProviderFromRequest(c);
+  try {
+    prepared = prepareLlmInput(ThreadStateSchema, body, {
+      task: 'interpolator',
+      requestId,
+    });
+    enforceNoToolsAuthorized({
+      task: 'interpolator',
+      requestId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
   }
 
   try {
-    const result = await runInterpolatorWriter(parsed.data as any);
-    const { filtered, safetyMetadata } = filterWriterResponse(result);
-    logSafetyFlag('[llm/write/interpolator]', safetyMetadata);
+    const result = await withCircuitProtection(c, 'interpolator', () => runInterpolatorWriter({
+      ...(prepared.data as any),
+      requestId,
+    }, preferredProvider ? {
+      enhancer: {
+        preferredProvider,
+      },
+    } : undefined));
+    const filterResult = filterWriterResponse({ ...result });
+    const wasMutated = JSON.stringify(filterResult.filtered) !== JSON.stringify(result);
+    recordWriterSafetyFilterRun({
+      mutated: wasMutated,
+      blocked: !filterResult.safetyMetadata.passed,
+    });
+
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      WriterResponseSchema,
+      result,
+      {
+        task: 'interpolator',
+        requestId,
+      },
+      {
+        filter: () => filterResult as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[llm/write/interpolator]', safety);
+    if (!safety.passed) {
+      return c.json({
+        collapsedSummary: '',
+        whatChanged: [],
+        contributorBlurbs: [],
+        abstained: true,
+        mode: prepared.data.summaryMode,
+      });
+    }
     return c.json(filtered);
   } catch (err: unknown) {
+    if (err instanceof CircuitOpenError) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+      c.header('Retry-After', String(retryAfterSeconds));
+      return c.json({
+        error: 'LLM writer temporarily unavailable',
+        code: 'CIRCUIT_OPEN',
+        requestId: requestIdFromContext(c),
+      }, 503);
+    }
     const message = err instanceof Error ? err.message : 'Writer failed';
     console.error('[llm/write/interpolator]', message);
     // Graceful degradation: return abstained result, do not break thread UI
@@ -164,7 +410,7 @@ llmRouter.post('/write/interpolator', async (c) => {
       whatChanged: [],
       contributorBlurbs: [],
       abstained: true,
-      mode: parsed.data.summaryMode,
+      mode: prepared.data.summaryMode,
     });
   }
 });
@@ -172,7 +418,7 @@ llmRouter.post('/write/interpolator', async (c) => {
 // ─── POST /analyze/media ───────────────────────────────────────────────────
 
 llmRouter.post('/analyze/media', async (c) => {
-  if (!env.LLM_ENABLED) return llmDisabled(c);
+  if (!env.LLM_ENABLED) return mediaLlmDisabled(c);
 
   let body: unknown;
   try {
@@ -181,35 +427,88 @@ llmRouter.post('/analyze/media', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const parsed = MediaRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  const requestId = requestIdFromContext(c);
+  let prepared: { data: z.infer<typeof MediaRequestSchema> };
+  try {
+    prepared = prepareLlmInput(MediaRequestSchema, body, {
+      task: 'media',
+      requestId,
+    });
+    enforceNoToolsAuthorized({
+      task: 'media',
+      requestId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
+  }
+
+  const sanitizedMediaUrl = sanitizeRemoteProcessingUrl(prepared.data.mediaUrl);
+  if (!sanitizedMediaUrl) {
+    return c.json({ error: 'Unsafe media URL' }, 400);
+  }
+
+  const safeBrowsingVerdict = await checkUrlAgainstSafeBrowsing(sanitizedMediaUrl);
+  if (shouldBlockSafeBrowsingVerdict(safeBrowsingVerdict)) {
+    return c.json({
+      error: safeBrowsingVerdict.reason ?? 'Media URL blocked by Google Safe Browsing.',
+    }, 400);
   }
 
   try {
-    const result = await runMediaAnalyzer(parsed.data as any);
-    const { filtered, safetyMetadata } = filterMediaAnalyzerResponse(result);
-    logSafetyFlag('[llm/analyze/media]', safetyMetadata);
+    const result = await withCircuitProtection(c, 'media', () => runMediaAnalyzer({
+      ...prepared.data,
+      mediaUrl: sanitizedMediaUrl,
+    } as any));
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      MediaResponseSchema,
+      result,
+      {
+        task: 'media',
+        requestId,
+      },
+      {
+        filter: (value) => filterMediaAnalyzerResponse({ ...value }) as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[llm/analyze/media]', safety);
+    if (!safety.passed) {
+      return c.json(degradedMediaAnalyzerPayload());
+    }
     return c.json(filtered);
   } catch (err: unknown) {
+    if (err instanceof CircuitOpenError) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+      c.header('Retry-After', String(retryAfterSeconds));
+      return c.json({
+        error: 'Media analyzer temporarily unavailable',
+        code: 'CIRCUIT_OPEN',
+        requestId: requestIdFromContext(c),
+      }, 503);
+    }
+    if (err instanceof ValidationError) {
+      return c.json({ error: err.message }, err.status as 400);
+    }
     const message = err instanceof Error ? err.message : 'Media analysis failed';
     console.error('[llm/analyze/media]', message);
     // Graceful degradation
-    return c.json({
-      mediaCentrality: 0,
-      mediaType: 'unknown',
-      mediaSummary: '',
-      candidateEntities: [],
-      confidence: 0,
-      cautionFlags: [],
-    });
+    return c.json(degradedMediaAnalyzerPayload());
   }
 });
 
 // ─── POST /write/search-story ──────────────────────────────────────────────
 
 llmRouter.post('/write/search-story', async (c) => {
-  if (!env.LLM_ENABLED) return llmDisabled(c);
+  if (!env.LLM_ENABLED) return searchLlmDisabled(c);
 
   let body: unknown;
   try {
@@ -218,13 +517,34 @@ llmRouter.post('/write/search-story', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const parsed = ExploreSynopsisSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  const requestId = requestIdFromContext(c);
+  let prepared: { data: z.infer<typeof ExploreSynopsisSchema> };
+  try {
+    prepared = prepareLlmInput(ExploreSynopsisSchema, body, {
+      task: 'searchStory',
+      requestId,
+    });
+    enforceNoToolsAuthorized({
+      task: 'searchStory',
+      requestId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
   }
 
   // Reuse the interpolator writer with adapted input
-  const { storyId, titleHint, candidatePosts, safeEntities, factualHighlights, confidence } = parsed.data;
+  const {
+    storyId,
+    titleHint,
+    candidatePosts,
+    safeEntities,
+    factualHighlights,
+    confidence,
+    mediaFindings,
+  } = prepared.data;
 
   // Derive summary mode from confidence — same logic as the client routing layer.
   const storySummaryMode: 'normal' | 'descriptive_fallback' | 'minimal_fallback' =
@@ -234,6 +554,7 @@ llmRouter.post('/write/search-story', async (c) => {
 
   const writerInput = {
     threadId: storyId,
+    requestId,
     summaryMode: storySummaryMode,
     confidence,
     rootPost: {
@@ -252,19 +573,59 @@ llmRouter.post('/write/search-story', async (c) => {
     safeEntities,
     factualHighlights,
     whatChangedSignals: [],
+    ...(mediaFindings
+      ? {
+          mediaFindings: mediaFindings.map((item) => ({
+            mediaType: item.mediaType,
+            summary: item.summary,
+            confidence: item.confidence,
+            ...(item.extractedText ? { extractedText: item.extractedText } : {}),
+            ...(item.cautionFlags ? { cautionFlags: item.cautionFlags } : {}),
+          })),
+        }
+      : {}),
   };
 
   try {
-    const result = await runInterpolatorWriter(writerInput);
+    const result = await withCircuitProtection(c, 'searchStory', () => runInterpolatorWriter(writerInput));
     const synopsis = {
       synopsis: result.collapsedSummary,
       ...(result.expandedSummary ? { shortSynopsis: result.expandedSummary } : {}),
       abstained: result.abstained,
     };
-    const { filtered, safetyMetadata } = filterWriterResponse(synopsis);
-    logSafetyFlag('[llm/write/search-story]', safetyMetadata);
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      ExploreSynopsisResponseSchema,
+      synopsis,
+      {
+        task: 'searchStory',
+        requestId,
+      },
+      {
+        filter: (value) => filterWriterResponse({ ...value }) as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[llm/write/search-story]', safety);
+    if (!safety.passed) {
+      return c.json({ synopsis: '', abstained: true });
+    }
     return c.json(filtered);
   } catch (err: unknown) {
+    if (err instanceof CircuitOpenError) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+      c.header('Retry-After', String(retryAfterSeconds));
+      return c.json({
+        error: 'Search writer temporarily unavailable',
+        code: 'CIRCUIT_OPEN',
+        requestId: requestIdFromContext(c),
+      }, 503);
+    }
     const message = err instanceof Error ? err.message : 'Synopsis writer failed';
     console.error('[llm/write/search-story]', message);
     return c.json({ synopsis: '', abstained: true });
@@ -274,7 +635,7 @@ llmRouter.post('/write/search-story', async (c) => {
 // ─── POST /write/composer-guidance ────────────────────────────────────────
 
 llmRouter.post('/write/composer-guidance', async (c) => {
-  if (!env.LLM_ENABLED) return llmDisabled(c);
+  if (!env.LLM_ENABLED) return composerGuidanceLlmDisabled(c);
 
   let body: unknown;
   try {
@@ -283,17 +644,118 @@ llmRouter.post('/write/composer-guidance', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const parsed = ComposerGuidanceSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  const requestId = requestIdFromContext(c);
+  let prepared: { data: z.infer<typeof ComposerGuidanceSchema> };
+  try {
+    prepared = prepareLlmInput(ComposerGuidanceSchema, body, {
+      task: 'composerGuidance',
+      requestId,
+    });
+    enforceNoToolsAuthorized({
+      task: 'composerGuidance',
+      requestId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
   }
 
   try {
-    const result = await runComposerGuidanceWriter(parsed.data);
-    return c.json(result);
+    const { parentText, ...rest } = prepared.data;
+    const request = parentText === undefined ? rest : { ...rest, parentText };
+    const result = await withCircuitProtection(c, 'composerGuidance', () => runComposerGuidanceWriter(request));
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      ComposerGuidanceResponseSchema,
+      result,
+      {
+        task: 'composerGuidance',
+        requestId,
+      },
+      {
+        filter: (value) => filterComposerGuidanceResponse({ ...value }) as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[llm/write/composer-guidance]', safety);
+
+    if (!safety.passed || typeof filtered.message !== 'string' || !filtered.message.trim()) {
+      throw new Error('Composer guidance output failed safety validation');
+    }
+
+    return c.json(filtered);
   } catch (err: unknown) {
+    if (err instanceof CircuitOpenError) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+      c.header('Retry-After', String(retryAfterSeconds));
+      return c.json({
+        error: 'Composer guidance temporarily unavailable',
+        code: 'CIRCUIT_OPEN',
+        requestId: requestIdFromContext(c),
+      }, 503);
+    }
     const message = err instanceof Error ? err.message : 'Composer guidance writer failed';
     console.error('[llm/write/composer-guidance]', message);
     return c.json({ error: 'Composer guidance writer failed' }, 503);
   }
+});
+
+llmRouter.onError((error, c) => {
+  if (error instanceof CircuitOpenError) {
+    const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1000));
+    c.header('Retry-After', String(retryAfterSeconds));
+    return c.json({
+      error: 'LLM route temporarily unavailable',
+      code: 'CIRCUIT_OPEN',
+      requestId: requestIdFromContext(c),
+    }, 503);
+  }
+
+  if (error instanceof AppError) {
+    return c.json({
+      error: error.message,
+      code: error.code,
+      requestId: requestIdFromContext(c),
+      ...(error.details ? { details: error.details } : {}),
+    }, error.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | 504);
+  }
+
+  const path = c.req.path;
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (path.endsWith('/write/interpolator')) {
+    console.error('[llm/onError/interpolator]', message);
+    return c.json({
+      collapsedSummary: '',
+      whatChanged: [],
+      contributorBlurbs: [],
+      abstained: true,
+      mode: 'minimal_fallback',
+    });
+  }
+
+  if (path.endsWith('/analyze/media')) {
+    console.error('[llm/onError/analyze-media]', message);
+    return c.json(degradedMediaAnalyzerPayload());
+  }
+
+  if (path.endsWith('/write/search-story')) {
+    console.error('[llm/onError/search-story]', message);
+    return c.json({ synopsis: '', abstained: true });
+  }
+
+  if (path.endsWith('/write/composer-guidance')) {
+    console.error('[llm/onError/composer-guidance]', message);
+    return c.json({ error: 'Composer guidance writer failed' }, 503);
+  }
+
+  console.error('[llm/onError/unhandled]', message);
+  return c.json({ error: 'LLM route failed' }, 500);
 });

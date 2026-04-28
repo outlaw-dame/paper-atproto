@@ -14,14 +14,15 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { useSessionStore } from '../../store/sessionStore.js';
-import { atpCall, atpMutate } from './client.js';
-import { mapFeedViewPost, mapNotification, hasDisplayableRecordContent } from '../../atproto/mappers.js';
-import type { MockPost } from '../../data/mockData.js';
-import type { LiveNotification } from '../../atproto/mappers.js';
+import { useSessionStore } from '../../store/sessionStore';
+import { atpCall, atpMutate } from './client';
+import { mapFeedViewPost, mapNotification, hasDisplayableRecordContent } from '../../atproto/mappers';
+import type { MockPost } from '../../data/mockData';
+import type { LiveNotification } from '../../atproto/mappers';
 import { AtUri } from '@atproto/syntax';
-import { useModerationStore } from '../../store/moderationStore.js';
+import { useModerationStore } from '../../store/moderationStore';
 import type { AppBskyFeedDefs, AppBskyGraphDefs } from '@atproto/api';
+import { normalizeAtprotoSearchQuery } from '../searchQuery';
 
 // ─── Query key factory ─────────────────────────────────────────────────────
 export const qk = {
@@ -40,6 +41,7 @@ export const qk = {
   suggestions:   ()                      => ['suggestions'] as const,
   suggestedFeeds: ()                     => ['suggestedFeeds'] as const,
   preferences:    ()                     => ['preferences'] as const,
+  labelerServices: (didsKey: string)     => ['labelerServices', didsKey] as const,
   mutes:          ()                     => ['mutes'] as const,
   blocks:         ()                     => ['blocks'] as const,
 };
@@ -58,15 +60,15 @@ export function useTimelineFeed(mode: 'Following' | 'Discover' | 'Feeds') {
       let _cursor: string | undefined;
 
       if (mode === 'Following') {
-        const res = await atpCall(s => agent.getTimeline({ limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.getTimeline({ limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       } else if (mode === 'Discover') {
-        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_URI, limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.app.bsky.feed.getFeed({ feed: DISCOVER_URI, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       } else {
-        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, cursor: pageParam }), { signal });
+        const res = await atpCall(s => agent.getAuthorFeed({ actor: session.did, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }), { signal });
         feed = res.data.feed;
         _cursor = res.data.cursor;
       }
@@ -146,12 +148,12 @@ export function useLikes(actor: string | undefined) {
   return useQuery({
     queryKey: qk.likes(actor ?? ''),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(s => agent.listRecords({
+      const res = await atpCall(() => agent.com.atproto.repo.listRecords({
         repo: actor!,
         collection: 'app.bsky.feed.like',
         limit: 50,
       }), { signal });
-      return res.data.records;
+      return (res as any).data.records;
     },
     enabled: !!session && !!actor,
     staleTime: 1000 * 60 * 5,
@@ -182,8 +184,8 @@ export function useSavedFeeds() {
   return useQuery<AppBskyFeedDefs.GeneratorView[], Error>({
     queryKey: qk.savedFeeds(),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(
-        s => agent.app.bsky.feed.getSavedFeeds({ limit: 100 }),
+      const res: any = await atpCall(
+        () => (agent.app.bsky.feed as any).getSavedFeeds({ limit: 100 }),
         { signal, maxAttempts: 4, baseDelayMs: 250, capDelayMs: 8_000 },
       );
       return res.data.feeds ?? [];
@@ -229,14 +231,15 @@ export function useSubscribedLists() {
 // ─── Search posts ──────────────────────────────────────────────────────────
 export function useSearchPosts(query: string) {
   const { agent, session } = useSessionStore();
+  const normalizedQuery = normalizeAtprotoSearchQuery(query);
 
   return useQuery({
-    queryKey: qk.search(query),
+    queryKey: qk.search(normalizedQuery),
     queryFn: async ({ signal }) => {
-      const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: query, limit: 25 }), { signal });
-      return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post, reply: undefined, reason: undefined }));
+      const res = await atpCall(s => agent.app.bsky.feed.searchPosts({ q: normalizedQuery, limit: 25 }), { signal });
+      return (res.data.posts ?? []).map((post: any) => mapFeedViewPost({ post }));
     },
-    enabled: !!session && query.trim().length > 1,
+    enabled: !!session && normalizedQuery.length > 1,
     staleTime: 1000 * 60,
     gcTime: 1000 * 60 * 5,
   });
@@ -295,6 +298,76 @@ export function usePreferences() {
     enabled: !!session,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 30,
+  });
+}
+
+export function useLabelerServices(dids: string[]) {
+  const { agent, session } = useSessionStore();
+  const sortedDids = [...dids].sort();
+  const didsKey = sortedDids.join(',');
+
+  return useQuery({
+    queryKey: qk.labelerServices(didsKey),
+    queryFn: () => atpCall(() => agent.app.bsky.labeler.getServices({ dids: sortedDids, detailed: true })),
+    enabled: !!session && sortedDids.length > 0,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
+  });
+}
+
+export function useSetContentLabelPref() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      label,
+      visibility,
+      labelerDid,
+    }: {
+      label: string;
+      visibility: 'hide' | 'warn' | 'ignore';
+      labelerDid?: string;
+    }) => atpCall(
+      () => agent.setContentLabelPref(label, visibility, labelerDid),
+      {
+        // Explicit jittered retry configuration for transient policy write failures.
+        maxAttempts: 3,
+        baseDelayMs: 250,
+        capDelayMs: 3_000,
+      },
+    ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useAddLabeler() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ did }: { did: string }) => atpCall(() => agent.addLabeler(did)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useRemoveLabeler() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ did }: { did: string }) => atpCall(() => agent.removeLabeler(did)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
+  });
+}
+
+export function useRemoveLabelers() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ dids }: { dids: string[] }) => atpCall(() => Promise.all(dids.map((did) => agent.removeLabeler(did)))),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.preferences() }),
   });
 }
 
@@ -394,6 +467,22 @@ export function useMuteActor() {
   });
 }
 
+export function useMuteList() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        await agent.app.bsky.graph.muteActorList({ list: listUri });
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listMutes() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
+    },
+  });
+}
+
 export function useUnmuteActor() {
   const { agent } = useSessionStore();
   const qc = useQueryClient();
@@ -412,6 +501,22 @@ export function useUnmuteActor() {
   });
 }
 
+export function useUnmuteList() {
+  const { agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        await agent.app.bsky.graph.unmuteActorList({ list: listUri });
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listMutes() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
+    },
+  });
+}
+
 // ─── Blocked accounts ─────────────────────────────────────────────────────
 export function useGetBlocks() {
   const { session, agent } = useSessionStore();
@@ -421,6 +526,30 @@ export function useGetBlocks() {
     enabled: !!session,
     staleTime: 60_000,
   });
+}
+
+async function resolveActorBlockRkey(
+  agent: ReturnType<typeof useSessionStore.getState>['agent'],
+  did: string,
+): Promise<string | undefined> {
+  const profileRes = await atpCall(() => agent.getProfile({ actor: did }));
+  const profileBlockingUri = profileRes.data.viewer?.blocking;
+  if (profileBlockingUri) {
+    return new AtUri(profileBlockingUri).rkey;
+  }
+
+  let cursor: string | undefined;
+  do {
+    const res = await atpCall(() => agent.app.bsky.graph.getBlocks({ limit: 100, ...(cursor ? { cursor } : {}) }));
+    const record = res.data.blocks.find((b) => b.did === did);
+    const blockingUri = record?.viewer?.blocking;
+    if (blockingUri) {
+      return new AtUri(blockingUri).rkey;
+    }
+    cursor = res.data.cursor;
+  } while (cursor);
+
+  return undefined;
 }
 
 export function useBlockActor() {
@@ -454,14 +583,10 @@ export function useUnblockActor() {
   return useMutation({
     mutationFn: ({ did }: { did: string }) =>
       atpCall(async () => {
-        // Try cached rkey first; fall back to fetching the blocks list.
+        // Try cached rkey first; otherwise resolve from profile or paginated block list.
         let rkey = blockRkeys[did];
         if (!rkey) {
-          const res = await agent.app.bsky.graph.getBlocks({ limit: 100 });
-          const record = res.data.blocks.find((b) => b.did === did);
-          if (record?.viewer?.blocking) {
-            rkey = new AtUri(record.viewer.blocking).rkey;
-          }
+          rkey = await resolveActorBlockRkey(agent, did);
         }
         if (!rkey) throw new Error(`No block record found for ${did}`);
         await agent.app.bsky.graph.block.delete({ repo: session!.did, rkey });
@@ -470,6 +595,62 @@ export function useUnblockActor() {
     onSuccess: (_data, { did }) => {
       void qc.invalidateQueries({ queryKey: qk.blocks() });
       void qc.invalidateQueries({ queryKey: qk.profile(did) });
+    },
+  });
+}
+
+export function useBlockList() {
+  const { session, agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        await agent.app.bsky.graph.listblock.create(
+          { repo: session!.did },
+          { subject: listUri, createdAt: new Date().toISOString() },
+        );
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listBlocks() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
+    },
+  });
+}
+
+async function resolveListBlockRkey(
+  agent: ReturnType<typeof useSessionStore.getState>['agent'],
+  listUri: string,
+): Promise<string | undefined> {
+  let cursor: string | undefined;
+
+  do {
+    const res = await atpCall(() => agent.app.bsky.graph.getListBlocks({ limit: 100, ...(cursor ? { cursor } : {}) }));
+    const record = res.data.lists.find((l) => l.uri === listUri);
+    const blockedUri = (record?.viewer as any)?.blocked ?? (record?.viewer as any)?.blocking;
+    if (typeof blockedUri === 'string' && blockedUri.length > 0) {
+      return new AtUri(blockedUri).rkey;
+    }
+    cursor = res.data.cursor;
+  } while (cursor);
+
+  return undefined;
+}
+
+export function useUnblockList() {
+  const { session, agent } = useSessionStore();
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ listUri }: { listUri: string }) =>
+      atpCall(async () => {
+        const rkey = await resolveListBlockRkey(agent, listUri);
+        if (!rkey) throw new Error(`No list block record found for ${listUri}`);
+        await agent.app.bsky.graph.listblock.delete({ repo: session!.did, rkey });
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.listBlocks() });
+      void qc.invalidateQueries({ queryKey: ['subscribedLists'] });
     },
   });
 }

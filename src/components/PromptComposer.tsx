@@ -16,12 +16,12 @@
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore.js';
-import { atpMutate } from '../lib/atproto/client.js';
-import ComposerGuidanceBanner from './ComposerGuidanceBanner.js';
-import MentalHealthSupportBanner from './MentalHealthSupportBanner.js';
-import { buildHostedThreadComposerContext } from '../intelligence/composer/contextBuilder.js';
-import { useComposerGuidance } from '../hooks/useComposerGuidance.js';
+import { useSessionStore } from '../store/sessionStore';
+import { atpMutate } from '../lib/atproto/client';
+import ComposerGuidanceBanner from './ComposerGuidanceBanner';
+import MentalHealthSupportBanner from './MentalHealthSupportBanner';
+import { projectHostedThreadComposerContext } from '../conversation/projections/composerProjection';
+import { useComposerGuidance } from '../hooks/useComposerGuidance';
 import {
   promptHero as phTokens,
   discussion as disc,
@@ -31,7 +31,7 @@ import {
   space,
   transitions,
   slideUpVariants,
-} from '../design/index.js';
+} from '../design/index';
 
 interface Props {
   onClose: () => void;
@@ -197,7 +197,8 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
   const canPreview = prompt.trim().length >= 10;
   const canPost = canPreview && !posting;
 
-  const composerContext = useMemo(() => buildHostedThreadComposerContext({
+  const composerContext = useMemo(() => projectHostedThreadComposerContext({
+    draftText: [prompt, description].filter(Boolean).join('\n\n'),
     prompt,
     description,
     source,
@@ -250,9 +251,9 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
   }, [canPost, session, prompt, description, topics, source, agent, onPosted, onClose]);
 
   const profileData = profile ? {
-    displayName: profile.displayName,
-    handle: profile.handle,
-    avatar: profile.avatar,
+    ...(profile.displayName ? { displayName: profile.displayName } : {}),
+    ...(profile.handle ? { handle: profile.handle } : {}),
+    ...(profile.avatar ? { avatar: profile.avatar } : {}),
   } : null;
 
   return (
@@ -260,7 +261,7 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
       initial={{ opacity: 0, y: '100%' }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: '100%' }}
-      transition={transitions.sheetEntry}
+      transition={transitions.sheet}
       style={{
         position: 'fixed', inset: 0,
         background: disc.bgBase,
@@ -435,7 +436,9 @@ export default function PromptComposer({ onClose, onPosted }: Props) {
               <AnimatePresence>
                 {composerGuidance.heuristics.hasMentalHealthCrisis && mentalHealthDismissedAt === null && (
                   <MentalHealthSupportBanner
-                    category={composerGuidance.heuristics.mentalHealthCategory}
+                    {...(composerGuidance.heuristics.mentalHealthCategory
+                      ? { category: composerGuidance.heuristics.mentalHealthCategory }
+                      : {})}
                     onDismiss={() => setMentalHealthDismissedAt(Date.now())}
                   />
                 )}

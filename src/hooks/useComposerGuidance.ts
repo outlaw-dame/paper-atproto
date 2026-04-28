@@ -2,9 +2,9 @@ import { useDeferredValue, useEffect, useMemo, useRef } from 'react';
 import {
   analyzeComposerGuidance,
   analyzeComposerGuidanceImmediate,
-} from '../intelligence/composer/guidancePipeline.js';
-import { createEmptyComposerGuidanceResult } from '../intelligence/composer/guidanceScoring.js';
-import { maybeWriteComposerGuidance } from '../intelligence/composer/guidanceWriter.js';
+} from '../intelligence/composer/guidancePipeline';
+import { createEmptyComposerGuidanceResult } from '../intelligence/composer/guidanceScoring';
+import { maybeWriteComposerGuidance } from '../intelligence/composer/guidanceWriter';
 import {
   getComposerModelDebounceMs,
   getComposerWriterDebounceMs,
@@ -13,22 +13,18 @@ import {
   shouldReuseCachedComposerGuidance,
   shouldRunComposerModelStageForDraft,
   shouldRunComposerWriterStage,
-} from '../intelligence/composer/routing.js';
-import type { ComposerContext, ComposerGuidanceResult } from '../intelligence/composer/types.js';
-import { useComposerGuidanceStore } from '../store/composerGuidanceStore.js';
+} from '../intelligence/composer/routing';
+import {
+  createComposerContextFingerprint,
+  createComposerDraftId,
+} from '../intelligence/composer/guidanceIdentity';
+import type { ComposerContext, ComposerGuidanceResult } from '../intelligence/composer/types';
+import { useComposerGuidanceStore } from '../store/composerGuidanceStore';
 
 interface UseComposerGuidanceOptions {
   surfaceId: string;
   context: ComposerContext;
   debounceMs?: number;
-}
-
-function hashDraftKey(value: string): string {
-  let hash = 5381;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
-  }
-  return (hash >>> 0).toString(36);
 }
 
 export function useComposerGuidance({
@@ -41,40 +37,53 @@ export function useComposerGuidance({
   const clearGuidance = useComposerGuidanceStore((state) => state.clearGuidance);
   const requestIdRef = useRef(0);
   const deferredContext = useDeferredValue(context);
-
-  const contextKey = JSON.stringify(deferredContext);
   const draftId = useMemo(
-    () => `${surfaceId}:${hashDraftKey(contextKey)}`,
-    [contextKey, surfaceId],
+    () => createComposerDraftId(surfaceId, deferredContext),
+    [deferredContext, surfaceId],
+  );
+  const contextFingerprint = useMemo(
+    () => createComposerContextFingerprint(deferredContext),
+    [deferredContext],
   );
 
   const cachedGuidance = useComposerGuidanceStore((state) => state.byDraftId[draftId]);
-  const guidance = cachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode);
+  const cachedContextFingerprint = useComposerGuidanceStore(
+    (state) => state.contextFingerprintByDraftId[draftId] ?? null,
+  );
+  const isCachedContextFresh = cachedContextFingerprint === contextFingerprint;
+  const immediateGuidance = useMemo(
+    () => analyzeComposerGuidanceImmediate(deferredContext),
+    [contextFingerprint, deferredContext],
+  );
+  const guidance = isCachedContextFresh && cachedGuidance
+    ? cachedGuidance
+    : immediateGuidance;
   const dismissedAt = useComposerGuidanceStore((state) => state.dismissedByDraftId[draftId] ?? null);
 
   useEffect(() => {
-    if (shouldReuseCachedComposerGuidance(deferredContext.mode, deferredContext.draftText, cachedGuidance, dismissedAt)) {
+    const reusableCachedGuidance = isCachedContextFresh ? cachedGuidance : undefined;
+
+    if (shouldReuseCachedComposerGuidance(deferredContext.mode, deferredContext.draftText, reusableCachedGuidance, dismissedAt)) {
       return;
     }
 
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
 
-    const immediate = analyzeComposerGuidanceImmediate(deferredContext);
     let latestGuidance: ComposerGuidanceResult = hasComposerModelCoverage(
-      cachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode),
+      reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode),
     )
-      ? (cachedGuidance ?? immediate)
-      : immediate;
+      ? (reusableCachedGuidance ?? immediateGuidance)
+      : immediateGuidance;
 
-    if (!hasComposerModelCoverage(cachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
-      setGuidance(draftId, immediate);
+    if (!hasComposerModelCoverage(reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
+      setGuidance(draftId, immediateGuidance, contextFingerprint);
     }
 
     const shouldRunModelStage = shouldRunComposerModelStageForDraft(
       deferredContext.mode,
       deferredContext.draftText,
-      immediate,
+      immediateGuidance,
     );
 
     if (!shouldRunModelStage) {
@@ -86,15 +95,15 @@ export function useComposerGuidance({
     const writerAbort = new AbortController();
 
     const runModelStage = async () => {
-      if (hasComposerModelCoverage(cachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
-        latestGuidance = cachedGuidance ?? latestGuidance;
+      if (hasComposerModelCoverage(reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
+        latestGuidance = reusableCachedGuidance ?? latestGuidance;
         return latestGuidance;
       }
 
       const result = await analyzeComposerGuidance(deferredContext);
       if (requestIdRef.current !== requestId) return latestGuidance;
       latestGuidance = result;
-      setGuidance(draftId, result);
+      setGuidance(draftId, result, contextFingerprint);
       return result;
     };
 
@@ -117,7 +126,7 @@ export function useComposerGuidance({
         const written = await maybeWriteComposerGuidance(deferredContext, baseGuidance, writerAbort.signal);
         if (requestIdRef.current !== requestId) return;
         latestGuidance = written;
-        setGuidance(draftId, written);
+        setGuidance(draftId, written, contextFingerprint);
       })().catch(() => {
         // Writer guidance is optional; keep the local copy if the server-side pass fails.
       });
@@ -133,6 +142,10 @@ export function useComposerGuidance({
     debounceMs,
     dismissedAt,
     draftId,
+    contextFingerprint,
+    cachedGuidance,
+    isCachedContextFresh,
+    immediateGuidance,
     setGuidance,
   ]);
 

@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useUiStore } from '../store/uiStore.js';
-import { useActivityStore } from '../store/activityStore.js';
-import { atpCall } from '../lib/atproto/client.js';
-import { mapNotification } from '../atproto/mappers.js';
-import { formatTime } from '../data/mockData.js';
+import { useSessionStore } from '../store/sessionStore';
+import { useUiStore } from '../store/uiStore';
+import { useActivityStore } from '../store/activityStore';
+import { atpCall } from '../lib/atproto/client';
+import { mapNotification } from '../atproto/mappers';
+import { formatTime } from '../data/mockData';
+import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
 
 const NOTIF_CONFIG: Record<string, { symbol: string; color: string; bg: string }> = {
   like: { symbol: '♥', color: 'var(--red)', bg: 'rgba(255,69,58,0.12)' },
@@ -16,6 +17,8 @@ const NOTIF_CONFIG: Record<string, { symbol: string; color: string; bg: string }
   quote: { symbol: '"', color: 'var(--teal)', bg: 'rgba(90,200,250,0.12)' },
   app: { symbol: '•', color: 'var(--indigo)', bg: 'rgba(88,86,214,0.12)' },
 };
+
+const DEFAULT_NOTIF_CONFIG = { symbol: '•', color: 'var(--indigo)', bg: 'rgba(88,86,214,0.12)' };
 
 const FILTERS = ['All', 'Mentions', 'Likes', 'Follows', 'App'] as const;
 type Filter = typeof FILTERS[number];
@@ -115,6 +118,38 @@ export default function ActivityTab() {
   const [notifications, setNotifications] = useState<ActivityNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const viewResumeKey = useMemo(() => {
+    if (!session?.did) return null;
+    return `activity:${session.did}`;
+  }, [session?.did]);
+
+  const persistViewScroll = useCallback(() => {
+    if (!viewResumeKey || !scrollRef.current) return;
+    writeViewScrollPosition(viewResumeKey, scrollRef.current.scrollTop);
+  }, [viewResumeKey]);
+
+  useEffect(() => {
+    if (!viewResumeKey) return;
+    const top = readViewScrollPosition(viewResumeKey);
+    if (top <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = top;
+      }
+    }, 50);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [viewResumeKey]);
+
+  useEffect(() => {
+    return () => {
+      persistViewScroll();
+    };
+  }, [persistViewScroll]);
 
   const fetchNotifications = useCallback(async () => {
     if (!session) return;
@@ -315,7 +350,7 @@ export default function ActivityTab() {
         </div>
       </div>
 
-      <div className="scroll-y" style={{ flex: 1 }}>
+      <div ref={scrollRef} className="scroll-y" style={{ flex: 1 }} onScroll={persistViewScroll}>
         <AnimatePresence mode="wait">
           {loading ? (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -410,7 +445,7 @@ export default function ActivityTab() {
 }
 
 function NotifRow({ n, index, last }: { n: ActivityNotification; index: number; last: boolean }) {
-  const cfg = NOTIF_CONFIG[n.type] ?? NOTIF_CONFIG.app;
+  const cfg = NOTIF_CONFIG[n.type] ?? DEFAULT_NOTIF_CONFIG;
 
   return (
     <motion.div

@@ -1,9 +1,9 @@
-import { pipeline } from '@xenova/transformers';
-
 /**
  * Entity Linking Utility
  * 1. Named Entity Recognition (NER) using Transformers.js
  * 2. Entity Linking to Wikidata
+ * 
+ * Note: Transformers.js import is deferred to allow ONNX Runtime configuration
  */
 
 export interface LinkedEntity {
@@ -15,11 +15,32 @@ export interface LinkedEntity {
 }
 
 let nerPipeline: any = null;
+let transformersModule: any = null;
+
+async function getTransformers() {
+  if (!transformersModule) {
+    transformersModule = await import('@xenova/transformers');
+    // ONNX Runtime should already be pre-configured from bootstrap.ts
+    // This is a fallback configuration in case it's needed
+    const env = transformersModule.env;
+    if (!env.backends?.onnx?.wasm?.numThreads) {
+      env.localModelPath ??= '/models/';
+      env.allowLocalModels ??= true;
+      env.backends ??= {};
+      env.backends.onnx ??= {};
+      env.backends.onnx.wasm ??= {};
+      env.backends.onnx.wasm.numThreads = 1;
+      env.backends.onnx.wasm.proxy = false;
+    }
+  }
+  return transformersModule;
+}
 
 export const initLinking = async () => {
   if (!nerPipeline) {
+    const transformers = await getTransformers();
     // Using a lightweight NER model
-    nerPipeline = await pipeline('token-classification', 'Xenova/distilbert-base-uncased-finetuned-conll03-english');
+    nerPipeline = await transformers.pipeline('token-classification', 'Xenova/distilbert-base-uncased-finetuned-conll03-english');
   }
 };
 

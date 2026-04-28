@@ -1,4 +1,4 @@
-import type { TranslationResult } from './types.js';
+import type { TranslationResult } from './types';
 
 export function getDisplayText(
   originalText: string,

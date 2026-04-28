@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { mediaTranscriptionClient } from '../lib/media/transcriptionClient';
 import { List, ListItem, Block, Button, Searchbar, Card, Navbar, Page, Toolbar, Link } from 'konsta/react';
-import { feedService } from '../feeds.js';
-import { Markdown } from './Markdown.js';
-import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
-import type { Feed, FeedItem } from '../schema.js';
+import { feedService } from '../feeds';
+import { Markdown } from './Markdown';
+import YouTubeEmbedCard from './YouTubeEmbedCard';
+import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback';
+import { useMediaSettingsStore } from '../store/mediaSettingsStore';
+import type { Feed, FeedItem } from '../schema';
+import { extractFirstYouTubeReference } from '../lib/youtube';
+import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
 
 interface PodcastValueRecipient {
   name?: string;
@@ -61,10 +66,17 @@ export const FeedList: React.FC = () => {
   };
 
   const handleAddFeed = async () => {
-    if (!newFeedUrl.trim()) return;
     setIsLoading(true);
     try {
-      await feedService.addFeed(newFeedUrl);
+      const result = await subscribeToExternalFeed({
+        rawUrl: newFeedUrl,
+        category: 'News',
+      });
+      if (!result.ok) {
+        alert(result.message);
+        return;
+      }
+
       setNewFeedUrl('');
       loadFeeds();
     } catch (error) {
@@ -150,43 +162,61 @@ export const FeedList: React.FC = () => {
       ) : (
         <div className="flex-1 overflow-auto p-4 space-y-4">
           {feedItems.map((item) => (
-            <Card key={item.id} className="overflow-hidden">
-              <div className="p-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
-                    {selectedFeed.category || 'News'}
-                  </span>
-                  <span className="text-xs font-semibold px-2 py-1 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 uppercase tracking-wider">
-                    {selectedFeed.type}
-                  </span>
-                </div>
-                <h3 className="text-lg font-bold mb-2 leading-tight">
-                  <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                    {item.title}
-                  </a>
-                </h3>
-                {item.enclosureUrl && (
-                  <div className="mb-3">
-                    {item.enclosureType && (
-                      <MediaEnclosurePlayer
-                        url={item.enclosureUrl}
-                        type={item.enclosureType}
-                        transcriptUrl={item.transcriptUrl ?? undefined}
-                        chaptersUrl={item.chaptersUrl ?? undefined}
-                        valueConfig={item.valueConfig ?? undefined}
-                      />
-                    )}
+            (() => {
+              const youtubeReference = extractFirstYouTubeReference({
+                explicitUrls: [item.enclosureUrl, item.link],
+                text: item.content,
+              });
+              const hasAudioEnclosure = (item.enclosureType || '').startsWith('audio/');
+
+              return (
+                <Card key={item.id} className="overflow-hidden">
+                  <div className="p-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        {selectedFeed.category || 'News'}
+                      </span>
+                      <span className="text-xs font-semibold px-2 py-1 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 uppercase tracking-wider">
+                        {selectedFeed.type}
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-bold mb-2 leading-tight">
+                      <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                        {item.title}
+                      </a>
+                    </h3>
+                    {youtubeReference && !hasAudioEnclosure ? (
+                      <div className="mb-3">
+                        <YouTubeEmbedCard
+                          url={youtubeReference.normalizedUrl}
+                          title={item.title}
+                          description={item.content || undefined}
+                          domain={youtubeReference.domain}
+                          compact
+                        />
+                      </div>
+                    ) : item.enclosureUrl && item.enclosureType ? (
+                      <div className="mb-3">
+                        <MediaEnclosurePlayer
+                          url={item.enclosureUrl}
+                          type={item.enclosureType}
+                          transcriptUrl={item.transcriptUrl ?? undefined}
+                          chaptersUrl={item.chaptersUrl ?? undefined}
+                          valueConfig={item.valueConfig ?? undefined}
+                        />
+                      </div>
+                    ) : null}
+                    <div className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-3 mb-3">
+                      <Markdown content={item.content || ''} />
+                    </div>
+                    <div className="flex justify-between items-center text-xs text-zinc-500">
+                      <span>{item.author || selectedFeed.title}</span>
+                      <span>{item.pubDate ? new Date(item.pubDate).toLocaleDateString() : ''}</span>
+                    </div>
                   </div>
-                )}
-                <div className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-3 mb-3">
-                  <Markdown content={item.content || ''} />
-                </div>
-                <div className="flex justify-between items-center text-xs text-zinc-500">
-                  <span>{item.author || selectedFeed.title}</span>
-                  <span>{item.pubDate ? new Date(item.pubDate).toLocaleDateString() : ''}</span>
-                </div>
-              </div>
-            </Card>
+                </Card>
+              );
+            })()
           ))}
         </div>
       )}
@@ -203,6 +233,7 @@ interface MediaEnclosurePlayerProps {
 }
 
 const MediaEnclosurePlayer: React.FC<MediaEnclosurePlayerProps> = ({ url, type, transcriptUrl, chaptersUrl, valueConfig }) => {
+  const preferredCaptionLanguage = useMediaSettingsStore((s) => s.preferredCaptionLanguage);
   const mediaRef = useRef<HTMLMediaElement>(null);
   const lastPersistAtRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -221,6 +252,7 @@ const MediaEnclosurePlayer: React.FC<MediaEnclosurePlayerProps> = ({ url, type, 
   const [transcriptText, setTranscriptText] = useState<string | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [transcriptAttribution, setTranscriptAttribution] = useState<string | null>(null);
 
   const isVideo = type.startsWith('video/');
 
@@ -305,7 +337,8 @@ const MediaEnclosurePlayer: React.FC<MediaEnclosurePlayerProps> = ({ url, type, 
     setTranscriptText(null);
     setTranscriptLoading(false);
     setTranscriptError(null);
-  }, [transcriptUrl]);
+    setTranscriptAttribution(null);
+  }, [transcriptUrl, url]);
 
   useEffect(() => {
     let canceled = false;
@@ -370,6 +403,38 @@ const MediaEnclosurePlayer: React.FC<MediaEnclosurePlayerProps> = ({ url, type, 
       canceled = true;
     };
   }, [showTranscript, transcriptText, transcriptUrl]);
+
+  const handleTranscriptButtonClick = async () => {
+    if (transcriptUrl) {
+      setShowTranscript((prev) => !prev);
+      return;
+    }
+
+    if (showTranscript && transcriptText) {
+      setShowTranscript(false);
+      return;
+    }
+
+    if (transcriptLoading) return;
+
+    setShowTranscript(true);
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+
+    try {
+      const result = await mediaTranscriptionClient.transcribeUrl(url, preferredCaptionLanguage ?? undefined);
+      const normalizedText = result.text.trim();
+      setTranscriptText(normalizedText || null);
+      setTranscriptAttribution(`Generated on demand with ${result.model}`);
+      if (!normalizedText) {
+        setTranscriptError('Transcript was generated but empty.');
+      }
+    } catch (error) {
+      setTranscriptError((error as { message?: string })?.message?.trim() || 'Unable to generate transcript right now.');
+    } finally {
+      setTranscriptLoading(false);
+    }
+  };
 
   useEffect(() => {
     let canceled = false;
@@ -695,13 +760,17 @@ const MediaEnclosurePlayer: React.FC<MediaEnclosurePlayerProps> = ({ url, type, 
                 <option value={2}>2x</option>
               </select>
             </label>
-            {transcriptUrl && (
+            {(transcriptUrl || (!transcriptUrl && (isVideo || type.startsWith('audio/')))) && (
               <button
                 type="button"
-                onClick={() => setShowTranscript((prev) => !prev)}
+                onClick={() => { void handleTranscriptButtonClick(); }}
                 className="px-2 py-1 text-xs font-semibold rounded bg-zinc-700 hover:bg-zinc-600 transition"
               >
-                {showTranscript ? 'Hide Transcript' : 'Transcript'}
+                {transcriptLoading
+                  ? 'Transcribing...'
+                  : transcriptUrl
+                    ? (showTranscript ? 'Hide Transcript' : 'Transcript')
+                    : (showTranscript && transcriptText ? 'Hide Transcript' : 'Generate Transcript')}
               </button>
             )}
             {chapters.length > 0 && (
@@ -746,18 +815,22 @@ const MediaEnclosurePlayer: React.FC<MediaEnclosurePlayerProps> = ({ url, type, 
           <p className="mt-2 text-xs text-emerald-300">{boostStatus}</p>
         )}
 
-        {showTranscript && transcriptUrl && (
+        {showTranscript && (transcriptUrl || transcriptText || transcriptLoading || transcriptError) && (
           <div className="mt-3 border-t border-zinc-700 pt-3 text-xs text-zinc-200 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="font-semibold">Transcript</div>
-              <a
-                href={transcriptUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-zinc-300 hover:text-white"
-              >
-                Open original
-              </a>
+              {transcriptUrl ? (
+                <a
+                  href={transcriptUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-zinc-300 hover:text-white"
+                >
+                  Open original
+                </a>
+              ) : transcriptAttribution ? (
+                <span className="text-zinc-400">{transcriptAttribution}</span>
+              ) : null}
             </div>
             {transcriptLoading && <p className="text-zinc-400">Loading transcript...</p>}
             {transcriptError && <p className="text-amber-300">{transcriptError}</p>}

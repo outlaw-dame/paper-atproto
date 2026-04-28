@@ -13,7 +13,8 @@ type Ct2WorkerRequest = {
   hfDir: string;
   sourceLang: string;
   targetLang: string;
-  text: string;
+  text?: string;
+  texts?: string[];
   targetPrefix?: string;
 };
 
@@ -21,7 +22,8 @@ type Ct2WorkerResponse =
   | {
       requestId: string;
       ok: true;
-      translatedText: string;
+      translatedText?: string;
+      translatedTexts?: string[];
     }
   | {
       requestId: string;
@@ -31,7 +33,7 @@ type Ct2WorkerResponse =
     };
 
 type PendingRequest = {
-  resolve: (value: string) => void;
+  resolve: (value: string | string[]) => void;
   reject: (reason?: unknown) => void;
   timeoutId: NodeJS.Timeout;
 };
@@ -133,7 +135,11 @@ class Ct2WorkerBridge {
     this.pending.delete(parsed.requestId);
 
     if (parsed.ok) {
-      pending.resolve(parsed.translatedText);
+      if (Array.isArray(parsed.translatedTexts)) {
+        pending.resolve(parsed.translatedTexts);
+      } else {
+        pending.resolve(typeof parsed.translatedText === 'string' ? parsed.translatedText : '');
+      }
       return;
     }
 
@@ -164,13 +170,64 @@ class Ct2WorkerBridge {
         );
       }, env.TRANSLATION_TIMEOUT_MS);
 
-      this.pending.set(requestId, { resolve, reject, timeoutId });
+      this.pending.set(requestId, {
+        timeoutId,
+        reject,
+        resolve: (value) => {
+          if (Array.isArray(value)) {
+            resolve(value[0] ?? '');
+            return;
+          }
+          resolve(value);
+        },
+      });
 
       child.stdin.write(`${JSON.stringify({ ...input, requestId })}\n`, (error) => {
         if (!error) return;
         clearTimeout(timeoutId);
         this.pending.delete(requestId);
         reject(createWorkerError('Failed to send request to translation worker', { cause: String(error) }));
+      });
+    });
+  }
+
+  async translateBatch(input: Omit<Ct2WorkerRequest, 'requestId' | 'text'> & { texts: string[] }): Promise<string[]> {
+    if (input.texts.length === 0) return [];
+    const child = this.startWorker();
+    const requestId = `translation-batch-${Date.now()}-${this.requestSequence += 1}`;
+
+    return new Promise<string[]>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.pending.delete(requestId);
+        this.child?.kill();
+        this.child = null;
+        reject(
+          createWorkerError('Translation worker batch timed out', {
+            requestId,
+            timeoutMs: env.TRANSLATION_TIMEOUT_MS,
+            stderr: this.stderrBuffer.join('\n'),
+            count: input.texts.length,
+          }),
+        );
+      }, env.TRANSLATION_TIMEOUT_MS);
+
+      this.pending.set(requestId, {
+        timeoutId,
+        resolve: (value) => {
+          if (Array.isArray(value)) {
+            resolve(value);
+            return;
+          }
+          resolve([value]);
+        },
+        reject,
+      });
+
+      child.stdin.write(`${JSON.stringify({ ...input, requestId })}\n`, (error) => {
+        if (!error) return;
+        clearTimeout(timeoutId);
+        this.pending.delete(requestId);
+        reject(createWorkerError('Failed to send batch request to translation worker', { cause: String(error) }));
       });
     });
   }

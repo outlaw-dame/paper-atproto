@@ -6,29 +6,62 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppBskyFeedDefs, AppBskyActorDefs, AppBskyGraphDefs } from '@atproto/api';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useUiStore } from '../store/uiStore.js';
-import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost } from '../atproto/mappers.js';
-import PostCard from '../components/PostCard.js';
-import TranslationSettingsSheet from '../components/TranslationSettingsSheet.js';
-import type { MockPost } from '../data/mockData.js';
-import { formatCount, formatTime } from '../data/mockData.js';
-import type { StoryEntry } from '../App.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import { usePlatform, getButtonTokens } from '../hooks/usePlatform.js';
+import { useSessionStore } from '../store/sessionStore';
+import { useBookmarksStore } from '../store/bookmarksStore';
+import { useUiStore } from '../store/uiStore';
+import { useTranslationStore } from '../store/translationStore';
+import { atpCall } from '../lib/atproto/client';
+import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
+import PostCard from '../components/PostCard';
+import LazyModuleBoundary from '../components/LazyModuleBoundary';
+import TranslationSettingsSheetFallback from '../components/TranslationSettingsSheetFallback';
+import type { MockPost } from '../data/mockData';
+import { formatCount, formatTime } from '../data/mockData';
+import type { StoryEntry } from '../App';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import { warnMatchReasons } from '../lib/contentFilters/presentation';
+import type { WarnMatchReason } from '../lib/contentFilters/presentation';
+import { usePlatform, getButtonTokens } from '../hooks/usePlatform';
+import { useAppearanceStore } from '../store/appearanceStore';
 import {
   useMuteActor,
   useUnmuteActor,
   useBlockActor,
   useUnblockActor,
-} from '../lib/atproto/queries.js';
+  usePreferences,
+  useAddLabeler,
+  useRemoveLabeler,
+} from '../lib/atproto/queries';
+import { useConversationBatchHydration } from '../conversation/sessionHydration';
+import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
+import { embeddingPipeline } from '../intelligence/embeddingPipeline';
+import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
+import { lazyWithRetry } from '../lib/lazyWithRetry';
 
 // ─── Sub-tabs ──────────────────────────────────────────────────────────────
 const PROFILE_TABS = ['Posts', 'Library', 'Media', 'Feeds', 'Starter Packs', 'Lists'] as const;
 type ProfileTab = typeof PROFILE_TABS[number];
 type LibrarySort = 'Newest' | 'Oldest' | 'A-Z' | 'Z-A';
+type LibraryCardEntry =
+  | { kind: 'warn'; post: MockPost; reasons: WarnMatchReason[] }
+  | { kind: 'post'; post: MockPost };
+
+type StarterPackMember = {
+  did: string;
+  handle?: string;
+  avatar?: string;
+  following: boolean;
+  blocked: boolean;
+};
+
+type StarterPackFollowState = {
+  inFlight: boolean;
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  lastError: string | null;
+  optimisticFollowedDids: string[];
+};
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -45,6 +78,57 @@ function shortenUrl(raw: string): string {
   } catch {
     return raw.length > 30 ? raw.slice(0, 28) + '…' : raw;
   }
+}
+
+function starterPackRkeyFromUri(uri: string | undefined): string {
+  const safe = String(uri ?? '').trim();
+  if (!safe) return '';
+  const parts = safe.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? '';
+}
+
+function starterPackTitle(pack: any): string {
+  const recordName = String(pack?.record?.name ?? '').trim();
+  if (recordName) return recordName;
+  const displayName = String(pack?.displayName ?? '').trim();
+  if (displayName) return displayName;
+  const creatorHandle = String(pack?.creator?.handle ?? '').trim();
+  if (creatorHandle) return `${creatorHandle}'s starter pack`;
+  return 'Starter Pack';
+}
+
+function normalizeDid(input: string): string {
+  return input.trim().toLowerCase();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function extractStarterPackMembers(pack: any): StarterPackMember[] {
+  const rawCandidates = [
+    ...(Array.isArray(pack?.listItemsSample) ? pack.listItemsSample : []),
+    ...(Array.isArray(pack?.details?.listItemsSample) ? pack.details.listItemsSample : []),
+    ...(Array.isArray(pack?.details?.members) ? pack.details.members : []),
+  ];
+  const out = new Map<string, StarterPackMember>();
+
+  for (const entry of rawCandidates) {
+    const subject = entry?.subject ?? entry;
+    const did = normalizeDid(String(subject?.did ?? ''));
+    if (!did.startsWith('did:')) continue;
+    out.set(did, {
+      did,
+      ...(typeof subject?.handle === 'string' ? { handle: subject.handle } : {}),
+      ...(typeof subject?.avatar === 'string' ? { avatar: subject.avatar } : {}),
+      following: Boolean(subject?.viewer?.following),
+      blocked: Boolean(subject?.viewer?.blocking || subject?.viewer?.blockedBy),
+    });
+  }
+
+  return [...out.values()];
 }
 
 // ─── Bio text (linkified hashtags + URLs) ──────────────────────────────────
@@ -118,6 +202,223 @@ function StatItem({ count, label }: { count: number; label: string }) {
         {formatCount(count)}
       </span>
       <span style={{ fontSize: 12, color: 'var(--label-3)', fontWeight: 500, letterSpacing: 0.1 }}>{label}</span>
+    </div>
+  );
+}
+
+interface FeaturedHashtag {
+  name: string;
+  statusesCount: number;
+  lastStatusAt: string | null;
+}
+
+interface FeaturedHashtagCandidate extends FeaturedHashtag {
+  rankingScore: number;
+}
+
+type FeaturedTagSignal = 'post-facet' | 'post-text' | 'pinned' | 'bio' | 'counterpart' | 'popular';
+
+function formatFeaturedTagLastUsed(isoDate: string | null): string {
+  if (!isoDate) return 'No recent post';
+  const t = Date.parse(isoDate);
+  if (!Number.isFinite(t)) return 'No recent post';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(t));
+}
+
+function formatFeaturedTagRelativeLastUsed(isoDate: string | null): string {
+  if (!isoDate) return 'No recent post';
+  const t = Date.parse(isoDate);
+  if (!Number.isFinite(t)) return 'No recent post';
+
+  const deltaMs = Date.now() - t;
+  if (deltaMs < 0) return 'Just now';
+
+  const minutes = Math.floor(deltaMs / 60000);
+  if (minutes < 60) {
+    if (minutes <= 1) return 'Just now';
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? '1h ago' : `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days}d ago`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return weeks === 1 ? '1w ago' : `${weeks}w ago`;
+
+  const months = Math.floor(days / 30);
+  if (months < 12) return months === 1 ? '1mo ago' : `${months}mo ago`;
+
+  const years = Math.floor(days / 365);
+  return years === 1 ? '1y ago' : `${years}y ago`;
+}
+
+const HASHTAG_RE = /(^|\s)#([a-z0-9_]{2,64})\b/gi;
+const TranslationSettingsSheet = lazyWithRetry(
+  () => import('../components/TranslationSettingsSheet'),
+  'TranslationSettingsSheet',
+);
+const WORD_RE = /[a-z0-9_]{2,64}/gi;
+const POPULAR_TAG_FALLBACK = [
+  'news',
+  'tech',
+  'sports',
+  'music',
+  'art',
+  'gaming',
+  'books',
+  'movies',
+  'photography',
+  'travel',
+] as const;
+
+function normalizeTag(raw: string): string {
+  return raw.trim().replace(/^#/, '').toLowerCase();
+}
+
+function extractHashtagsFromText(text: string): string[] {
+  if (!text.trim()) return [];
+  const set = new Set<string>();
+  HASHTAG_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HASHTAG_RE.exec(text)) !== null) {
+    const tag = normalizeTag(match[2] ?? '');
+    if (tag) set.add(tag);
+  }
+  return [...set];
+}
+
+function extractWordsFromText(text: string): Set<string> {
+  const out = new Set<string>();
+  if (!text.trim()) return out;
+  WORD_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = WORD_RE.exec(text.toLowerCase())) !== null) {
+    const word = match[0]?.trim();
+    if (word) out.add(word);
+  }
+  return out;
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  if (!len) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < len; i += 1) {
+    const ai = a[i] ?? 0;
+    const bi = b[i] ?? 0;
+    dot += ai * bi;
+    normA += ai * ai;
+    normB += bi * bi;
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom > 0 ? dot / denom : 0;
+}
+
+function FeaturedHashtagsCard({
+  tags,
+  onTagClick,
+}: {
+  tags: FeaturedHashtag[];
+  onTagClick: (tag: string) => void;
+}) {
+  if (tags.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        width: 'calc(100% - 32px)',
+        margin: '12px 16px 0',
+        border: '1px solid var(--sep)',
+        borderRadius: 14,
+        background: 'var(--surface)',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--sep)' }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--label-3)' }}>
+          Featured Hashtags
+        </div>
+      </div>
+      <div style={{ display: 'grid' }}>
+        {tags.map((tag, index) => (
+          (() => {
+            const relativeLastUsed = formatFeaturedTagRelativeLastUsed(tag.lastStatusAt);
+            const absoluteLastUsed = formatFeaturedTagLastUsed(tag.lastStatusAt);
+            return (
+          <button
+            key={tag.name}
+            onClick={() => onTagClick(tag.name)}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 10,
+              textAlign: 'left',
+              width: '100%',
+              border: 'none',
+              borderTop: index === 0 ? 'none' : '1px solid var(--sep)',
+              background: 'transparent',
+              padding: '10px 12px',
+              cursor: 'pointer',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--blue)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                #{tag.name}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--label-3)', marginTop: 2 }}>
+                {tag.statusesCount} {tag.statusesCount === 1 ? 'post' : 'posts'}
+              </div>
+            </div>
+            <div
+              style={{
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-end',
+                gap: 2,
+                maxWidth: '42%',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: 'var(--label-2)',
+                  whiteSpace: 'nowrap',
+                }}
+                aria-label={`Last used ${relativeLastUsed}`}
+                title={`Last used ${absoluteLastUsed}`}
+              >
+                {relativeLastUsed}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--label-3)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {absoluteLastUsed}
+              </div>
+            </div>
+          </button>
+            );
+          })()
+        ))}
+      </div>
     </div>
   );
 }
@@ -196,6 +497,162 @@ function ListRow({ list, index }: { list: AppBskyGraphDefs.ListView; index: numb
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--label-4)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
         <polyline points="9 18 15 12 9 6"/>
       </svg>
+    </motion.div>
+  );
+}
+
+function StarterPackRow({
+  pack,
+  index,
+  members,
+  followState,
+  onFollowAll,
+}: {
+  pack: any;
+  index: number;
+  members: StarterPackMember[];
+  followState: StarterPackFollowState | undefined;
+  onFollowAll: (pack: any) => void;
+}) {
+  const title = starterPackTitle(pack);
+  const creatorHandle = String(pack?.creator?.handle ?? '').trim();
+  const listCount = Number(pack?.list?.listItemCount ?? 0);
+  const description = String(pack?.record?.description ?? '').trim();
+  const rkey = starterPackRkeyFromUri(String(pack?.uri ?? ''));
+  const handleOrDid = creatorHandle || String(pack?.creator?.did ?? '').trim();
+  const href = handleOrDid && rkey ? `https://bsky.app/start/${handleOrDid}/${rkey}` : '';
+  const avatars = members
+    .map((member) => member.avatar)
+    .filter((avatar): avatar is string => typeof avatar === 'string' && avatar.length > 0)
+    .slice(0, 5);
+  const optimisticFollowed = new Set(followState?.optimisticFollowedDids ?? []);
+  const followedCount = members.filter((member) => member.following || optimisticFollowed.has(member.did)).length;
+  const followableMembers = members.filter((member) => {
+    if (member.blocked) return false;
+    return !member.following && !optimisticFollowed.has(member.did);
+  });
+  const knownMembers = members.length;
+  const totalMembers = listCount > 0 ? listCount : knownMembers;
+  const followButtonLabel = followState?.inFlight
+    ? `Following ${Math.min(followState.attempted, followableMembers.length)}/${followableMembers.length}`
+    : followableMembers.length === 0
+      ? 'All followed'
+      : `Follow all (${followableMembers.length})`;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+      style={{
+        display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12,
+        padding: '12px 16px', background: 'var(--surface)', borderRadius: 16,
+        marginBottom: 8, boxShadow: '0 1px 6px rgba(0,0,0,0.04)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', minWidth: 84 }}>
+        {avatars.length > 0 ? (
+          avatars.map((avatar, avatarIndex) => (
+            <img
+              key={`${pack?.uri ?? index}:${avatarIndex}`}
+              src={avatar}
+              alt=""
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: '50%',
+                border: '1px solid var(--surface)',
+                marginLeft: avatarIndex === 0 ? 0 : -8,
+                background: 'var(--fill-1)',
+              }}
+            />
+          ))
+        ) : (
+          <div style={{
+            width: 48,
+            height: 48,
+            borderRadius: 14,
+            background: 'linear-gradient(135deg, rgba(0,122,255,0.16) 0%, rgba(90,200,250,0.12) 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--blue)',
+            fontWeight: 700,
+            fontSize: 12,
+          }}>
+            PACK
+          </div>
+        )}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--label-1)', letterSpacing: -0.3, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {title}
+        </p>
+        <p style={{ fontSize: 12, color: 'var(--label-3)', marginBottom: description ? 2 : 0 }}>
+          {creatorHandle ? `By @${creatorHandle}` : 'Starter pack'}
+          {totalMembers > 0 ? ` · ${formatCount(totalMembers)} members` : ''}
+        </p>
+        <p style={{ fontSize: 12, color: 'var(--label-3)', marginBottom: description ? 2 : 0 }}>
+          Following {formatCount(followedCount)}
+          {knownMembers > 0 ? ` of ${formatCount(knownMembers)} loaded` : ''}
+        </p>
+        {description && (
+          <p style={{ fontSize: 12, color: 'var(--label-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {description}
+          </p>
+        )}
+        {!!followState?.lastError && (
+          <p style={{ fontSize: 11, color: 'var(--red)', marginTop: 3 }}>
+            {followState.lastError}
+          </p>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => onFollowAll(pack)}
+          disabled={followState?.inFlight || followableMembers.length === 0}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 999,
+            border: 'none',
+            background: followableMembers.length === 0
+              ? 'var(--fill-2)'
+              : 'var(--blue)',
+            color: followableMembers.length === 0 ? 'var(--label-3)' : '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: followState?.inFlight || followableMembers.length === 0 ? 'default' : 'pointer',
+            opacity: followState?.inFlight ? 0.72 : 1,
+            minWidth: 98,
+          }}
+        >
+          {followButtonLabel}
+        </button>
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              padding: '6px 12px',
+              borderRadius: 999,
+              border: 'none',
+              background: 'var(--blue)',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 700,
+              textDecoration: 'none',
+            }}
+          >
+            Open
+          </a>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--label-4)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        )}
+      </div>
     </motion.div>
   );
 }
@@ -289,13 +746,14 @@ function MediaGrid({ posts, onOpenStory }: { posts: MockPost[]; onOpenStory: (e:
         {mediaPosts.map((post, i) => {
           const thumbUrl = post.media?.[0]?.url;
           const byline = post.author.displayName || post.author.handle;
+          const storyRootId = post.threadRoot?.id ?? post.id;
           return (
             <motion.button
               key={post.id}
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: i * 0.03 }}
-              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+              onClick={() => onOpenStory({ type: 'post', id: storyRootId, title: post.author.displayName })}
               className="media-card"
               style={{
                 position: 'relative',
@@ -309,7 +767,7 @@ function MediaGrid({ posts, onOpenStory }: { posts: MockPost[]; onOpenStory: (e:
               }}
             >
               {thumbUrl ? (
-                <img src={thumbUrl} alt={post.media![0].alt ?? ''} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img src={thumbUrl} alt={post.media?.[0]?.alt ?? ''} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
                 <div style={{ position: 'absolute', inset: 0, background: 'var(--fill-2)' }} />
               )}
@@ -356,13 +814,14 @@ function getLibraryStoryDescription(post: MockPost): string {
 function WePresentStoryCard({ post, index, onOpenStory }: { post: MockPost; index: number; onOpenStory: (e: StoryEntry) => void }) {
   const thumbUrl = post.media?.[0]?.url ?? (post.embed?.type === 'external' ? (post.embed as { thumb?: string }).thumb : null);
   const byline = post.author.displayName || post.author.handle;
+  const storyRootId = post.threadRoot?.id ?? post.id;
 
   return (
     <motion.button
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.03 }}
-      onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.author.displayName })}
+      onClick={() => onOpenStory({ type: 'post', id: storyRootId, title: post.author.displayName })}
       className="wepresent-card"
       style={{
         width: '100%',
@@ -454,6 +913,8 @@ function WePresentWarningCard({
 export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const { agent, session, profile: sessionProfile } = useSessionStore();
   const { openExploreSearch, openComposeReply, setTab: setAppTab } = useUiStore();
+  const translationPolicy = useTranslationStore((state) => state.policy);
+  const { showFeaturedHashtags, useMlFeaturedHashtagRanking } = useAppearanceStore();
   const platform = usePlatform();
   const btnTokens = getButtonTokens(platform);
   const touchLike = platform.isMobile || platform.prefersCoarsePointer || platform.hasAnyCoarsePointer;
@@ -469,14 +930,46 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   // Tab data
   const [posts, setPosts]       = useState<MockPost[]>([]);
   const [likedPosts, setLiked]  = useState<MockPost[]>([]);
+  const [pinnedPost, setPinnedPost] = useState<MockPost | null>(null);
+  const [pinnedPostLoading, setPinnedPostLoading] = useState(false);
+  const [pinnedPostUnavailable, setPinnedPostUnavailable] = useState(false);
   const [feeds, setFeeds]       = useState<AppBskyFeedDefs.GeneratorView[]>([]);
   const [lists, setLists]       = useState<AppBskyGraphDefs.ListView[]>([]);
+  const [starterPacks, setStarterPacks] = useState<any[]>([]);
+  const [starterPackFollowStateByUri, setStarterPackFollowStateByUri] = useState<Record<string, StarterPackFollowState>>({});
   const [loading, setLoading]   = useState(false);
   const [profileLoading, setProfileLoading] = useState(!isOwnProfile || !sessionProfile);
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
   const [viewerMutedOverride, setViewerMutedOverride] = useState<boolean | null>(null);
   const [viewerBlockedOverride, setViewerBlockedOverride] = useState<boolean | null>(null);
+  const [mlFeaturedHashtags, setMlFeaturedHashtags] = useState<FeaturedHashtag[] | null>(null);
+  const sessionDid = session?.did ?? '';
+  const emptyBookmarkedUris = useMemo<string[]>(() => [], []);
+  const bookmarkedUris = useBookmarksStore((state) => (
+    sessionDid ? (state.bookmarksByDid[sessionDid] ?? emptyBookmarkedUris) : emptyBookmarkedUris
+  ));
+
+  // Derive profile fields early so they are safe to use in memo/effect hooks below.
+  const displayName = profile?.displayName ?? profile?.handle ?? session?.handle ?? '';
+  const handle = profile?.handle ?? session?.handle ?? '';
+  const bio = profile?.description ?? '';
+  const followersCount = profile?.followersCount ?? 0;
+  const followsCount = profile?.followsCount ?? 0;
+  const postsCount = profile?.postsCount ?? 0;
+  const isMuted = viewerMutedOverride ?? !!profile?.viewer?.muted;
+  const isBlocked = viewerBlockedOverride ?? !!profile?.viewer?.blocking;
+  const isLabelerProfile = Boolean((profile as any)?.associated?.labeler);
+
+  const { data: preferencesData } = usePreferences();
+  const addLabelerMutation = useAddLabeler();
+  const removeLabelerMutation = useRemoveLabeler();
+  const isSubscribedToLabeler = useMemo(() => {
+    if (!profile?.did) return false;
+    const prefs = preferencesData?.moderationPrefs?.labelers ?? [];
+    return prefs.some((entry) => entry.did === profile.did);
+  }, [preferencesData, profile?.did]);
+  const togglingLabelerSubscription = addLabelerMutation.isPending || removeLabelerMutation.isPending;
 
   const muteActor = useMuteActor();
   const unmuteActor = useUnmuteActor();
@@ -484,13 +977,71 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   const unblockActor = useUnblockActor();
 
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPersistedScrollTopRef = useRef<number | null>(null);
+  const libraryLoadRequestRef = useRef(0);
+  const reactiveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewResumeKey = useMemo(() => {
+    if (!session?.did || !did) return null;
+    return `profile:${session.did}:${did}`;
+  }, [did, session?.did]);
+
+  const flushViewScrollPersistence = useCallback(() => {
+    if (!viewResumeKey || !scrollRef.current) return;
+    const nextTop = Math.max(0, Math.floor(scrollRef.current.scrollTop));
+    if (lastPersistedScrollTopRef.current === nextTop) return;
+    lastPersistedScrollTopRef.current = nextTop;
+    writeViewScrollPosition(viewResumeKey, nextTop);
+  }, [viewResumeKey]);
+
+  const persistViewScroll = useCallback(() => {
+    if (!viewResumeKey || !scrollRef.current) return;
+    if (scrollPersistTimerRef.current) return;
+    scrollPersistTimerRef.current = setTimeout(() => {
+      scrollPersistTimerRef.current = null;
+      flushViewScrollPersistence();
+    }, 180);
+  }, [flushViewScrollPersistence, viewResumeKey]);
+
+  useEffect(() => {
+    if (!viewResumeKey) return;
+    const top = readViewScrollPosition(viewResumeKey);
+    if (top <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = top;
+        lastPersistedScrollTopRef.current = top;
+      }
+    }, 50);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [viewResumeKey]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollPersistTimerRef.current) {
+        clearTimeout(scrollPersistTimerRef.current);
+        scrollPersistTimerRef.current = null;
+      }
+      flushViewScrollPersistence();
+    };
+  }, [flushViewScrollPersistence]);
 
   // Reset content when switching to a different user
   useEffect(() => {
     setPosts([]);
     setLiked([]);
+    setPinnedPost(null);
+    setPinnedPostLoading(false);
+    setPinnedPostUnavailable(false);
     setFeeds([]);
     setLists([]);
+    setStarterPacks([]);
+    setStarterPackFollowStateByUri({});
     setProfile(isOwnProfile ? sessionProfile : null);
     setTab('Posts');
     setViewerMutedOverride(null);
@@ -508,6 +1059,47 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
       .finally(() => setProfileLoading(false));
   }, [did, isOwnProfile, sessionProfile, agent]);
 
+  // ── Load pinned post from profile strongRef ─────────────────────────────
+  useEffect(() => {
+    const pinnedUri = profile?.pinnedPost?.uri;
+    if (!did || !pinnedUri) {
+      setPinnedPost(null);
+      setPinnedPostLoading(false);
+      setPinnedPostUnavailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPinnedPostLoading(true);
+    setPinnedPostUnavailable(false);
+
+    atpCall((s) => agent.getPosts({ uris: [pinnedUri] }))
+      .then((res) => {
+        if (cancelled) return;
+        const post = res.data.posts?.[0];
+        if (!post || !hasDisplayableRecordContent((post as any).record)) {
+          setPinnedPost(null);
+          setPinnedPostUnavailable(true);
+          return;
+        }
+        const mapped = mapFeedViewPost({ post } as AppBskyFeedDefs.FeedViewPost);
+        setPinnedPost(mapped);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPinnedPost(null);
+        setPinnedPostUnavailable(true);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setPinnedPostLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, did, profile?.pinnedPost?.uri]);
+
   // ── Load posts ─────────────────────────────────────────────────────────────
   const loadPosts = useCallback(async () => {
     if (!did) return;
@@ -519,16 +1111,49 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     finally { setLoading(false); }
   }, [agent, did]);
 
-  // ── Load liked posts (Library) ─────────────────────────────────────────────
+  // ── Load bookmarked posts (Library) ────────────────────────────────────────
   const loadLiked = useCallback(async () => {
-    if (!did) return;
+    const requestId = ++libraryLoadRequestRef.current;
     setLoading(true);
     try {
-      const res = await atpCall(s => agent.getActorLikes({ actor: did, limit: 40 }));
-      setLiked(res.data.feed.filter(i => (i.post.record as any)?.text).map(mapFeedViewPost));
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, [agent, did]);
+      const uris = useBookmarksStore.getState().getBookmarkedUris(sessionDid);
+      if (!uris || uris.length === 0) {
+        if (requestId === libraryLoadRequestRef.current) {
+          setLiked([]);
+        }
+        return;
+      }
+
+      // ATProto getPosts is capped at 25 URIs per call — chunk and fan out.
+      const CHUNK_SIZE = 25;
+      const chunks: string[][] = [];
+      for (let i = 0; i < uris.length; i += CHUNK_SIZE) {
+        chunks.push(uris.slice(i, i + CHUNK_SIZE));
+      }
+      const results = await Promise.all(
+        chunks.map((chunk) => atpCall(() => agent.getPosts({ uris: chunk }))),
+      );
+
+      const posts = results
+        .flatMap((res) => res.data.posts)
+        .filter((i) => (i.record as any)?.text)
+        .map((post): any => ({ post }))
+        .map(mapFeedViewPost);
+
+      if (requestId === libraryLoadRequestRef.current) {
+        setLiked(posts);
+      }
+    } catch (err) {
+      if (requestId === libraryLoadRequestRef.current) {
+        console.error('Failed to load bookmarks:', err);
+        setLiked([]);
+      }
+    } finally {
+      if (requestId === libraryLoadRequestRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [agent, sessionDid]);
 
   // ── Load feeds ────────────────────────────────────────────────────────────
   const loadFeeds = useCallback(async () => {
@@ -552,13 +1177,187 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     finally { setLoading(false); }
   }, [agent, did]);
 
+  const loadStarterPacks = useCallback(async () => {
+    if (!did) return;
+    setLoading(true);
+    try {
+      const res = await atpCall(
+        () => (agent.app.bsky.graph as any).getActorStarterPacks({ actor: did, limit: 50 }),
+        {
+          maxAttempts: 4,
+          baseDelayMs: 250,
+          capDelayMs: 4_000,
+        },
+      );
+      const starterPackResponse = res as { data?: { starterPacks?: any[] } } | null;
+      const rows = Array.isArray(starterPackResponse?.data?.starterPacks)
+        ? starterPackResponse.data.starterPacks
+        : [];
+      const enrichedRows = await Promise.all(rows.map(async (pack: any) => {
+        const uri = String(pack?.uri ?? '').trim();
+        if (!uri) return pack;
+        try {
+          const detailRes = await atpCall(
+            () => (agent.app.bsky.graph as any).getStarterPack({ starterPack: uri }),
+            {
+              maxAttempts: 3,
+              baseDelayMs: 220,
+              capDelayMs: 3_500,
+            },
+          );
+          const detailData = (detailRes as { data?: any } | null)?.data;
+          const detailPack = detailData?.starterPack ?? detailData ?? null;
+          if (!detailPack) return pack;
+          return {
+            ...pack,
+            details: detailPack,
+            listItemsSample: Array.isArray(detailPack?.listItemsSample)
+              ? detailPack.listItemsSample
+              : pack.listItemsSample,
+            list: detailPack?.list ?? pack.list,
+            record: detailPack?.record ?? pack.record,
+          };
+        } catch {
+          return pack;
+        }
+      }));
+      setStarterPacks(enrichedRows);
+    } catch {
+      setStarterPacks([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [agent, did]);
+
+  const followAllStarterPack = useCallback(async (pack: any) => {
+    const packUri = String(pack?.uri ?? '').trim();
+    if (!packUri) return;
+
+    setStarterPackFollowStateByUri((previous) => {
+      const current = previous[packUri];
+      if (current?.inFlight) return previous;
+      return previous;
+    });
+
+    const members = extractStarterPackMembers(pack);
+    const eligible = members.filter((member) => !member.following && !member.blocked);
+    if (eligible.length === 0) {
+      setStarterPackFollowStateByUri((previous) => ({
+        ...previous,
+        [packUri]: {
+          inFlight: false,
+          attempted: 0,
+          succeeded: 0,
+          failed: 0,
+          lastError: null,
+          optimisticFollowedDids: previous[packUri]?.optimisticFollowedDids ?? [],
+        },
+      }));
+      return;
+    }
+
+    const optimisticFollowedDids = eligible.map((member) => member.did);
+    setStarterPackFollowStateByUri((previous) => ({
+      ...previous,
+      [packUri]: {
+        inFlight: true,
+        attempted: 0,
+        succeeded: 0,
+        failed: 0,
+        lastError: null,
+        optimisticFollowedDids,
+      },
+    }));
+
+    let attempted = 0;
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const member of eligible) {
+      attempted += 1;
+      setStarterPackFollowStateByUri((previous) => {
+        const current = previous[packUri];
+        if (!current) return previous;
+        return {
+          ...previous,
+          [packUri]: {
+            ...current,
+            attempted,
+          },
+        };
+      });
+
+      try {
+        await atpCall(
+          () => agent.follow(member.did),
+          {
+            maxAttempts: 3,
+            baseDelayMs: 250,
+            capDelayMs: 4_000,
+          },
+        );
+        succeeded += 1;
+      } catch {
+        failed += 1;
+        setStarterPackFollowStateByUri((previous) => {
+          const current = previous[packUri];
+          if (!current) return previous;
+          return {
+            ...previous,
+            [packUri]: {
+              ...current,
+              optimisticFollowedDids: current.optimisticFollowedDids.filter((did) => did !== member.did),
+            },
+          };
+        });
+      }
+
+      await sleep(260);
+    }
+
+    setStarterPackFollowStateByUri((previous) => {
+      const current = previous[packUri];
+      if (!current) return previous;
+      return {
+        ...previous,
+        [packUri]: {
+          ...current,
+          inFlight: false,
+          attempted,
+          succeeded,
+          failed,
+          lastError: failed > 0 ? `${failed} follow${failed === 1 ? '' : 's'} failed and were rolled back.` : null,
+        },
+      };
+    });
+  }, [agent]);
+
   useEffect(() => {
     if (tab === 'Posts' || tab === 'Media') loadPosts();
     else if (tab === 'Library') loadLiked();
     else if (tab === 'Feeds') loadFeeds();
+    else if (tab === 'Starter Packs') loadStarterPacks();
     else if (tab === 'Lists') loadLists();
-    // Starter Packs: load when API is available
-  }, [tab, loadPosts, loadLiked, loadFeeds, loadLists]);
+  }, [tab, loadPosts, loadLiked, loadFeeds, loadStarterPacks, loadLists]);
+
+  // Keep Library in sync when bookmarks change while the Library tab is active.
+  // Debounce to prevent a spinner flash on every rapid add/remove.
+  useEffect(() => {
+    if (tab !== 'Library') return;
+    if (reactiveRefreshTimerRef.current !== null) {
+      clearTimeout(reactiveRefreshTimerRef.current);
+    }
+    reactiveRefreshTimerRef.current = setTimeout(() => {
+      reactiveRefreshTimerRef.current = null;
+      loadLiked();
+    }, 300);
+    return () => {
+      if (reactiveRefreshTimerRef.current !== null) {
+        clearTimeout(reactiveRefreshTimerRef.current);
+        reactiveRefreshTimerRef.current = null;
+      }
+    };
+  }, [tab, bookmarkedUris, loadLiked]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleToggleRepost = useCallback(async (p: MockPost) => {
@@ -570,8 +1369,37 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
   }, [agent, session]);
 
   const handleBookmark = useCallback(async (p: MockPost) => {
-    // Placeholder
-  }, []);
+    if (!sessionDid) return;
+    const postUri = p.id;
+    const { isBookmarked, addBookmark, removeBookmark } = useBookmarksStore.getState();
+    const wasBookmarked = isBookmarked(sessionDid, postUri);
+
+    // Update local state
+    setPosts((prev) => prev.map((item) => {
+      if (item.id !== p.id) return item;
+      const viewer = item.viewer ?? {};
+      if (wasBookmarked) {
+        const { bookmark: _bookmark, ...restViewer } = viewer;
+        return {
+          ...item,
+          bookmarkCount: Math.max(0, item.bookmarkCount - 1),
+          viewer: restViewer,
+        };
+      }
+      return {
+        ...item,
+        bookmarkCount: item.bookmarkCount + 1,
+        viewer: { ...viewer, bookmark: 'bookmarked' },
+      };
+    }));
+
+    // Persist to account-scoped store
+    if (wasBookmarked) {
+      removeBookmark(sessionDid, postUri);
+    } else {
+      addBookmark(sessionDid, postUri);
+    }
+  }, [sessionDid]);
 
   const handleMore = useCallback((p: MockPost) => {
     // Placeholder
@@ -593,15 +1421,310 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     return [...byId.values()];
   }, [posts, likedPosts]);
   const filterResults = usePostFilterResults(profileVisiblePool, 'profile');
+  const featuredHashtags = useMemo<FeaturedHashtagCandidate[]>(() => {
+    const byTag = new Map<string, { score: number; statusesCount: number; lastStatusAt: number; signals: Set<FeaturedTagSignal> }>();
+
+    const addSignal = (tag: string, signal: FeaturedTagSignal, timestamp: number, scoreDelta: number, countDelta: number) => {
+      const normalized = normalizeTag(tag);
+      if (!normalized) return;
+      const prev = byTag.get(normalized);
+      if (!prev) {
+        byTag.set(normalized, {
+          score: scoreDelta,
+          statusesCount: Math.max(0, countDelta),
+          lastStatusAt: timestamp,
+          signals: new Set<FeaturedTagSignal>([signal]),
+        });
+        return;
+      }
+      prev.score += scoreDelta;
+      prev.statusesCount += Math.max(0, countDelta);
+      prev.lastStatusAt = Math.max(prev.lastStatusAt, timestamp);
+      prev.signals.add(signal);
+    };
+
+    for (const post of posts) {
+      if (post.author.did !== did) continue;
+      const postTags = new Set<string>();
+
+      for (const facet of post.facets ?? []) {
+        if (facet.kind !== 'hashtag') continue;
+        const rawTag = (facet.tag ?? '').trim().toLowerCase();
+        if (!rawTag) continue;
+        postTags.add(rawTag);
+      }
+
+      for (const rawTag of extractHashtagsFromText(post.content)) {
+        postTags.add(rawTag);
+      }
+
+      if (postTags.size === 0) continue;
+      const ts = Date.parse(post.createdAt);
+      const postTime = Number.isFinite(ts) ? ts : 0;
+
+      for (const tag of postTags) {
+        const hasFacet = (post.facets ?? []).some((facet) => facet.kind === 'hashtag' && normalizeTag(facet.tag ?? '') === tag);
+        addSignal(tag, hasFacet ? 'post-facet' : 'post-text', postTime, hasFacet ? 3.5 : 2.0, 1);
+      }
+    }
+
+    // Pull explicit and implied tags from bio text so new accounts can still curate profile identity tags.
+    const bioText = bio ?? '';
+    const bioTags = extractHashtagsFromText(bioText);
+    for (const tag of bioTags) {
+      addSignal(tag, 'bio', Date.now(), 2.25, 0);
+    }
+
+    // Include pinned post signals with a higher boost because they are intentional profile-level content.
+    if (pinnedPost) {
+      const pinTsParsed = Date.parse(pinnedPost.createdAt);
+      const pinTime = Number.isFinite(pinTsParsed) ? pinTsParsed : Date.now();
+
+      for (const facet of pinnedPost.facets ?? []) {
+        if (facet.kind !== 'hashtag') continue;
+        const tag = normalizeTag(facet.tag ?? '');
+        if (!tag) continue;
+        addSignal(tag, 'pinned', pinTime, 4.0, 1);
+      }
+
+      for (const tag of extractHashtagsFromText(pinnedPost.content)) {
+        addSignal(tag, 'pinned', pinTime, 3.0, 1);
+      }
+    }
+
+    // Plain-text counterpart matching: if words in bio/pinned match known tags, promote them lightly.
+    const knownTags = new Set<string>([...byTag.keys()]);
+    for (const t of POPULAR_TAG_FALLBACK) knownTags.add(t);
+
+    const counterpartWordSets = [extractWordsFromText(bioText)];
+    if (pinnedPost?.content) counterpartWordSets.push(extractWordsFromText(pinnedPost.content));
+
+    for (const words of counterpartWordSets) {
+      for (const tag of knownTags) {
+        if (!words.has(tag)) continue;
+        addSignal(tag, 'counterpart', Date.now(), 1.1, 0);
+      }
+    }
+
+    // Lightweight popular fallback when account history is sparse.
+    if (byTag.size < 3) {
+      for (const tag of POPULAR_TAG_FALLBACK) {
+        const alreadyStrong = (byTag.get(tag)?.score ?? 0) >= 2;
+        if (alreadyStrong) continue;
+        addSignal(tag, 'popular', Date.now(), 0.35, 0);
+      }
+    }
+
+    return [...byTag.entries()]
+      .filter(([, data]) => data.score >= 1.5)
+      .map(([name, data]) => ({
+        name,
+        statusesCount: Math.max(1, data.statusesCount),
+        lastStatusAt: data.lastStatusAt > 0 ? new Date(data.lastStatusAt).toISOString() : null,
+        rankingScore: data.score,
+      }))
+      .sort((a, b) => {
+        if (b.rankingScore !== a.rankingScore) return b.rankingScore - a.rankingScore;
+        if (b.statusesCount !== a.statusesCount) return b.statusesCount - a.statusesCount;
+        const aTime = a.lastStatusAt ? Date.parse(a.lastStatusAt) : 0;
+        const bTime = b.lastStatusAt ? Date.parse(b.lastStatusAt) : 0;
+        if (bTime !== aTime) return bTime - aTime;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 12);
+  }, [bio, did, pinnedPost, posts]);
+
+  useEffect(() => {
+    if (!showFeaturedHashtags || !useMlFeaturedHashtagRanking) {
+      setMlFeaturedHashtags(null);
+      return;
+    }
+    if (featuredHashtags.length === 0) {
+      setMlFeaturedHashtags([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const contextParts = [
+          bio ?? '',
+          pinnedPost?.content ?? '',
+          ...posts.slice(0, 12).map((p) => p.content),
+        ].map((s) => s.trim()).filter(Boolean);
+        const contextText = contextParts.join('\n').slice(0, 6000);
+
+        if (!contextText) {
+          if (!cancelled) {
+            setMlFeaturedHashtags(featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt })));
+          }
+          return;
+        }
+
+        const [contextEmbedding, tagEmbeddings] = await Promise.all([
+          embeddingPipeline.embed(contextText, { mode: 'query' }),
+          embeddingPipeline.embedBatch(
+            featuredHashtags.map((tag) => `#${tag.name} hashtag topic`),
+            { mode: 'query' },
+          ),
+        ]);
+
+        if (cancelled) return;
+
+        const reranked = featuredHashtags
+          .map((tag, idx) => {
+            const tagEmbedding = tagEmbeddings[idx] ?? [];
+            const similarity = cosineSimilarity(contextEmbedding, tagEmbedding);
+            const relevanceScore = ((similarity + 1) / 2) * 100;
+            const blended = tag.rankingScore * 0.7 + relevanceScore * 0.3;
+            return {
+              name: tag.name,
+              statusesCount: tag.statusesCount,
+              lastStatusAt: tag.lastStatusAt,
+              score: blended,
+            };
+          })
+          .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            if (b.statusesCount !== a.statusesCount) return b.statusesCount - a.statusesCount;
+            return a.name.localeCompare(b.name);
+          })
+          .slice(0, 10)
+          .map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt }));
+
+        setMlFeaturedHashtags(reranked);
+      } catch {
+        if (!cancelled) {
+          // Keep deterministic ranking as fallback when model inference fails.
+          setMlFeaturedHashtags(featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt })));
+        }
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [bio, featuredHashtags, pinnedPost?.content, posts, showFeaturedHashtags, useMlFeaturedHashtagRanking]);
+
+  const featuredHashtagsToRender = useMemo<FeaturedHashtag[]>(() => {
+    if (!showFeaturedHashtags) return [];
+    if (useMlFeaturedHashtagRanking) {
+      if (mlFeaturedHashtags) return mlFeaturedHashtags;
+      return featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt }));
+    }
+    return featuredHashtags.slice(0, 10).map(({ name, statusesCount, lastStatusAt }) => ({ name, statusesCount, lastStatusAt }));
+  }, [featuredHashtags, mlFeaturedHashtags, showFeaturedHashtags, useMlFeaturedHashtagRanking]);
+
+  const profileSlicePosts = useMemo(() => {
+    const candidates = [pinnedPost, ...posts]
+      .filter((post): post is MockPost => post != null);
+    const seen = new Set<string>();
+    return candidates.filter((post) => {
+      if (!post.id || seen.has(post.id)) return false;
+      seen.add(post.id);
+      return true;
+    });
+  }, [pinnedPost, posts]);
+
+  const profileSliceRootUris = useMemo(
+    () => profileSlicePosts.map((post) => post.threadRoot?.id ?? post.id),
+    [profileSlicePosts],
+  );
+
+  useConversationBatchHydration({
+    enabled: Boolean(agent && did && profileSlicePosts.length > 0 && (tab === 'Posts' || tab === 'Media')),
+    rootUris: profileSliceRootUris,
+    mode: 'profile_slice',
+    agent,
+    translationPolicy,
+    maxTargets: 8,
+  });
+
+  const profileTimelineHints = useTimelineConversationHintsProjection(profileSlicePosts);
 
   function renderContent() {
     if (loading) return <Spinner />;
 
     switch (tab) {
       case 'Posts':
-        return posts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length === 0
-          ? <EmptyState message="No posts yet." />
-          : posts.map((p, i) => {
+        {
+          const pinnedMatches = pinnedPost ? (filterResults[pinnedPost.id] ?? []) : [];
+          const pinnedHidden = pinnedMatches.some((m) => m.action === 'hide');
+          const pinnedWarned = pinnedMatches.some((m) => m.action === 'warn');
+          const pinnedRevealed = pinnedPost ? !!revealedFilteredPosts[pinnedPost.id] : false;
+          const showPinned = !!pinnedPost && !pinnedHidden;
+
+          const timelinePosts = posts.filter((p) => p.id !== pinnedPost?.id);
+          const visibleTimelineCount = timelinePosts.filter((p) => !((filterResults[p.id] ?? []).some((m) => m.action === 'hide'))).length;
+
+          if (!showPinned && !pinnedPostUnavailable && !pinnedPostLoading && visibleTimelineCount === 0) {
+            return <EmptyState message="No posts yet." />;
+          }
+
+          return (
+            <>
+              {pinnedPostLoading && (
+                <div style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'var(--fill-1)', color: 'var(--label-3)', fontSize: 12, fontWeight: 600 }}>
+                  Loading pinned post...
+                </div>
+              )}
+
+              {pinnedPostUnavailable && (
+                <div style={{ marginBottom: 10, padding: '12px 14px', borderRadius: 12, border: '1px solid var(--sep)', background: 'var(--surface)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--label-3)', marginBottom: 6 }}>
+                    Pinned Post
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--label-2)', lineHeight: 1.4 }}>
+                    This profile has a pinned post, but it is currently unavailable.
+                  </div>
+                </div>
+              )}
+
+              {showPinned && pinnedPost && (
+                <div style={{ marginBottom: 10, borderRadius: 12, border: '1px solid color-mix(in srgb, var(--blue) 22%, var(--sep) 78%)', background: 'color-mix(in srgb, var(--surface) 92%, var(--blue) 8%)', overflow: 'hidden' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '10px 12px 4px', padding: '4px 9px', borderRadius: 999, background: 'color-mix(in srgb, var(--blue) 18%, var(--surface) 82%)', color: 'var(--blue)', fontSize: 11, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    <span style={{ fontSize: 10 }}>▲</span>
+                    Pinned
+                  </div>
+                  {pinnedWarned && !pinnedRevealed ? (
+                    <div style={{ border: '1px solid var(--sep)', borderRadius: 12, padding: '10px 12px', margin: '0 8px 8px', background: 'color-mix(in srgb, var(--surface) 90%, var(--orange) 10%)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--label-1)', marginBottom: 4 }}>Content warning</div>
+                      <div style={{ fontSize: 11, color: 'var(--label-3)', marginBottom: 8 }}>This pinned post may include words or topics you asked to warn about.</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--label-2)', marginBottom: 6 }}>Matches filter:</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                        {warnMatchReasons(pinnedMatches).map((entry) => (
+                          <span key={`${entry.phrase}:${entry.reason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, border: '1px solid var(--sep)', padding: '3px 8px', background: 'var(--fill-1)' }}>
+                            <span style={{ fontSize: 11, color: 'var(--label-1)', fontWeight: 700 }}>{entry.phrase}</span>
+                            <span style={{ fontSize: 10, color: 'var(--label-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                              {entry.reason === 'exact+semantic' ? 'exact + semantic' : entry.reason}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                      <button onClick={() => setRevealedFilteredPosts((prev) => ({ ...prev, [pinnedPost.id]: true }))} style={{ border: 'none', background: 'transparent', color: 'var(--blue)', fontSize: 12, fontWeight: 700, padding: 0, cursor: 'pointer' }}>
+                        Show pinned post
+                      </button>
+                    </div>
+                  ) : (
+                    <PostCard
+                      key={pinnedPost.id}
+                      post={pinnedPost}
+                      onOpenStory={onOpenStory}
+                      onToggleRepost={handleToggleRepost}
+                      onToggleLike={handleToggleLike}
+                      onBookmark={handleBookmark}
+                      onMore={handleMore}
+                      onReply={openComposeReply}
+                      index={0}
+                      {...(profileTimelineHints[pinnedPost.id] ? { timelineHint: profileTimelineHints[pinnedPost.id] } : {})}
+                    />
+                  )}
+                </div>
+              )}
+
+              {timelinePosts.map((p, i) => {
               const matches = filterResults[p.id] ?? [];
               const isHidden = matches.some((m) => m.action === 'hide');
               const isWarned = matches.some((m) => m.action === 'warn');
@@ -630,8 +1753,24 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                   </div>
                 );
               }
-              return <PostCard key={p.id} post={p} onOpenStory={onOpenStory} onToggleRepost={handleToggleRepost} onToggleLike={handleToggleLike} onBookmark={handleBookmark} onMore={handleMore} onReply={openComposeReply} index={i} />;
-            });
+              return (
+                <PostCard
+                  key={p.id}
+                  post={p}
+                  onOpenStory={onOpenStory}
+                  onToggleRepost={handleToggleRepost}
+                  onToggleLike={handleToggleLike}
+                  onBookmark={handleBookmark}
+                  onMore={handleMore}
+                  onReply={openComposeReply}
+                  index={i + (showPinned ? 1 : 0)}
+                  {...(profileTimelineHints[p.id] ? { timelineHint: profileTimelineHints[p.id] } : {})}
+                />
+              );
+            })}
+            </>
+          );
+        }
 
       case 'Library':
         {
@@ -643,7 +1782,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
             return librarySort === 'A-Z' ? aTitle.localeCompare(bTitle) : bTitle.localeCompare(aTitle);
           });
 
-          const cards = sorted.flatMap((p) => {
+          const cards: LibraryCardEntry[] = sorted.flatMap((p): LibraryCardEntry[] => {
             const matches = filterResults[p.id] ?? [];
             const isHidden = matches.some((m) => m.action === 'hide');
             const isWarned = matches.some((m) => m.action === 'warn');
@@ -655,7 +1794,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
             return [{ kind: 'post' as const, post: p }];
           });
 
-          if (cards.length === 0) return <EmptyState message="Liked posts will appear here." />;
+          if (cards.length === 0) return <EmptyState message="Bookmarked posts will appear here." />;
 
           return (
             <div style={{ maxWidth: 1120, margin: '0 auto', padding: '10px 0 14px' }}>
@@ -724,7 +1863,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               <div className="wepresent-shell">
               <div style={{ display: 'flex', flexDirection: platform.isMobile ? 'column' : 'row', alignItems: platform.isMobile ? 'stretch' : 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
                 <h2 className="wepresent-list-title" style={{ margin: 0, color: 'var(--label-1)' }}>
-                  Story Library
+                  Bookmarks
                 </h2>
                 <div style={{ width: platform.isMobile ? '100%' : 260 }}>
                   <label htmlFor="profile-library-sort" style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--label-3)', marginBottom: 6 }}>
@@ -772,7 +1911,18 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
           : feeds.map((f, i) => <FeedRow key={f.uri} feed={f} index={i} />);
 
       case 'Starter Packs':
-        return <EmptyState message="Starter Packs coming soon." />;
+        return starterPacks.length === 0
+          ? <EmptyState message="No starter packs yet." />
+          : starterPacks.map((pack, index) => (
+              <StarterPackRow
+                key={String(pack?.uri ?? `starter-pack-${index}`)}
+                pack={pack}
+                index={index}
+                members={extractStarterPackMembers(pack)}
+                followState={starterPackFollowStateByUri[String(pack?.uri ?? '')]}
+                onFollowAll={followAllStarterPack}
+              />
+            ));
 
       case 'Lists':
         return lists.length === 0
@@ -783,15 +1933,6 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
         return null;
     }
   }
-
-  const displayName = profile?.displayName ?? profile?.handle ?? session?.handle ?? '';
-  const handle = profile?.handle ?? session?.handle ?? '';
-  const bio = profile?.description ?? '';
-  const followersCount = profile?.followersCount ?? 0;
-  const followsCount   = profile?.followsCount ?? 0;
-  const postsCount     = profile?.postsCount ?? 0;
-  const isMuted = viewerMutedOverride ?? !!profile?.viewer?.muted;
-  const isBlocked = viewerBlockedOverride ?? !!profile?.viewer?.blocking;
 
   function handleToggleMute() {
     if (!did || isOwnProfile) return;
@@ -829,6 +1970,15 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
         onSuccess: () => setViewerBlockedOverride(true),
       },
     );
+  }
+
+  function handleToggleLabelerSubscription() {
+    if (!profile?.did || !isLabelerProfile) return;
+    if (isSubscribedToLabeler) {
+      removeLabelerMutation.mutate({ did: profile.did });
+      return;
+    }
+    addLabelerMutation.mutate({ did: profile.did });
   }
 
   return (
@@ -880,7 +2030,7 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
       </div>
 
       {/* ── Scrollable body ───────────────────────────────────────────────── */}
-      <div className="scroll-y" style={{ flex: 1 }}>
+      <div ref={scrollRef} className="scroll-y" style={{ flex: 1 }} onScroll={persistViewScroll}>
 
         {/* ── Profile header ──────────────────────────────────────────────── */}
         {profileLoading ? (
@@ -954,9 +2104,31 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
               <p style={{ fontSize: 14, color: 'var(--label-3)', marginTop: 3, fontWeight: 500 }}>
                 @{handle.replace('.bsky.social', '')}
               </p>
+              {isLabelerProfile && (
+                <div style={{ marginTop: 6 }}>
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.03em',
+                    textTransform: 'uppercase',
+                    color: 'var(--blue)',
+                    background: 'color-mix(in srgb, var(--blue) 14%, var(--fill-2))',
+                  }}>
+                    Labeler
+                  </span>
+                </div>
+              )}
 
               {/* Bio — linkified */}
               {bio && <BioText text={bio} onHashtagClick={tag => openExploreSearch(tag)} />}
+
+              {showFeaturedHashtags && (
+                <FeaturedHashtagsCard tags={featuredHashtagsToRender} onTagClick={(tag) => openExploreSearch(tag)} />
+              )}
 
               {/* Stats row */}
               <div style={{
@@ -1038,6 +2210,29 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                     }}>
                       Follow
                     </button>
+                    {isLabelerProfile && (
+                      <button
+                        onClick={handleToggleLabelerSubscription}
+                        disabled={togglingLabelerSubscription}
+                        style={{
+                          flex: 1,
+                          minWidth: !isOwnProfile && touchLike ? 'calc(50% - 5px)' : undefined,
+                          height: btnTokens.height,
+                          borderRadius: btnTokens.borderRadius,
+                          background: isSubscribedToLabeler ? 'color-mix(in srgb, var(--blue) 14%, var(--fill-2))' : 'var(--blue)',
+                          border: 'none', cursor: 'pointer',
+                          fontSize: btnTokens.fontSize,
+                          fontWeight: btnTokens.fontWeight,
+                          color: isSubscribedToLabeler ? 'var(--blue)' : '#fff',
+                          letterSpacing: -0.2,
+                          WebkitTapHighlightColor: 'transparent',
+                          transition: 'opacity 0.12s',
+                          opacity: togglingLabelerSubscription ? 0.65 : 1,
+                        }}
+                      >
+                        {isSubscribedToLabeler ? 'Unsubscribe Labeler' : 'Subscribe Labeler'}
+                      </button>
+                    )}
                     <button style={{
                       flex: 1,
                       minWidth: !isOwnProfile && touchLike ? 'calc(50% - 5px)' : undefined,
@@ -1178,7 +2373,33 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
         <div style={{ height: 32 }} />
       </div>
 
-      <TranslationSettingsSheet open={showTranslationSettings} onClose={() => setShowTranslationSettings(false)} />
+      {showTranslationSettings ? (
+        <LazyModuleBoundary
+          resetKey={`profile-settings:${showTranslationSettings ? 'open' : 'closed'}`}
+          fallback={
+            <TranslationSettingsSheetFallback
+              open={showTranslationSettings}
+              onClose={() => setShowTranslationSettings(false)}
+              title="Settings unavailable"
+              message="The settings module could not finish loading. Close this sheet and try again."
+            />
+          }
+        >
+          <React.Suspense
+            fallback={
+              <TranslationSettingsSheetFallback
+                open={showTranslationSettings}
+                onClose={() => setShowTranslationSettings(false)}
+              />
+            }
+          >
+            <TranslationSettingsSheet
+              open={showTranslationSettings}
+              onClose={() => setShowTranslationSettings(false)}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      ) : null}
     </div>
   );
 }

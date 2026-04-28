@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   createOAuthState,
   getOAuthRuntimeConfigStatus,
+  hasFollowingFeedScope,
+  FOLLOWING_TIMELINE_SCOPE,
+  isRecoverableOAuthClientError,
+  isLoopbackOAuthOrigin,
   isLikelyAuthIdentifier,
   sanitizeAuthIdentifier,
-} from './oauthClient.js';
+} from './oauthClient';
 
 describe('oauthClient auth identifier handling', () => {
   it('sanitizes control and zero-width characters from identifiers', () => {
@@ -34,6 +38,32 @@ describe('oauthClient auth identifier handling', () => {
       blockingMessage: 'Hosted OAuth client metadata is required outside local development. Set VITE_ATPROTO_OAUTH_CLIENT_ID to your public client metadata URL.',
       warningMessage: null,
     });
+  });
+
+  it('identifies loopback origins correctly for auth fallback decisions', () => {
+    expect(isLoopbackOAuthOrigin('http://127.0.0.1:5180/')).toBe(true);
+    expect(isLoopbackOAuthOrigin('http://localhost:5180/')).toBe(true);
+    expect(isLoopbackOAuthOrigin('https://glimpse.example.com/')).toBe(false);
+  });
+
+  it('treats transition and granular AppView timeline scopes as sufficient for Following', () => {
+    expect(hasFollowingFeedScope('atproto transition:generic')).toBe(true);
+    expect(hasFollowingFeedScope(`atproto ${FOLLOWING_TIMELINE_SCOPE}`)).toBe(true);
+    expect(hasFollowingFeedScope('atproto')).toBe(false);
+  });
+
+  it('recognizes closed browser oauth databases as recoverable client failures', () => {
+    const error = new Error('Database closed');
+    error.stack = 'Error: Database closed\n    at BrowserOAuthDatabase.cleanup (browser-oauth-database.js:1:1)';
+
+    expect(isRecoverableOAuthClientError(error)).toBe(true);
+  });
+
+  it('does not swallow unrelated database errors', () => {
+    const error = new Error('Database closed');
+    error.stack = 'Error: Database closed\n    at unrelated-library.js:1:1';
+
+    expect(isRecoverableOAuthClientError(error)).toBe(false);
   });
 
   it('blocks non-https non-loopback origins', () => {

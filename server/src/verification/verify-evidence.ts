@@ -123,6 +123,11 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
   const grounding = new GeminiGroundingProvider();
   const media = new GoogleVisionMediaProvider();
   const entityLinking = createEntityLinkingProvider();
+  const entityLinkingEndpoint = env.VERIFY_ENTITY_LINKING_PROVIDER === 'wikidata'
+    ? env.VERIFY_WIKIDATA_ENDPOINT
+    : env.VERIFY_ENTITY_LINKING_PROVIDER === 'hybrid'
+      ? `${env.VERIFY_ENTITY_LINKING_ENDPOINT} | ${env.VERIFY_WIKIDATA_ENDPOINT}`
+      : env.VERIFY_ENTITY_LINKING_ENDPOINT;
 
   const claimType = naiveClaimType(input.text);
   const extractedClaim = input.text.trim() || null;
@@ -177,6 +182,20 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
     corroborationLevel: grounded.corroborationLevel, mediaContextConfidence, mismatchRisk,
   });
 
+  // Always include linked entities so the client can upgrade canonicalEntityId
+  // values from locally-generated IDs (ent:concept:ai) to Wikidata/DBpedia
+  // canonical IDs (wikidata:Q11660). Filtered to confidence ≥ 0.55 to avoid
+  // low-quality matches polluting the entity landscape.
+  const canonicalEntities = linkedEntities
+    .filter((e) => e.confidence >= 0.55)
+    .map((e) => ({
+      mention: e.mention,
+      canonicalId: e.canonicalId,
+      canonicalLabel: e.canonicalLabel,
+      confidence: e.confidence,
+      provider: e.provider,
+    }));
+
   return {
     claimType,
     extractedClaim,
@@ -199,19 +218,14 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
     factualConfidence,
     factualState,
     reasons,
+    ...(canonicalEntities.length > 0 ? { canonicalEntities } : {}),
     ...(env.VERIFY_ENTITY_LINKING_DEBUG
       ? {
           entityLinking: {
             provider: env.VERIFY_ENTITY_LINKING_PROVIDER,
-            ...(env.VERIFY_ENTITY_LINKING_ENDPOINT
-              ? { endpoint: env.VERIFY_ENTITY_LINKING_ENDPOINT }
+            ...(entityLinkingEndpoint
+              ? { endpoint: entityLinkingEndpoint }
               : {}),
-            linkedEntities: linkedEntities.map(entity => ({
-              mention: entity.mention,
-              canonicalId: entity.canonicalId,
-              canonicalLabel: entity.canonicalLabel,
-              confidence: entity.confidence,
-            })),
           },
         }
       : {}),

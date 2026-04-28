@@ -5,7 +5,7 @@
 import {
   neutralLight, neutralDark, discovery, discussion, intel,
   accent, shadow, shadowDark, blur,
-} from './foundation.js';
+} from './foundation';
 
 // ─── Neutral / Home mode ──────────────────────────────────────────────────
 export const neutral = {

@@ -80,7 +80,12 @@ export function normalizeError(err: unknown): AtpError {
   const lowerMessage = message.toLowerCase();
 
   if (status === 401 || lowerMessage.includes('authenticationrequired') || lowerMessage.includes('expiredtoken')) {
-    return { kind: 'auth', message: 'Session expired — please sign in again', status, original: err };
+    return {
+      kind: 'auth',
+      message: 'Session expired — please sign in again',
+      ...(status !== undefined ? { status } : {}),
+      original: err,
+    };
   }
   if (status === 403) {
     if (
@@ -93,25 +98,51 @@ export function normalizeError(err: unknown): AtpError {
       return {
         kind: 'auth',
         message: 'Your granted permissions are insufficient. Please sign in again and approve access.',
-        status,
+        ...(status !== undefined ? { status } : {}),
         original: err,
       };
     }
-    return { kind: 'forbidden', message: 'You do not have permission to do that', status, original: err };
+    return {
+      kind: 'forbidden',
+      message: 'You do not have permission to do that',
+      ...(status !== undefined ? { status } : {}),
+      original: err,
+    };
   }
   if (status === 404) {
-    return { kind: 'not_found', message: 'Not found', status, original: err };
+    return {
+      kind: 'not_found',
+      message: 'Not found',
+      ...(status !== undefined ? { status } : {}),
+      original: err,
+    };
   }
   if (status === 429) {
     const retryAfter = anyErr?.headers?.get?.('Retry-After');
     const retryAfterMs = parseRetryAfterMs(retryAfter);
-    return { kind: 'rate_limit', message: 'Rate limited — please wait a moment', status, retryAfterMs, original: err };
+    return {
+      kind: 'rate_limit',
+      message: 'Rate limited — please wait a moment',
+      ...(status !== undefined ? { status } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      original: err,
+    };
   }
   if (status && status >= 500) {
-    return { kind: 'server', message: 'Server error — please try again shortly', status, original: err };
+    return {
+      kind: 'server',
+      message: 'Server error — please try again shortly',
+      ...(status !== undefined ? { status } : {}),
+      original: err,
+    };
   }
 
-  return { kind: 'unknown', message, status, original: err };
+  return {
+    kind: 'unknown',
+    message,
+    ...(status !== undefined ? { status } : {}),
+    original: err,
+  };
 }
 
 export function isRetryable(err: AtpError): boolean {

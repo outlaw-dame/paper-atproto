@@ -1,35 +1,39 @@
-import { markPrefetchStart, markPrefetchEnd } from '../perf/prefetchTelemetry.js';
+import { markPrefetchStart, markPrefetchEnd } from '../perf/prefetchTelemetry';
+import { getStaticPlatformInfo } from '../lib/platformDetect';
 
 let scheduled = false;
-
-type MaybeConnection = {
-  saveData?: boolean;
-  effectiveType?: string;
-};
 
 export function shouldSkipPrefetch(): boolean {
   if (typeof window === 'undefined' || typeof document === 'undefined') return true;
   if (typeof navigator === 'undefined') return true;
   if (document.visibilityState === 'hidden') return true;
   if (navigator.onLine === false) return true;
-  const ua = navigator.userAgent;
-  const isIOS = /iphone|ipad|ipod/i.test(ua);
-  const isAndroid = /android/i.test(ua);
-  const matchMedia = window.matchMedia?.bind(window);
-  const isStandalone =
-    (!!matchMedia && (matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: minimal-ui)').matches)) ||
-    (isIOS && 'standalone' in navigator && (navigator as Navigator & { standalone?: boolean }).standalone === true);
-  const deviceMemory = Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0);
-  const hardwareConcurrency = Number((navigator as Navigator & { hardwareConcurrency?: number }).hardwareConcurrency ?? 0);
-  const isLowMemoryDevice = Number.isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4;
-  const isLowCpuDevice = Number.isFinite(hardwareConcurrency) && hardwareConcurrency > 0 && hardwareConcurrency <= 4;
-  if (isIOS || isAndroid || isStandalone || isLowMemoryDevice || isLowCpuDevice) return true;
-  const connection = (navigator as Navigator & { connection?: MaybeConnection }).connection;
-  if (!!matchMedia && matchMedia('(prefers-reduced-data: reduce)').matches) return true;
-  if (!connection) return false;
-  if (connection.saveData) return true;
-  const effectiveType = connection.effectiveType ?? '';
-  return effectiveType.includes('2g') || effectiveType.includes('3g');
+
+  const {
+    isIOS,
+    isAndroid,
+    isStandalone,
+    deviceMemory,
+    hardwareConcurrency,
+    saveData,
+    connectionEffectiveType,
+  } = getStaticPlatformInfo();
+
+  if (isIOS || isAndroid || isStandalone) return true;
+  if (deviceMemory > 0 && deviceMemory <= 4) return true;
+  if (hardwareConcurrency > 0 && hardwareConcurrency <= 4) return true;
+  if (saveData) return true;
+
+  try {
+    if (window.matchMedia('(prefers-reduced-data: reduce)').matches) return true;
+  } catch {
+    // matchMedia unavailable — skip the check.
+  }
+
+  return (
+    connectionEffectiveType.includes('2g') ||
+    connectionEffectiveType.includes('3g')
+  );
 }
 
 type PrefetchTask = {
@@ -40,8 +44,7 @@ type PrefetchTask = {
     | 'compose-sheet'
     | 'prompt-composer'
     | 'story-mode'
-    | 'search-story'
-    | 'atproto-queries';
+    | 'search-story';
   load: () => Promise<unknown>;
 };
 
@@ -66,17 +69,16 @@ export function scheduleRuntimePrefetches(): void {
   if (shouldSkipPrefetch()) return;
 
   const phase1: PrefetchTask[] = [
-    { key: 'tab-explore', load: () => import('../tabs/ExploreTab.js') },
-    { key: 'tab-profile', load: () => import('../tabs/ProfileTab.js') },
-    { key: 'overlay-host', load: () => import('../shell/OverlayHost.js') },
+    { key: 'tab-explore', load: () => import('../tabs/ExploreTab') },
+    { key: 'tab-profile', load: () => import('../tabs/ProfileTab') },
+    { key: 'overlay-host', load: () => import('../shell/OverlayHost') },
   ];
 
   const phase2: PrefetchTask[] = [
-    { key: 'compose-sheet', load: () => import('../components/ComposeSheet.js') },
-    { key: 'prompt-composer', load: () => import('../components/PromptComposer.js') },
-    { key: 'story-mode', load: () => import('../components/StoryMode.js') },
-    { key: 'search-story', load: () => import('../components/SearchStoryScreen.js') },
-    { key: 'atproto-queries', load: () => import('../lib/atproto/queries.js') },
+    { key: 'compose-sheet', load: () => import('../components/ComposeSheet') },
+    { key: 'prompt-composer', load: () => import('../components/PromptComposer') },
+    { key: 'story-mode', load: () => import('../components/StoryMode') },
+    { key: 'search-story', load: () => import('../components/SearchStoryScreen') },
   ];
 
   const schedule = (cb: () => void, timeout: number) => {

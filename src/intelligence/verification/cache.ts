@@ -1,4 +1,4 @@
-import type { VerificationOutcome } from './types.js';
+import type { VerificationOutcome } from './types';
 
 export interface VerificationCache {
   get(key: string): Promise<VerificationOutcome | null>;

@@ -2,17 +2,17 @@ import {
   analyzeComposeTone,
   analyzeComposeToneImmediate,
   type ComposeToneAnalysis,
-} from '../composeTonePipeline.js';
-import { toAnalyzeOptions } from './contextBuilder.js';
-import { buildComposerGuidanceUi } from './guidanceCopy.js';
+} from '../composeTonePipeline';
+import { toAnalyzeOptions } from './contextBuilder';
+import { buildComposerGuidanceUi } from './guidanceCopy';
 import {
   createEmptyComposerGuidanceResult,
   computeComposerGuidanceScores,
   deriveComposerGuidanceState,
   normalizeToolsUsed,
   uiStateToLevel,
-} from './guidanceScoring.js';
-import type { ComposerContext, ComposerGuidanceResult } from './types.js';
+} from './guidanceScoring';
+import type { ComposerContext, ComposerGuidanceResult } from './types';
 
 function fromToneAnalysis(
   context: ComposerContext,

@@ -56,12 +56,33 @@ const ANIMAL_CRUELTY_PATTERNS = [
   /\b(here'?s\s+how\s+to\s+(hurt|kill|torture)\s+(animals|pets))\b/i,
 ];
 
+const EXPLICIT_SEXUAL_PATTERNS = [
+  /\b(porn|xxx|smut|nude|sex\s+tape|explicit\s+sexual)\b/i,
+  /\b(cum|semen|orgasm|masturbat(e|ion)|blowjob|handjob)\b/i,
+  /\b(horny|turned\s+on|hook\s?up|one[-\s]?night\s+stand)\b/i,
+  /\b(fetish|kink|erotic)\b/i,
+];
+
+const FORMAL_EXPLICIT_SEXUAL_REPLACEMENTS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\b(porn|xxx|smut)\b/gi, replacement: 'explicit sexual content' },
+  { pattern: /\b(nude)\b/gi, replacement: 'nudity' },
+  { pattern: /\b(sex\s+tape)\b/gi, replacement: 'sexually explicit recording' },
+  { pattern: /\b(cum|semen)\b/gi, replacement: 'sexual fluid' },
+  { pattern: /\b(orgasm)\b/gi, replacement: 'sexual climax' },
+  { pattern: /\b(masturbat(e|ion))\b/gi, replacement: 'self-stimulation' },
+  { pattern: /\b(blowjob|handjob)\b/gi, replacement: 'explicit sexual act' },
+  { pattern: /\b(horny|turned\s+on)\b/gi, replacement: 'sexually aroused' },
+  { pattern: /\b(hook\s?up|one[-\s]?night\s+stand)\b/gi, replacement: 'casual sexual encounter' },
+  { pattern: /\b(fetish|kink)\b/gi, replacement: 'sexual preference' },
+  { pattern: /\b(erotic)\b/gi, replacement: 'sexually explicit' },
+];
+
 /**
  * Detect if text contains encouragement of self-harm, harm to others, or animal cruelty
  */
 export function detectHarmfulContent(text: string): {
   isHarmful: boolean;
-  category?: 'self-harm' | 'suicidal' | 'harm-to-others' | 'animal-cruelty';
+  category?: 'self-harm' | 'suicidal' | 'harm-to-others' | 'animal-cruelty' | 'explicit-sexual';
   matchedPattern?: string;
 } {
   for (const pattern of SELF_HARM_PATTERNS) {
@@ -88,6 +109,12 @@ export function detectHarmfulContent(text: string): {
     }
   }
 
+  for (const pattern of EXPLICIT_SEXUAL_PATTERNS) {
+    if (pattern.test(text)) {
+      return { isHarmful: true, category: 'explicit-sexual', matchedPattern: pattern.source };
+    }
+  }
+
   return { isHarmful: false };
 }
 
@@ -109,7 +136,18 @@ const FALLBACK_RESPONSES: Record<string, string> = {
 
   'animal-cruelty':
     'This discussion involves harming animals. Animals deserve protection and compassion. If you\'re experiencing urges to harm animals, please speak with a mental health professional.',
+
+  'explicit-sexual':
+    'This discussion includes explicit sexual content. The summary is limited to neutral, non-graphic wording.',
 };
+
+function normalizeExplicitSexualLanguage(text: string): string {
+  let normalized = text;
+  FORMAL_EXPLICIT_SEXUAL_REPLACEMENTS.forEach(({ pattern, replacement }) => {
+    normalized = normalized.replace(pattern, replacement);
+  });
+  return normalized;
+}
 
 /**
  * Filter a model response to remove/replace harmful content.
@@ -126,6 +164,13 @@ export function filterResponseForSafety(
 
   if (!detection.isHarmful) {
     return { filtered: rawResponse, isSafe: true };
+  }
+
+  if (detection.category === 'explicit-sexual') {
+    return {
+      filtered: normalizeExplicitSexualLanguage(rawResponse),
+      isSafe: true,
+    };
   }
 
   const category = detection.category || 'unknown';
@@ -172,9 +217,11 @@ export function filterWriterResponse(response: {
   if (response.collapsedSummary) {
     fieldsChecked.push('collapsedSummary');
     const check = detectHarmfulContent(response.collapsedSummary);
-    if (check.isHarmful) {
+    if (check.isHarmful && check.category !== 'explicit-sexual') {
       console.warn(`[SAFETY] Harmful content in collapsedSummary [${check.category}]`);
       response.collapsedSummary = FALLBACK_RESPONSES[check.category || 'self-harm'] ?? FALLBACK_RESPONSES['self-harm'] ?? 'Please reach out for support.';
+    } else {
+      response.collapsedSummary = normalizeExplicitSexualLanguage(response.collapsedSummary);
     }
   }
 
@@ -182,36 +229,52 @@ export function filterWriterResponse(response: {
   if (response.expandedSummary) {
     fieldsChecked.push('expandedSummary');
     const check = detectHarmfulContent(response.expandedSummary);
-    if (check.isHarmful) {
+    if (check.isHarmful && check.category !== 'explicit-sexual') {
       console.warn(`[SAFETY] Harmful content in expandedSummary [${check.category}]`);
       delete response.expandedSummary; // Omit rather than show fallback
+    } else {
+      response.expandedSummary = normalizeExplicitSexualLanguage(response.expandedSummary);
     }
   }
 
   // Check whatChanged
   if (response.whatChanged) {
     fieldsChecked.push('whatChanged');
-    response.whatChanged = response.whatChanged.filter(item => {
-      const check = detectHarmfulContent(item);
-      if (check.isHarmful) {
-        console.warn(`[SAFETY] Harmful content in whatChanged item [${check.category}]`);
-        return false;
-      }
-      return true;
-    });
+    response.whatChanged = response.whatChanged
+      .map(item => {
+        const check = detectHarmfulContent(item);
+        if (check.isHarmful && check.category !== 'explicit-sexual') {
+          console.warn(`[SAFETY] Harmful content in whatChanged item [${check.category}]`);
+          return '';
+        }
+        return normalizeExplicitSexualLanguage(item);
+      })
+      .filter(item => item.trim().length > 0);
   }
 
   // Check contributorBlurbs
   if (response.contributorBlurbs) {
     fieldsChecked.push('contributorBlurbs');
-    response.contributorBlurbs = response.contributorBlurbs.filter(blurb => {
-      const check = detectHarmfulContent(blurb.blurb);
-      if (check.isHarmful) {
-        console.warn(`[SAFETY] Harmful content in blurb for ${blurb.handle} [${check.category}]`);
-        return false;
-      }
-      return true;
-    });
+    response.contributorBlurbs = response.contributorBlurbs
+      .map(blurb => {
+        const handleCheck = detectHarmfulContent(blurb.handle);
+        const blurbCheck = detectHarmfulContent(blurb.blurb);
+
+        const hasBlockedCategory = [handleCheck, blurbCheck].some(
+          (check) => check.isHarmful && check.category !== 'explicit-sexual',
+        );
+
+        if (hasBlockedCategory) {
+          console.warn(`[SAFETY] Harmful content in blurb for ${blurb.handle} [${handleCheck.category || blurbCheck.category}]`);
+          return null;
+        }
+
+        return {
+          handle: normalizeExplicitSexualLanguage(blurb.handle),
+          blurb: normalizeExplicitSexualLanguage(blurb.blurb),
+        };
+      })
+      .filter((blurb): blurb is { handle: string; blurb: string } => blurb !== null);
   }
 
   const isSafe = fieldsChecked.every(field => {
@@ -290,7 +353,7 @@ export function ensureSafetyInstructions(systemPrompt: string): string {
 
 export interface SafetyIncident {
   timestamp: string;
-  category: 'self-harm' | 'suicidal' | 'harm-to-others' | 'animal-cruelty';
+  category: 'self-harm' | 'suicidal' | 'harm-to-others' | 'animal-cruelty' | 'explicit-sexual';
   model: 'qwen-writer' | 'qwen-multimodal' | 'gemini';
   endpoint: string;
   matchedPattern: string;

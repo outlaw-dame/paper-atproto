@@ -11,29 +11,36 @@
 //     3. RelatedConversationCard — top reply threads
 //   BottomQueryDock (refine query)
 
-import React, { useState, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
-import { useSessionStore } from '../store/sessionStore.js';
-import { useUiStore } from '../store/uiStore.js';
-import { atpCall } from '../lib/atproto/client.js';
-import { mapFeedViewPost, mapPostViewToMockPost, hasDisplayableRecordContent } from '../atproto/mappers.js';
-import type { MockPost } from '../data/mockData.js';
-import type { StoryEntry } from '../App.js';
-import { summarizeStoryEntities } from '../intelligence/entityLinking.js';
-import { useTranslationStore } from '../store/translationStore.js';
-import { translationClient } from '../lib/i18n/client.js';
-import { heuristicDetectLanguage } from '../lib/i18n/detect.js';
-import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
-import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults.js';
-import { warnMatchReasons } from '../lib/contentFilters/presentation.js';
-import type { PostFilterMatch } from '../lib/contentFilters/types.js';
+import { useSessionStore } from '../store/sessionStore';
+import { useUiStore } from '../store/uiStore';
+import { useExploreAiInsight } from '../conversation/discovery/exploreAiInsight';
+import { useAppearanceStore } from '../store/appearanceStore';
+import type { MockPost } from '../data/mockData';
+import type { StoryEntry } from '../App';
+import { useTranslationStore } from '../store/translationStore';
+import { translationClient } from '../lib/i18n/client';
+import { hasTranslatableLanguageSignal, heuristicDetectLanguage } from '../lib/i18n/detect';
+import { hasMeaningfulTranslation, isLikelySameLanguage } from '../lib/i18n/normalize';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
+import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
+import { warnMatchReasons } from '../lib/contentFilters/presentation';
+import type { PostFilterMatch } from '../lib/contentFilters/types';
+import ProfileCardTrigger from './ProfileCardTrigger';
+import {
+  rootUriForStoryPost,
+  type StoryProjectedPost,
+  type StoryProjection,
+} from '../conversation/projections/storyProjection';
+import { useConversationBatchHydration } from '../conversation/sessionHydration';
+import { useStoryProjection } from '../conversation/sessionSelectors';
+import { useStorySearchResults } from '../conversation/discovery/storySearch';
 import {
   storyProgress as spTokens,
   overviewCard as ocTokens,
   bottomQueryDock as bqdTokens,
-  interpolator as intTokens,
   discovery as disc,
   accent,
   type as typeScale,
@@ -41,7 +48,8 @@ import {
   space,
   transitions,
   storyCardVariants,
-} from '../design/index.js';
+} from '../design/index';
+import { postLabelChips, type LabelChip } from '../lib/atproto/labelPresentation';
 
 interface Props {
   query: string;
@@ -51,6 +59,35 @@ interface Props {
 
 const CARD_NAMES = ['Overview', 'Best Source', 'Related', 'Conversation'] as const;
 type CardName = typeof CARD_NAMES[number];
+
+const chipStyleByTone: Record<'neutral' | 'warning' | 'danger' | 'info', React.CSSProperties> = {
+  neutral: { background: 'var(--fill-3)', color: 'var(--label-2)' },
+  warning: { background: 'rgba(255,149,0,0.18)', color: '#ffb454' },
+  danger: { background: 'rgba(255,77,79,0.18)', color: '#ff7b7d' },
+  info: { background: 'rgba(124,233,255,0.2)', color: '#6de7ff' },
+};
+
+function LabelChipRow({ chips }: { chips: LabelChip[] }) {
+  if (chips.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {chips.map((chip) => (
+        <span
+          key={chip.key}
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            borderRadius: 999,
+            padding: '2px 8px',
+            ...chipStyleByTone[chip.tone],
+          }}
+        >
+          {chip.text}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ─── StoryProgressRail ────────────────────────────────────────────────────
 function StoryProgressRail({ total, current }: { total: number; current: number }) {
@@ -110,14 +147,108 @@ function RichText({ text, color }: { text: string; color: string }) {
   );
 }
 
+// ─── AiInsightBlock ───────────────────────────────────────────────────────
+function AiInsightBlock({
+  insight,
+  shortInsight,
+  provider,
+  loading,
+}: {
+  insight: string | null;
+  shortInsight: string | null;
+  provider: string | null;
+  loading: boolean;
+}) {
+  if (!loading && !insight) return null;
+  return (
+    <div style={{
+      marginBottom: 14,
+      borderRadius: 14,
+      background: 'linear-gradient(135deg, rgba(91,124,255,0.13) 0%, rgba(124,233,255,0.09) 100%)',
+      border: '0.5px solid rgba(124,233,255,0.28)',
+      padding: '12px 14px',
+      position: 'relative',
+      overflow: 'hidden',
+    }}>
+      {/* Ambient glow */}
+      <div style={{
+        position: 'absolute', top: -16, right: -16,
+        width: 80, height: 80, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(124,233,255,0.14) 0%, transparent 70%)',
+        pointerEvents: 'none',
+      }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: loading ? 0 : 8 }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill={accent.cyan400} aria-hidden="true">
+          <path d="M12 2l1.8 7.2L21 7l-5.4 5.4L21 18l-7.2-1.8L12 24l-1.8-7.2L3 18l5.4-5.6L3 7l7.2 2.2L12 2z"/>
+        </svg>
+        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: accent.cyan400 }}>
+          AI Insight
+        </span>
+        {provider && !loading && (
+          <span style={{ fontSize: 9, color: disc.textTertiary, fontWeight: 600, marginLeft: 2 }}>
+            · {provider}
+          </span>
+        )}
+      </div>
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, paddingTop: 4 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={accent.cyan400} strokeWidth={2} strokeLinecap="round">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83">
+              <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>
+            </path>
+          </svg>
+          <span style={{ fontSize: 11, color: disc.textTertiary, fontWeight: 600 }}>Synthesising…</span>
+        </div>
+      ) : (
+        <>
+          <p style={{ fontSize: 12, lineHeight: '18px', color: disc.textPrimary, fontWeight: 500, margin: 0 }}>
+            {insight}
+          </p>
+          {shortInsight && (
+            <p style={{ marginTop: 6, fontSize: 11, lineHeight: '15px', color: disc.textSecondary, fontWeight: 600, fontStyle: 'italic', margin: '6px 0 0' }}>
+              {shortInsight}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── OverviewCard ─────────────────────────────────────────────────────────
-function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; query: string; getTranslatedText: (post: MockPost) => string }) {
+function OverviewCard({
+  overview,
+  resultCount,
+  showAtprotoLabelChips,
+  aiInsight,
+  aiShortInsight,
+  aiInsightProvider,
+  aiInsightLoading,
+}: {
+  overview: StoryProjectedPost | null;
+  resultCount: number;
+  showAtprotoLabelChips: boolean;
+  aiInsight: string | null;
+  aiShortInsight: string | null;
+  aiInsightProvider: string | null;
+  aiInsightLoading: boolean;
+}) {
   const navigateToProfile = useProfileNavigation();
-  const top = posts[0];
-  if (!top) return null;
-  const topText = getTranslatedText(top);
-  const img = top.images?.[0] ?? top.embed?.thumbnail;
-  const domain = top.embed?.url ? (() => { try { return new URL(top.embed!.url!).hostname.replace(/^www\./, ''); } catch { return ''; } })() : '';
+  if (!overview) return null;
+  const { post: top, profileCardData: standardProfileCardData, text: topText } = overview;
+  const mediaEmbed = top.embed?.type === 'external' || top.embed?.type === 'video' ? top.embed : null;
+  const img = overview.imageUrl;
+  const domain = overview.domain ?? '';
+  const synopsisText = overview.synopsisText ?? topText.slice(0, 140);
+  const moderationLabelChips = showAtprotoLabelChips
+    ? postLabelChips({
+      contentLabels: top.contentLabels,
+      labelDetails: top.labelDetails,
+      authorDid: top.author.did,
+      maxChips: 1,
+      includeLabellerProvenance: true,
+    })
+    : [];
 
   return (
     <div style={{
@@ -136,6 +267,14 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
       )}
 
       <div style={{ padding: `${ocTokens.padding}px` }}>
+        {/* AI Insight block — shown when AI insight is active */}
+        <AiInsightBlock
+          insight={aiInsight}
+          shortInsight={aiShortInsight}
+          provider={aiInsightProvider}
+          loading={aiInsightLoading}
+        />
+
         {/* Synopsis chip */}
         <div style={{ marginBottom: 10 }}>
           <span style={{
@@ -157,15 +296,57 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
           fontWeight: typeScale.titleLg[2], letterSpacing: typeScale.titleLg[3],
           color: disc.textPrimary, marginBottom: 10,
         }}>
-          <RichText text={topText.slice(0, 140)} color={disc.textPrimary} />
+          <RichText text={synopsisText} color={disc.textPrimary} />
         </p>
+
+        {(overview.isSessionBacked || overview.sourceSupportPresent || overview.direction) && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {overview.isSessionBacked && (
+              <span style={{
+                padding: '4px 10px',
+                borderRadius: radius.full,
+                background: 'rgba(124,233,255,0.12)',
+                color: accent.cyan400,
+                fontSize: typeScale.metaSm[0],
+                fontWeight: 700,
+              }}>
+                Thread-aware
+              </span>
+            )}
+            {overview.sourceSupportPresent && (
+              <span style={{
+                padding: '4px 10px',
+                borderRadius: radius.full,
+                background: 'rgba(91,124,255,0.14)',
+                color: accent.primary,
+                fontSize: typeScale.metaSm[0],
+                fontWeight: 700,
+              }}>
+                Source-backed
+              </span>
+            )}
+            {overview.direction && (
+              <span style={{
+                padding: '4px 10px',
+                borderRadius: radius.full,
+                background: disc.surfaceFocus,
+                color: disc.textSecondary,
+                fontSize: typeScale.metaSm[0],
+                fontWeight: 700,
+                textTransform: 'capitalize',
+              }}>
+                {overview.direction}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Stats row */}
         <div style={{ display: 'flex', gap: 16, marginBottom: 14 }}>
           {[
-            { icon: '💬', val: top.replies, label: 'replies' },
-            { icon: '🔁', val: top.reposts, label: 'reposts' },
-            { icon: '❤️', val: top.likes, label: 'likes' },
+            { icon: '💬', val: top.replyCount, label: 'replies' },
+            { icon: '🔁', val: top.repostCount, label: 'reposts' },
+            { icon: '❤️', val: top.likeCount, label: 'likes' },
           ].map(s => (
             <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <span style={{ fontSize: 13 }}>{s.icon}</span>
@@ -173,7 +354,7 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
             </div>
           ))}
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{posts.length} results</span>
+          <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{resultCount} results</span>
         </div>
 
         {/* Source strip */}
@@ -195,14 +376,21 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
                 {domain}
               </span>
             ) : (
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-                @{top.author.handle}
-              </button>
+              <ProfileCardTrigger data={standardProfileCardData} did={top.author.did} disabled={!standardProfileCardData}>
+                <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], fontWeight: 500, color: ocTokens.sourceStrip.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  @{top.author.handle}
+                </button>
+              </ProfileCardTrigger>
             )}
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>
               {top.timestamp}
             </span>
+          </div>
+        )}
+        {moderationLabelChips.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <LabelChipRow chips={moderationLabelChips} />
           </div>
         )}
       </div>
@@ -211,11 +399,28 @@ function OverviewCard({ posts, query, getTranslatedText }: { posts: MockPost[]; 
 }
 
 // ─── BestSourceCard ───────────────────────────────────────────────────────
-function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTranslatedText: (post: MockPost) => string }) {
+function BestSourceCard({
+  source,
+  showAtprotoLabelChips,
+}: {
+  source: StoryProjectedPost | null;
+  showAtprotoLabelChips: boolean;
+}) {
   const navigateToProfile = useProfileNavigation();
-  const top = posts[0];
-  if (!top) return null;
-  const topText = getTranslatedText(top);
+  if (!source) return null;
+  const { post: top, profileCardData: standardProfileCardData, text: topText } = source;
+  const sessionSummary = source.synopsisText && source.synopsisText !== topText
+    ? source.synopsisText
+    : undefined;
+  const moderationLabelChips = showAtprotoLabelChips
+    ? postLabelChips({
+      contentLabels: top.contentLabels,
+      labelDetails: top.labelDetails,
+      authorDid: top.author.did,
+      maxChips: 2,
+      includeLabellerProvenance: true,
+    })
+    : [];
   return (
     <div style={{
       borderRadius: ocTokens.radius,
@@ -231,16 +436,20 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
 
       {/* Author */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
-          {top.author.avatar
-            ? <img src={top.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent.indigo600, color: '#fff', fontSize: 16, fontWeight: 700 }}>{top.author.displayName[0]}</div>
-          }
-        </div>
-        <div>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>{top.author.displayName}</button>
-          <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{top.author.handle}</button>
-        </div>
+        <ProfileCardTrigger data={standardProfileCardData} did={top.author.did} disabled={!standardProfileCardData}>
+          <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
+            {top.author.avatar
+              ? <img src={top.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent.indigo600, color: '#fff', fontSize: 16, fontWeight: 700 }}>{top.author.displayName[0]}</div>
+            }
+          </div>
+        </ProfileCardTrigger>
+        <ProfileCardTrigger data={standardProfileCardData} did={top.author.did} disabled={!standardProfileCardData}>
+          <div>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.chip[0], fontWeight: 700, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>{top.author.displayName}</button>
+            <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(top.author.did || top.author.handle); }} style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>@{top.author.handle}</button>
+          </div>
+        </ProfileCardTrigger>
       </div>
 
       {/* Full text */}
@@ -251,6 +460,35 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
       }}>
         <RichText text={topText} color={disc.textSecondary} />
       </p>
+      {moderationLabelChips.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <LabelChipRow chips={moderationLabelChips} />
+        </div>
+      )}
+
+      {sessionSummary && (
+        <div style={{
+          marginBottom: 16,
+          padding: `${space[6]}px ${space[8]}px`,
+          borderRadius: radius[12],
+          background: disc.surfaceFocus,
+          border: `0.5px solid ${disc.lineSubtle}`,
+        }}>
+          <p style={{
+            fontSize: typeScale.metaSm[0],
+            fontWeight: 700,
+            color: disc.textTertiary,
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+            marginBottom: 4,
+          }}>
+            Thread context
+          </p>
+          <p style={{ fontSize: typeScale.bodySm[0], color: disc.textSecondary }}>
+            <RichText text={sessionSummary} color={disc.textSecondary} />
+          </p>
+        </div>
+      )}
 
       {/* Embed if present */}
       {top.embed && (top.embed.type === 'external' || top.embed.type === 'video') && (
@@ -282,15 +520,10 @@ function BestSourceCard({ posts, getTranslatedText }: { posts: MockPost[]; getTr
 }
 
 // ─── RelatedEntitiesCard ──────────────────────────────────────────────────
-function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
+function RelatedEntitiesCard({ entities }: { entities: StoryProjection['relatedEntities'] }) {
   const navigateToProfile = useProfileNavigation();
-  const entities = summarizeStoryEntities(posts.map(p => p.content));
-  const topicEntities = entities
-    .filter(entity => entity.entityKind === 'concept' || entity.entityKind === 'claim')
-    .slice(0, 12);
-  const actorEntities = entities
-    .filter(entity => entity.entityKind === 'person' || entity.entityKind === 'org')
-    .slice(0, 8);
+  const topicEntities = entities.topics;
+  const actorEntities = entities.actors;
 
   return (
     <div style={{
@@ -351,7 +584,15 @@ function RelatedEntitiesCard({ posts }: { posts: MockPost[] }) {
 }
 
 // ─── RelatedConversationCard ──────────────────────────────────────────────
-function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { posts: MockPost[]; onOpenStory: (e: StoryEntry) => void; getTranslatedText: (post: MockPost) => string }) {
+function RelatedConversationCard({
+  conversations,
+  onOpenStory,
+  showAtprotoLabelChips,
+}: {
+  conversations: StoryProjectedPost[];
+  onOpenStory: (e: StoryEntry) => void;
+  showAtprotoLabelChips: boolean;
+}) {
   const navigateToProfile = useProfileNavigation();
   return (
     <div style={{
@@ -366,42 +607,115 @@ function RelatedConversationCard({ posts, onOpenStory, getTranslatedText }: { po
       }}>Related Conversations</p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {posts.slice(1, 6).map(post => (
-          <motion.div
-            key={post.id}
-            whileTap={{ scale: 0.985 }}
-            onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.content.slice(0, 80) })}
-            style={{
-              background: disc.surfaceCard,
-              borderRadius: radius[20],
-              padding: `${space[8]}px ${space[8]}px`,
-              border: `0.5px solid ${disc.lineSubtle}`,
-              cursor: 'pointer',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
-                {post.author.avatar
-                  ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
-                }
+        {conversations.map(({
+          post,
+          profileCardData: standardProfileCardData,
+          text,
+          synopsisText,
+          direction,
+          sourceSupportPresent,
+          isSessionBacked,
+        }) => {
+          const moderationLabelChips = showAtprotoLabelChips
+            ? postLabelChips({
+              contentLabels: post.contentLabels,
+              labelDetails: post.labelDetails,
+              authorDid: post.author.did,
+              maxChips: 1,
+              includeLabellerProvenance: true,
+            })
+            : [];
+          return (
+            <motion.div
+              key={post.id}
+              whileTap={{ scale: 0.985 }}
+              onClick={() => onOpenStory({ type: 'post', id: post.id, title: post.content.slice(0, 80) })}
+              style={{
+                background: disc.surfaceCard,
+                borderRadius: radius[20],
+                padding: `${space[8]}px ${space[8]}px`,
+                border: `0.5px solid ${disc.lineSubtle}`,
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>
+                  <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', background: disc.surfaceFocus, flexShrink: 0 }}>
+                    {post.author.avatar
+                      ? <img src={post.author.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <div style={{ width: '100%', height: '100%', background: accent.indigo600, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>{post.author.displayName[0]}</div>
+                    }
+                  </div>
+                </ProfileCardTrigger>
+                <ProfileCardTrigger data={standardProfileCardData} did={post.author.did} disabled={!standardProfileCardData}>
+                  <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
+                </ProfileCardTrigger>
+                <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{post.timestamp}</span>
               </div>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(post.author.did || post.author.handle); }} style={{ fontSize: typeScale.metaLg[0], fontWeight: 600, color: disc.textPrimary, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{post.author.displayName}</button>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>{post.timestamp}</span>
-            </div>
-            <p style={{
-              fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
-              color: disc.textSecondary,
-              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-            }}>
-              <RichText text={getTranslatedText(post)} color={disc.textSecondary} />
-            </p>
-            <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
-              <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>❤️ {post.likeCount}</span>
-            </div>
-          </motion.div>
-        ))}
+              <p style={{
+                fontSize: typeScale.bodySm[0], lineHeight: `${typeScale.bodySm[1]}px`,
+                color: disc.textSecondary,
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>
+                <RichText text={text} color={disc.textSecondary} />
+              </p>
+              {moderationLabelChips.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <LabelChipRow chips={moderationLabelChips} />
+                </div>
+              )}
+              {synopsisText && synopsisText !== text && (
+                <p style={{
+                  marginTop: 8,
+                  fontSize: typeScale.metaSm[0],
+                  color: disc.textTertiary,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}>
+                  <RichText text={synopsisText} color={disc.textTertiary} />
+                </p>
+              )}
+              {(isSessionBacked || sourceSupportPresent || direction) && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  {isSessionBacked && (
+                    <span style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: accent.cyan400,
+                      fontWeight: 700,
+                    }}>
+                      Thread-aware
+                    </span>
+                  )}
+                  {sourceSupportPresent && (
+                    <span style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: accent.primary,
+                      fontWeight: 700,
+                    }}>
+                      Source-backed
+                    </span>
+                  )}
+                  {direction && (
+                    <span style={{
+                      fontSize: typeScale.metaSm[0],
+                      color: disc.textTertiary,
+                      fontWeight: 700,
+                      textTransform: 'capitalize',
+                    }}>
+                      {direction}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>💬 {post.replyCount}</span>
+                <span style={{ fontSize: typeScale.metaSm[0], color: disc.textTertiary }}>❤️ {post.likeCount}</span>
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
     </div>
   );
@@ -538,13 +852,26 @@ function ModerationNoticeCard({
 // ─── Main component ────────────────────────────────────────────────────────
 export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props) {
   const { agent, session } = useSessionStore();
+  const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
+  const exploreAiInsightEnabled = useUiStore((state) => state.exploreAiInsightEnabled);
   const { policy: translationPolicy, byId: translationById, upsertTranslation } = useTranslationStore();
-  const [posts, setPosts] = useState<MockPost[]>([]);
-  const [loading, setLoading] = useState(true);
   const [cardIdx, setCardIdx] = useState(0);
   const [dir, setDir] = useState(1);
   const [refinedQuery, setRefinedQuery] = useState(query);
+  const [searchSort, setSearchSort] = useState<'top' | 'latest'>('top');
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const {
+    posts,
+    loading,
+    loadingMorePosts,
+    hasMorePosts,
+    loadMorePosts,
+  } = useStorySearchResults({
+    query: refinedQuery,
+    searchSort,
+    agent,
+    enabled: Boolean(session && agent),
+  });
   const filterResults = usePostFilterResults(posts, 'explore');
 
   const getModerationMatches = useCallback((postId: string) => filterResults[postId] ?? [], [filterResults]);
@@ -573,25 +900,31 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     setRevealedFilteredPosts({});
   }, [refinedQuery]);
 
-  useEffect(() => {
-    if (!session) return;
-    setLoading(true);
-    atpCall(() => agent.app.bsky.feed.searchPosts({ q: refinedQuery, limit: 25 }))
-      .then(res => {
-        if (res?.data?.posts) {
-          setPosts(
-            res.data.posts
-              .filter((p: any) => hasDisplayableRecordContent(p?.record))
-              .map((p: any) => mapPostViewToMockPost(p))
-          );
-        }
-      })
-      .finally(() => setLoading(false));
-  }, [refinedQuery, agent, session]);
-
   const getTranslatedText = useCallback((post: MockPost): string => {
     return translationById[post.id]?.translatedText ?? post.content;
   }, [translationById]);
+
+  const visibleStoryRootCandidates = useMemo(
+    () => visiblePosts
+      .slice(0, 6)
+      .map((post) => rootUriForStoryPost(post)),
+    [visiblePosts],
+  );
+
+  useConversationBatchHydration({
+    enabled: Boolean(session && agent && visiblePosts.length > 0),
+    rootUris: visibleStoryRootCandidates,
+    mode: 'story',
+    agent,
+    translationPolicy,
+    maxTargets: 6,
+  });
+
+  const storyProjection = useStoryProjection({
+    query: refinedQuery,
+    posts: visiblePosts,
+    getTranslatedText,
+  });
 
   useEffect(() => {
     if (!translationPolicy.autoTranslateExplore) return;
@@ -599,6 +932,7 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
 
     const visible = posts.slice(0, 6).filter((post) => {
       if (post.content.trim().length === 0 || translationById[post.id]) return false;
+      if (!hasTranslatableLanguageSignal(post.content)) return false;
       const detected = heuristicDetectLanguage(post.content);
       if (detected.language !== 'und' && isLikelySameLanguage(detected.language, translationPolicy.userLanguage)) return false;
       return true;
@@ -626,6 +960,39 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     });
   }, [posts, translationById, translationPolicy.autoTranslateExplore, translationPolicy.localOnlyMode, translationPolicy.userLanguage, upsertTranslation]);
 
+  // Build a minimal page shape for the AI insight hook from story posts.
+  const storyInsightPage = useMemo(() => ({
+    posts: visiblePosts,
+    actors: [],
+    feedItems: [],
+    intent: {
+      kind: 'general' as const,
+      label: 'General discovery',
+      confidence: 0.6,
+      reasons: ['story_screen'],
+      queryHasVisualIntent: false,
+    },
+    postCursor: null,
+    tagPostCursor: null,
+    actorCursor: null,
+    semanticActorDids: new Set<string>(),
+    keywordActorDids: new Set<string>(),
+    hasMorePosts: false,
+    hasMoreActors: false,
+  }), [visiblePosts]);
+
+  const {
+    insight: aiInsight,
+    shortInsight: aiShortInsight,
+    provider: aiInsightProvider,
+    loading: aiInsightLoading,
+  } = useExploreAiInsight({
+    page: storyInsightPage,
+    query: refinedQuery,
+    actorDid: session?.did ?? null,
+    enabled: exploreAiInsightEnabled && visiblePosts.length >= 2,
+  });
+
   const advance = useCallback(() => {
     if (cardIdx < CARD_NAMES.length - 1) { setDir(1); setCardIdx(i => i + 1); }
   }, [cardIdx]);
@@ -641,10 +1008,24 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
   }, { axis: 'x', swipe: { velocity: 0.3 } });
 
   const cards = [
-    <OverviewCard key="overview" posts={visiblePosts} query={refinedQuery} getTranslatedText={getTranslatedText} />,
-    <BestSourceCard key="source" posts={visiblePosts} getTranslatedText={getTranslatedText} />,
-    <RelatedEntitiesCard key="entities" posts={visiblePosts} />,
-    <RelatedConversationCard key="conversation" posts={visiblePosts} onOpenStory={onOpenStory} getTranslatedText={getTranslatedText} />,
+    <OverviewCard
+      key="overview"
+      overview={storyProjection.overview}
+      resultCount={storyProjection.resultCount}
+      showAtprotoLabelChips={showAtprotoLabelChips}
+      aiInsight={aiInsight}
+      aiShortInsight={aiShortInsight}
+      aiInsightProvider={aiInsightProvider}
+      aiInsightLoading={aiInsightLoading}
+    />,
+    <BestSourceCard key="source" source={storyProjection.bestSource} showAtprotoLabelChips={showAtprotoLabelChips} />,
+    <RelatedEntitiesCard key="entities" entities={storyProjection.relatedEntities} />,
+    <RelatedConversationCard
+      key="conversation"
+      conversations={storyProjection.relatedConversations}
+      onOpenStory={onOpenStory}
+      showAtprotoLabelChips={showAtprotoLabelChips}
+    />,
   ];
 
   const activeCard = cards[cardIdx];
@@ -698,6 +1079,60 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
       {/* Progress rail */}
       <div style={{ position: 'relative', zIndex: 2, flexShrink: 0, paddingBottom: 12 }}>
         <StoryProgressRail total={CARD_NAMES.length} current={cardIdx} />
+      </div>
+
+      <div style={{ position: 'relative', zIndex: 2, padding: '0 20px 10px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={() => setSearchSort('top')}
+          style={{
+            border: 'none',
+            borderRadius: 999,
+            padding: '6px 12px',
+            cursor: 'pointer',
+            background: searchSort === 'top' ? accent.primary : disc.surfaceCard,
+            color: searchSort === 'top' ? '#fff' : disc.textSecondary,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          Top
+        </button>
+        <button
+          type="button"
+          onClick={() => setSearchSort('latest')}
+          style={{
+            border: 'none',
+            borderRadius: 999,
+            padding: '6px 12px',
+            cursor: 'pointer',
+            background: searchSort === 'latest' ? accent.primary : disc.surfaceCard,
+            color: searchSort === 'latest' ? '#fff' : disc.textSecondary,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          Latest
+        </button>
+        {hasMorePosts && (
+          <button
+            type="button"
+            onClick={loadMorePosts}
+            disabled={loadingMorePosts}
+            style={{
+              border: 'none',
+              borderRadius: 999,
+              padding: '6px 12px',
+              cursor: loadingMorePosts ? 'default' : 'pointer',
+              background: loadingMorePosts ? disc.surfaceFocus : 'rgba(124,233,255,0.18)',
+              color: disc.textPrimary,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {loadingMorePosts ? 'Loading…' : 'Load More'}
+          </button>
+        )}
       </div>
 
       {/* Card area */}

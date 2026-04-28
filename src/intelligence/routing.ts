@@ -2,7 +2,7 @@
 // Multimodal score, summary mode routing, and inclusion threshold helpers.
 // All functions are pure and synchronous.
 
-import type { SummaryMode } from './llmContracts.js';
+import type { SummaryMode } from './llmContracts';
 
 // ─── Multimodal routing ───────────────────────────────────────────────────
 
@@ -51,10 +51,13 @@ export function chooseSummaryMode(input: {
   surfaceConfidence: number;
   interpretiveConfidence: number;
 }): SummaryMode {
-  if (input.interpretiveConfidence < 0.45 && input.surfaceConfidence >= 0.60) {
+  // 0.45 was too aggressive: personal opinions, anecdotes, and social posts
+  // naturally score below 0.45 even when fully interpretable. Only resort to
+  // fallback modes for genuinely sparse or incoherent threads.
+  if (input.interpretiveConfidence < 0.28 && input.surfaceConfidence >= 0.55) {
     return 'descriptive_fallback';
   }
-  if (input.interpretiveConfidence < 0.45 && input.surfaceConfidence < 0.60) {
+  if (input.interpretiveConfidence < 0.28 && input.surfaceConfidence < 0.55) {
     return 'minimal_fallback';
   }
   return 'normal';

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { usePreferences, useSetThreadViewPrefs, useSetFeedViewPrefs } from '../lib/atproto/queries.js';
-import { useSessionStore } from '../store/sessionStore.js';
+import { usePreferences, useSetThreadViewPrefs, useSetFeedViewPrefs } from '../lib/atproto/queries';
+import { useSessionStore } from '../store/sessionStore';
 
 const THREAD_SORT_OPTIONS = [
   { value: 'oldest',     label: 'Oldest first' },

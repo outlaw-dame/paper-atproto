@@ -1,18 +1,27 @@
 // ─── Inference Client ─────────────────────────────────────────────────────
 // Manages the inference web worker and exposes a clean Promise-based API.
 
-import type { AbuseModelResult } from '../lib/abuseModel.js';
+import type { AbuseModelResult } from '../lib/abuseModel';
 import type {
   ComposerEmotionResult,
   ComposerQualityResult,
   ComposerSentimentResult,
   ComposerTargetedToneResult,
-} from '../lib/composerMl.js';
-import type { ToneModelResult } from '../lib/toneModel.js';
+} from '../lib/composerMl';
+import type { ToneModelResult } from '../lib/toneModel';
 
 type PendingRequest = {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
+};
+
+type SmokeCheckResult = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  crossOriginIsolated: boolean;
+  allowLocalModels: boolean;
+  allowRemoteModels: boolean;
+  assetIntegrityOk: boolean;
+  assetError: string | null;
 };
 
 class InferenceClient {
@@ -21,6 +30,39 @@ class InferenceClient {
   private idCounter = 0;
   private readyCallbacks: (() => void)[] = [];
   private _status: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  private onWorkerMessage = (event: MessageEvent) => {
+    const { id, type, result, error } = event.data;
+
+    if (id === '__system__') {
+      if (type === 'ready') {
+        this._status = 'ready';
+        this.readyCallbacks.forEach((callback) => callback());
+        this.readyCallbacks = [];
+      } else if (type === 'error') {
+        this._status = 'error';
+      }
+      return;
+    }
+
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+
+    if (error) {
+      pending.reject(new Error(error));
+    } else {
+      pending.resolve(result);
+    }
+  };
+
+  private onWorkerError = (err: ErrorEvent) => {
+    this._status = 'error';
+    for (const [, req] of this.pending) {
+      req.reject(new Error(`Worker crashed: ${err.message}`));
+    }
+    this.pending.clear();
+    this.worker = null;
+  };
 
   get status() { return this._status; }
 
@@ -49,49 +91,45 @@ class InferenceClient {
       { type: 'module' },
     );
 
-    this.worker.addEventListener('message', (event) => {
-      const { id, type, result, error } = event.data;
-
-      if (id === '__system__') {
-        if (type === 'ready') {
-          this._status = 'ready';
-          this.readyCallbacks.forEach((callback) => callback());
-          this.readyCallbacks = [];
-        } else if (type === 'error') {
-          this._status = 'error';
-        }
-        return;
-      }
-
-      const pending = this.pending.get(id);
-      if (!pending) return;
-      this.pending.delete(id);
-
-      if (error) {
-        pending.reject(new Error(error));
-      } else {
-        pending.resolve(result);
-      }
-    });
-
-    this.worker.addEventListener('error', (err) => {
-      this._status = 'error';
-      for (const [, req] of this.pending) {
-        req.reject(new Error(`Worker crashed: ${err.message}`));
-      }
-      this.pending.clear();
-      this.worker = null;
-    });
+    this.worker.addEventListener('message', this.onWorkerMessage);
+    this.worker.addEventListener('error', this.onWorkerError);
 
     return this.worker;
   }
 
-  private send<T>(type: string, payload?: any): Promise<T> {
+  private send<T>(type: string, payload?: any, options: { timeoutMs?: number } = {}): Promise<T> {
     const id = String(++this.idCounter);
     const worker = this.getWorker();
 
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      const settle = (callback: () => void) => {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        callback();
+      };
+
+      this.pending.set(id, {
+        resolve: (value) => {
+          settle(() => resolve(value));
+        },
+        reject: (reason) => {
+          settle(() => reject(reason));
+        },
+      });
+
+      const timeoutMs = Number(options.timeoutMs ?? 0);
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeoutId = setTimeout(() => {
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          this.pending.delete(id);
+          reject(new Error(`Worker request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+
       worker.postMessage({ id, type, payload });
     });
   }
@@ -161,6 +199,10 @@ class InferenceClient {
     return this.send('status');
   }
 
+  async runSmokeCheck(timeoutMs = 6000): Promise<SmokeCheckResult> {
+    return this.send<SmokeCheckResult>('smoke', undefined, { timeoutMs });
+  }
+
   async captionImage(imageUrl: string): Promise<string> {
     const res = await this.send<{ caption: string }>('caption_image', { imageUrl });
     return res.caption;
@@ -179,9 +221,19 @@ class InferenceClient {
   }
 
   terminate(): void {
-    this.worker?.terminate();
+    const worker = this.worker;
+    if (worker) {
+      worker.removeEventListener('message', this.onWorkerMessage);
+      worker.removeEventListener('error', this.onWorkerError);
+      worker.terminate();
+    }
     this.worker = null;
+
+    for (const [, req] of this.pending) {
+      req.reject(new Error('Inference worker terminated before request completion'));
+    }
     this.pending.clear();
+
     this._status = 'idle';
   }
 }

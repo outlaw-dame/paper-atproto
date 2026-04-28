@@ -1,5 +1,5 @@
 import React from 'react';
-import { getLeagueByDid, getTeamByDid } from '../sports/leagueRegistry.js';
+import { getLeagueByDid, getTeamByDid } from '../sports/leagueRegistry';
 
 interface OfficialSportsBadgeProps {
   authorDid: string;

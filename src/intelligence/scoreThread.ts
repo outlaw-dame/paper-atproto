@@ -19,9 +19,9 @@ import type {
   EvidenceSignal,
   EntityKind,
   ContributorImpact,
-} from './interpolatorTypes.js';
-import type { ThreadNode, ResolvedFacet, ResolvedEmbed } from '../lib/resolver/atproto.js';
-import { linkAndMatchEntities, type EntityCatalog } from './entityLinking.js';
+} from './interpolatorTypes';
+import type { ThreadNode, ResolvedFacet, ResolvedEmbed } from '../lib/resolver/atproto';
+import { linkAndMatchEntities, type EntityCatalog } from './entityLinking';
 
 // ─── Evidence extraction ──────────────────────────────────────────────────
 
@@ -30,6 +30,13 @@ const FIRSTHAND_RE = /\b(i (saw|witnessed|experienced|tested|tried|built|worked|
 const COUNTEREXAMPLE_RE = /\b(for example|for instance|case in point|specifically|e\.g\.|namely|consider)\b/i;
 const SPECULATION_RE = /\b(i think|i believe|i feel|maybe|perhaps|possibly|might be|could be|seems like|appears to)\b/i;
 const CLAIM_CITE_RE = /\b(according to|per |cited in|study shows?|research (finds?|shows?|suggests?)|data (shows?|suggests?))\b/i;
+const DIRECT_SOURCE_SHARE_RE = /\b(i posted|posted the|shared|linked|links? to|point(?:s|ed)? to|cited|uploaded|quoted?)\b/i;
+const DOCUMENT_SOURCE_RE = /\b(pdf|memo|notice|agenda|faq|report|study|paper|filing|article|writeup|blog post|advisory|disclosure|document|minutes|statement)\b/i;
+const OFFICIAL_SOURCE_RE = /\b(board agenda|agenda pdf|staff faq|faq|policy|rule|law|ordinance|regulation|official|city utility|school board|board|district|vote text|building notice|notice|advisory|disclosure)\b/i;
+const SECONDARY_SOURCE_RE = /\b(blog post|writeup|article|thread)\b/i;
+const SOURCE_GAP_RE = /\b(primary (?:source|advisory|disclosure)|not (?:the )?primary (?:source|advisory|disclosure)|unless someone posts (?:the )?(?:advisory|disclosure)|need(?:s)? (?:a |the )?(?:source|advisory|disclosure)|(?:has not|not) confirmed|secondary (?:writeup|source)|not the primary disclosure|do you have (?:the )?(?:order|notice|advisory|source)|asking for (?:the )?(?:order|notice|advisory)|no public (?:order|notice|advisory|disclosure)|people quoting each other)\b/i;
+const CORRECTION_RE = /\b(narrower than|narrower exemption|not a full (?:rollback|repeal)|not repealing|not repealed|not killing the policy|rather than|only mentions?|limited to|does not change|doesn't change|temporary pause|during the inspection window|access restrictions|reporting requirements stay in place|not exposed|still require(?:s)?)\b/i;
+const CLARIFICATION_CUE_RE = /\b(clarif|could you|what do you mean|do you mean|explain|scope|specifics|inspection window|handled separately|reporting requirements|not confirmed)\b/i;
 
 function extractEvidenceSignals(
   text: string,
@@ -38,6 +45,7 @@ function extractEvidenceSignals(
 ): EvidenceSignal[] {
   const signals: EvidenceSignal[] = [];
   const lower = text.toLowerCase();
+  const hasSourceGap = SOURCE_GAP_RE.test(lower);
 
   // ── Facet links (richtext citations — highest confidence) ─────────────
   for (const f of facets) {
@@ -64,6 +72,20 @@ function extractEvidenceSignals(
   // ── Attributed claim in prose ("according to", "study shows", etc.) ───
   if (CLAIM_CITE_RE.test(lower)) {
     signals.push({ kind: 'citation', confidence: 0.72, extractedText: 'attributed claim' });
+  }
+
+  // ── Plain-text source/document references ("posted the memo", "agenda PDF") ──
+  const documentSourceMatch = text.match(DOCUMENT_SOURCE_RE);
+  if (documentSourceMatch && !(hasSourceGap && !DIRECT_SOURCE_SHARE_RE.test(lower))) {
+    let confidence = DIRECT_SOURCE_SHARE_RE.test(lower) ? 0.56 : 0.44;
+    if (OFFICIAL_SOURCE_RE.test(lower)) confidence += 0.18;
+    if (SECONDARY_SOURCE_RE.test(lower)) confidence = Math.min(confidence, 0.48);
+
+    signals.push({
+      kind: 'citation',
+      confidence: Math.min(0.82, confidence),
+      extractedText: documentSourceMatch[0],
+    });
   }
 
   // ── Numeric data point ────────────────────────────────────────────────
@@ -102,7 +124,7 @@ function computeFactualContribution(signals: EvidenceSignal[]): number {
   let score = 0;
   for (const s of signals) {
     switch (s.kind) {
-      case 'citation':       score += 0.30 * s.confidence; break;
+      case 'citation':       score += 0.40 * s.confidence; break;
       case 'data_point':     score += 0.25 * s.confidence; break;
       case 'firsthand':      score += 0.20 * s.confidence; break;
       case 'counterexample': score += 0.15 * s.confidence; break;
@@ -155,9 +177,15 @@ function assignRole(
   const hasData = signals.some(s => s.kind === 'data_point');
   const hasFirsthand = signals.some(s => s.kind === 'firsthand');
   const speculative = signals.length > 0 && signals.every(s => s.kind === 'speculation');
+  const hasDocumentSourceCue = DOCUMENT_SOURCE_RE.test(lower);
+  const hasOfficialSourceCue = OFFICIAL_SOURCE_RE.test(lower) && (hasCitation || hasDocumentSourceCue);
+  const hasSecondarySourceCue = SECONDARY_SOURCE_RE.test(lower);
+  const hasSourceGap = SOURCE_GAP_RE.test(lower);
+  const hasCorrectionCue = CORRECTION_RE.test(lower);
+  const hasDirectSourceShare = DIRECT_SOURCE_SHARE_RE.test(lower);
 
   const hasQuestion = text.includes('?');
-  const hasClarification = /\b(clarif|could you|what do you mean|do you mean|explain)\b/.test(lower);
+  const hasClarification = CLARIFICATION_CUE_RE.test(lower);
   const hasDisagreement = /\b(disagree|wrong|actually|but wait|however|not true|incorrect|no,)\b/.test(lower);
   const hasAgreement = /\b(agree|exactly|yes|correct|right|absolutely|totally)\b/.test(lower);
 
@@ -171,12 +199,32 @@ function assignRole(
   if (words < 4 && !hasCitation) return 'repetitive';
   if (isRepetitive) return 'repetitive';
 
+  if (hasSourceGap && (!hasDirectSourceShare || hasSecondarySourceCue)) {
+    return 'clarifying';
+  }
+  if (hasOfficialSourceCue && (hasDisagreement || hasCorrectionCue)) {
+    return 'useful_counterpoint';
+  }
+  if (hasOfficialSourceCue && (hasDirectSourceShare || hasCitation || hasData)) {
+    return 'rule_source';
+  }
+  if ((hasCitation || hasDocumentSourceCue) && (hasDisagreement || hasCorrectionCue)) {
+    return 'useful_counterpoint';
+  }
+  if ((hasCitation || hasDocumentSourceCue) && (hasClarification || hasSourceGap)) {
+    return 'clarifying';
+  }
+  if (hasCitation || hasDocumentSourceCue) {
+    return hasSecondarySourceCue ? 'new_information' : 'source_bringer';
+  }
   if (factualContribution > 0.5 && (hasCitation || hasData)) {
     return hasDisagreement ? 'useful_counterpoint' : 'new_information';
   }
   if (hasDisagreement && hasCitation) return 'useful_counterpoint';
   if (hasClarification || (hasQuestion && !hasDisagreement)) return 'clarifying';
   if (hasDisagreement && (hasData || hasFirsthand)) return 'useful_counterpoint';
+  if (hasCorrectionCue && /\b(vote text|faq|notice|policy)\b/.test(lower)) return 'useful_counterpoint';
+  if (hasCorrectionCue) return 'direct_response';
   if (hasDisagreement) return 'provocative';
   if (hasCitation || hasData || hasFirsthand) return 'new_information';
   if (hasAgreement && words < 8) return 'repetitive';

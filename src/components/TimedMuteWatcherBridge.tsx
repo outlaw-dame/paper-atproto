@@ -1,5 +1,5 @@
 import React from 'react';
-import { useTimedMuteWatcher } from '../lib/atproto/useTimedMuteWatcher.js';
+import { useTimedMuteWatcher } from '../lib/atproto/useTimedMuteWatcher';
 
 // Mounted lazily from AppShell to keep ATProto watcher logic out of the
 // initial synchronous startup import path.

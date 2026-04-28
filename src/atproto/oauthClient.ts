@@ -1,8 +1,16 @@
 import { BrowserOAuthClient } from '@atproto/oauth-client-browser';
-import { withRetry } from '../lib/atproto/retry.js';
+import { withRetry } from '../lib/atproto/retry';
 
 const DEFAULT_HANDLE_RESOLVER = 'https://bsky.social';
-const DEFAULT_OAUTH_SCOPE = 'atproto transition:generic';
+const APPVIEW_AUDIENCE = 'did:web:api.bsky.app#bsky_appview';
+export const FOLLOWING_TIMELINE_SCOPE = `rpc:app.bsky.feed.getTimeline?aud=${APPVIEW_AUDIENCE}`;
+const APPVIEW_PROFILE_SCOPE = `rpc:app.bsky.actor.getProfile?aud=${APPVIEW_AUDIENCE}`;
+const DEFAULT_OAUTH_SCOPE = [
+  'atproto',
+  'transition:generic',
+  FOLLOWING_TIMELINE_SCOPE,
+  APPVIEW_PROFILE_SCOPE,
+].join(' ');
 const MAX_AUTH_IDENTIFIER_LENGTH = 512;
 
 const OAUTH_CLIENT_ID = parseConfiguredUrl(
@@ -13,8 +21,18 @@ const OAUTH_HANDLE_RESOLVER =
   parseConfiguredUrl(import.meta.env.VITE_ATPROTO_HANDLE_RESOLVER, 'VITE_ATPROTO_HANDLE_RESOLVER')
   ?? DEFAULT_HANDLE_RESOLVER;
 const OAUTH_REQUESTED_SCOPE = parseConfiguredScope(import.meta.env.VITE_ATPROTO_OAUTH_SCOPE);
+const LOCALHOST_OAUTH_SCOPE = 'atproto';
+const OAUTH_CLIENT_STORAGE_RECOVERY_STACK_FRAGMENTS = [
+  'oauth-client-browser',
+  'browser-oauth-database',
+  'indexed-db/db',
+];
+const OAUTH_RECOVERY_LISTENER_KEY = '__paperOAuthRecoveryListenerInstalled__';
 
 let oauthClientPromise: Promise<BrowserOAuthClient> | null = null;
+let oauthClientInstance: BrowserOAuthClient | null = null;
+let oauthClientResetPromise: Promise<void> | null = null;
+let hasInstalledOAuthClientRecovery = false;
 
 export interface OAuthRuntimeConfigStatus {
   canStartOAuth: boolean;
@@ -30,20 +48,77 @@ function isLoopbackUrl(url: URL): boolean {
   return url.protocol === 'http:' && isLoopbackHost(url.hostname);
 }
 
-function getDerivedClientIdFromLocation(): string | null {
-  if (typeof window === 'undefined') return null;
+function parseCurrentUrl(currentHref?: string): URL | null {
+  if (typeof window === 'undefined' && !currentHref) return null;
 
   try {
-    const currentUrl = new URL(window.location.href);
-    if (currentUrl.protocol !== 'https:') return null;
-    return new URL('/oauth/client-metadata.json', currentUrl.origin).toString();
+    return new URL(currentHref ?? window.location.href);
   } catch {
     return null;
   }
 }
 
 function resolveOAuthClientId(): string | null {
-  return OAUTH_CLIENT_ID ?? getDerivedClientIdFromLocation();
+  return OAUTH_CLIENT_ID;
+}
+
+function isClosedOAuthDatabaseMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes('database closed') || normalized.includes('database has been disposed');
+}
+
+export function isRecoverableOAuthClientError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (!isClosedOAuthDatabaseMessage(error.message)) return false;
+  if (!error.stack) return true;
+
+  const stack = error.stack.toLowerCase();
+  return OAUTH_CLIENT_STORAGE_RECOVERY_STACK_FRAGMENTS.some((fragment) => stack.includes(fragment));
+}
+
+async function disposeOAuthClient(client: BrowserOAuthClient | null): Promise<void> {
+  if (!client) return;
+
+  const asyncDisposable = client as BrowserOAuthClient & {
+    [Symbol.asyncDispose]?: () => Promise<void>;
+    dispose?: () => void;
+  };
+
+  try {
+    if (typeof asyncDisposable[Symbol.asyncDispose] === 'function') {
+      await asyncDisposable[Symbol.asyncDispose]!();
+      return;
+    }
+
+    if (typeof asyncDisposable.dispose === 'function') {
+      asyncDisposable.dispose();
+    }
+  } catch {
+    // Disposal is best-effort only; never leak the original auth failure.
+  }
+}
+
+function installOAuthClientRecovery(): void {
+  if (hasInstalledOAuthClientRecovery || typeof window === 'undefined') return;
+
+  const globalScope = globalThis as Record<string, unknown>;
+  if (globalScope[OAUTH_RECOVERY_LISTENER_KEY] === true) {
+    hasInstalledOAuthClientRecovery = true;
+    return;
+  }
+
+  window.addEventListener('unhandledrejection', (event) => {
+    if (!isRecoverableOAuthClientError(event.reason)) {
+      return;
+    }
+
+    event.preventDefault();
+    console.warn('[OAuth] Browser auth storage closed unexpectedly; resetting the client.');
+    void resetOAuthClient('browser-storage-closed');
+  });
+
+  globalScope[OAUTH_RECOVERY_LISTENER_KEY] = true;
+  hasInstalledOAuthClientRecovery = true;
 }
 
 function parseConfiguredUrl(rawValue: string | undefined, label: string): string | null {
@@ -73,7 +148,7 @@ function parseConfiguredScope(rawValue: string | undefined): string {
     .split(/\s+/)
     .map((token) => token.trim())
     .filter(Boolean)
-    .filter((token) => /^[a-z][a-z0-9:._-]*$/i.test(token));
+    .filter((token) => /^[\x21-\x7E]+$/.test(token));
 
   if (!tokens.length) return DEFAULT_OAUTH_SCOPE;
 
@@ -104,7 +179,6 @@ async function buildOAuthClient(): Promise<BrowserOAuthClient> {
 
   return new BrowserOAuthClient({
     // Loopback mode for local development when a public client_id is not configured.
-    clientMetadata: undefined,
     handleResolver: OAUTH_HANDLE_RESOLVER,
     responseMode: 'query',
   });
@@ -118,21 +192,11 @@ export function getOAuthRuntimeConfigStatus(
   currentHref?: string,
   configuredClientId: string | null = resolveOAuthClientId(),
 ): OAuthRuntimeConfigStatus {
-  if (typeof window === 'undefined' && !currentHref) {
+  const currentUrl = parseCurrentUrl(currentHref);
+  if (!currentUrl) {
     return {
       canStartOAuth: Boolean(configuredClientId),
       blockingMessage: null,
-      warningMessage: null,
-    };
-  }
-
-  let currentUrl: URL;
-  try {
-    currentUrl = new URL(currentHref ?? window.location.href);
-  } catch {
-    return {
-      canStartOAuth: false,
-      blockingMessage: 'This app origin is invalid for OAuth. Reload the app from a valid HTTPS or localhost URL.',
       warningMessage: null,
     };
   }
@@ -160,7 +224,7 @@ export function getOAuthRuntimeConfigStatus(
     return {
       canStartOAuth: true,
       blockingMessage: null,
-      warningMessage: null,
+      warningMessage: 'Running in loopback OAuth mode without hosted client metadata. Following feed permission may be unavailable unless VITE_ATPROTO_OAUTH_CLIENT_ID is configured.',
     };
   }
 
@@ -184,15 +248,94 @@ export function getOAuthRuntimeConfigStatus(
   }
 }
 
-export function getOAuthClient(): Promise<BrowserOAuthClient> {
+export async function resetOAuthClient(_reason = 'manual'): Promise<void> {
+  if (oauthClientResetPromise) {
+    return oauthClientResetPromise;
+  }
+
+  const pendingClientPromise = oauthClientPromise;
+  const existingClient = oauthClientInstance;
+
+  oauthClientPromise = null;
+  oauthClientInstance = null;
+
+  oauthClientResetPromise = (async () => {
+    const resolvedClient = existingClient ?? (pendingClientPromise ? await pendingClientPromise.catch(() => null) : null);
+    await disposeOAuthClient(resolvedClient);
+  })().finally(() => {
+    oauthClientResetPromise = null;
+  });
+
+  return oauthClientResetPromise;
+}
+
+export async function getOAuthClient(): Promise<BrowserOAuthClient> {
+  installOAuthClientRecovery();
+
+  if (oauthClientResetPromise) {
+    await oauthClientResetPromise;
+  }
+
   if (!oauthClientPromise) {
-    oauthClientPromise = buildOAuthClient().catch((error) => {
-      oauthClientPromise = null;
-      throw error;
-    });
+    oauthClientPromise = buildOAuthClient()
+      .then((client) => {
+        oauthClientInstance = client;
+        return client;
+      })
+      .catch((error) => {
+        oauthClientPromise = null;
+        oauthClientInstance = null;
+        throw error;
+      });
   }
 
   return oauthClientPromise;
+}
+
+export async function withRecoveredOAuthClient<T>(
+  operation: (oauthClient: BrowserOAuthClient) => Promise<T>,
+  context = 'oauth-operation',
+): Promise<T> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const oauthClient = await getOAuthClient();
+      return await operation(oauthClient);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !isRecoverableOAuthClientError(error)) {
+        throw error;
+      }
+
+      console.warn(`[OAuth] Recovering browser auth client after ${context} storage closure.`);
+      await resetOAuthClient(context);
+    }
+  }
+
+  throw lastError ?? new Error('OAuth client recovery exhausted.');
+}
+
+export function isLoopbackOAuthOrigin(currentHref?: string): boolean {
+  const currentUrl = parseCurrentUrl(currentHref);
+  return currentUrl ? isLoopbackUrl(currentUrl) : false;
+}
+
+function normalizeScopeSet(scope?: string): Set<string> {
+  if (!scope) return new Set();
+  return new Set(
+    scope
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(Boolean),
+  );
+}
+
+export function hasFollowingFeedScope(scope?: string): boolean {
+  const granted = normalizeScopeSet(scope);
+  if (!granted.size) return false;
+
+  return granted.has('transition:generic') || granted.has(FOLLOWING_TIMELINE_SCOPE);
 }
 
 export function sanitizeAuthIdentifier(value: string): string {
@@ -237,5 +380,8 @@ export function createOAuthState(): string {
 }
 
 export function getOAuthRequestedScope(): string {
+  if (isLoopbackOAuthOrigin() && !resolveOAuthClientId()) {
+    return LOCALHOST_OAUTH_SCOPE;
+  }
   return OAUTH_REQUESTED_SCOPE;
 }

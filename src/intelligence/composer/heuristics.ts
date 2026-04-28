@@ -5,4 +5,4 @@ export {
   type SentimentLevel,
   type SentimentResult,
   type ToneClassifier,
-} from '../../lib/sentiment.js';
+} from '../../lib/sentiment';

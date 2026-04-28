@@ -11,10 +11,10 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useTranslationStore } from '../store/translationStore.js';
-import { translationClient } from '../lib/i18n/client.js';
-import { hasMeaningfulTranslation } from '../lib/i18n/normalize.js';
-import type { TranslationMode } from '../lib/i18n/types.js';
+import { useTranslationStore } from '../store/translationStore';
+import { translationClient } from '../lib/i18n/client';
+import { hasMeaningfulTranslation } from '../lib/i18n/normalize';
+import type { TranslationMode } from '../lib/i18n/types';
 
 // ─── Translate Icon ───────────────────────────────────────────────────────────
 

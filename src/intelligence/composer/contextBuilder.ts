@@ -1,5 +1,5 @@
-import type { AnalyzeOptions } from '../../lib/sentiment.js';
-import type { ComposerContext } from './types.js';
+import type { AnalyzeOptions } from '../../lib/sentiment';
+import type { ComposerContext } from './types';
 
 interface BuildReplyComposerContextInput {
   draftText: string;
@@ -31,6 +31,13 @@ function uniqTrimmed(values: Array<string | undefined | null>, limit: number): s
   ).slice(0, limit);
 }
 
+function sanitizeContextSignal(value: string | undefined, maxLength: number): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return undefined;
+  return trimmed.slice(0, maxLength);
+}
+
 function buildTargetText(context: ComposerContext): string | undefined {
   const authorHandle = context.directParent?.authorHandle?.trim();
   if (authorHandle) {
@@ -44,6 +51,46 @@ function buildTargetText(context: ComposerContext): string | undefined {
   if (!sentence) return undefined;
 
   return sentence.slice(0, 96);
+}
+
+function buildContextSignals(context: ComposerContext): string[] {
+  const premiumContext = context.summaries?.premiumContext;
+  const mediaContext = context.summaries?.mediaContext;
+  const epistemicSummary = context.summaries?.epistemicSummary;
+  const threadState = context.threadState;
+
+  return uniqTrimmed(
+    [
+      premiumContext?.groundedContext
+        ? `Deep context: ${sanitizeContextSignal(premiumContext.groundedContext, 140)}`
+        : premiumContext?.deepSummary
+          ? `Deep summary: ${sanitizeContextSignal(premiumContext.deepSummary, 140)}`
+          : undefined,
+      premiumContext?.perspectiveGaps[0]
+        ? `Missing context: ${sanitizeContextSignal(premiumContext.perspectiveGaps[0], 120)}`
+        : undefined,
+      premiumContext?.followUpQuestions[0]
+        ? `Open question: ${sanitizeContextSignal(premiumContext.followUpQuestions[0], 120)}`
+        : undefined,
+      mediaContext?.summary
+        ? `Media context: ${sanitizeContextSignal(mediaContext.summary, 140)}${mediaContext.analysisStatus === 'degraded' ? ' (low-authority hint)' : ''}`
+        : mediaContext?.primaryKind
+          ? `Media context: key media appears to be a ${mediaContext.primaryKind}${mediaContext.analysisStatus === 'degraded' ? ' (low-authority hint)' : ''}`
+          : undefined,
+      mediaContext?.cautionFlags[0]
+        ? `Media caution: ${sanitizeContextSignal(mediaContext.cautionFlags[0], 96)}`
+        : undefined,
+      epistemicSummary?.missingContextHints[0]
+        ? `Context gap: ${sanitizeContextSignal(epistemicSummary.missingContextHints[0], 120)}`
+        : undefined,
+      threadState?.conversationPhase && threadState?.dominantTone
+        ? `Thread state: ${threadState.conversationPhase} / ${threadState.dominantTone}`
+        : threadState?.conversationPhase
+          ? `Thread phase: ${threadState.conversationPhase}`
+          : undefined,
+    ],
+    6,
+  );
 }
 
 export function buildPostComposerContext(draftText: string): ComposerContext {
@@ -122,6 +169,7 @@ export function toAnalyzeOptions(context: ComposerContext): AnalyzeOptions {
     32,
   );
   const targetText = buildTargetText(context);
+  const contextSignals = buildContextSignals(context);
 
   return {
     ...(context.directParent?.text ? { parentText: context.directParent.text } : {}),
@@ -134,6 +182,7 @@ export function toAnalyzeOptions(context: ComposerContext): AnalyzeOptions {
       : {}),
     threadTexts,
     commentTexts,
+    ...(contextSignals.length > 0 ? { contextSignals } : {}),
     ...(typeof context.replyContext?.totalCommentCount === 'number'
       ? { totalCommentCount: context.replyContext.totalCommentCount }
       : {}),

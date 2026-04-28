@@ -1,4 +1,4 @@
-import { getConfiguredApiBaseUrl, resolveApiUrl } from './apiBase.js';
+import { getConfiguredApiBaseUrl, resolveApiUrl } from './apiBase';
 
 interface PodcastIndexSearchFeed {
   id?: number;

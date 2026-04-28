@@ -1,43 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { feedService } from '../feeds.js';
-import { useActivityStore } from '../store/activityStore.js';
-import { searchPodcastIndex, type PodcastIndexSearchFeed } from '../lib/podcastIndexClient.js';
-import type { Feed, FeedItem } from '../schema.js';
+import { feedService } from '../feeds';
+import { useActivityStore } from '../store/activityStore';
+import { searchPodcastIndex, type PodcastIndexSearchFeed } from '../lib/podcastIndexClient';
+import type { Feed, FeedItem } from '../schema';
+import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
+import {
+  readEpisodeEntries,
+  type PodcastEpisodeEntry,
+  writeEpisodeEntries,
+} from '../lib/podcastEpisodeStorage';
 
 type FeedCategory = 'News' | 'Podcasts' | 'Videos' | 'General';
 
 const SUPPORTED_FEED_TYPES = ['RSS', 'ATOM', 'JSON Feed', 'JSON-LD', 'RDF/XML'];
 const SAVED_EPISODES_KEY = 'paper-atproto.podcast.saved.v1';
 const DOWNLOADED_EPISODES_KEY = 'paper-atproto.podcast.downloaded.v1';
-
-interface PodcastEpisodeEntry {
-  id: string;
-  title: string;
-  showTitle: string;
-  link: string;
-  pubDate?: string | undefined;
-}
-
-function readEpisodeEntries(key: string): PodcastEpisodeEntry[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as PodcastEpisodeEntry[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeEpisodeEntries(key: string, entries: PodcastEpisodeEntry[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(entries));
-  } catch {
-    // ignore storage write errors
-  }
-}
 
 function inferPodcastCategory(feed: Feed): string {
   const corpus = `${feed.title || ''} ${feed.description || ''}`.toLowerCase();
@@ -172,30 +149,36 @@ export default function FeedsSettingsPage() {
   };
 
   const handleAddFeed = async () => {
-    const trimmedUrl = newFeedUrl.trim();
-    if (!trimmedUrl) return;
-
     setIsLoading(true);
     setError(null);
     setSuccessMessage(null);
 
     try {
-      await feedService.addFeed(trimmedUrl, category);
+      const result = await subscribeToExternalFeed({
+        rawUrl: newFeedUrl,
+        category,
+      });
+      if (!result.ok) {
+        setError(result.message);
+        setSuccessMessage(null);
+        addAppNotification({
+          title: result.reason === 'invalid_url' ? 'Invalid Feed URL' : 'Feed Add Failed',
+          message: result.reason === 'invalid_url'
+            ? 'Only valid http(s) feed URLs are supported.'
+            : `Could not add ${result.normalizedUrl}`,
+          level: 'warning',
+        });
+        return;
+      }
+
       setNewFeedUrl('');
       setSuccessMessage('Feed added successfully.');
       addAppNotification({
         title: 'Feed Added',
-        message: `Added ${trimmedUrl}`,
+        message: `Added ${result.normalizedUrl}`,
         level: 'success',
       });
       await loadFeeds();
-    } catch {
-      setError('Failed to add feed. Verify the URL and feed format.');
-      addAppNotification({
-        title: 'Feed Add Failed',
-        message: `Could not add ${trimmedUrl}`,
-        level: 'warning',
-      });
     } finally {
       setIsLoading(false);
     }
@@ -219,26 +202,33 @@ export default function FeedsSettingsPage() {
   };
 
   const addPodcastIndexFeed = async (feedUrl: string) => {
-    if (!feedUrl.trim()) return;
     setError(null);
     setSuccessMessage(null);
-    try {
-      await feedService.addFeed(feedUrl, 'Podcasts');
+    const result = await subscribeToExternalFeed({
+      rawUrl: feedUrl,
+      category: 'Podcasts',
+    });
+    if (result.ok) {
       setSuccessMessage('Podcast feed added from Podcast Index.');
       addAppNotification({
         title: 'Podcast Added',
-        message: `Added podcast ${feedUrl}`,
+        message: `Added podcast ${result.normalizedUrl}`,
         level: 'success',
       });
       await loadFeeds();
-    } catch {
-      setError('Failed to add Podcast Index feed URL.');
-      addAppNotification({
-        title: 'Podcast Add Failed',
-        message: `Could not add podcast ${feedUrl}`,
-        level: 'warning',
-      });
+      return;
     }
+
+    setError(result.reason === 'invalid_url'
+      ? 'Podcast Index returned an invalid feed URL.'
+      : result.message);
+    addAppNotification({
+      title: result.reason === 'invalid_url' ? 'Invalid Feed URL' : 'Podcast Add Failed',
+      message: result.reason === 'invalid_url'
+        ? 'Podcast Index returned an invalid feed URL.'
+        : `Could not add podcast ${result.normalizedUrl}`,
+      level: 'warning',
+    });
   };
 
   return (

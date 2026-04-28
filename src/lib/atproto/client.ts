@@ -7,11 +7,12 @@
 //   • a single place to add logging, metrics, or mocking later
 //
 // Usage:
-//   import { atpCall } from '../lib/atproto/client.js';
+//   import { atpCall } from '../lib/atproto/client';
 //   const feed = await atpCall(() => agent.getTimeline({ limit: 30 }), { signal });
 
-import { withRetry, type RetryOptions } from './retry.js';
-import { normalizeError, type AtpError } from './errors.js';
+import { withRetry, type RetryOptions } from './retry';
+import { normalizeError, type AtpError } from './errors';
+import { composeAbortSignals } from '../abortSignals';
 
 export type { AtpError };
 
@@ -58,31 +59,6 @@ function recordAuthFailureDebug(kind: string, status: number | undefined, messag
 export interface CallOptions extends RetryOptions {
   /** Milliseconds before the request is automatically cancelled. Default: 15 000 ms */
   timeoutMs?: number;
-}
-
-function composeAbortSignals(signals: AbortSignal[]): AbortSignal {
-  if (typeof AbortSignal.any === 'function') {
-    return AbortSignal.any(signals);
-  }
-
-  const controller = new AbortController();
-  const onAbort = (event: Event) => {
-    const source = event.target as AbortSignal | null;
-    controller.abort(source?.reason);
-    for (const signal of signals) {
-      signal.removeEventListener('abort', onAbort);
-    }
-  };
-
-  for (const signal of signals) {
-    if (signal.aborted) {
-      controller.abort(signal.reason);
-      return controller.signal;
-    }
-    signal.addEventListener('abort', onAbort, { once: true });
-  }
-
-  return controller.signal;
 }
 
 /**

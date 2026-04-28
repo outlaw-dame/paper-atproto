@@ -8,9 +8,9 @@ import type {
   MediaVerificationProvider,
   MediaVerificationResult,
   VerificationRequest,
-} from './types.js';
-import { VerificationBadResponseError, VerificationConfigError, VerificationRateLimitError, VerificationTimeoutError } from './errors.js';
-import { withRetry } from './retry.js';
+} from './types';
+import { VerificationBadResponseError, VerificationConfigError, VerificationRateLimitError, VerificationTimeoutError } from './errors';
+import { withRetry } from './retry';
 
 export interface HttpProviderOptions {
   baseUrl: string;

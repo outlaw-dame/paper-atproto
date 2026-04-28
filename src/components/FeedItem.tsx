@@ -1,10 +1,12 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Card } from 'konsta/react';
-import { Markdown } from './Markdown.js';
-import { Gif } from './Gif.js';
-import { LinkPreview } from './LinkPreview.js';
-import { useProfileNavigation } from '../hooks/useProfileNavigation.js';
+import { Markdown } from './Markdown';
+import { Gif } from './Gif';
+import AudioEmbed from './AudioEmbed';
+import { LinkPreview } from './LinkPreview';
+import { isAudioUrl } from '../atproto/mappers';
+import { useProfileNavigation } from '../hooks/useProfileNavigation';
 
 interface FeedItemProps {
   post: {
@@ -30,6 +32,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
   // Parse embed if it's a string (from DB)
   const embed = typeof post.embed === 'string' ? JSON.parse(post.embed) : post.embed;
   const navigateToProfile = useProfileNavigation();
+  const avatarFallback = (post.author.handle?.trim()?.[0] ?? '?').toUpperCase();
 
   return (
     <motion.div
@@ -38,7 +41,6 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
       className="cursor-pointer"
     >
       <Card
-        margin="m-4"
         className="overflow-hidden rounded-xl shadow-lg border-none bg-white dark:bg-zinc-900"
       >
         <div className="p-4">
@@ -52,7 +54,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
             ) : (
               <div className="w-10 h-10 rounded-full bg-zinc-200 dark:bg-zinc-700 mr-3 flex items-center justify-center">
                 <span className="text-zinc-500 text-sm font-bold">
-                  {post.author.handle[0].toUpperCase()}
+                  {avatarFallback}
                 </span>
               </div>
             )}
@@ -105,8 +107,23 @@ export const FeedItem: React.FC<FeedItemProps> = ({ post, onClick }) => {
               ))}
             </div>
           )}
+          {embed?.type === 'audio' && (
+            <AudioEmbed
+              url={embed.url}
+              title={embed.title}
+              description={embed.description}
+              thumbnail={embed.thumb}
+            />
+          )}
           {embed?.type === 'app.bsky.embed.external' && (
-            embed.external.uri.includes('tenor.com') ? (
+            isAudioUrl(embed.external.uri) ? (
+              <AudioEmbed
+                url={embed.external.uri}
+                title={embed.external.title}
+                description={embed.external.description}
+                thumbnail={typeof embed.external.thumb === 'string' ? embed.external.thumb : undefined}
+              />
+            ) : (embed.external.uri.includes('tenor.com') || embed.external.uri.includes('klipy.com')) ? (
               <Gif 
                 url={embed.external.uri} 
                 title={embed.external.title} 

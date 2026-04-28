@@ -1,5 +1,5 @@
-import type { EntityImpact, EntityKind } from './interpolatorTypes.js';
-import type { ResolvedFacet } from '../lib/resolver/atproto.js';
+import type { EntityImpact, EntityKind } from './interpolatorTypes';
+import type { ResolvedFacet } from '../lib/resolver/atproto';
 
 export interface EntityCatalogEntry {
   canonicalId: string;
@@ -48,6 +48,8 @@ const STOP_WORDS = new Set([
   'there', 'what', 'when', 'where', 'which', 'would', 'could', 'should', 'have', 'has',
   'were', 'been', 'being', 'your', 'you', 'our', 'its', 'just', 'also', 'than', 'then',
 ]);
+
+const ENTITY_MATCH_CONFIDENCE_THRESHOLD = 0.8;
 
 // ─── Sentiment lexicons ───────────────────────────────────────────────────
 // Lightweight word lists for assistive entity-level sentiment scoring.
@@ -141,7 +143,7 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 }
 
 function bigrams(value: string): Set<string> {
-  const clean = value.replace(/\s+/g, ' ').trim();
+  const clean = value.replace(/\s+/g, ' ').trim().replace(/\s+/g, '');
   if (clean.length < 2) return new Set([clean]);
   const grams = new Set<string>();
   for (let i = 0; i < clean.length - 1; i += 1) {
@@ -159,6 +161,10 @@ function diceSimilarity(a: string, b: string): number {
     if (bg.has(gram)) intersection += 1;
   }
   return (2 * intersection) / (ag.size + bg.size);
+}
+
+function combinedEntitySimilarity(a: string, b: string): number {
+  return diceSimilarity(a, b) * 0.7 + jaccardSimilarity(tokenSet(a), tokenSet(b)) * 0.3;
 }
 
 function applyConceptCanonicalization(normalized: string): string {
@@ -281,7 +287,6 @@ function findBestCatalogMatch(
   catalog: EntityCatalog,
 ): { entry: EntityCatalogEntry; confidence: number } | null {
   let best: { entry: EntityCatalogEntry; confidence: number } | null = null;
-  const candidateTokens = tokenSet(candidate.normalized);
 
   for (const entry of catalog.values()) {
     if (entry.entityKind !== candidate.entityKind) continue;
@@ -290,13 +295,12 @@ function findBestCatalogMatch(
       return { entry, confidence: 0.99 };
     }
 
-    const lexical = Math.max(
-      diceSimilarity(candidate.normalized, entry.normalizedLabel),
-      ...[...entry.aliases].map(alias => diceSimilarity(candidate.normalized, alias)),
+    const combined = Math.max(
+      combinedEntitySimilarity(candidate.normalized, entry.normalizedLabel),
+      ...[...entry.aliases].map(alias => combinedEntitySimilarity(candidate.normalized, alias)),
     );
-    const tokenScore = jaccardSimilarity(candidateTokens, tokenSet(entry.normalizedLabel));
-    const combined = lexical * 0.7 + tokenScore * 0.3;
-    if (combined >= 0.76 && (!best || combined > best.confidence)) {
+
+    if (combined >= ENTITY_MATCH_CONFIDENCE_THRESHOLD && (!best || combined > best.confidence)) {
       best = { entry, confidence: combined };
     }
   }

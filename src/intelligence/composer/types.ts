@@ -1,6 +1,7 @@
-import type { AbuseModelResult } from '../../lib/abuseModel.js';
-import type { SentimentResult } from '../../lib/sentiment.js';
-import type { ComposerMLSignals } from './classifierContracts.js';
+import type { AbuseModelResult } from '../../lib/abuseModel';
+import type { SentimentResult } from '../../lib/sentiment';
+import type { ComposerMLSignals } from './classifierContracts';
+import type { MediaAnalysisStatus, MediaModerationStatus } from '../llmContracts';
 
 export type ComposerMode = 'post' | 'reply' | 'hosted_thread';
 export type ComposerGuidanceLevel = 'ok' | 'positive' | 'caution' | 'warning' | 'alert';
@@ -43,6 +44,48 @@ export interface HostedThreadComposerMeta {
   audience?: string;
 }
 
+export interface ComposerEpistemicSummary {
+  disagreementType: 'factual' | 'interpretive' | 'value-based';
+  missingContextHints: string[];
+  confidenceWarnings: string[];
+}
+
+export interface ComposerPremiumContextSummary {
+  deepSummary?: string;
+  groundedContext?: string;
+  perspectiveGaps: string[];
+  followUpQuestions: string[];
+  confidence: number;
+}
+
+export interface ComposerMediaContextSummary {
+  summary?: string;
+  primaryKind?: 'screenshot' | 'chart' | 'document' | 'photo' | 'meme' | 'unknown';
+  cautionFlags: string[];
+  confidence: number;
+  analysisStatus?: MediaAnalysisStatus;
+  moderationStatus?: MediaModerationStatus;
+}
+
+export interface ComposerSummaries {
+  directParentSummary?: string;
+  threadSummary?: string;
+  replyContextSummary?: string;
+  conversationHeatSummary?: string;
+  epistemicSummary?: ComposerEpistemicSummary;
+  premiumContext?: ComposerPremiumContextSummary;
+  mediaContext?: ComposerMediaContextSummary;
+}
+
+export interface ComposerThreadStateSummary {
+  dominantTone?: string;
+  conversationPhase?: string;
+  heatLevel?: number;
+  repetitionLevel?: number;
+  sourceSupportPresent?: boolean;
+  factualSignalPresent?: boolean;
+}
+
 export interface ComposerContext {
   mode: ComposerMode;
   draftText: string;
@@ -50,6 +93,8 @@ export interface ComposerContext {
   threadContext?: ComposerThreadContext;
   replyContext?: ComposerReplyContext;
   hostedThread?: HostedThreadComposerMeta;
+  summaries?: ComposerSummaries;
+  threadState?: ComposerThreadStateSummary;
 }
 
 export interface ComposerGuidanceUi {

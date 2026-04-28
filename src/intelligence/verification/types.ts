@@ -206,6 +206,17 @@ export interface VerificationOutcome {
   factualState: FactualState;
   reasons: VerificationReason[];
 
+  /** Wikidata/DBpedia canonical entities resolved from this reply's text.
+   *  Used to upgrade locally-generated entity IDs to authoritative canonical IDs
+   *  and boost matchConfidence on matching EntityImpact entries. */
+  canonicalEntities?: Array<{
+    mention: string;
+    canonicalId: string;
+    canonicalLabel: string;
+    confidence: number;
+    provider: string;
+  }>;
+
   diagnostics: {
     providerFailures: string[];
     latencyMs: number;

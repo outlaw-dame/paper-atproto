@@ -20,7 +20,7 @@
  * can enrich the result when a tone classifier is provided.
  */
 
-import type { ToneModelResult } from './toneModel.js';
+import type { ToneModelResult } from './toneModel';
 
 export type SentimentLevel = 'ok' | 'positive' | 'warn' | 'alert';
 
@@ -230,6 +230,8 @@ const SUPPORTIVE_MODEL_THRESHOLD = 0.78;
 const CONSTRUCTIVE_MODEL_THRESHOLD = 0.74;
 const MODEL_SCORE_MARGIN = 0.08;
 
+type StanceBucket = 'supportive' | 'questioning' | 'counterpoint' | 'evidence';
+
 // ─── Structural / context signals ─────────────────────────────────────────
 
 function detectStructuralSignals(text: string): string[] {
@@ -279,8 +281,40 @@ function analyzeParent(parentText: string): { heatSignals: string[]; isContentio
   return { heatSignals, isContentious };
 }
 
+function inferStanceBucket(text: string): StanceBucket | null {
+  const normalized = text.toLowerCase();
+
+  if (/\b(i\s+agree|agree\s+with|good\s+point|exactly|well\s+said)\b/i.test(normalized)) {
+    return 'supportive';
+  }
+  if (/\b(can\s+you\s+clarify|what\s+do\s+you\s+mean|genuine\s+question|help\s+me\s+understand)\b/i.test(normalized)) {
+    return 'questioning';
+  }
+  if (/\b(i\s+disagree|i\s+don'?t\s+think|however|on\s+the\s+other\s+hand|counterpoint)\b/i.test(normalized)) {
+    return 'counterpoint';
+  }
+  if (/\b(source|evidence|data\s+shows|according\s+to|citation|study)\b/i.test(normalized)) {
+    return 'evidence';
+  }
+
+  return null;
+}
+
+function analyzeStanceCoverage(texts: string[]): { diversity: number; represented: StanceBucket[] } {
+  const represented = new Set<StanceBucket>();
+
+  for (const text of texts.slice(0, 24)) {
+    const inferred = inferStanceBucket(text);
+    if (inferred) represented.add(inferred);
+  }
+
+  const representedBuckets = Array.from(represented);
+  const diversity = representedBuckets.length / 4;
+  return { diversity, represented: representedBuckets };
+}
+
 /** Detects mental health crisis language in text. */
-function detectMentalHealthCrisis(
+export function detectMentalHealthCrisis(
   text: string,
 ): { hasCrisis: boolean; category?: 'self-harm' | 'suicidal' | 'severe-depression' | 'hopelessness' | 'isolation' } {
   for (const { re, category } of MENTAL_HEALTH_CRISIS_PATTERNS) {
@@ -311,6 +345,8 @@ export interface AnalyzeOptions {
   commentTexts?: string[];
   /** Aggregate comments/replies count if available. */
   totalCommentCount?: number;
+  /** Bounded Conversation OS summary signals that can inform reply-aware analysis. */
+  contextSignals?: string[];
 }
 
 export type ToneClassifier = (text: string) => Promise<ToneModelResult>;
@@ -364,7 +400,7 @@ function toneLooksHostile(tone: ToneModelResult, isReplyContext: boolean): boole
   );
 }
 
-function mergeToneModelIntoSentiment(
+export function applyToneModelToSentiment(
   base: SentimentResult,
   text: string,
   tone: ToneModelResult,
@@ -452,6 +488,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     threadTexts = [],
     commentTexts = [],
     totalCommentCount = 0,
+    contextSignals = [],
   } = options;
 
   // Check for mental health crisis language immediately
@@ -470,6 +507,9 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
   // Analyse the parent post independently of draft length.
   const parentAnalysis = parentText ? analyzeParent(parentText) : null;
   const parentSignals = parentAnalysis?.heatSignals ?? [];
+  const mentalHealthFields = mentalHealthCrisis.category
+    ? { mentalHealthCategory: mentalHealthCrisis.category }
+    : {};
   const parentIsHot = (parentAnalysis?.heatSignals.length ?? 0) > 0;
   const parentIsContentious = parentAnalysis?.isContentious ?? false;
 
@@ -504,6 +544,19 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     parentSignals.push('Thread comments show recurring contentious themes — context-rich replies tend to land better.');
   }
 
+  const stanceCoverage = analyzeStanceCoverage(threadContextTexts);
+  if (parentText && stanceCoverage.represented.length > 0 && stanceCoverage.diversity < 0.5) {
+    parentSignals.push('Thread viewpoints look narrow right now — adding context or an evidence-based angle can improve balance.');
+  }
+
+  const normalizedContextSignals = contextSignals
+    .map((signal) => signal.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (normalizedContextSignals.length > 0) {
+    parentSignals.push(...normalizedContextSignals);
+  }
+
   // In reply context, lower the baseline threshold because short replies are
   // often the sharpest ones and should still receive a tone nudge.
   const minLength = conversationIsHot || conversationIsContentious
@@ -527,7 +580,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
         parentSignals,
         isReplyContext: !!parentText,
         hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
-        mentalHealthCategory: mentalHealthCrisis.category,
+        ...mentalHealthFields,
       };
     }
   }
@@ -574,7 +627,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       parentSignals,
       isReplyContext: !!parentText,
       hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
-      mentalHealthCategory: mentalHealthCrisis.category,
+      ...mentalHealthFields,
     };
   }
 
@@ -599,7 +652,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       parentSignals,
       isReplyContext: !!parentText,
       hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
-      mentalHealthCategory: mentalHealthCrisis.category,
+      ...mentalHealthFields,
     };
   }
 
@@ -613,7 +666,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
       parentSignals,
       isReplyContext: !!parentText,
       hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
-      mentalHealthCategory: mentalHealthCrisis.category,
+      ...mentalHealthFields,
     };
   }
 
@@ -625,7 +678,7 @@ export function analyzeSentiment(text: string, options: AnalyzeOptions = {}): Se
     parentSignals,
     isReplyContext: !!parentText,
     hasMentalHealthCrisis: mentalHealthCrisis.hasCrisis,
-    mentalHealthCategory: mentalHealthCrisis.category,
+    ...mentalHealthFields,
   };
 }
 
@@ -643,7 +696,7 @@ export async function analyzeSentimentWithModel(
 
   try {
     const tone = await classifyTone(trimmed);
-    return mergeToneModelIntoSentiment(base, trimmed, tone);
+    return applyToneModelToSentiment(base, trimmed, tone);
   } catch {
     return base;
   }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useSensitiveMediaStore } from '../store/sensitiveMediaStore.js';
-import { getSensitiveMediaMetricsSnapshot } from '../perf/sensitiveMediaTelemetry.js';
+import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
+import { getSensitiveMediaMetricsSnapshot } from '../perf/sensitiveMediaTelemetry';
 
 export default function SensitiveMediaSection() {
   const { policy, setPolicy, clearReveals, revealedPostIds } = useSensitiveMediaStore();
@@ -31,7 +31,7 @@ export default function SensitiveMediaSection() {
         Sensitive media
       </h4>
       <p style={{ fontSize: 12, color: 'var(--label-3)', lineHeight: 1.35, marginBottom: 10 }}>
-        Blur media flagged as sexual content, nudity, or graphic violence. Reveal is local to your device and can be reset anytime.
+        Blur or warn on sensitive media, and keep the most severe media hidden. Reveal stays local to your device and can be reset anytime.
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -1,0 +1,2 @@
+{"query":"breaking climate report","positives":[{"id":"post:123","score":0.91},{"id":"post:124","score":0.83}],"negatives":[{"id":"post:499","score":0.79},{"id":"post:500","score":0.42}]}
+{"query":"nba trade deadline","positives":[{"id":"post:901","score":0.88},{"id":"feed:77","score":0.81}],"negatives":[{"id":"post:108","score":0.76},{"id":"feed:15","score":0.35}]}

@@ -1,5 +1,5 @@
-import { getLeagueByDid, getTeamByDid } from '../sports/leagueRegistry.js';
-import type { LiveGame, SportsFeedFilter } from '../sports/types.js';
+import { getLeagueByDid, getTeamByDid } from '../sports/leagueRegistry';
+import type { LiveGame, SportsFeedFilter } from '../sports/types';
 
 /**
  * Custom feed generator for sports content

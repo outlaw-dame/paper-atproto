@@ -10,9 +10,9 @@ import type {
   InterpolatorState,
   ContributionScore,
   EntityImpact,
-} from './interpolatorTypes.js';
-import type { ThreadNode } from '../lib/resolver/atproto.js';
-import { computeContributorImpacts } from './scoreThread.js';
+} from './interpolatorTypes';
+import type { ThreadNode } from '../lib/resolver/atproto';
+import { computeContributorImpacts } from './scoreThread';
 
 // ─── synthesiseSummary ────────────────────────────────────────────────────
 // Builds a single cohesive prose sentence that explains what the thread is
@@ -32,10 +32,33 @@ function topicPhrase(rootText: string): string {
   return base;
 }
 
+function compactTopicPhrase(value: string, maxLen = 64): string {
+  if (value.length <= maxLen) return value;
+  const sliced = value.slice(0, maxLen).trimEnd();
+  const lastSpace = sliced.lastIndexOf(' ');
+  if (lastSpace >= Math.max(20, Math.floor(maxLen * 0.5))) {
+    return `${sliced.slice(0, lastSpace).trimEnd()}...`;
+  }
+  return `${sliced}...`;
+}
+
+function ensureSentence(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function joinReplyClauses(clauses: string[]): string {
+  if (clauses.length === 0) return 'remain mixed and early';
+  if (clauses.length === 1) return clauses[0]!;
+  if (clauses.length === 2) return `${clauses[0]!} and ${clauses[1]!}`;
+  return `${clauses.slice(0, -1).join(', ')}, and ${clauses[clauses.length - 1]!}`;
+}
+
 function synthesiseSummary(
   rootText: string,
   entityLandscape: EntityImpact[],
-  topContributors: ReturnType<typeof import('./scoreThread.js').computeContributorImpacts>,
+  _topContributors: ReturnType<typeof import('./scoreThread').computeContributorImpacts>,
   clarificationsAdded: string[],
   newAnglesAdded: string[],
   sourceSupportPresent: boolean,
@@ -47,75 +70,97 @@ function synthesiseSummary(
 ): string {
   if (totalReplies === 0) return '';
 
-  const topEntities = entityLandscape.slice(0, 2).map(e => e.entityText);
-  const namedVoice = topContributors.find(c => c.handle != null);
   const isHot = heatLevel > 0.45;
   const isRepetitive = repetitionLevel > 0.40;
   const isGrounded = factualSignalPresent || sourceSupportPresent;
   const hasClarifications = clarificationsAdded.length > 0;
   const hasNewAngles = newAnglesAdded.length > 0;
+  const opening = ensureSentence(topicPhrase(rootText));
 
-  // Opening: what the thread is about
-  let opening: string;
-  if (topEntities.length >= 2) {
-    opening = `The thread centres on ${topEntities[0]} and ${topEntities[1]}`;
-  } else if (topEntities.length === 1) {
-    opening = `The discussion focuses on ${topEntities[0]}`;
-  } else {
-    opening = `The thread is focused on "${topicPhrase(rootText)}"`;
+  const replyClauses: string[] = [];
+  if (hasClarifications) replyClauses.push('add clarification');
+  if (hasNewAngles) replyClauses.push('introduce counterpoints and new context');
+  if (isGrounded) replyClauses.push('keep returning to cited material');
+
+  if (replyClauses.length === 0 && isHot && !isGrounded) {
+    replyClauses.push('turn heated quickly');
+  }
+  if (replyClauses.length === 0 && isRepetitive) {
+    replyClauses.push('repeat the same point');
   }
 
-  // Middle: dominant discussion character
-  let middle: string;
-  if (isHot && !isGrounded) {
-    middle = 'and has generated heat without much sourcing to anchor it';
-  } else if (isHot && isGrounded) {
-    middle = 'with heated takes and source-backed grounding both in play';
-  } else if (isGrounded && hasClarifications) {
-    middle = 'with contributors adding clarification backed by cited sources';
-  } else if (isGrounded && hasNewAngles) {
-    middle = 'with fresh angles entering and evidence grounding the conversation';
-  } else if (hasClarifications && hasNewAngles) {
-    middle = 'with both clarifications and new perspectives shaping the conversation';
-  } else if (hasClarifications) {
-    middle = 'with contributors focused on clarifying the key points';
-  } else if (hasNewAngles) {
-    middle = `with ${newAnglesAdded.length} new angle${newAnglesAdded.length > 1 ? 's' : ''} introduced so far`;
-  } else if (isRepetitive) {
-    middle = 'though much of the conversation is covering the same ground';
-  } else {
-    middle = 'and is still developing';
-  }
-
-  // Coda: name a key voice and their role
-  const roleDesc: Record<string, string> = {
-    clarifying: 'clarifying the key points',
-    new_information: 'bringing new information',
-    useful_counterpoint: 'offering a counterpoint',
-    source_bringer: 'citing primary sources',
-    rule_source: 'grounding the discussion in official sources',
-    story_worthy: 'shaping the narrative',
-    direct_response: 'responding directly',
-    repetitive: 'echoing earlier points',
-    provocative: 'raising the temperature',
-    unknown: 'contributing',
-  };
+  const middle = `Replies ${joinReplyClauses(replyClauses.slice(0, 3))}.`;
 
   let coda = '';
-  if (namedVoice?.handle != null) {
-    const desc = roleDesc[namedVoice.dominantRole] ?? 'contributing';
-    coda = ` @${namedVoice.handle} is ${desc}.`;
-  }
-
-  // Sentiment assist: only surfaces when strongly skewed and not already captured by heat
-  const topEntity = entityLandscape[0];
-  if (!isHot && topEntity !== undefined && Math.abs(topEntitySentiment) > 0.45) {
+  if (isHot && !isGrounded) {
+    coda = 'Source support remains thin.';
+  } else if (isHot && isGrounded) {
+    coda = 'The dispute is heated, but cited material is keeping the thread anchored.';
+  } else if (isRepetitive && !hasClarifications && !hasNewAngles) {
+    coda = 'A lot of the thread is still circling the same point.';
+  } else if (!isHot && entityLandscape[0] !== undefined && Math.abs(topEntitySentiment) > 0.45) {
     const direction = topEntitySentiment < 0 ? 'critical' : 'positive';
-    const sentimentNote = ` The tone toward ${topEntity.entityText} is running ${direction}.`;
-    coda += sentimentNote;
+    coda = `The tone toward ${entityLandscape[0].entityText} is running ${direction}.`;
   }
 
-  return `${opening}, ${middle}.${coda}`;
+  return `${opening} ${middle}${coda ? ` ${coda}` : ''}`.trim();
+}
+
+function buildPerspectiveGaps(params: {
+  rootText: string;
+  replies: ThreadNode[];
+  scores: Record<string, ContributionScore>;
+  clarificationsAdded: string[];
+  newAnglesAdded: string[];
+  sourceSupportPresent: boolean;
+  factualSignalPresent: boolean;
+}): string[] {
+  const {
+    rootText,
+    replies,
+    scores,
+    clarificationsAdded,
+    newAnglesAdded,
+    sourceSupportPresent,
+    factualSignalPresent,
+  } = params;
+
+  if (replies.length === 0) return [];
+
+  const gaps: string[] = [];
+  const focus = compactTopicPhrase(topicPhrase(rootText).replace(/[.!?…]+$/g, '').trim(), 64);
+  const focusPhrase = focus ? `"${focus}"` : 'the main claim';
+  const participantCount = new Set(
+    replies
+      .map((reply) => reply.authorDid || reply.authorHandle)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  ).size;
+  const hasCounterpoint = replies.some((reply) => scores[reply.uri]?.role === 'useful_counterpoint');
+  const hasOfficialSource = replies.some((reply) => scores[reply.uri]?.role === 'rule_source');
+  const hasSecondarySourceMention = replies.some((reply) => {
+    const lower = reply.text.toLowerCase();
+    return /\b(blog post|writeup|article|thread)\b/.test(lower);
+  });
+
+  if (!sourceSupportPresent && !factualSignalPresent) {
+    gaps.push(`The visible thread still lacks direct sourcing or verifiable evidence for ${focusPhrase}.`);
+  } else if (!hasOfficialSource && hasSecondarySourceMention) {
+    gaps.push(`Visible replies cite secondary context around ${focusPhrase}, but direct sourcing or verifiable evidence is still missing.`);
+  }
+
+  if (replies.length >= 2 && !hasCounterpoint) {
+    gaps.push(`There is little visible counterpoint to the main read of ${focusPhrase} so far.`);
+  }
+
+  if (replies.length >= 2 && participantCount <= 1) {
+    gaps.push(`${focusPhrase} is being shaped by a narrow slice of participants so far.`);
+  }
+
+  if (replies.length >= 2 && clarificationsAdded.length === 0 && newAnglesAdded.length === 0) {
+    gaps.push(`Visible replies have not materially moved the thread beyond the initial claim in ${focusPhrase}.`);
+  }
+
+  return Array.from(new Set(gaps)).slice(0, 3);
 }
 
 type SummaryPatch = Omit<
@@ -170,7 +215,10 @@ export function buildInterpolatorSummary(
     }
 
     if (score.evidenceSignals.some(s => s.kind !== 'speculation')) evidencePresent = true;
-    if (score.factualContribution > 0.3) factualSignalPresent = true;
+    const hasSourceLikeSignal = score.role === 'source_bringer'
+      || score.role === 'rule_source'
+      || score.evidenceSignals.some(s => s.kind === 'citation' && s.confidence >= 0.6);
+    if (score.factualContribution > 0.3 || hasSourceLikeSignal) factualSignalPresent = true;
 
     if (score.role === 'repetitive') {
       repetitionLevel = Math.min(1, repetitionLevel + 0.12);
@@ -217,6 +265,15 @@ export function buildInterpolatorSummary(
     .slice(0, 15);
 
   const topEntitySentiment = entityLandscape[0]?.sentimentShift ?? 0;
+  const perspectiveGaps = buildPerspectiveGaps({
+    rootText,
+    replies: sorted,
+    scores,
+    clarificationsAdded,
+    newAnglesAdded,
+    sourceSupportPresent,
+    factualSignalPresent,
+  });
 
   const summaryText = synthesiseSummary(
     rootText,
@@ -241,6 +298,7 @@ export function buildInterpolatorSummary(
     repetitionLevel,
     heatLevel,
     sourceSupportPresent,
+    perspectiveGaps,
     entityLandscape,
     topContributors,
     evidencePresent,

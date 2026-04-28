@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { useMiniPlayer } from '../context/MiniPlayerContext.js';
-import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback.js';
+import { useMiniPlayer } from '../context/MiniPlayerContext';
+import { getMediaPlaybackPrefs, saveMediaPlaybackPrefs } from '../lib/mediaPlayback';
 
 /**
  * Floating mini-player — stays fixed at bottom-right above the tab bar.

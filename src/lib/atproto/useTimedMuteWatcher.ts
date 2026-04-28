@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useSessionStore } from '../../store/sessionStore.js';
-import { useModerationStore } from '../../store/moderationStore.js';
+import { useSessionStore } from '../../store/sessionStore';
+import { useModerationStore } from '../../store/moderationStore';
 
 const MUTES_QUERY_KEY = ['mutes'] as const;
 

@@ -1,11 +1,11 @@
-import { translationClient } from './client.js';
-import { heuristicDetectLanguage } from './detect.js';
-import { isLikelySameLanguage, normalizeTranslatableText } from './normalize.js';
+import { translationClient } from './client';
+import { heuristicDetectLanguage } from './detect';
+import { isLikelySameLanguage, normalizeTranslatableText } from './normalize';
 import type {
   BatchTranslateRequest,
   TranslationMode,
   TranslationResult,
-} from './types.js';
+} from './types';
 
 export type WriterTranslationInput = {
   rootPost: {

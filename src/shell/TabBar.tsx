@@ -3,9 +3,9 @@
 // back via setTab / openCompose. Renders the compose FAB in the centre slot.
 
 import React from 'react';
-import { useUiStore } from '../store/uiStore.js';
-import type { TabId } from '../App.js';
-import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform.js';
+import { useUiStore } from '../store/uiStore';
+import type { TabId } from '../App';
+import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 
 const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNode }[] = [
   {
@@ -46,13 +46,22 @@ const TABS: { id: TabId; label: string; icon: (active: boolean) => React.ReactNo
   },
 ];
 
-const tabBarStyle: React.CSSProperties = {
+// Tab bar chrome style — stable object (no platform dependence) memoized at module level.
+const tabBarBaseStyle: React.CSSProperties = {
   flexShrink: 0,
   display: 'flex', flexDirection: 'row', alignItems: 'stretch',
   background: 'var(--chrome-bg)',
   backdropFilter: 'blur(20px) saturate(180%)',
   WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+  // Hairline separator — required by Apple HIG for tab bars
+  borderTop: '0.5px solid var(--sep)',
   paddingBottom: 'var(--safe-bottom)',
+  // Landscape safe areas: iPhone notch appears on left/right in landscape
+  paddingLeft: 'var(--safe-left, 0px)',
+  paddingRight: 'var(--safe-right, 0px)',
+  // Prevent text selection on the entire nav chrome
+  userSelect: 'none',
+  WebkitUserSelect: 'none',
 };
 
 interface TabBarProps {
@@ -63,7 +72,8 @@ export default function TabBar({ hidden = false }: TabBarProps) {
   const { activeTab, unreadCount, setTab } = useUiStore();
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
-  const tabBtnStyle: React.CSSProperties = {
+
+  const tabBtnStyle = React.useMemo<React.CSSProperties>(() => ({
     flex: 1, display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
     paddingTop: platform.prefersCoarsePointer ? 10 : 8,
@@ -73,18 +83,22 @@ export default function TabBar({ hidden = false }: TabBarProps) {
     cursor: 'pointer',
     border: 'none', background: 'none',
     WebkitTapHighlightColor: 'transparent',
-  };
+    // Prevent text selection on tab labels
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+  }), [platform.prefersCoarsePointer]);
 
   return (
     <nav
       style={{
-        ...tabBarStyle,
+        ...tabBarBaseStyle,
         maxHeight: hidden ? 0 : 120,
         opacity: hidden ? 0 : 1,
         transform: hidden ? 'translateY(12px)' : 'translateY(0)',
         pointerEvents: hidden ? 'none' : 'auto',
         overflow: 'hidden',
-        transition: 'max-height 0.18s ease, opacity 0.16s ease, transform 0.16s ease',
+        transition: 'max-height 0.22s ease, opacity 0.18s ease, transform 0.18s ease',
+        willChange: hidden ? 'transform, opacity' : 'auto',
       }}
       role="tablist"
       aria-label="Main navigation"
@@ -128,7 +142,7 @@ export default function TabBar({ hidden = false }: TabBarProps) {
                 </span>
               )}
             </div>
-            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-meta-sm-track)', color: active ? 'var(--blue)' : 'var(--label-2)' }}>
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-meta-sm-track)', color: active ? 'var(--blue)' : 'var(--label-2)', userSelect: 'none', WebkitUserSelect: 'none' }}>
               {label}
             </span>
           </button>

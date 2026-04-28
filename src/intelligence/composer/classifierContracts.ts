@@ -3,7 +3,7 @@ import type {
   ComposerQualityScores,
   ComposerSentimentLabel,
   ComposerTargetedToneLabel,
-} from '../../lib/composerMl.js';
+} from '../../lib/composerMl';
 
 export interface ComposerSentimentSignal {
   label: ComposerSentimentLabel;

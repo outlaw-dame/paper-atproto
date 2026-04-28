@@ -4,7 +4,7 @@
 //
 // Formula:  sleep = min(cap, random_between(base, prev_sleep * 3))
 
-import { normalizeError, isRetryable, type AtpError } from './errors.js';
+import { normalizeError, isRetryable, type AtpError } from './errors';
 
 export interface RetryOptions {
   maxAttempts?: number;   // default 3
@@ -22,8 +22,16 @@ function jitteredDelay(base: number, prev: number, cap: number): number {
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
-    const id = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => { clearTimeout(id); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+    const id = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(id);
+      signal?.removeEventListener('abort', onAbort);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
