@@ -33,8 +33,8 @@ export interface InterpolatorWriterOutputAdapterOptions {
   thinkingMode: InterpolatorWriterThinkingMode;
   latencyMs: number | null;
   outputTokens: number | null;
-  maxTextChars?: number;
-  maxReferenceIds?: number;
+  maxTextChars?: number | undefined;
+  maxReferenceIds?: number | undefined;
 }
 
 export interface InterpolatorWriterOutputAdapterResult {
@@ -87,38 +87,14 @@ export function adaptInterpolatorWriterOutput(
   const parseResult = parseRawWriterOutput(options.rawOutput);
 
   if (!parseResult.ok) {
-    const candidateOutput = buildRejectedCandidateOutput(options);
-    const evalResult = evaluateInterpolatorWriterOutput(options.fixture, candidateOutput);
-
-    return {
-      schemaVersion: INTERPOLATOR_WRITER_OUTPUT_ADAPTER_VERSION,
-      status: 'schema_rejected',
-      candidateOutput,
-      evalResult,
-      reasonCodes: ['writer_output_schema_rejected', 'writer_output_fallback_candidate_created'],
-      diagnostics: buildDiagnostics(options, false, false),
-    };
+    return buildSchemaRejectedResult(options, []);
   }
 
   const reasonCodes: InterpolatorWriterOutputAdapterReasonCode[] = [];
   const text = normalizeText(parseResult.value.text, maxTextChars, reasonCodes);
 
   if (text.length === 0) {
-    const candidateOutput = buildRejectedCandidateOutput(options);
-    const evalResult = evaluateInterpolatorWriterOutput(options.fixture, candidateOutput);
-
-    return {
-      schemaVersion: INTERPOLATOR_WRITER_OUTPUT_ADAPTER_VERSION,
-      status: 'schema_rejected',
-      candidateOutput,
-      evalResult,
-      reasonCodes: unique([
-        ...reasonCodes,
-        'writer_output_schema_rejected',
-        'writer_output_fallback_candidate_created',
-      ]),
-      diagnostics: buildDiagnostics(options, false, false),
-    };
+    return buildSchemaRejectedResult(options, reasonCodes);
   }
 
   const usedEntityIds = normalizeReferenceIds(parseResult.value.usedEntityIds, maxReferenceIds, reasonCodes);
@@ -156,7 +132,9 @@ export function adaptInterpolatorWriterOutput(
     reasonCodes: unique([
       ...reasonCodes,
       accepted ? 'writer_output_accepted' : 'writer_output_contract_rejected',
-      ...(candidateOutput.fixtureId !== options.fixture.id ? ['writer_output_fixture_id_mismatch' as const] : []),
+      ...(evalResult.violations.some((violation) => violation.code === 'fixture_id_mismatch')
+        ? ['writer_output_fixture_id_mismatch' as const]
+        : []),
     ]),
     diagnostics: buildDiagnostics(options, true, accepted),
   };
@@ -183,6 +161,27 @@ function parseRawWriterOutput(rawOutput: unknown): ParseResult {
       citedEvidenceIds: rawOutput.citedEvidenceIds,
       selfReportedQuality: rawOutput.selfReportedQuality,
     },
+  };
+}
+
+function buildSchemaRejectedResult(
+  options: InterpolatorWriterOutputAdapterOptions,
+  baseReasonCodes: readonly InterpolatorWriterOutputAdapterReasonCode[],
+): InterpolatorWriterOutputAdapterResult {
+  const candidateOutput = buildRejectedCandidateOutput(options);
+  const evalResult = evaluateInterpolatorWriterOutput(options.fixture, candidateOutput);
+
+  return {
+    schemaVersion: INTERPOLATOR_WRITER_OUTPUT_ADAPTER_VERSION,
+    status: 'schema_rejected',
+    candidateOutput,
+    evalResult,
+    reasonCodes: unique([
+      ...baseReasonCodes,
+      'writer_output_schema_rejected',
+      'writer_output_fallback_candidate_created',
+    ]),
+    diagnostics: buildDiagnostics(options, false, false),
   };
 }
 

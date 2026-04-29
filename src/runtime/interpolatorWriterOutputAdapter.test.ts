@@ -79,8 +79,8 @@ function adapt(
     thinkingMode: overrides.thinkingMode ?? 'off',
     latencyMs: overrides.latencyMs ?? 800,
     outputTokens: overrides.outputTokens ?? 72,
-    ...(overrides.maxTextChars === undefined ? {} : { maxTextChars: overrides.maxTextChars }),
-    ...(overrides.maxReferenceIds === undefined ? {} : { maxReferenceIds: overrides.maxReferenceIds }),
+    maxTextChars: overrides.maxTextChars,
+    maxReferenceIds: overrides.maxReferenceIds,
   });
 }
 
