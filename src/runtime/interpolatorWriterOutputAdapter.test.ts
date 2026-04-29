@@ -181,7 +181,7 @@ describe('adaptInterpolatorWriterOutput', () => {
       usedClaimIds: ['claim:root-launch-delay', 'claim:reply-cost-concern'],
       citedEvidenceIds: ['evidence:root-post', 'evidence:reply-1'],
     }), {
-      maxTextChars: 31,
+      maxTextChars: 32,
       maxReferenceIds: 1,
     });
 
