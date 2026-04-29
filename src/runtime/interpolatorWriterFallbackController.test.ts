@@ -136,7 +136,7 @@ describe('selectInterpolatorWriterFallback', () => {
     expect(decision.final).toBe(false);
     expect(decision.nextAttempt).toBe(1);
     expect(decision.reasonCodes).toEqual(expect.arrayContaining([
-      'schema_rejected_retry_available',
+      'empty_output_retry_available',
       'retry_budget_available',
     ]));
   });
@@ -149,7 +149,7 @@ describe('selectInterpolatorWriterFallback', () => {
     expect(decision.final).toBe(true);
     expect(decision.nextAttempt).toBeNull();
     expect(decision.reasonCodes).toEqual(expect.arrayContaining([
-      'schema_rejected_retry_exhausted',
+      'empty_output_retry_exhausted',
       'retry_budget_exhausted',
     ]));
   });
