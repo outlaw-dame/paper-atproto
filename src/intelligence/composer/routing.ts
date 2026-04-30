@@ -12,6 +12,13 @@ const MODEL_TOOLS = new Set([
 const WRITER_ELIGIBLE_STATES = new Set(['positive', 'caution', 'warning']);
 const MIN_MODEL_TEXT_LENGTH = 12;
 const MIN_WRITER_TEXT_LENGTH = 24;
+const MIN_AUTOMATIC_BROWSER_ML_MEMORY_GIB = 8;
+
+export interface ComposerBrowserMlGateOptions {
+  automaticBrowserMlEnabled?: boolean;
+  deviceMemoryGiB?: number | null;
+  isMobile?: boolean;
+}
 
 export function getComposerModelDebounceMs(
   mode: ComposerMode,
@@ -37,11 +44,30 @@ export function hasComposerWriterCoverage(guidance: ComposerGuidanceResult): boo
   return guidance.toolsUsed.includes('guidance-writer');
 }
 
+export function isAutomaticComposerBrowserMlAllowed(
+  options: ComposerBrowserMlGateOptions = {},
+): boolean {
+  const enabled = options.automaticBrowserMlEnabled ?? readBooleanEnv('VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML');
+  if (!enabled) return false;
+
+  const isMobile = options.isMobile ?? isMobileRuntime();
+  if (isMobile) return false;
+
+  const deviceMemoryGiB = options.deviceMemoryGiB ?? getDeviceMemoryGiB();
+  if (deviceMemoryGiB !== null && deviceMemoryGiB < MIN_AUTOMATIC_BROWSER_ML_MEMORY_GIB) {
+    return false;
+  }
+
+  return true;
+}
+
 export function shouldRunComposerModelStageForDraft(
   mode: ComposerMode,
   draftText: string,
   guidance: ComposerGuidanceResult,
+  browserMlGateOptions: ComposerBrowserMlGateOptions = {},
 ): boolean {
+  if (!isAutomaticComposerBrowserMlAllowed(browserMlGateOptions)) return false;
   if (guidance.heuristics.hasMentalHealthCrisis) return false;
   if (guidance.level === 'alert') return false;
 
@@ -85,4 +111,20 @@ export function shouldReuseCachedComposerGuidance(
   if (!writerNeeded) return true;
 
   return hasComposerWriterCoverage(guidance);
+}
+
+function readBooleanEnv(key: string): boolean {
+  const value = String(import.meta.env[key] ?? '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function getDeviceMemoryGiB(): number | null {
+  if (typeof navigator === 'undefined') return null;
+  const value = Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? NaN);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function isMobileRuntime(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 }
