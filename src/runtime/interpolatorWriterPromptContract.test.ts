@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildInterpolatorWriterPromptContract,
+  buildRawInterpolatorWriterOutputJsonSchema,
   INTERPOLATOR_WRITER_PROMPT_CONTRACT_VERSION,
   RAW_INTERPOLATOR_WRITER_OUTPUT_SCHEMA_VERSION,
 } from './interpolatorWriterPromptContract';
 
 type PromptInput = Parameters<typeof buildInterpolatorWriterPromptContract>[0];
 type Fixture = PromptInput['fixture'];
-
-const assistedPolicyKey = ['allowProvider', 'Hidden', 'Think', 'ing'].join('');
-const modeKey = ['think', 'ingMode'].join('');
 
 function fixture(overrides: Partial<Fixture> = {}): Fixture {
   return {
@@ -31,23 +29,23 @@ function fixture(overrides: Partial<Fixture> = {}): Fixture {
       { id: 'evidence:reply-1', sourceType: 'reply', required: false },
     ],
     policy: {
-      [assistedPolicyKey]: false,
+      allowProviderHiddenThinking: false,
       requireClaimEvidence: true,
       requireRequiredEntityCoverage: true,
       maxUnsupportedClaims: 0,
-      ['maxInvented' + 'Entities']: 0,
+      maxInventedEntities: 0,
     },
     ...overrides,
-  } as Fixture;
+  };
 }
 
 function input(overrides: Partial<PromptInput> = {}): PromptInput {
   return {
     fixture: fixture(),
     mode: 'normal',
-    [modeKey]: 'off',
+    thinkingMode: 'off',
     ...overrides,
-  } as PromptInput;
+  };
 }
 
 describe('buildInterpolatorWriterPromptContract', () => {
@@ -70,6 +68,22 @@ describe('buildInterpolatorWriterPromptContract', () => {
     expect(contract.outputJsonSchema.properties.fixtureId.const).toBe('fixture-thread-1');
     expect(contract.outputJsonSchema.properties.selfReportedQuality.minimum).toBe(0);
     expect(contract.outputJsonSchema.properties.selfReportedQuality.maximum).toBe(1);
+  });
+
+  it('returns a fresh fixture-specific schema for every call', () => {
+    const first = buildRawInterpolatorWriterOutputJsonSchema('fixture-one');
+    const second = buildRawInterpolatorWriterOutputJsonSchema('fixture-two');
+
+    expect(first).not.toBe(second);
+    expect(first.required).not.toBe(second.required);
+    expect(first.properties).not.toBe(second.properties);
+    expect(first.properties.fixtureId).not.toBe(second.properties.fixtureId);
+    expect(first.properties.fixtureId.const).toBe('fixture-one');
+    expect(second.properties.fixtureId.const).toBe('fixture-two');
+
+    first.properties.fixtureId.const = 'mutated';
+    expect(buildRawInterpolatorWriterOutputJsonSchema('fixture-one').properties.fixtureId.const).toBe('fixture-one');
+    expect(second.properties.fixtureId.const).toBe('fixture-two');
   });
 
   it('projects fixture IDs into policy', () => {
@@ -101,13 +115,21 @@ describe('buildInterpolatorWriterPromptContract', () => {
     expect(payload).not.toHaveProperty('remote');
   });
 
-  it('escapes fixture IDs when embedding them in the instruction text', () => {
+  it('escapes fixture IDs before embedding them in instruction text', () => {
+    const fixtureId = 'fixture\nwith\rbreak\u2028and "quotes"';
     const contract = buildInterpolatorWriterPromptContract(input({
-      fixture: fixture({ id: 'fixture\nwith break' }),
+      fixture: fixture({ id: fixtureId }),
     }));
 
-    expect(contract.outputJsonSchema.properties.fixtureId.const).toBe('fixture\nwith break');
-    expect(contract.instruction).toContain('Use fixtureId exactly: "fixture\\nwith break".');
+    const fixtureInstruction = contract.instruction
+      .split('\n')
+      .find((line) => line.startsWith('Use fixtureId exactly'));
+
+    expect(contract.outputJsonSchema.properties.fixtureId.const).toBe(fixtureId);
+    expect(fixtureInstruction).toBe('Use fixtureId exactly as this JSON string value: "fixture\\nwith\\rbreak\\u2028and \\"quotes\\"".');
+    expect(contract.instruction).not.toContain('fixture\nwith');
+    expect(contract.instruction).not.toContain('with\rbreak');
+    expect(contract.instruction).not.toContain('\u2028');
   });
 
   it('emits mode-specific reason codes', () => {
