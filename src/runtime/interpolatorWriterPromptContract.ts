@@ -93,20 +93,27 @@ const REQUIRED_OUTPUT_KEYS = [
   'selfReportedQuality',
 ] as const satisfies readonly OutputKey[];
 
-export const RAW_INTERPOLATOR_WRITER_OUTPUT_JSON_SCHEMA: RawInterpolatorWriterOutputJsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: REQUIRED_OUTPUT_KEYS,
-  properties: {
-    schemaVersion: { type: 'integer', const: RAW_INTERPOLATOR_WRITER_OUTPUT_SCHEMA_VERSION },
-    fixtureId: { type: 'string' },
-    text: { type: 'string' },
-    usedEntityIds: { type: 'array', items: { type: 'string' } },
-    usedClaimIds: { type: 'array', items: { type: 'string' } },
-    citedEvidenceIds: { type: 'array', items: { type: 'string' } },
-    selfReportedQuality: { type: 'number', minimum: 0, maximum: 1 },
-  },
-};
+export function buildRawInterpolatorWriterOutputJsonSchema(
+  fixtureId: string,
+): RawInterpolatorWriterOutputJsonSchema {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: REQUIRED_OUTPUT_KEYS,
+    properties: {
+      schemaVersion: { type: 'integer', const: RAW_INTERPOLATOR_WRITER_OUTPUT_SCHEMA_VERSION },
+      fixtureId: { type: 'string', const: fixtureId },
+      text: { type: 'string' },
+      usedEntityIds: { type: 'array', items: { type: 'string' } },
+      usedClaimIds: { type: 'array', items: { type: 'string' } },
+      citedEvidenceIds: { type: 'array', items: { type: 'string' } },
+      selfReportedQuality: { type: 'number', minimum: 0, maximum: 1 },
+    },
+  };
+}
+
+export const RAW_INTERPOLATOR_WRITER_OUTPUT_JSON_SCHEMA: RawInterpolatorWriterOutputJsonSchema =
+  buildRawInterpolatorWriterOutputJsonSchema('');
 
 export function buildInterpolatorWriterPromptContract(
   input: InterpolatorWriterPromptContractInput,
@@ -118,8 +125,8 @@ export function buildInterpolatorWriterPromptContract(
   return {
     schemaVersion: INTERPOLATOR_WRITER_PROMPT_CONTRACT_VERSION,
     instruction: buildInstruction(input.fixture, input.mode, input.thinkingMode, retryInstruction, maxTextChars),
-    fixturePayloadJson: JSON.stringify(buildFixturePayload(input.fixture), null, 2),
-    outputJsonSchema: RAW_INTERPOLATOR_WRITER_OUTPUT_JSON_SCHEMA,
+    fixturePayloadJson: JSON.stringify(buildFixturePayload(input.fixture)),
+    outputJsonSchema: buildRawInterpolatorWriterOutputJsonSchema(input.fixture.id),
     requiredOutputKeys: REQUIRED_OUTPUT_KEYS,
     policy,
     reasonCodes: buildReasonCodes(input.mode, input.thinkingMode, input.fixture, retryInstruction),
@@ -153,6 +160,8 @@ function buildInstruction(
   retryInstruction: InterpolatorWriterRetryInstruction,
   maxTextChars: number,
 ): string {
+  const escapedFixtureId = JSON.stringify(fixture.id);
+
   return [
     'Role: Interpolator Writer.',
     'Return exactly one JSON object with the required keys.',
@@ -162,7 +171,7 @@ function buildInstruction(
     'Do not invent entities, users, claims, evidence, sources, facts, or relationships.',
     'Do not include text outside the JSON object.',
     'Provider and route metadata are caller-owned and must not be included.',
-    `Use fixtureId exactly: ${fixture.id}.`,
+    `Use fixtureId exactly: ${escapedFixtureId}.`,
     `Keep text at or below ${maxTextChars} characters.`,
     getModeInstruction(mode),
     getAssistedModeInstruction(thinkingMode, fixture),
