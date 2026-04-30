@@ -33,6 +33,15 @@ type OutputKey =
   | 'citedEvidenceIds'
   | 'selfReportedQuality';
 
+interface CollectedFixturePolicyIds {
+  allowedEntityIds: string[];
+  allowedClaimIds: string[];
+  allowedEvidenceIds: string[];
+  requiredEntityIds: string[];
+  requiredClaimIds: string[];
+  requiredEvidenceIds: string[];
+}
+
 export interface InterpolatorWriterPromptContractInput {
   fixture: InterpolatorWriterEvalFixture;
   mode: InterpolatorWriterMode;
@@ -120,7 +129,8 @@ export function buildInterpolatorWriterPromptContract(
 ): InterpolatorWriterPromptContract {
   const retryInstruction = input.retryInstruction ?? 'none';
   const maxTextChars = sanitizeMaxTextChars(input.maxTextChars);
-  const policy = buildPolicy(input.fixture, maxTextChars);
+  const policyIds = collectFixturePolicyIds(input.fixture);
+  const policy = buildPolicy(input.fixture, maxTextChars, policyIds);
 
   return {
     schemaVersion: INTERPOLATOR_WRITER_PROMPT_CONTRACT_VERSION,
@@ -133,9 +143,42 @@ export function buildInterpolatorWriterPromptContract(
   };
 }
 
+function collectFixturePolicyIds(fixture: InterpolatorWriterEvalFixture): CollectedFixturePolicyIds {
+  const allowedEntityIds: string[] = [];
+  const requiredEntityIds: string[] = [];
+  for (const entity of fixture.allowedEntities) {
+    allowedEntityIds.push(entity.id);
+    if (entity.required) requiredEntityIds.push(entity.id);
+  }
+
+  const allowedClaimIds: string[] = [];
+  const requiredClaimIds: string[] = [];
+  for (const claim of fixture.allowedClaims) {
+    allowedClaimIds.push(claim.id);
+    if (claim.required) requiredClaimIds.push(claim.id);
+  }
+
+  const allowedEvidenceIds: string[] = [];
+  const requiredEvidenceIds: string[] = [];
+  for (const evidence of fixture.allowedEvidence) {
+    allowedEvidenceIds.push(evidence.id);
+    if (evidence.required) requiredEvidenceIds.push(evidence.id);
+  }
+
+  return {
+    allowedEntityIds,
+    allowedClaimIds,
+    allowedEvidenceIds,
+    requiredEntityIds,
+    requiredClaimIds,
+    requiredEvidenceIds,
+  };
+}
+
 function buildPolicy(
   fixture: InterpolatorWriterEvalFixture,
   maxTextChars: number,
+  ids: CollectedFixturePolicyIds,
 ): InterpolatorWriterPromptContractPolicy {
   return {
     role: 'interpolator_writer',
@@ -143,12 +186,12 @@ function buildPolicy(
     requireJsonOnly: true,
     fixtureId: fixture.id,
     maxTextChars,
-    allowedEntityIds: fixture.allowedEntities.map((entity) => entity.id),
-    allowedClaimIds: fixture.allowedClaims.map((claim) => claim.id),
-    allowedEvidenceIds: fixture.allowedEvidence.map((evidence) => evidence.id),
-    requiredEntityIds: fixture.allowedEntities.filter((entity) => entity.required).map((entity) => entity.id),
-    requiredClaimIds: fixture.allowedClaims.filter((claim) => claim.required).map((claim) => claim.id),
-    requiredEvidenceIds: fixture.allowedEvidence.filter((evidence) => evidence.required).map((evidence) => evidence.id),
+    allowedEntityIds: ids.allowedEntityIds,
+    allowedClaimIds: ids.allowedClaimIds,
+    allowedEvidenceIds: ids.allowedEvidenceIds,
+    requiredEntityIds: ids.requiredEntityIds,
+    requiredClaimIds: ids.requiredClaimIds,
+    requiredEvidenceIds: ids.requiredEvidenceIds,
     callerOwnsProviderMetadata: true,
   };
 }
