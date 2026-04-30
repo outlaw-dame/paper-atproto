@@ -58,20 +58,25 @@ const MODEL_CATALOG = {
   smollm3_3b: {
     key: 'smollm3_3b',
     id: 'HuggingFaceTB/SmolLM3-3B-ONNX',
-    purpose: 'Local text generation fallback',
+    purpose: 'Explicit local text generation experiment',
     variant: 'q4f16',
   },
   qwen35_2b_mm: {
     key: 'qwen35_2b_mm',
     id: 'onnx-community/Qwen3.5-2B-ONNX',
-    purpose: 'On-demand local multimodal staging',
+    purpose: 'Explicit local multimodal experiment',
     variant: 'q4f16',
   },
 };
 
 const MODEL_PROFILES = {
-  core: ['embeddings', 'image_captioning', 'tone', 'toxicity', 'sentiment'],
-  balanced: ['embeddings', 'image_captioning', 'tone', 'toxicity', 'sentiment', 'smollm3_3b'],
+  // Safe default for normal development. Keep this intentionally small so
+  // `pnpm models:download-browser` cannot silently stage a multi-GB local AI
+  // bundle that later crashes browser tabs or fills device storage.
+  core: ['embeddings'],
+  composer_ml: ['tone', 'toxicity', 'sentiment'],
+  media: ['image_captioning'],
+  balanced: ['embeddings', 'tone', 'toxicity', 'sentiment'],
   multimodal: ['qwen35_2b_mm'],
   premium: ['embeddings', 'image_captioning', 'tone', 'toxicity', 'sentiment', 'smollm3_3b', 'qwen35_2b_mm'],
 };
