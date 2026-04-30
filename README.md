@@ -37,20 +37,32 @@ The canonical architecture and execution flow now live in [ARCHITECTURE.md](./AR
 
 ## Getting Started
 
+1. **Install and Setup:**
 ```bash
+# Install dependencies
 pnpm install
-pnpm dev
+
+# Setup server environment
+cd server && npm install
+cp .env.example .env
+cd ..
 ```
 
-Run the auth/retry hardening checks with:
+2. **Run the Project:**
+You need to run the app, the verify-server, and an HTTPS tunnel (required for full permissions) in separate terminals:
 
-```bash
-pnpm test
-```
+*   **Terminal 1 (App):** `pnpm dev` (Runs on `http://localhost:5180`)
+*   **Terminal 2 (Server):** `npm --prefix ./server run dev`
+*   **Terminal 3 (Tunnel):** An HTTPS tunnel is required for full ATProto permissions. **Cloudflare Tunnel** is recommended, but you can also use `ngrok`, `zrok`, or `localtunnel`:
+    *   *Recommended:* `npx cloudflared tunnel --url http://127.0.0.1:5180`
+    *   *Alternative (ngrok):* `ngrok http 5180`
+
+3. **Access the App:**
+Copy the HTTPS URL from your tunnel output (e.g., `https://...trycloudflare.com`), update your root `.env` with it, and open it in your browser.
 
 For GIF search, create a `.env` file from `.env.example` and set `VITE_KLIPY_API_KEY` to a valid Klipy API key (get one at https://partner.klipy.com/api-keys).
 
-Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
+Open the tunnel URL and sign in with your Bluesky handle through OAuth.
 
 ### Optional platform env
 
