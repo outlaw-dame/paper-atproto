@@ -63,7 +63,7 @@ export function isAutomaticComposerBrowserMlAllowed(
       ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML),
     deviceMemoryGiB: options.deviceMemoryGiB ?? getDeviceMemoryGiB(),
     isMobile: options.isMobile ?? isMobileRuntime(),
-    deviceTier: options.deviceTier,
+    ...(options.deviceTier ? { deviceTier: options.deviceTier } : {}),
   });
 }
 
@@ -81,7 +81,7 @@ export function shouldRunComposerModelStageForDraft(
       ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML),
     deviceMemoryGiB: browserMlGateOptions.deviceMemoryGiB ?? getDeviceMemoryGiB(),
     isMobile: browserMlGateOptions.isMobile ?? isMobileRuntime(),
-    deviceTier: browserMlGateOptions.deviceTier,
+    ...(browserMlGateOptions.deviceTier ? { deviceTier: browserMlGateOptions.deviceTier } : {}),
     edgeAvailable: true,
   });
 
