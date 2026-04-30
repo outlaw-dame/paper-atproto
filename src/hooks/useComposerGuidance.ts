@@ -85,16 +85,27 @@ export function useComposerGuidance({
       deferredContext.draftText,
       immediateGuidance,
     );
+    const shouldRunWriterFromImmediateGuidance = shouldRunComposerWriterStage(
+      deferredContext.mode,
+      deferredContext.draftText,
+      latestGuidance,
+      dismissedAt,
+    );
 
-    if (!shouldRunModelStage) {
+    if (!shouldRunModelStage && !shouldRunWriterFromImmediateGuidance) {
       return;
     }
 
     const modelDebounceMs = getComposerModelDebounceMs(deferredContext.mode, debounceMs);
     const writerDebounceMs = getComposerWriterDebounceMs(deferredContext.mode);
     const writerAbort = new AbortController();
+    let modelTimer: number | null = null;
 
     const runModelStage = async () => {
+      if (!shouldRunModelStage) {
+        return latestGuidance;
+      }
+
       if (hasComposerModelCoverage(reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
         latestGuidance = reusableCachedGuidance ?? latestGuidance;
         return latestGuidance;
@@ -107,11 +118,13 @@ export function useComposerGuidance({
       return result;
     };
 
-    const modelTimer = window.setTimeout(() => {
-      void runModelStage().catch(() => {
-        // Keep the immediate local guidance result if the async refinement fails.
-      });
-    }, modelDebounceMs);
+    if (shouldRunModelStage) {
+      modelTimer = window.setTimeout(() => {
+        void runModelStage().catch(() => {
+          // Keep the immediate local guidance result if the async refinement fails.
+        });
+      }, modelDebounceMs);
+    }
 
     const writerTimer = window.setTimeout(() => {
       void (async () => {
@@ -130,10 +143,12 @@ export function useComposerGuidance({
       })().catch(() => {
         // Writer guidance is optional; keep the local copy if the server-side pass fails.
       });
-    }, Math.max(writerDebounceMs, modelDebounceMs + 700));
+    }, shouldRunModelStage ? Math.max(writerDebounceMs, modelDebounceMs + 700) : writerDebounceMs);
 
     return () => {
-      window.clearTimeout(modelTimer);
+      if (modelTimer !== null) {
+        window.clearTimeout(modelTimer);
+      }
       window.clearTimeout(writerTimer);
       writerAbort.abort();
     };
