@@ -247,6 +247,16 @@ function postProcessRows(rows: any[], options?: SearchOptions): any[] {
     .sort((a, b) => Number(b.fused_score ?? 0) - Number(a.fused_score ?? 0));
 }
 
+function defaultPrivacyModeForSearchScope(dataScope: DataScope): PrivacyMode {
+  return dataScope === 'private_corpus' || dataScope === 'private_draft'
+    ? 'local_only'
+    : 'balanced';
+}
+
+function defaultEdgeAvailableForSearchScope(dataScope: DataScope): boolean {
+  return dataScope === 'public_corpus';
+}
+
 function buildSearchRoutingInput(input: {
   task: IntelligenceTask;
   dataScope: DataScope;
@@ -256,14 +266,10 @@ function buildSearchRoutingInput(input: {
   return {
     task: input.task,
     dataScope: input.dataScope,
+    privacyMode: input.options.privacyMode ?? defaultPrivacyModeForSearchScope(input.dataScope),
+    localSmallMlAvailable: input.options.localSmallMlAvailable ?? true,
+    edgeAvailable: input.options.edgeAvailable ?? defaultEdgeAvailableForSearchScope(input.dataScope),
     localSearchQuality: input.localSearchQuality,
-    ...(input.options.privacyMode ? { privacyMode: input.options.privacyMode } : {}),
-    ...(typeof input.options.localSmallMlAvailable === 'boolean'
-      ? { localSmallMlAvailable: input.options.localSmallMlAvailable }
-      : {}),
-    ...(typeof input.options.edgeAvailable === 'boolean'
-      ? { edgeAvailable: input.options.edgeAvailable }
-      : {}),
   };
 }
 
