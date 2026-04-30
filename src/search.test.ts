@@ -197,6 +197,103 @@ describe('HybridSearch semantic query execution', () => {
     expect(result.rows[0]?.fused_score).toBeGreaterThan(0.3);
   });
 
+  it('keeps local-cache searches on the local browser small-ML lane when edge availability is omitted', async () => {
+    const trxQueryMock = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'weak-local-result',
+            rrf_score: 0.02,
+            fts_rank_raw: 0,
+            semantic_distance: 0.96,
+            semantic_matched: 1,
+          },
+        ],
+      });
+
+    transactionMock.mockImplementation(async (callback: (trx: { query: typeof trxQueryMock }) => Promise<unknown>) => (
+      callback({ query: trxQueryMock })
+    ));
+
+    const result = await hybridSearch.search('private-ish local cache query', 10, { disableCache: true });
+
+    expect(result.localSearchQuality.confidence).toBeLessThan(0.48);
+    expect(result.intelligenceRouting).toMatchObject({
+      lane: 'browser_small_ml',
+      reasonCode: 'browser_small_ml_default',
+      sendsPrivateText: false,
+    });
+    expect(result.intelligenceRouting.fallbackLane).toBeUndefined();
+  });
+
+  it('allows explicit edge availability to escalate low-confidence local-cache search', async () => {
+    const trxQueryMock = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'weak-edge-eligible-result',
+            rrf_score: 0.02,
+            fts_rank_raw: 0,
+            semantic_distance: 0.96,
+            semantic_matched: 1,
+          },
+        ],
+      });
+
+    transactionMock.mockImplementation(async (callback: (trx: { query: typeof trxQueryMock }) => Promise<unknown>) => (
+      callback({ query: trxQueryMock })
+    ));
+
+    const result = await hybridSearch.search('public-ish local cache query', 10, {
+      disableCache: true,
+      edgeAvailable: true,
+    });
+
+    expect(result.localSearchQuality.confidence).toBeLessThan(0.48);
+    expect(result.intelligenceRouting).toMatchObject({
+      lane: 'edge_reranker',
+      fallbackLane: 'browser_small_ml',
+      reasonCode: 'edge_reranker_low_local_quality',
+      sendsPrivateText: false,
+    });
+  });
+
+  it('defaults private-corpus search to local-only routing even when edge availability is omitted', async () => {
+    const trxQueryMock = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'weak-private-result',
+            rrf_score: 0.01,
+            fts_rank_raw: 0,
+            semantic_distance: 0.99,
+            semantic_matched: 1,
+          },
+        ],
+      });
+
+    transactionMock.mockImplementation(async (callback: (trx: { query: typeof trxQueryMock }) => Promise<unknown>) => (
+      callback({ query: trxQueryMock })
+    ));
+
+    const result = await hybridSearch.search('private library query', 10, {
+      disableCache: true,
+      dataScope: 'private_corpus',
+    });
+
+    expect(result.intelligenceRouting).toMatchObject({
+      lane: 'browser_small_ml',
+      reasonCode: 'browser_small_ml_private_search',
+      sendsPrivateText: false,
+    });
+  });
+
   it('filters weak semantic matches using semantic distance cutoff while keeping lexical-only rows', async () => {
     const cutoffSearch = new HybridSearch({ semanticDistanceCutoff: 0.6 });
 
