@@ -67,6 +67,7 @@ describe('buildInterpolatorWriterPromptContract', () => {
       'selfReportedQuality',
     ]);
     expect(contract.outputJsonSchema.properties.schemaVersion.const).toBe(RAW_INTERPOLATOR_WRITER_OUTPUT_SCHEMA_VERSION);
+    expect(contract.outputJsonSchema.properties.fixtureId.const).toBe('fixture-thread-1');
     expect(contract.outputJsonSchema.properties.selfReportedQuality.minimum).toBe(0);
     expect(contract.outputJsonSchema.properties.selfReportedQuality.maximum).toBe(1);
   });
@@ -89,6 +90,7 @@ describe('buildInterpolatorWriterPromptContract', () => {
     const contract = buildInterpolatorWriterPromptContract(input());
     const payload = JSON.parse(contract.fixturePayloadJson) as Record<string, unknown>;
 
+    expect(contract.fixturePayloadJson).not.toContain('\n');
     expect(payload.fixtureId).toBe('fixture-thread-1');
     expect(payload.title).toBe('prompt contract fixture');
     expect(payload.allowedEntities).toEqual(expect.arrayContaining([
@@ -97,6 +99,15 @@ describe('buildInterpolatorWriterPromptContract', () => {
     expect(payload).not.toHaveProperty('provider');
     expect(payload).not.toHaveProperty('route');
     expect(payload).not.toHaveProperty('remote');
+  });
+
+  it('escapes fixture IDs when embedding them in the instruction text', () => {
+    const contract = buildInterpolatorWriterPromptContract(input({
+      fixture: fixture({ id: 'fixture\nwith break' }),
+    }));
+
+    expect(contract.outputJsonSchema.properties.fixtureId.const).toBe('fixture\nwith break');
+    expect(contract.instruction).toContain('Use fixtureId exactly: "fixture\\nwith break".');
   });
 
   it('emits mode-specific reason codes', () => {
