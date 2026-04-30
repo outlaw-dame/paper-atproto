@@ -47,7 +47,8 @@ export function hasComposerWriterCoverage(guidance: ComposerGuidanceResult): boo
 export function isAutomaticComposerBrowserMlAllowed(
   options: ComposerBrowserMlGateOptions = {},
 ): boolean {
-  const enabled = options.automaticBrowserMlEnabled ?? readBooleanEnv('VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML');
+  const enabled = options.automaticBrowserMlEnabled
+    ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML);
   if (!enabled) return false;
 
   const isMobile = options.isMobile ?? isMobileRuntime();
@@ -113,9 +114,9 @@ export function shouldReuseCachedComposerGuidance(
   return hasComposerWriterCoverage(guidance);
 }
 
-function readBooleanEnv(key: string): boolean {
-  const value = String(import.meta.env[key] ?? '').trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes';
+function readBooleanEnv(value: string | undefined): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
 function getDeviceMemoryGiB(): number | null {
