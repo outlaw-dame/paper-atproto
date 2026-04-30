@@ -1,3 +1,9 @@
+import {
+  chooseIntelligenceLane,
+  isBrowserExperimentalAllowed,
+  type DeviceTier,
+  type PrivacyMode,
+} from '../intelligenceRoutingPolicy';
 import type { ComposerGuidanceResult, ComposerMode } from './types';
 
 const MODEL_TOOLS = new Set([
@@ -12,12 +18,17 @@ const MODEL_TOOLS = new Set([
 const WRITER_ELIGIBLE_STATES = new Set(['positive', 'caution', 'warning']);
 const MIN_MODEL_TEXT_LENGTH = 12;
 const MIN_WRITER_TEXT_LENGTH = 24;
-const MIN_AUTOMATIC_BROWSER_ML_MEMORY_GIB = 8;
 
 export interface ComposerBrowserMlGateOptions {
   automaticBrowserMlEnabled?: boolean;
   deviceMemoryGiB?: number | null;
   isMobile?: boolean;
+  deviceTier?: DeviceTier;
+}
+
+export interface ComposerWriterRoutingOptions {
+  privacyMode?: PrivacyMode;
+  edgeAvailable?: boolean;
 }
 
 export function getComposerModelDebounceMs(
@@ -47,19 +58,13 @@ export function hasComposerWriterCoverage(guidance: ComposerGuidanceResult): boo
 export function isAutomaticComposerBrowserMlAllowed(
   options: ComposerBrowserMlGateOptions = {},
 ): boolean {
-  const enabled = options.automaticBrowserMlEnabled
-    ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML);
-  if (!enabled) return false;
-
-  const isMobile = options.isMobile ?? isMobileRuntime();
-  if (isMobile) return false;
-
-  const deviceMemoryGiB = options.deviceMemoryGiB ?? getDeviceMemoryGiB();
-  if (deviceMemoryGiB !== null && deviceMemoryGiB < MIN_AUTOMATIC_BROWSER_ML_MEMORY_GIB) {
-    return false;
-  }
-
-  return true;
+  return isBrowserExperimentalAllowed({
+    browserExperimentalEnabled: options.automaticBrowserMlEnabled
+      ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML),
+    deviceMemoryGiB: options.deviceMemoryGiB ?? getDeviceMemoryGiB(),
+    isMobile: options.isMobile ?? isMobileRuntime(),
+    deviceTier: options.deviceTier ?? getDeviceTierFromMemory(options.deviceMemoryGiB ?? getDeviceMemoryGiB()),
+  });
 }
 
 export function shouldRunComposerModelStageForDraft(
@@ -68,7 +73,19 @@ export function shouldRunComposerModelStageForDraft(
   guidance: ComposerGuidanceResult,
   browserMlGateOptions: ComposerBrowserMlGateOptions = {},
 ): boolean {
-  if (!isAutomaticComposerBrowserMlAllowed(browserMlGateOptions)) return false;
+  const decision = chooseIntelligenceLane({
+    task: 'composer_refine',
+    dataScope: 'private_draft',
+    privacyMode: 'balanced',
+    browserExperimentalEnabled: browserMlGateOptions.automaticBrowserMlEnabled
+      ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML),
+    deviceMemoryGiB: browserMlGateOptions.deviceMemoryGiB ?? getDeviceMemoryGiB(),
+    isMobile: browserMlGateOptions.isMobile ?? isMobileRuntime(),
+    deviceTier: browserMlGateOptions.deviceTier ?? getDeviceTierFromMemory(browserMlGateOptions.deviceMemoryGiB ?? getDeviceMemoryGiB()),
+    edgeAvailable: true,
+  });
+
+  if (decision.lane !== 'browser_experimental') return false;
   if (guidance.heuristics.hasMentalHealthCrisis) return false;
   if (guidance.level === 'alert') return false;
 
@@ -86,7 +103,16 @@ export function shouldRunComposerWriterStage(
   draftText: string,
   guidance: ComposerGuidanceResult,
   dismissedAt: number | null,
+  routingOptions: ComposerWriterRoutingOptions = {},
 ): boolean {
+  const decision = chooseIntelligenceLane({
+    task: 'composer_writer',
+    dataScope: 'private_draft',
+    privacyMode: routingOptions.privacyMode ?? 'balanced',
+    edgeAvailable: routingOptions.edgeAvailable ?? true,
+  });
+
+  if (decision.lane !== 'server_writer') return false;
   if (dismissedAt !== null) return false;
   if (guidance.heuristics.hasMentalHealthCrisis) return false;
   if (guidance.ui.state === 'alert' || guidance.ui.state === 'neutral') return false;
@@ -128,4 +154,10 @@ function getDeviceMemoryGiB(): number | null {
 function isMobileRuntime(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+}
+
+function getDeviceTierFromMemory(deviceMemoryGiB: number | null): DeviceTier {
+  if (deviceMemoryGiB !== null && deviceMemoryGiB >= 8) return 'high';
+  if (deviceMemoryGiB !== null && deviceMemoryGiB >= 4) return 'mid';
+  return 'low';
 }
