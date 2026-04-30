@@ -8,6 +8,13 @@
 
 import { paperDB } from './db';
 import { embeddingPipeline, sanitizeForEmbedding } from './intelligence/embeddingPipeline';
+import {
+  chooseIntelligenceLane,
+  evaluateLocalSearchQuality,
+  type DataScope,
+  type IntelligenceTask,
+  type LocalSearchQuality,
+} from './intelligence/intelligenceRoutingPolicy';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 import { recordHybridSearchTimeoutFallback } from './perf/searchTelemetry';
 import {
@@ -233,6 +240,38 @@ function postProcessRows(rows: any[], options?: SearchOptions): any[] {
     .sort((a, b) => Number(b.fused_score ?? 0) - Number(a.fused_score ?? 0));
 }
 
+function finalizeSearchResult(
+  result: any,
+  rows: any[],
+  input: {
+    limit: number;
+    task: IntelligenceTask;
+    dataScope: DataScope;
+    localIndexCoverage?: number | null;
+  },
+): any {
+  const localSearchQuality = evaluateLocalSearchQuality({
+    rows,
+    resultLimit: input.limit,
+    localIndexCoverage: input.localIndexCoverage ?? null,
+  });
+  const intelligenceRouting = chooseIntelligenceLane({
+    task: input.task,
+    dataScope: input.dataScope,
+    privacyMode: input.dataScope === 'private_corpus' ? 'local_only' : 'balanced',
+    localSmallMlAvailable: true,
+    edgeAvailable: input.dataScope === 'public_corpus',
+    localSearchQuality,
+  });
+
+  return {
+    ...result,
+    rows,
+    localSearchQuality,
+    intelligenceRouting,
+  };
+}
+
 export class HybridSearch {
   private readonly resolvedRuntimeConfig: ReturnType<typeof resolveHybridSearchRuntimeConfig>;
   private readonly backoffTimer: BackoffTimer;
@@ -363,7 +402,7 @@ export class HybridSearch {
     try {
       const pg = paperDB.getPG();
       // Simple query to check connection viability
-      const result = await Promise.race([
+      await Promise.race([
         pg.query('SELECT 1'),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Health check timeout')), this.queryTimeoutMs / 2)
@@ -531,10 +570,12 @@ export class HybridSearch {
       semanticCandidateLimit,
       'search',
     );
-    return {
-      ...result,
-      rows: postProcessRows(result.rows ?? [], resolvedOptions),
-    };
+    const rows = postProcessRows(result.rows ?? [], resolvedOptions);
+    return finalizeSearchResult(result, rows, {
+      limit: resolvedLimit,
+      task: 'local_search',
+      dataScope: 'local_cache',
+    });
   }
 
   /**
@@ -640,10 +681,12 @@ export class HybridSearch {
       semanticCandidateLimit,
       'searchAll',
     );
-    return {
-      ...result,
-      rows: postProcessRows(result.rows ?? [], resolvedOptions),
-    };
+    const rows = postProcessRows(result.rows ?? [], resolvedOptions);
+    return finalizeSearchResult(result, rows, {
+      limit: resolvedLimit,
+      task: 'public_search',
+      dataScope: 'public_corpus',
+    });
   }
 
   /**
@@ -723,10 +766,12 @@ export class HybridSearch {
       semanticCandidateLimit,
       'searchFeedItems',
     );
-    return {
-      ...result,
-      rows: postProcessRows(result.rows ?? [], resolvedOptions),
-    };
+    const rows = postProcessRows(result.rows ?? [], resolvedOptions);
+    return finalizeSearchResult(result, rows, {
+      limit: resolvedLimit,
+      task: 'local_search',
+      dataScope: 'local_cache',
+    });
   }
 
   async getIndexHealthSnapshot() {
