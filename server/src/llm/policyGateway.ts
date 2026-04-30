@@ -7,6 +7,7 @@ export type LlmPolicyTask =
   | 'media'
   | 'searchStory'
   | 'composerGuidance'
+  | 'composerClassifier'
   | 'premiumDeep'
   | 'verificationGrounding'
   | 'localTextGeneration'
