@@ -108,7 +108,7 @@ export function buildRawInterpolatorWriterOutputJsonSchema(
   return {
     type: 'object',
     additionalProperties: false,
-    required: REQUIRED_OUTPUT_KEYS,
+    required: [...REQUIRED_OUTPUT_KEYS],
     properties: {
       schemaVersion: { type: 'integer', const: RAW_INTERPOLATOR_WRITER_OUTPUT_SCHEMA_VERSION },
       fixtureId: { type: 'string', const: fixtureId },
@@ -120,9 +120,6 @@ export function buildRawInterpolatorWriterOutputJsonSchema(
     },
   };
 }
-
-export const RAW_INTERPOLATOR_WRITER_OUTPUT_JSON_SCHEMA: RawInterpolatorWriterOutputJsonSchema =
-  buildRawInterpolatorWriterOutputJsonSchema('');
 
 export function buildInterpolatorWriterPromptContract(
   input: InterpolatorWriterPromptContractInput,
@@ -203,18 +200,19 @@ function buildInstruction(
   retryInstruction: InterpolatorWriterRetryInstruction,
   maxTextChars: number,
 ): string {
-  const escapedFixtureId = JSON.stringify(fixture.id);
+  const fixtureIdJson = stringifyInstructionScalar(fixture.id);
 
   return [
     'Role: Interpolator Writer.',
     'Return exactly one JSON object with the required keys.',
     'Be accurate, helpful, and careful.',
-    'Do not drift from the supplied fixture.',
+    'Stay within the supplied fixture.',
     'Use only supplied entity IDs, claim IDs, and evidence IDs.',
-    'Do not invent entities, users, claims, evidence, sources, facts, or relationships.',
-    'Do not include text outside the JSON object.',
+    'Avoid invented entities, users, claims, evidence, sources, facts, or relationships.',
+    'Output JSON only; no surrounding prose.',
     'Provider and route metadata are caller-owned and must not be included.',
-    `Use fixtureId exactly: ${escapedFixtureId}.`,
+    `Use fixtureId exactly as this JSON string value: ${fixtureIdJson}.`,
+    'The fixtureId field must match outputJsonSchema.properties.fixtureId.const exactly.',
     `Keep text at or below ${maxTextChars} characters.`,
     getModeInstruction(mode),
     getAssistedModeInstruction(thinkingMode, fixture),
@@ -298,4 +296,10 @@ function buildReasonCodes(
 function sanitizeMaxTextChars(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return DEFAULT_MAX_TEXT_CHARS;
   return Math.max(1, Math.floor(value));
+}
+
+function stringifyInstructionScalar(value: string): string {
+  return JSON.stringify(value)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
