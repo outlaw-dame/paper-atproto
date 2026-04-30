@@ -12,8 +12,10 @@ import {
   chooseIntelligenceLane,
   evaluateLocalSearchQuality,
   type DataScope,
+  type IntelligenceRoutingInput,
   type IntelligenceTask,
   type LocalSearchQuality,
+  type PrivacyMode,
 } from './intelligence/intelligenceRoutingPolicy';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 import { recordHybridSearchTimeoutFallback } from './perf/searchTelemetry';
@@ -37,6 +39,11 @@ interface SearchOptions {
   lexicalWeight?: number;
   semanticWeight?: number;
   confidenceWeight?: number;
+  privacyMode?: PrivacyMode;
+  dataScope?: DataScope;
+  localSmallMlAvailable?: boolean;
+  edgeAvailable?: boolean;
+  localIndexCoverage?: number | null;
 }
 
 interface CachedVector {
@@ -240,29 +247,48 @@ function postProcessRows(rows: any[], options?: SearchOptions): any[] {
     .sort((a, b) => Number(b.fused_score ?? 0) - Number(a.fused_score ?? 0));
 }
 
+function buildSearchRoutingInput(input: {
+  task: IntelligenceTask;
+  dataScope: DataScope;
+  options: SearchOptions;
+  localSearchQuality: LocalSearchQuality;
+}): IntelligenceRoutingInput {
+  return {
+    task: input.task,
+    dataScope: input.dataScope,
+    localSearchQuality: input.localSearchQuality,
+    ...(input.options.privacyMode ? { privacyMode: input.options.privacyMode } : {}),
+    ...(typeof input.options.localSmallMlAvailable === 'boolean'
+      ? { localSmallMlAvailable: input.options.localSmallMlAvailable }
+      : {}),
+    ...(typeof input.options.edgeAvailable === 'boolean'
+      ? { edgeAvailable: input.options.edgeAvailable }
+      : {}),
+  };
+}
+
 function finalizeSearchResult(
   result: any,
   rows: any[],
   input: {
     limit: number;
     task: IntelligenceTask;
-    dataScope: DataScope;
-    localIndexCoverage?: number | null;
+    fallbackDataScope: DataScope;
+    options: SearchOptions;
   },
 ): any {
+  const dataScope = input.options.dataScope ?? input.fallbackDataScope;
   const localSearchQuality = evaluateLocalSearchQuality({
     rows,
     resultLimit: input.limit,
-    localIndexCoverage: input.localIndexCoverage ?? null,
+    localIndexCoverage: input.options.localIndexCoverage ?? null,
   });
-  const intelligenceRouting = chooseIntelligenceLane({
+  const intelligenceRouting = chooseIntelligenceLane(buildSearchRoutingInput({
     task: input.task,
-    dataScope: input.dataScope,
-    privacyMode: input.dataScope === 'private_corpus' ? 'local_only' : 'balanced',
-    localSmallMlAvailable: true,
-    edgeAvailable: input.dataScope === 'public_corpus',
+    dataScope,
+    options: input.options,
     localSearchQuality,
-  });
+  }));
 
   return {
     ...result,
@@ -574,7 +600,8 @@ export class HybridSearch {
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'local_search',
-      dataScope: 'local_cache',
+      fallbackDataScope: 'local_cache',
+      options: resolvedOptions,
     });
   }
 
@@ -685,7 +712,8 @@ export class HybridSearch {
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'public_search',
-      dataScope: 'public_corpus',
+      fallbackDataScope: 'public_corpus',
+      options: resolvedOptions,
     });
   }
 
@@ -770,7 +798,8 @@ export class HybridSearch {
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'local_search',
-      dataScope: 'local_cache',
+      fallbackDataScope: 'local_cache',
+      options: resolvedOptions,
     });
   }
 

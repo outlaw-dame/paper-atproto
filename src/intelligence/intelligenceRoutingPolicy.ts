@@ -79,9 +79,17 @@ type DecisionOptions = Partial<Omit<IntelligenceRoutingDecision, 'task' | 'lane'
 };
 
 const DEFAULT_PRIVACY_MODE: PrivacyMode = 'balanced';
+const DEFAULT_LOCAL_INDEX_COVERAGE = 0.5;
 const MIN_BROWSER_EXPERIMENT_MEMORY_GIB = 8;
 const HIGH_LOCAL_SEARCH_CONFIDENCE = 0.72;
 const LOW_LOCAL_SEARCH_CONFIDENCE = 0.48;
+const LOCAL_SEARCH_QUALITY_WEIGHTS = {
+  topScore: 0.42,
+  topMargin: 0.18,
+  resultCoverage: 0.16,
+  lexicalSemanticAgreement: 0.16,
+  localIndexCoverage: 0.08,
+} as const;
 
 export function chooseIntelligenceLane(
   input: IntelligenceRoutingInput,
@@ -160,11 +168,11 @@ export function evaluateLocalSearchQuality(input: LocalSearchQualityInput): Loca
   const localIndexCoverage = normalizeOptionalUnit(input.localIndexCoverage);
 
   const weighted =
-    0.42 * topScore
-    + 0.18 * clampUnit(topMargin * 2)
-    + 0.16 * resultCoverage
-    + 0.16 * lexicalSemanticAgreement
-    + 0.08 * (localIndexCoverage ?? 0.5);
+    LOCAL_SEARCH_QUALITY_WEIGHTS.topScore * topScore
+    + LOCAL_SEARCH_QUALITY_WEIGHTS.topMargin * clampUnit(topMargin * 2)
+    + LOCAL_SEARCH_QUALITY_WEIGHTS.resultCoverage * resultCoverage
+    + LOCAL_SEARCH_QUALITY_WEIGHTS.lexicalSemanticAgreement * lexicalSemanticAgreement
+    + LOCAL_SEARCH_QUALITY_WEIGHTS.localIndexCoverage * (localIndexCoverage ?? DEFAULT_LOCAL_INDEX_COVERAGE);
 
   return {
     topScore: round3(topScore),

@@ -63,7 +63,7 @@ export function isAutomaticComposerBrowserMlAllowed(
       ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML),
     deviceMemoryGiB: options.deviceMemoryGiB ?? getDeviceMemoryGiB(),
     isMobile: options.isMobile ?? isMobileRuntime(),
-    deviceTier: options.deviceTier ?? getDeviceTierFromMemory(options.deviceMemoryGiB ?? getDeviceMemoryGiB()),
+    ...(options.deviceTier ? { deviceTier: options.deviceTier } : {}),
   });
 }
 
@@ -81,7 +81,7 @@ export function shouldRunComposerModelStageForDraft(
       ?? readBooleanEnv(import.meta.env.VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML),
     deviceMemoryGiB: browserMlGateOptions.deviceMemoryGiB ?? getDeviceMemoryGiB(),
     isMobile: browserMlGateOptions.isMobile ?? isMobileRuntime(),
-    deviceTier: browserMlGateOptions.deviceTier ?? getDeviceTierFromMemory(browserMlGateOptions.deviceMemoryGiB ?? getDeviceMemoryGiB()),
+    ...(browserMlGateOptions.deviceTier ? { deviceTier: browserMlGateOptions.deviceTier } : {}),
     edgeAvailable: true,
   });
 
@@ -154,10 +154,4 @@ function getDeviceMemoryGiB(): number | null {
 function isMobileRuntime(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /iphone|ipad|ipod|android/i.test(navigator.userAgent);
-}
-
-function getDeviceTierFromMemory(deviceMemoryGiB: number | null): DeviceTier {
-  if (deviceMemoryGiB !== null && deviceMemoryGiB >= 8) return 'high';
-  if (deviceMemoryGiB !== null && deviceMemoryGiB >= 4) return 'mid';
-  return 'low';
 }
