@@ -14,6 +14,7 @@ import {
   type DataScope,
   type IntelligenceTask,
   type LocalSearchQuality,
+  type PrivacyMode,
 } from './intelligence/intelligenceRoutingPolicy';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
 import { recordHybridSearchTimeoutFallback } from './perf/searchTelemetry';
@@ -37,6 +38,11 @@ interface SearchOptions {
   lexicalWeight?: number;
   semanticWeight?: number;
   confidenceWeight?: number;
+  privacyMode?: PrivacyMode;
+  dataScope?: DataScope;
+  localSmallMlAvailable?: boolean;
+  edgeAvailable?: boolean;
+  localIndexCoverage?: number | null;
 }
 
 interface CachedVector {
@@ -246,21 +252,22 @@ function finalizeSearchResult(
   input: {
     limit: number;
     task: IntelligenceTask;
-    dataScope: DataScope;
-    localIndexCoverage?: number | null;
+    fallbackDataScope: DataScope;
+    options: SearchOptions;
   },
 ): any {
+  const dataScope = input.options.dataScope ?? input.fallbackDataScope;
   const localSearchQuality = evaluateLocalSearchQuality({
     rows,
     resultLimit: input.limit,
-    localIndexCoverage: input.localIndexCoverage ?? null,
+    localIndexCoverage: input.options.localIndexCoverage ?? null,
   });
   const intelligenceRouting = chooseIntelligenceLane({
     task: input.task,
-    dataScope: input.dataScope,
-    privacyMode: input.dataScope === 'private_corpus' ? 'local_only' : 'balanced',
-    localSmallMlAvailable: true,
-    edgeAvailable: input.dataScope === 'public_corpus',
+    dataScope,
+    privacyMode: input.options.privacyMode,
+    localSmallMlAvailable: input.options.localSmallMlAvailable,
+    edgeAvailable: input.options.edgeAvailable,
     localSearchQuality,
   });
 
@@ -574,7 +581,8 @@ export class HybridSearch {
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'local_search',
-      dataScope: 'local_cache',
+      fallbackDataScope: 'local_cache',
+      options: resolvedOptions,
     });
   }
 
@@ -685,7 +693,8 @@ export class HybridSearch {
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'public_search',
-      dataScope: 'public_corpus',
+      fallbackDataScope: 'public_corpus',
+      options: resolvedOptions,
     });
   }
 
@@ -770,7 +779,8 @@ export class HybridSearch {
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'local_search',
-      dataScope: 'local_cache',
+      fallbackDataScope: 'local_cache',
+      options: resolvedOptions,
     });
   }
 
