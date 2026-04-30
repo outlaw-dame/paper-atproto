@@ -12,6 +12,7 @@ import {
   chooseIntelligenceLane,
   evaluateLocalSearchQuality,
   type DataScope,
+  type IntelligenceRoutingInput,
   type IntelligenceTask,
   type LocalSearchQuality,
   type PrivacyMode,
@@ -246,6 +247,26 @@ function postProcessRows(rows: any[], options?: SearchOptions): any[] {
     .sort((a, b) => Number(b.fused_score ?? 0) - Number(a.fused_score ?? 0));
 }
 
+function buildSearchRoutingInput(input: {
+  task: IntelligenceTask;
+  dataScope: DataScope;
+  options: SearchOptions;
+  localSearchQuality: LocalSearchQuality;
+}): IntelligenceRoutingInput {
+  return {
+    task: input.task,
+    dataScope: input.dataScope,
+    localSearchQuality: input.localSearchQuality,
+    ...(input.options.privacyMode ? { privacyMode: input.options.privacyMode } : {}),
+    ...(typeof input.options.localSmallMlAvailable === 'boolean'
+      ? { localSmallMlAvailable: input.options.localSmallMlAvailable }
+      : {}),
+    ...(typeof input.options.edgeAvailable === 'boolean'
+      ? { edgeAvailable: input.options.edgeAvailable }
+      : {}),
+  };
+}
+
 function finalizeSearchResult(
   result: any,
   rows: any[],
@@ -262,14 +283,12 @@ function finalizeSearchResult(
     resultLimit: input.limit,
     localIndexCoverage: input.options.localIndexCoverage ?? null,
   });
-  const intelligenceRouting = chooseIntelligenceLane({
+  const intelligenceRouting = chooseIntelligenceLane(buildSearchRoutingInput({
     task: input.task,
     dataScope,
-    privacyMode: input.options.privacyMode,
-    localSmallMlAvailable: input.options.localSmallMlAvailable,
-    edgeAvailable: input.options.edgeAvailable,
+    options: input.options,
     localSearchQuality,
-  });
+  }));
 
   return {
     ...result,
