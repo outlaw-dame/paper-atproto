@@ -25,6 +25,8 @@ interface ImportMetaEnv {
 	readonly VITE_CLOUDKIT_ENVIRONMENT?: string;
 	readonly VITE_CLOUDKIT_JS_SRC?: string;
 	readonly VITE_ENABLE_DRAFT_RECOVERY_MIRROR?: string;
+	readonly VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML?: string;
+	readonly VITE_ENABLE_BROWSER_ML_SMOKE?: string;
 	readonly VITE_GLYMPSE_MEDIA_BASE_URL?: string;
 	readonly VITE_GLYMPSE_MEDIA_TIMEOUT_MS?: string;
 	readonly VITE_PGLITE_USE_WORKER?: string;

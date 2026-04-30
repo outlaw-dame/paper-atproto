@@ -10,7 +10,7 @@ A local-first ATProto social reader inspired by Facebook Paper, Neeva Gist, and 
 *   **Inference:** Transformers.js (in Web Worker)
 *   **Network:** ATProto via `@atproto/api`
 *   **UI:** Tailwind CSS, Konsta UI, Framer Motion
-*   **Composer Guidance Layer:** Shared authoring guidance for `ComposeSheet` and `PromptComposer`, built from staged local heuristics + worker-hosted sentiment/emotion/targeted-tone models + local abuse scoring + selective server-side guidance writing
+*   **Composer Guidance Layer:** Shared authoring guidance for `ComposeSheet` and `PromptComposer`, built from staged local heuristics + opt-in worker-hosted classifiers + local abuse scoring + selective server-side guidance writing
 
 ## Core Architecture
 
@@ -34,6 +34,8 @@ The app now runs as one connected AI system with layered execution rather than a
 Thread freshness is still bounded rather than truly live: Story mode rehydrates on a polling budget, and the app now reuses existing writer outputs when no meaningful thread change is detected instead of re-running the full model stack on every refresh.
 
 The canonical architecture and execution flow now live in [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+Browser ML safety policy and model staging profiles are documented in [docs/browser-ml-safety.md](./docs/browser-ml-safety.md).
 
 ## Getting Started
 
@@ -73,6 +75,17 @@ VITE_ATPROTO_OAUTH_REDIRECT_URIS=https://<your-tunnel-host>/
 For GIF search, set `VITE_KLIPY_API_KEY` in the root `.env` to a valid Klipy API key (get one at https://partner.klipy.com/api-keys).
 
 Open the tunnel URL and sign in with your Bluesky handle through OAuth.
+
+### Browser ML defaults
+
+Browser model loading is conservative by default:
+
+* Automatic composer browser ML is disabled unless `VITE_ENABLE_AUTOMATIC_COMPOSER_BROWSER_ML=1`.
+* Browser ML smoke checks are disabled unless `VITE_ENABLE_BROWSER_ML_SMOKE=1`.
+* `pnpm models:download-browser` installs the minimal `core` profile only: embeddings.
+* Large local browser model experiments require explicit staging, for example `pnpm models:download-browser -- --profile premium`.
+
+Keep these disabled for normal development unless intentionally testing local ONNX/WebGPU behavior.
 
 ### Optional platform env
 

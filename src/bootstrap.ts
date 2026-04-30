@@ -17,6 +17,15 @@ function shouldSkipVectorIndexBuild(): boolean {
   return isIOS || isAndroid || isStandalone || isLowMemoryDevice;
 }
 
+function isEnabledEnvFlag(value: string | undefined): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function shouldRunBrowserMlSmoke(): boolean {
+  return isEnabledEnvFlag(import.meta.env.VITE_ENABLE_BROWSER_ML_SMOKE);
+}
+
 /**
  * Initializes the application infrastructure.
  * Call this from main.tsx before rendering the app.
@@ -78,8 +87,8 @@ export async function initApp() {
     console.warn('[Bootstrap] Platform bootstrap failed (non-fatal):', error);
   });
 
-  // 2.6. Probe the local browser runtime conservatively after boot.
-  // This stays non-fatal and never blocks app startup or the existing worker hot path.
+  // 2.6. Probe browser hardware/runtime capability without loading model weights.
+  // This remains non-fatal and never blocks app startup.
   markBootstrapStageStarted('runtimeProbe');
   void import('./runtime/modelManager')
     .then(({ browserModelManager }) => browserModelManager.initCapabilityProbe())
@@ -120,10 +129,17 @@ export async function initApp() {
       });
   };
 
-  if (typeof requestIdleCallback !== 'undefined') {
-    requestIdleCallback(scheduleRuntimeSmoke, { timeout: 12_000 });
+  if (shouldRunBrowserMlSmoke()) {
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(scheduleRuntimeSmoke, { timeout: 12_000 });
+    } else {
+      setTimeout(scheduleRuntimeSmoke, 8_000);
+    }
   } else {
-    setTimeout(scheduleRuntimeSmoke, 8_000);
+    markBootstrapStageFinished('runtimeSmoke', {
+      status: 'skipped',
+      message: 'Skipped browser ML smoke check. Set VITE_ENABLE_BROWSER_ML_SMOKE=1 to start the inference worker during bootstrap diagnostics.',
+    });
   }
 
   // 3. Warmup Inference (optional, deferred to keep startup fast)
