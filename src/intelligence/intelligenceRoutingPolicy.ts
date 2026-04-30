@@ -74,8 +74,11 @@ export interface LocalSearchQuality {
   confidence: number;
 }
 
+type DecisionOptions = Partial<Omit<IntelligenceRoutingDecision, 'task' | 'lane' | 'reasonCode' | 'fallbackLane'>> & {
+  fallbackLane?: IntelligenceLane | undefined;
+};
+
 const DEFAULT_PRIVACY_MODE: PrivacyMode = 'balanced';
-const DEFAULT_DEVICE_TIER: DeviceTier = 'mid';
 const MIN_BROWSER_EXPERIMENT_MEMORY_GIB = 8;
 const HIGH_LOCAL_SEARCH_CONFIDENCE = 0.72;
 const LOW_LOCAL_SEARCH_CONFIDENCE = 0.48;
@@ -338,7 +341,7 @@ function decision(
   task: IntelligenceTask,
   lane: IntelligenceLane,
   reasonCode: IntelligenceRoutingDecision['reasonCode'],
-  options: Partial<Omit<IntelligenceRoutingDecision, 'task' | 'lane' | 'reasonCode'>> = {},
+  options: DecisionOptions = {},
 ): IntelligenceRoutingDecision {
   return {
     task,
