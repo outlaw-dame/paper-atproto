@@ -37,20 +37,42 @@ The canonical architecture and execution flow now live in [ARCHITECTURE.md](./AR
 
 ## Getting Started
 
+1. **Install and setup:**
 ```bash
+# Install workspace dependencies
 pnpm install
-pnpm dev
+
+# Create the root app env file for OAuth, Klipy, and verify-server settings
+cp .env.example .env
+
+# Create the verify-server env file
+cd server
+npm install
+cp .env.example .env
+cd ..
 ```
 
-Run the auth/retry hardening checks with:
+2. **Run the project:**
+You need to run the app, the verify-server, and an HTTPS tunnel (required for full permissions) in separate terminals:
+
+*   **Terminal 1 (App):** `pnpm dev` (Runs on `http://localhost:5180`)
+*   **Terminal 2 (Server):** `npm --prefix ./server run dev`
+*   **Terminal 3 (Tunnel):** An HTTPS tunnel is required for full ATProto permissions. **Cloudflare Tunnel** is recommended, but you can also use `ngrok`, `zrok`, or `localtunnel`:
+    *   *Recommended:* `npx cloudflared tunnel --url http://127.0.0.1:5180`
+    *   *Alternative (ngrok):* `ngrok http 5180`
+
+3. **Access the app:**
+Copy the HTTPS URL from your tunnel output (for example, `https://...trycloudflare.com`). In the root `.env`, set:
 
 ```bash
-pnpm test
+VITE_ATPROTO_OAUTH_CLIENT_ID=https://<your-tunnel-host>/oauth/client-metadata.json
+VITE_ATPROTO_OAUTH_METADATA_ORIGIN=https://<your-tunnel-host>
+VITE_ATPROTO_OAUTH_REDIRECT_URIS=https://<your-tunnel-host>/
 ```
 
-For GIF search, create a `.env` file from `.env.example` and set `VITE_KLIPY_API_KEY` to a valid Klipy API key (get one at https://partner.klipy.com/api-keys).
+For GIF search, set `VITE_KLIPY_API_KEY` in the root `.env` to a valid Klipy API key (get one at https://partner.klipy.com/api-keys).
 
-Open `http://localhost:5173` and sign in with your Bluesky handle through OAuth.
+Open the tunnel URL and sign in with your Bluesky handle through OAuth.
 
 ### Optional platform env
 
@@ -69,8 +91,9 @@ When enabled, the app now lazy-loads CloudKit JS on demand with bounded retry, f
 OAuth setup notes:
 
 *   For local development, OAuth loopback mode works without a hosted `client_id`.
+*   Localhost loopback mode intentionally requests only the base `atproto` scope when `VITE_ATPROTO_OAUTH_CLIENT_ID` is unset. Use an HTTPS origin with hosted client metadata for full Bluesky AppView permissions.
 *   For full Bluesky app permissions, use a secure hosted metadata URL (HTTPS). Loopback-only OAuth can be permission-limited.
-*   For secure origins, the app now auto-derives `client_id` as `<origin>/oauth/client-metadata.json` when `VITE_ATPROTO_OAUTH_CLIENT_ID` is unset.
+*   For secure origins, set `VITE_ATPROTO_OAUTH_CLIENT_ID` to `<origin>/oauth/client-metadata.json` or another hosted client metadata URL.
 *   Vite dev server now serves dynamic metadata at `/oauth/client-metadata.json` with strict sanitization and no-store caching.
 *   A starter static metadata template is still included at `public/oauth/client-metadata.json` for fully static hosting scenarios.
 *   Hardened client config validation is enabled: invalid or insecure OAuth URLs are ignored and the app falls back to safe defaults.
@@ -81,11 +104,12 @@ OAuth setup notes:
 
 1. Serve the app from an HTTPS origin (deployed domain or tunnel).
 2. Ensure metadata is reachable at `<origin>/oauth/client-metadata.json`.
-3. If using dynamic metadata in dev, optionally set:
-    - `VITE_ATPROTO_OAUTH_METADATA_ORIGIN`
-    - `VITE_ATPROTO_OAUTH_REDIRECT_URIS` (comma-separated)
-4. Keep `VITE_ATPROTO_OAUTH_SCOPE=atproto transition:generic` unless your provider requires otherwise.
-5. If metadata is hosted on a different origin, set `VITE_ATPROTO_OAUTH_CLIENT_ID` explicitly.
+3. If using dynamic metadata in dev, set:
+    - `VITE_ATPROTO_OAUTH_CLIENT_ID=<origin>/oauth/client-metadata.json`
+    - `VITE_ATPROTO_OAUTH_METADATA_ORIGIN=<origin>`
+    - `VITE_ATPROTO_OAUTH_REDIRECT_URIS=<origin>/` (comma-separated if you support more than one redirect URI)
+4. Keep the default `VITE_ATPROTO_OAUTH_SCOPE` from `.env.example` unless your provider requires otherwise. It includes `atproto`, `transition:generic`, and the Bluesky AppView RPC scopes used by timeline/profile calls.
+5. If metadata is hosted on a different origin, set `VITE_ATPROTO_OAUTH_CLIENT_ID` explicitly to that hosted metadata URL.
 6. Confirm consent/technical details include required app permissions (not only `atproto`).
 7. Run sign-in + OTP + consent + callback smoke tests on the final origin.
 8. Use HTTPS everywhere except intentional localhost loopback development.
