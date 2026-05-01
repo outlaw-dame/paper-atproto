@@ -33,14 +33,14 @@ Before implementing a major intelligence feature:
 
 | Branch | Current assessment | Action |
 |---|---|---|
-| `feat/router-coordinator-contract` | Foundational contract and diagnostics work is merged; diagnostic/test refinements remain ahead of `master`. | Review and recover remaining diagnostics only. |
-| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect after remaining diagnostics are reconciled. |
+| `feat/router-coordinator-contract` | Foundational contract and diagnostics work is merged; direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
+| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect after runtime-adapter audit. |
 | `feat/router-authority-advisory-profile` | Router authority/advisory profile work. | Inspect with router policy work. |
 | `feat/router-runtime-adapter` | Foundational local runtime work is merged; compare before further recovery to identify any remaining runtime-boundary deltas. | Audit before shadow-evaluator work. |
 | `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover after runtime adapter audit. |
-| `feat/router-coordinator-shadow-diagnostics` | Shadow diagnostics branch. | Recover after shadow evaluator. |
+| `feat/router-coordinator-shadow-diagnostics` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after diagnostics contracts stabilize. |
-| `fix/router-coordinator-route-diagnostics` | Route diagnostics fix branch. | Inspect with diagnostics work. |
+| `fix/router-coordinator-route-diagnostics` | Direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
 | `fix/land-router-runtime-boundary` | Landing/fix branch for router runtime boundary. | Inspect before runtime adapter changes. |
 
 ### FunctionGemma router chain
@@ -82,18 +82,17 @@ Current `master` now includes these foundational pieces:
 
 ## Safe recovery order
 
-1. [DONE] Router/coordinator contract and baseline diagnostics contract.
+1. [DONE] Router/coordinator contract and diagnostics refinements.
 2. [DONE] FunctionGemma router invoker boundary, execution adapter, local runtime, and load-error fixes.
 3. [DONE] Interpolator writer routing/eval/prompt contracts and baseline output adapter.
-4. Review and recover remaining router/coordinator diagnostics refinements.
-5. Audit router runtime adapter / local runtime branches for any remaining deltas not already on `master`.
-6. Recover router/coordinator shadow evaluator and diagnostics.
-7. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
-8. Recover interpolator writer fallback controller.
-9. Recover interpolator writer execution finalizer.
-10. Recover interpolator writer eval harness and fixture fixes.
-11. Extract coordinator runtime around `sessionAssembler.ts`.
-12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
+4. Audit router runtime adapter / local runtime branches for any remaining deltas not already on `master`.
+5. Recover router/coordinator shadow evaluator and diagnostics.
+6. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
+7. Recover interpolator writer fallback controller.
+8. Recover interpolator writer execution finalizer.
+9. Recover interpolator writer eval harness and fixture fixes.
+10. Extract coordinator runtime around `sessionAssembler.ts`.
+11. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
 
@@ -105,7 +104,6 @@ Use this checklist before opening a major intelligence PR:
 - [ ] Identify whether the work is contract, runtime, UI, diagnostics, or provider integration.
 - [ ] Recover contract/test slices before runtime wiring.
 - [ ] Avoid broad file rewrites unless required.
-- [ ] Preserve strict privacy boundaries: no provider secrets in browser code.
 - [ ] Preserve local-only privacy behavior.
 - [ ] Preserve source-token/staleness checks for async output.
 - [ ] Run full CI before merge.
