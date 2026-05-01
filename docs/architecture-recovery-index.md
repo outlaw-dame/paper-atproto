@@ -22,9 +22,9 @@ Before implementing a major intelligence feature:
 | `feat/interpolator-writer-routing-policy` | Foundational writer-routing work; equivalent files are already present on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-eval-contract` | Foundational writer-evaluation work; equivalent files are already present on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-prompt-contract` | Foundational prompt-grounding contract; equivalent files are already present on `master`. | Keep as historical source material. |
-| `feat/interpolator-writer-output-adapter` | Diverged branch, ahead of `master`, adds `interpolatorWriterOutputAdapter.ts` and tests. | Review and recover next in a focused PR. |
-| `fix/interpolator-writer-output-adapter-review` | Review/fix branch for output adapter. | Inspect alongside output-adapter recovery. |
-| `feat/interpolator-writer-fallback-controller` | Diverged branch, ahead of `master`, adds fallback controller and tests. | Recover after output adapter. |
+| `feat/interpolator-writer-output-adapter` | Foundational output-adapter work; equivalent files are already present on `master`. | Keep as historical source material. |
+| `fix/interpolator-writer-output-adapter-review` | Diverged review/fix branch with small adapter/test refinements still ahead of `master`. | Inspect in a focused PR before fallback-controller recovery. |
+| `feat/interpolator-writer-fallback-controller` | Diverged branch, ahead of `master`, adds fallback controller and tests. | Recover after output-adapter review refinements. |
 | `feat/interpolator-writer-execution-finalizer` | Diverged branch, ahead of `master`, adds execution finalizer and tests. | Recover after fallback controller. |
 | `feat/interpolator-writer-eval-harness` | Diverged branch for eval harness. | Recover after finalizer. |
 | `fix/interpolator-writer-eval-harness-fixture-test` | Follow-up test/fix branch for eval harness. | Inspect alongside eval-harness recovery. |
@@ -33,52 +33,67 @@ Before implementing a major intelligence feature:
 
 | Branch | Current assessment | Action |
 |---|---|---|
-| `feat/router-coordinator-contract` | Diverged branch; compare shows diagnostics contract/test changes remain ahead of `master`. | Review and recover before runtime changes. |
-| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect after contract recovery. |
+| `feat/router-coordinator-contract` | Foundational contract and diagnostics work is merged; diagnostic/test refinements remain ahead of `master`. | Review and recover remaining diagnostics only. |
+| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect after remaining diagnostics are reconciled. |
 | `feat/router-authority-advisory-profile` | Router authority/advisory profile work. | Inspect with router policy work. |
-| `feat/router-runtime-adapter` | Diverged branch, adds FunctionGemma local runtime files and tests. | Recover after router/coordinator contracts. |
-| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover after runtime adapter. |
+| `feat/router-runtime-adapter` | Foundational local runtime work is merged; compare before further recovery to identify any remaining runtime-boundary deltas. | Audit before shadow-evaluator work. |
+| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover after runtime adapter audit. |
 | `feat/router-coordinator-shadow-diagnostics` | Shadow diagnostics branch. | Recover after shadow evaluator. |
 | `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after diagnostics contracts stabilize. |
 | `fix/router-coordinator-route-diagnostics` | Route diagnostics fix branch. | Inspect with diagnostics work. |
-| `fix/land-router-runtime-boundary` | Landing/fix branch for router runtime boundary. | Inspect before runtime adapter recovery. |
+| `fix/land-router-runtime-boundary` | Landing/fix branch for router runtime boundary. | Inspect before runtime adapter changes. |
 
 ### FunctionGemma router chain
 
 | Branch | Current assessment | Action |
 |---|---|---|
-| `feat/functiongemma-router-invoker-boundary` | Diverged branch; adds FunctionGemma invoker, router execution adapter, enhancer fallback, and tests. | High-priority recovery after router/coordinator contracts. |
-| `fix/functiongemma-load-errors` | Follow-up load-error fix branch. | Inspect with FunctionGemma recovery. |
-| `fix/functiongemma-load-error-reporting` | Follow-up load-error reporting branch. | Inspect with FunctionGemma recovery. |
-| `fix/functiongemma-load-aggregate-error` | Follow-up aggregate-error branch. | Inspect with FunctionGemma recovery. |
+| `feat/functiongemma-router-invoker-boundary` | Foundational invoker, execution adapter, local runtime, and FunctionGemma tests are merged; enhancer fallback logic from this branch family still needs audit. | Recover remaining enhancer/fallback logic only after auditing current `master`. |
+| `fix/functiongemma-load-errors` | Fully absorbed into `master` with zero commits ahead. | Keep as historical source material. |
+| `fix/functiongemma-load-error-reporting` | Fully absorbed into `master` with zero commits ahead. | Keep as historical source material. |
+| `fix/functiongemma-load-aggregate-error` | Fully absorbed into `master` with zero commits ahead. | Keep as historical source material. |
 
 ## Already restored to current master
 
 Current `master` now includes these foundational pieces:
 
 - `docs/router-coordinator-architecture.md`
+- `docs/architecture-recovery-index.md`
 - `src/intelligence/modelRoles.ts`
+- `src/intelligence/edge/edgeProviderPlanner.ts`
+- `src/intelligence/edge/edgeProviderPlanner.test.ts`
+- `src/runtime/routerCoordinatorContract.ts`
+- `src/runtime/routerCoordinatorContract.test.ts`
+- `src/runtime/routerCoordinatorDiagnostics.ts`
+- `src/runtime/routerCoordinatorDiagnostics.test.ts`
+- `src/runtime/routerExecutionAdapter.ts`
+- `src/runtime/routerExecutionAdapter.test.ts`
+- `src/runtime/functionGemmaRouterInvoker.ts`
+- `src/runtime/functionGemmaRouterInvoker.test.ts`
+- `src/runtime/functionGemmaLocalRuntime.ts`
+- `src/runtime/functionGemmaLocalRuntime.test.ts`
 - `src/runtime/interpolatorWriterRoutingPolicy.ts`
 - `src/runtime/interpolatorWriterRoutingPolicy.test.ts`
 - `src/runtime/interpolatorWriterEvalContract.ts`
 - `src/runtime/interpolatorWriterEvalContract.test.ts`
 - `src/runtime/interpolatorWriterPromptContract.ts`
 - `src/runtime/interpolatorWriterPromptContract.test.ts`
-- `src/intelligence/edge/edgeProviderPlanner.ts`
-- `src/intelligence/edge/edgeProviderPlanner.test.ts`
+- `src/runtime/interpolatorWriterOutputAdapter.ts`
+- `src/runtime/interpolatorWriterOutputAdapter.test.ts`
 
 ## Safe recovery order
 
-1. Router/coordinator contract and diagnostics contract.
-2. FunctionGemma router invoker boundary and load-error fixes.
-3. Router runtime adapter / local runtime boundary.
-4. Router/coordinator shadow evaluator and diagnostics.
-5. Interpolator writer output adapter and review fixes.
-6. Interpolator writer fallback controller.
-7. Interpolator writer execution finalizer.
-8. Interpolator writer eval harness and fixture fixes.
-9. Coordinator runtime extraction around `sessionAssembler.ts`.
-10. Broader Cloudflare Workers AI provider expansion after router/coordinator/writer contracts are stable.
+1. [DONE] Router/coordinator contract and baseline diagnostics contract.
+2. [DONE] FunctionGemma router invoker boundary, execution adapter, local runtime, and load-error fixes.
+3. [DONE] Interpolator writer routing/eval/prompt contracts and baseline output adapter.
+4. Review and recover remaining router/coordinator diagnostics refinements.
+5. Audit router runtime adapter / local runtime branches for any remaining deltas not already on `master`.
+6. Recover router/coordinator shadow evaluator and diagnostics.
+7. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
+8. Recover interpolator writer fallback controller.
+9. Recover interpolator writer execution finalizer.
+10. Recover interpolator writer eval harness and fixture fixes.
+11. Extract coordinator runtime around `sessionAssembler.ts`.
+12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
 
