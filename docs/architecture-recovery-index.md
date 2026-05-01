@@ -26,8 +26,8 @@ Before implementing a major intelligence feature:
 | `fix/interpolator-writer-output-adapter-review` | Direct source/test comparison against `master` shows no remaining output-adapter delta. | Keep as historical source material. |
 | `feat/interpolator-writer-fallback-controller` | Fallback controller and tests are recovered on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-execution-finalizer` | Execution finalizer and tests are recovered on `master`. | Keep as historical source material. |
-| `feat/interpolator-writer-eval-harness` | Diverged branch for eval harness. | Recover next. |
-| `fix/interpolator-writer-eval-harness-fixture-test` | Follow-up test/fix branch for eval harness. | Inspect alongside eval-harness recovery. |
+| `feat/interpolator-writer-eval-harness` | Eval harness source and tests are recovered on `master`. | Keep as historical source material. |
+| `fix/interpolator-writer-eval-harness-fixture-test` | Fixture mismatch eval/test fix is recovered on `master`. | Keep as historical source material. |
 
 ### Router and coordinator chain
 
@@ -91,6 +91,8 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/interpolatorWriterFallbackController.test.ts`
 - `src/runtime/interpolatorWriterExecutionFinalizer.ts`
 - `src/runtime/interpolatorWriterExecutionFinalizer.test.ts`
+- `src/runtime/interpolatorWriterEvalHarness.ts`
+- `src/runtime/interpolatorWriterEvalHarness.test.ts`
 
 ## Safe recovery order
 
@@ -103,7 +105,7 @@ Current `master` now includes these foundational pieces:
 7. [DONE] Interpolator writer output-adapter review inspection.
 8. [DONE] Interpolator writer fallback controller.
 9. [DONE] Interpolator writer execution finalizer.
-10. Recover interpolator writer eval harness and fixture fixes.
+10. [DONE] Interpolator writer eval harness and fixture fixes.
 11. Extract coordinator runtime around `sessionAssembler.ts`.
 12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
