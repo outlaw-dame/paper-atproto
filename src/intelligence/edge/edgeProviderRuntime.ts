@@ -1,7 +1,7 @@
 import { callComposerEdgeClassifier } from '../composer/edgeClassifierClient';
 import type { ComposerEdgeClassifierProvider, ComposerEdgeClassifierRequest } from '../composer/edgeClassifierContracts';
 import type { ComposerClassifyEdgeResponse, EdgeProviderId } from './edgeProviderContracts';
-import type { EdgeProviderCoordinatorOptions } from './edgeProviderCoordinator';
+import type { EdgeProviderPlannerOptions } from './edgeProviderPlanner';
 
 function toEdgeProviderId(provider: ComposerEdgeClassifierProvider): EdgeProviderId {
   return provider === 'cloudflare-workers-ai' ? 'cloudflare-workers-ai' : 'node-heuristic';
@@ -9,7 +9,7 @@ function toEdgeProviderId(provider: ComposerEdgeClassifierProvider): EdgeProvide
 
 export async function runComposerClassifyOnEdge(
   input: ComposerEdgeClassifierRequest,
-  _options: EdgeProviderCoordinatorOptions = {},
+  _options: EdgeProviderPlannerOptions = {},
   signal?: AbortSignal,
 ): Promise<ComposerClassifyEdgeResponse> {
   const output = await callComposerEdgeClassifier(input, signal);

@@ -9,7 +9,7 @@ const ENDPOINTS = {
   media: '/api/llm/analyze/media',
 } as const;
 
-type EdgeCoordinatorInput = Omit<IntelligenceRoutingInput, 'edgeAvailable'> & {
+type EdgePlannerInput = Omit<IntelligenceRoutingInput, 'edgeAvailable'> & {
   edgeAvailable?: unknown;
 };
 
@@ -25,19 +25,19 @@ export interface EdgeProviderAvailability {
   nodeHeuristic?: boolean | undefined;
 }
 
-export interface EdgeProviderCoordinatorOptions {
+export interface EdgeProviderPlannerOptions {
   availability?: EdgeProviderAvailability;
 }
 
-function cloudflareAvailable(options: EdgeProviderCoordinatorOptions): boolean {
+function cloudflareAvailable(options: EdgeProviderPlannerOptions): boolean {
   return options.availability?.cloudflareWorkersAi !== false;
 }
 
-function nodeHeuristicAvailable(options: EdgeProviderCoordinatorOptions): boolean {
+function nodeHeuristicAvailable(options: EdgeProviderPlannerOptions): boolean {
   return options.availability?.nodeHeuristic !== false;
 }
 
-function resolveCapabilityPlan(task: IntelligenceTask, options: EdgeProviderCoordinatorOptions): EdgeCapabilityPlan | null {
+function resolveCapabilityPlan(task: IntelligenceTask, options: EdgeProviderPlannerOptions): EdgeCapabilityPlan | null {
   if (task === 'composer_refine') {
     if (cloudflareAvailable(options)) {
       return {
@@ -63,7 +63,7 @@ function resolveCapabilityPlan(task: IntelligenceTask, options: EdgeProviderCoor
 }
 
 function normalizeEdgeAvailable(
-  input: EdgeCoordinatorInput,
+  input: EdgePlannerInput,
   capabilityPlan: EdgeCapabilityPlan | null,
 ): boolean {
   return typeof input.edgeAvailable === 'boolean'
@@ -72,8 +72,8 @@ function normalizeEdgeAvailable(
 }
 
 export function planEdgeExecution(
-  input: EdgeCoordinatorInput,
-  options: EdgeProviderCoordinatorOptions = {},
+  input: EdgePlannerInput,
+  options: EdgeProviderPlannerOptions = {},
 ): EdgeExecutionPlan | null {
   const capabilityPlan = resolveCapabilityPlan(input.task, options);
   const decision = chooseIntelligenceLane({

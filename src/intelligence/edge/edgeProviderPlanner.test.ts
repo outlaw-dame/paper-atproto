@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { planEdgeExecution } from './edgeProviderCoordinator';
+import { planEdgeExecution } from './edgeProviderPlanner';
 
 describe('edge provider task planning', () => {
   it('plans composer classification with Cloudflare and node fallback when both are available', () => {
@@ -85,7 +85,7 @@ describe('edge provider task planning', () => {
     })).toBeNull();
   });
 
-  it('maps media analysis and story summary to their own capabilities and endpoints', () => {
+  it('maps media analysis and keeps story summary out of edge planning under current policy', () => {
     expect(planEdgeExecution({
       task: 'media_analysis',
       dataScope: 'public_corpus',
