@@ -71,13 +71,22 @@ export interface IntelligenceComponentStatus {
   updatedAtMs: number;
 }
 
+export type IntelligenceComponentStatusInput = Omit<
+  IntelligenceComponentStatus,
+  'updatedAtMs' | 'reasonCodes' | 'recommendedActions'
+> & {
+  updatedAtMs?: number;
+  reasonCodes?: CoordinatorReasonCode[];
+  recommendedActions?: CoordinatorAction[];
+};
+
 export function createIntelligenceComponentStatus(
-  status: Omit<IntelligenceComponentStatus, 'updatedAtMs'> & { updatedAtMs?: number },
+  status: IntelligenceComponentStatusInput,
 ): IntelligenceComponentStatus {
   return {
     ...status,
-    reasonCodes: Array.from(new Set(status.reasonCodes)),
-    recommendedActions: Array.from(new Set(status.recommendedActions)),
+    reasonCodes: Array.from(new Set(status.reasonCodes ?? [])),
+    recommendedActions: Array.from(new Set(status.recommendedActions ?? [])),
     updatedAtMs: status.updatedAtMs ?? Date.now(),
   };
 }

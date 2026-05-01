@@ -124,18 +124,6 @@ The coordinator treats providers as replaceable execution options, not as the ar
 - server writer/default model routes
 - premium API-provider lanes
 
-## Recovered branch trail
-
-Relevant older branches that should be treated as source material, not blindly merged:
-
-- `feat/interpolator-writer-eval-contract`
-- `feat/interpolator-writer-routing-policy`
-- `feat/interpolator-writer-prompt-contract`
-- `feat/interpolator-writer-output-adapter`
-- `feat/interpolator-writer-fallback-controller`
-- `feat/interpolator-writer-execution-finalizer`
-- `feat/interpolator-writer-eval-harness`
-
 ## Naming rule
 
 Do not call every planner a coordinator.
