@@ -1,8 +1,5 @@
 import type { ConversationSession } from './sessionTypes';
-import {
-  buildConversationModelSourceToken,
-  matchesConversationModelSourceToken,
-} from './modelSourceToken';
+import { buildConversationModelSourceToken } from './modelSourceToken';
 
 export const CONVERSATION_COORDINATOR_SOURCE_GUARD_VERSION = 1 as const;
 
@@ -40,14 +37,10 @@ export function isCoordinatorSourceFresh(
   session: ConversationSession,
   sourceToken: string | null | undefined,
 ): boolean {
-  const normalizedSourceToken = normalizeSourceToken(sourceToken);
-  if (!normalizedSourceToken) return false;
+  const candidateSourceToken = normalizeSourceToken(sourceToken);
+  if (!candidateSourceToken) return false;
 
-  try {
-    return matchesConversationModelSourceToken(session, normalizedSourceToken);
-  } catch {
-    return false;
-  }
+  return getCoordinatorCurrentSourceToken(session) === candidateSourceToken;
 }
 
 export function selectCoordinatorSourceApplication(
@@ -80,7 +73,7 @@ export function selectCoordinatorSourceApplication(
     });
   }
 
-  const fresh = isCoordinatorSourceFresh(session, candidateSourceToken);
+  const fresh = candidateSourceToken === currentSourceToken;
   return buildDecision({
     action: fresh ? 'apply' : 'discard_stale',
     stage,
