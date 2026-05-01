@@ -34,20 +34,20 @@ Before implementing a major intelligence feature:
 | Branch | Current assessment | Action |
 |---|---|---|
 | `feat/router-coordinator-contract` | Foundational contract and diagnostics work is merged; direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
-| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect after runtime-adapter audit. |
+| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect before shadow-evaluator recovery. |
 | `feat/router-authority-advisory-profile` | Router authority/advisory profile work. | Inspect with router policy work. |
-| `feat/router-runtime-adapter` | Foundational local runtime work is merged; compare before further recovery to identify any remaining runtime-boundary deltas. | Audit before shadow-evaluator work. |
-| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover after runtime adapter audit. |
+| `feat/router-runtime-adapter` | Direct runtime source/test comparison against `master` shows no remaining local-runtime delta. | Keep as historical source material. |
+| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover next. |
 | `feat/router-coordinator-shadow-diagnostics` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
-| `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after diagnostics contracts stabilize. |
+| `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after shadow evaluator. |
 | `fix/router-coordinator-route-diagnostics` | Direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
-| `fix/land-router-runtime-boundary` | Landing/fix branch for router runtime boundary. | Inspect before runtime adapter changes. |
+| `fix/land-router-runtime-boundary` | Runtime boundary files and enhancer quality fallback are present on `master`; direct source comparison shows no remaining runtime-boundary delta. | Keep as historical source material. |
 
 ### FunctionGemma router chain
 
 | Branch | Current assessment | Action |
 |---|---|---|
-| `feat/functiongemma-router-invoker-boundary` | Foundational invoker, execution adapter, local runtime, and FunctionGemma tests are merged; enhancer fallback logic from this branch family still needs audit. | Recover remaining enhancer/fallback logic only after auditing current `master`. |
+| `feat/functiongemma-router-invoker-boundary` | Foundational invoker, execution adapter, local runtime, and FunctionGemma tests are merged; enhancer fallback logic from this branch family is represented by `enhancerQualityFallback` on `master`. | Keep as historical source material. |
 | `fix/functiongemma-load-errors` | Fully absorbed into `master` with zero commits ahead. | Keep as historical source material. |
 | `fix/functiongemma-load-error-reporting` | Fully absorbed into `master` with zero commits ahead. | Keep as historical source material. |
 | `fix/functiongemma-load-aggregate-error` | Fully absorbed into `master` with zero commits ahead. | Keep as historical source material. |
@@ -71,6 +71,8 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/functionGemmaRouterInvoker.test.ts`
 - `src/runtime/functionGemmaLocalRuntime.ts`
 - `src/runtime/functionGemmaLocalRuntime.test.ts`
+- `src/runtime/enhancerQualityFallback.ts`
+- `src/runtime/enhancerQualityFallback.test.ts`
 - `src/runtime/interpolatorWriterRoutingPolicy.ts`
 - `src/runtime/interpolatorWriterRoutingPolicy.test.ts`
 - `src/runtime/interpolatorWriterEvalContract.ts`
@@ -83,16 +85,18 @@ Current `master` now includes these foundational pieces:
 ## Safe recovery order
 
 1. [DONE] Router/coordinator contract and diagnostics refinements.
-2. [DONE] FunctionGemma router invoker boundary, execution adapter, local runtime, and load-error fixes.
+2. [DONE] FunctionGemma router invoker boundary, execution adapter, local runtime, enhancer quality fallback, and load-error fixes.
 3. [DONE] Interpolator writer routing/eval/prompt contracts and baseline output adapter.
-4. Audit router runtime adapter / local runtime branches for any remaining deltas not already on `master`.
-5. Recover router/coordinator shadow evaluator and diagnostics.
-6. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
-7. Recover interpolator writer fallback controller.
-8. Recover interpolator writer execution finalizer.
-9. Recover interpolator writer eval harness and fixture fixes.
-10. Extract coordinator runtime around `sessionAssembler.ts`.
-11. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
+4. [DONE] Router runtime adapter / local runtime audit.
+5. Inspect router/coordinator prompts and authority/advisory profile branches.
+6. Recover router/coordinator shadow evaluator.
+7. Recover router/coordinator diagnostics UI if still relevant.
+8. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
+9. Recover interpolator writer fallback controller.
+10. Recover interpolator writer execution finalizer.
+11. Recover interpolator writer eval harness and fixture fixes.
+12. Extract coordinator runtime around `sessionAssembler.ts`.
+13. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
 
