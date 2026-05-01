@@ -1,6 +1,7 @@
 import { getConfiguredApiBaseUrl, resolveApiUrl } from '../../lib/apiBase';
 import { composeAbortSignals, sleepWithAbort } from '../../lib/abortSignals';
 import type {
+  ComposerEdgeClassifierProvider,
   ComposerEdgeClassifierRequest,
   ComposerEdgeClassifierResponse,
 } from './edgeClassifierContracts';
@@ -25,6 +26,7 @@ type AttemptSignal = {
 type EdgeClassifierTool = ComposerEdgeClassifierResponse['toolsUsed'][number];
 type EdgeClassifierAbuseScore = NonNullable<ComposerEdgeClassifierResponse['abuseScore']>;
 type EdgeClassifierAbuseLabel = EdgeClassifierAbuseScore['label'];
+type EdgeClassifierModel = ComposerEdgeClassifierResponse['model'];
 
 const EDGE_CLASSIFIER_TOOLS = new Set<EdgeClassifierTool>([
   'edge-classifier',
@@ -56,6 +58,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function normalizeProvider(value: unknown): ComposerEdgeClassifierProvider {
+  return value === 'cloudflare-workers-ai' ? 'cloudflare-workers-ai' : 'edge-heuristic';
+}
+
+function normalizeModel(value: unknown): EdgeClassifierModel {
+  return value === '@cf/huggingface/distilbert-sst-2-int8'
+    ? '@cf/huggingface/distilbert-sst-2-int8'
+    : 'composer-edge-classifier-v1';
 }
 
 function backoffWithJitterMs(attempt: number): number {
@@ -134,8 +146,8 @@ function validateEdgeClassifierResponse(value: unknown): ComposerEdgeClassifierR
   }
 
   return {
-    provider: 'edge-heuristic',
-    model: 'composer-edge-classifier-v1',
+    provider: normalizeProvider(value.provider),
+    model: normalizeModel(value.model),
     confidence,
     toolsUsed: normalizeToolsUsed(value.toolsUsed),
     ml: ml as ComposerEdgeClassifierResponse['ml'],
