@@ -98,6 +98,8 @@ Current `master` now includes these foundational pieces:
 - `src/conversation/coordinatorRuntime.test.ts`
 - `src/conversation/coordinatorSourceGuards.ts`
 - `src/conversation/coordinatorSourceGuards.test.ts`
+- `src/conversation/coordinatorModelStagePlanner.ts`
+- `src/conversation/coordinatorModelStagePlanner.test.ts`
 
 ## Safe recovery order
 
@@ -111,7 +113,7 @@ Current `master` now includes these foundational pieces:
 8. [DONE] Interpolator writer fallback controller.
 9. [DONE] Interpolator writer execution finalizer.
 10. [DONE] Interpolator writer eval harness and fixture fixes.
-11. [IN PROGRESS] Coordinator runtime extraction around `sessionAssembler.ts`; context snapshot and source-token guard slices are implemented. Follow `docs/coordinator-runtime-extraction-plan.md` for the next slices.
+11. [IN PROGRESS] Coordinator runtime extraction around `sessionAssembler.ts`; context snapshot, source-token guard, and model-stage planner slices are implemented. Follow `docs/coordinator-runtime-extraction-plan.md` for the next slices.
 12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
