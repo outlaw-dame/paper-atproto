@@ -37,7 +37,7 @@ Before implementing a major intelligence feature:
 | `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect before shadow-evaluator recovery. |
 | `feat/router-authority-advisory-profile` | Router authority/advisory profile work. | Inspect with router policy work. |
 | `feat/router-runtime-adapter` | Direct runtime source/test comparison against `master` shows no remaining local-runtime delta. | Keep as historical source material. |
-| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover next. |
+| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover after prompt inspection (Step 6). |
 | `feat/router-coordinator-shadow-diagnostics` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after shadow evaluator. |
 | `fix/router-coordinator-route-diagnostics` | Direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
