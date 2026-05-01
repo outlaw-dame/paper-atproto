@@ -7,6 +7,7 @@ interface Env {
 }
 
 const MODEL_ID = '@cf/huggingface/distilbert-sst-2-int8' as const;
+const RETRIES = 2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -53,6 +54,26 @@ function normalizeSentiment(raw: unknown) {
   return top ? { label: top.label, confidence: Math.round(Math.max(top.score, 0.01) * 1000) / 1000 } : { label: 'neutral', confidence: 0.5 };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runModel(ai: Env['AI'], draftText: string): Promise<unknown> {
+  if (!ai) throw new Error('Workers AI binding missing');
+  let lastError: unknown;
+  for (let attempt = 0; attempt < RETRIES; attempt += 1) {
+    try {
+      return await ai.run(MODEL_ID, { text: draftText });
+    } catch (error) {
+      lastError = error;
+      if (attempt < RETRIES - 1) {
+        await sleep(120 + Math.floor(Math.random() * 120));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Workers AI failed');
+}
+
 export const onRequest: PagesFunction<Env> = async (context): Promise<Response> => {
   if (context.request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   if (!context.env.AI) return json({ error: 'Workers AI unavailable', code: 'WORKERS_AI_UNAVAILABLE' }, 503);
@@ -65,7 +86,7 @@ export const onRequest: PagesFunction<Env> = async (context): Promise<Response> 
   const draftText = getDraftText(body);
   if (!draftText) return json({ error: 'Invalid request' }, 400);
   try {
-    const raw = await context.env.AI.run(MODEL_ID, { text: draftText });
+    const raw = await runModel(context.env.AI, draftText);
     const sentiment = normalizeSentiment(raw);
     return json({
       provider: 'cloudflare-workers-ai',
