@@ -127,6 +127,24 @@ describe('composer edge classifier routing', () => {
     )).toBe(true);
   });
 
+  it('continues to run when Cloudflare is unavailable but the local edge fallback is available', () => {
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance(),
+      { cloudflareWorkersAiAvailable: false, nodeHeuristicAvailable: true },
+    )).toBe(true);
+  });
+
+  it('does not run when all edge classifier providers are unavailable', () => {
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance(),
+      { cloudflareWorkersAiAvailable: false, nodeHeuristicAvailable: false },
+    )).toBe(false);
+  });
+
   it('does not run edge classifier when privacy mode is local only', () => {
     expect(shouldRunComposerEdgeClassifierStageForDraft(
       'post',
