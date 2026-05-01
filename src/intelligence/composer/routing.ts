@@ -4,7 +4,7 @@ import {
   type DeviceTier,
   type PrivacyMode,
 } from '../intelligenceRoutingPolicy';
-import { planEdgeExecution } from '../edge/edgeProviderCoordinator';
+import { planEdgeExecution } from '../edge/edgeProviderPlanner';
 import type { ComposerGuidanceResult, ComposerMode } from './types';
 
 const MODEL_TOOLS = new Set([
