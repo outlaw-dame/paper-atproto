@@ -2,8 +2,17 @@ import type { IntelligenceRoutingInput, IntelligenceTask, PrivacyMode } from '..
 import { chooseIntelligenceLane } from '../intelligenceRoutingPolicy';
 import type { EdgeCapability, EdgeExecutionPlan, EdgeProviderId } from './edgeProviderContracts';
 
-const COMPOSER_CLASSIFIER_ENDPOINT = '/api/llm/analyze/composer-classifier';
 const DEFAULT_PRIVACY_MODE: PrivacyMode = 'balanced';
+const ENDPOINTS = {
+  composer: '/api/llm/analyze/composer-classifier',
+  search: '/api/llm/rerank/search',
+  media: '/api/llm/analyze/media',
+  story: '/api/llm/summarize/story',
+} as const;
+
+type EdgeCoordinatorInput = Omit<IntelligenceRoutingInput, 'edgeAvailable'> & {
+  edgeAvailable?: unknown;
+};
 
 type EdgeCapabilityPlan = {
   capability: EdgeCapability;
@@ -29,81 +38,52 @@ function nodeHeuristicAvailable(options: EdgeProviderCoordinatorOptions): boolea
   return options.availability?.nodeHeuristic !== false;
 }
 
-function isEdgeAvailableForTask(
-  task: IntelligenceTask,
-  options: EdgeProviderCoordinatorOptions,
-): boolean {
-  const plan = resolveCapabilityPlan(task, options);
-  return plan !== null;
-}
-
-function resolveCapabilityPlan(
-  task: IntelligenceTask,
-  options: EdgeProviderCoordinatorOptions,
-): EdgeCapabilityPlan | null {
+function resolveCapabilityPlan(task: IntelligenceTask, options: EdgeProviderCoordinatorOptions): EdgeCapabilityPlan | null {
   if (task === 'composer_refine') {
     if (cloudflareAvailable(options)) {
       return {
         capability: 'composer_classify',
-        endpoint: COMPOSER_CLASSIFIER_ENDPOINT,
+        endpoint: ENDPOINTS.composer,
         provider: 'cloudflare-workers-ai',
         ...(nodeHeuristicAvailable(options) ? { fallbackProvider: 'node-heuristic' as const } : {}),
       };
     }
-
-    if (nodeHeuristicAvailable(options)) {
-      return {
-        capability: 'composer_classify',
-        endpoint: COMPOSER_CLASSIFIER_ENDPOINT,
-        provider: 'node-heuristic',
-      };
-    }
-
-    return null;
+    return nodeHeuristicAvailable(options)
+      ? { capability: 'composer_classify', endpoint: ENDPOINTS.composer, provider: 'node-heuristic' }
+      : null;
   }
 
+  if (!cloudflareAvailable(options)) return null;
   if (task === 'local_search' || task === 'public_search') {
-    return cloudflareAvailable(options)
-      ? {
-        capability: 'search_rerank',
-        endpoint: '/api/llm/rerank/search',
-        provider: 'cloudflare-workers-ai',
-      }
-      : null;
+    return { capability: 'search_rerank', endpoint: ENDPOINTS.search, provider: 'cloudflare-workers-ai' };
   }
-
   if (task === 'media_analysis') {
-    return cloudflareAvailable(options)
-      ? {
-        capability: 'media_classify',
-        endpoint: '/api/llm/analyze/media',
-        provider: 'cloudflare-workers-ai',
-      }
-      : null;
+    return { capability: 'media_classify', endpoint: ENDPOINTS.media, provider: 'cloudflare-workers-ai' };
   }
-
   if (task === 'story_summary') {
-    return cloudflareAvailable(options)
-      ? {
-        capability: 'story_summarize',
-        endpoint: '/api/llm/summarize/story',
-        provider: 'cloudflare-workers-ai',
-      }
-      : null;
+    return { capability: 'story_summarize', endpoint: ENDPOINTS.story, provider: 'cloudflare-workers-ai' };
   }
-
   return null;
 }
 
+function isEdgeAvailableForTask(task: IntelligenceTask, options: EdgeProviderCoordinatorOptions): boolean {
+  return resolveCapabilityPlan(task, options) !== null;
+}
+
+function normalizeEdgeAvailable(input: EdgeCoordinatorInput, options: EdgeProviderCoordinatorOptions): boolean {
+  return typeof input.edgeAvailable === 'boolean'
+    ? input.edgeAvailable
+    : isEdgeAvailableForTask(input.task, options);
+}
+
 export function planEdgeExecution(
-  input: IntelligenceRoutingInput,
+  input: EdgeCoordinatorInput,
   options: EdgeProviderCoordinatorOptions = {},
 ): EdgeExecutionPlan | null {
   const decision = chooseIntelligenceLane({
     ...input,
-    edgeAvailable: input.edgeAvailable ?? isEdgeAvailableForTask(input.task, options),
+    edgeAvailable: normalizeEdgeAvailable(input, options),
   });
-
   if (decision.lane !== 'edge_classifier' && decision.lane !== 'edge_reranker') return null;
 
   const capabilityPlan = resolveCapabilityPlan(input.task, options);
