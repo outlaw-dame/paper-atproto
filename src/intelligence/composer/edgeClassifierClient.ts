@@ -17,6 +17,11 @@ const RETRY_BASE_MS = 220;
 const RETRY_MAX_MS = 1_200;
 const RETRY_JITTER = 0.25;
 
+type AttemptSignal = {
+  signal: AbortSignal;
+  cleanup: () => void;
+};
+
 function clamp01(value: unknown): number | null {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
@@ -77,17 +82,22 @@ function validateEdgeClassifierResponse(value: unknown): ComposerEdgeClassifierR
   };
 }
 
-function withTimeout(signal?: AbortSignal): AbortSignal {
+function createAttemptSignal(parentSignal?: AbortSignal): AttemptSignal {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => {
+  const timeoutId = globalThis.setTimeout(() => {
     controller.abort(new DOMException('Composer edge classifier timed out', 'TimeoutError'));
   }, DEFAULT_TIMEOUT_MS);
 
-  controller.signal.addEventListener('abort', () => {
-    window.clearTimeout(timeout);
-  }, { once: true });
+  const signal = parentSignal
+    ? composeAbortSignals([parentSignal, controller.signal])
+    : controller.signal;
 
-  return signal ? composeAbortSignals([signal, controller.signal]) : controller.signal;
+  return {
+    signal,
+    cleanup: () => {
+      globalThis.clearTimeout(timeoutId);
+    },
+  };
 }
 
 export async function callComposerEdgeClassifier(
@@ -98,13 +108,13 @@ export async function callComposerEdgeClassifier(
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt += 1) {
-    const requestSignal = withTimeout(signal);
+    const attemptSignal = createAttemptSignal(signal);
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        signal: requestSignal,
+        signal: attemptSignal.signal,
         body: JSON.stringify(request),
       });
 
@@ -122,6 +132,8 @@ export async function callComposerEdgeClassifier(
       if (signal?.aborted || attempt === RETRY_ATTEMPTS - 1) {
         break;
       }
+    } finally {
+      attemptSignal.cleanup();
     }
 
     await sleepWithAbort(backoffWithJitterMs(attempt), signal);
