@@ -23,8 +23,8 @@ Before implementing a major intelligence feature:
 | `feat/interpolator-writer-eval-contract` | Foundational writer-evaluation work; equivalent files are already present on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-prompt-contract` | Foundational prompt-grounding contract; equivalent files are already present on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-output-adapter` | Foundational output-adapter work; equivalent files are already present on `master`. | Keep as historical source material. |
-| `fix/interpolator-writer-output-adapter-review` | Diverged review/fix branch with small adapter/test refinements still ahead of `master`. | Inspect in a focused PR before fallback-controller recovery. |
-| `feat/interpolator-writer-fallback-controller` | Diverged branch, ahead of `master`, adds fallback controller and tests. | Recover after output-adapter review refinements. |
+| `fix/interpolator-writer-output-adapter-review` | Direct source/test comparison against `master` shows no remaining output-adapter delta. | Keep as historical source material. |
+| `feat/interpolator-writer-fallback-controller` | Diverged branch, ahead of `master`, adds fallback controller and tests. | Recover next. |
 | `feat/interpolator-writer-execution-finalizer` | Diverged branch, ahead of `master`, adds execution finalizer and tests. | Recover after fallback controller. |
 | `feat/interpolator-writer-eval-harness` | Diverged branch for eval harness. | Recover after finalizer. |
 | `fix/interpolator-writer-eval-harness-fixture-test` | Follow-up test/fix branch for eval harness. | Inspect alongside eval-harness recovery. |
@@ -37,9 +37,9 @@ Before implementing a major intelligence feature:
 | `feat/router-coordinator-prompts` | Router/coordinator prompt work is present on `master`; direct prompt/runtime source comparison shows no remaining source delta. | Keep as historical source material. |
 | `feat/router-authority-advisory-profile` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `feat/router-runtime-adapter` | Direct runtime source/test comparison against `master` shows no remaining local-runtime delta. | Keep as historical source material. |
-| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover next. |
+| `feat/router-coordinator-shadow-evaluator` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `feat/router-coordinator-shadow-diagnostics` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
-| `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after shadow evaluator. |
+| `feat/router-coordinator-diagnostics-ui` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `fix/router-coordinator-route-diagnostics` | Direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
 | `fix/land-router-runtime-boundary` | Runtime boundary files and enhancer quality fallback are present on `master`; direct source comparison shows no remaining runtime-boundary delta. | Keep as historical source material. |
 
@@ -91,14 +91,13 @@ Current `master` now includes these foundational pieces:
 3. [DONE] Interpolator writer routing/eval/prompt contracts and baseline output adapter.
 4. [DONE] Router runtime adapter / local runtime audit.
 5. [DONE] Router/coordinator prompt and authority/advisory profile inspection.
-6. Recover router/coordinator shadow evaluator.
-7. Recover router/coordinator diagnostics UI if still relevant.
-8. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
-9. Recover interpolator writer fallback controller.
-10. Recover interpolator writer execution finalizer.
-11. Recover interpolator writer eval harness and fixture fixes.
-12. Extract coordinator runtime around `sessionAssembler.ts`.
-13. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
+6. [DONE] Router/coordinator shadow evaluator and diagnostics UI inspection.
+7. [DONE] Interpolator writer output-adapter review inspection.
+8. Recover interpolator writer fallback controller.
+9. Recover interpolator writer execution finalizer.
+10. Recover interpolator writer eval harness and fixture fixes.
+11. Extract coordinator runtime around `sessionAssembler.ts`.
+12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
 
