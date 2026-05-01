@@ -72,7 +72,7 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/prompts/promptSchemas.ts`
 - `src/runtime/prompts/promptJsonSchemas.ts`
 - `src/runtime/prompts/promptRegistry.ts`
-- `src/runtime/prompts/promptRegistry.test.ts`
+- `src/runtime/prompts/promptRegistry.test.ts` (covers the router/coordinator prompt registry, prompt schemas, and JSON Schema exports)
 - `src/runtime/functionGemmaRouterInvoker.ts`
 - `src/runtime/functionGemmaRouterInvoker.test.ts`
 - `src/runtime/functionGemmaLocalRuntime.ts`
