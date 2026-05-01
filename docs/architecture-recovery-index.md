@@ -24,9 +24,9 @@ Before implementing a major intelligence feature:
 | `feat/interpolator-writer-prompt-contract` | Foundational prompt-grounding contract; equivalent files are already present on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-output-adapter` | Foundational output-adapter work; equivalent files are already present on `master`. | Keep as historical source material. |
 | `fix/interpolator-writer-output-adapter-review` | Direct source/test comparison against `master` shows no remaining output-adapter delta. | Keep as historical source material. |
-| `feat/interpolator-writer-fallback-controller` | Diverged branch, ahead of `master`, adds fallback controller and tests. | Recover next. |
-| `feat/interpolator-writer-execution-finalizer` | Diverged branch, ahead of `master`, adds execution finalizer and tests. | Recover after fallback controller. |
-| `feat/interpolator-writer-eval-harness` | Diverged branch for eval harness. | Recover after finalizer. |
+| `feat/interpolator-writer-fallback-controller` | Fallback controller and tests are recovered on `master`. | Keep as historical source material. |
+| `feat/interpolator-writer-execution-finalizer` | Foundational execution finalizer work is already present on `master`. | Keep as historical source material. |
+| `feat/interpolator-writer-eval-harness` | Diverged branch for eval harness. | Recover next. |
 | `fix/interpolator-writer-eval-harness-fixture-test` | Follow-up test/fix branch for eval harness. | Inspect alongside eval-harness recovery. |
 
 ### Router and coordinator chain
@@ -87,6 +87,10 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/interpolatorWriterPromptContract.test.ts`
 - `src/runtime/interpolatorWriterOutputAdapter.ts`
 - `src/runtime/interpolatorWriterOutputAdapter.test.ts`
+- `src/runtime/interpolatorWriterExecutionFinalizer.ts`
+- `src/runtime/interpolatorWriterExecutionFinalizer.test.ts`
+- `src/runtime/interpolatorWriterFallbackController.ts`
+- `src/runtime/interpolatorWriterFallbackController.test.ts`
 
 ## Safe recovery order
 
@@ -97,8 +101,8 @@ Current `master` now includes these foundational pieces:
 5. [DONE] Router/coordinator prompt and authority/advisory profile inspection.
 6. [DONE] Router/coordinator shadow evaluator and diagnostics UI inspection.
 7. [DONE] Interpolator writer output-adapter review inspection.
-8. Recover interpolator writer fallback controller.
-9. Recover interpolator writer execution finalizer.
+8. [DONE] Interpolator writer fallback controller.
+9. [DONE] Interpolator writer execution finalizer.
 10. Recover interpolator writer eval harness and fixture fixes.
 11. Extract coordinator runtime around `sessionAssembler.ts`.
 12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
