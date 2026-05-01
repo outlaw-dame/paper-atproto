@@ -34,10 +34,10 @@ Before implementing a major intelligence feature:
 | Branch | Current assessment | Action |
 |---|---|---|
 | `feat/router-coordinator-contract` | Foundational contract and diagnostics work is merged; direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
-| `feat/router-coordinator-prompts` | Router/coordinator prompt work. | Inspect before shadow-evaluator recovery. |
-| `feat/router-authority-advisory-profile` | Router authority/advisory profile work. | Inspect with router policy work. |
+| `feat/router-coordinator-prompts` | Router/coordinator prompt work is present on `master`; direct prompt/runtime source comparison shows no remaining source delta. | Keep as historical source material. |
+| `feat/router-authority-advisory-profile` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `feat/router-runtime-adapter` | Direct runtime source/test comparison against `master` shows no remaining local-runtime delta. | Keep as historical source material. |
-| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover after prompt inspection (Step 6). |
+| `feat/router-coordinator-shadow-evaluator` | Shadow evaluation branch. | Recover next. |
 | `feat/router-coordinator-shadow-diagnostics` | Fully behind `master` with zero commits ahead. | Keep as historical source material. |
 | `feat/router-coordinator-diagnostics-ui` | Diagnostics UI branch. | Recover after shadow evaluator. |
 | `fix/router-coordinator-route-diagnostics` | Direct diagnostics file comparison against `master` shows no remaining source/test delta. | Keep as historical source material. |
@@ -67,6 +67,8 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/routerCoordinatorDiagnostics.test.ts`
 - `src/runtime/routerExecutionAdapter.ts`
 - `src/runtime/routerExecutionAdapter.test.ts`
+- `src/runtime/prompts/routerPrompt.ts`
+- `src/runtime/prompts/promptRegistry.test.ts`
 - `src/runtime/functionGemmaRouterInvoker.ts`
 - `src/runtime/functionGemmaRouterInvoker.test.ts`
 - `src/runtime/functionGemmaLocalRuntime.ts`
@@ -88,7 +90,7 @@ Current `master` now includes these foundational pieces:
 2. [DONE] FunctionGemma router invoker boundary, execution adapter, local runtime, enhancer quality fallback, and load-error fixes.
 3. [DONE] Interpolator writer routing/eval/prompt contracts and baseline output adapter.
 4. [DONE] Router runtime adapter / local runtime audit.
-5. Inspect router/coordinator prompts and authority/advisory profile branches.
+5. [DONE] Router/coordinator prompt and authority/advisory profile inspection.
 6. Recover router/coordinator shadow evaluator.
 7. Recover router/coordinator diagnostics UI if still relevant.
 8. Review and recover `fix/interpolator-writer-output-adapter-review` refinements.
