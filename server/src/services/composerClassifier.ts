@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type {
   ComposerClassifierResponseSchema,
   ComposerClassifierSchema,
@@ -6,8 +6,11 @@ import type {
 
 type ComposerClassifierRequest = z.infer<typeof ComposerClassifierSchema>;
 type ComposerClassifierResponse = z.infer<typeof ComposerClassifierResponseSchema>;
+type AbuseScore = NonNullable<ComposerClassifierResponse['abuseScore']>;
+type AbuseScoreLabel = keyof AbuseScore['scores'];
+type SentimentLabel = NonNullable<ComposerClassifierResponse['ml']['sentiment']>['label'];
 
-type UnitScores = Record<string, number>;
+type UnitScores = Record<AbuseScoreLabel, number>;
 
 type PatternRule = {
   re: RegExp;
@@ -38,7 +41,7 @@ const CONSTRUCTIVE_RULES: PatternRule[] = [
   { re: /\b(could|might|consider|maybe|try)\b/i, weight: 0.12 },
 ];
 
-const ABUSE_RULES: Array<PatternRule & { label: keyof ComposerClassifierResponse['abuseScore']['scores'] }> = [
+const ABUSE_RULES: Array<PatternRule & { label: AbuseScoreLabel }> = [
   { re: /\b(kill\s+your?self|kys|go\s+die|drop\s+dead)\b/i, weight: 0.9, label: 'threat' },
   { re: /\bf[a4*]gg?[o0*]t(s)?\b/i, weight: 0.95, label: 'identity_hate' },
   { re: /\bn[i1!*][g9][g9][ae3*]r?(s)?\b/i, weight: 0.98, label: 'identity_hate' },
@@ -99,14 +102,18 @@ function exclamationIntensity(text: string): number {
   return clamp01(((text.match(/!/g) ?? []).length - 1) / 4);
 }
 
-function buildSentiment(text: string) {
+function buildSentiment(text: string): {
+  label: SentimentLabel;
+  confidence: number;
+  scores: Record<SentimentLabel, number>;
+} {
   const negativeRaw = scoreRules(text, NEGATIVE_RULES, 0.08);
   const positiveRaw = scoreRules(text, POSITIVE_RULES, 0.08);
   const intensity = clamp01(allCapsIntensity(text) * 0.16 + exclamationIntensity(text) * 0.12);
   const negative = round3(negativeRaw + intensity);
   const positive = round3(positiveRaw);
   const neutral = round3(1 - Math.max(positive, negative) * 0.72);
-  const scores = { negative, neutral, positive };
+  const scores: Record<SentimentLabel, number> = { negative, neutral, positive };
   const label = strongestLabel(scores);
   return {
     label,
@@ -177,20 +184,20 @@ function buildAbuseScore(text: string): ComposerClassifierResponse['abuseScore']
 
   for (const rule of ABUSE_RULES) {
     if (rule.re.test(text)) {
-      scores[rule.label] = Math.max(scores[rule.label] ?? 0, rule.weight);
+      scores[rule.label] = Math.max(scores[rule.label], rule.weight);
     }
   }
 
-  scores.toxic = Math.max(scores.toxic ?? 0, (scores.insult ?? 0) * 0.72, (scores.obscene ?? 0) * 0.62, (scores.threat ?? 0) * 0.8);
-  scores.severe_toxic = Math.max(scores.severe_toxic ?? 0, (scores.threat ?? 0) * 0.78, (scores.identity_hate ?? 0) * 0.72);
+  scores.toxic = Math.max(scores.toxic, scores.insult * 0.72, scores.obscene * 0.62, scores.threat * 0.8);
+  scores.severe_toxic = Math.max(scores.severe_toxic, scores.threat * 0.78, scores.identity_hate * 0.72);
 
-  const rounded = {
-    toxic: round3(scores.toxic ?? 0),
-    insult: round3(scores.insult ?? 0),
-    obscene: round3(scores.obscene ?? 0),
-    identity_hate: round3(scores.identity_hate ?? 0),
-    threat: round3(scores.threat ?? 0),
-    severe_toxic: round3(scores.severe_toxic ?? 0),
+  const rounded: AbuseScore['scores'] = {
+    toxic: round3(scores.toxic),
+    insult: round3(scores.insult),
+    obscene: round3(scores.obscene),
+    identity_hate: round3(scores.identity_hate),
+    threat: round3(scores.threat),
+    severe_toxic: round3(scores.severe_toxic),
   };
   const label = strongestLabel(rounded);
   const score = rounded[label];
