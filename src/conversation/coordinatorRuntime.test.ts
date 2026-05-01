@@ -93,13 +93,11 @@ describe('coordinator runtime context snapshot', () => {
         },
         mediaFindings: [
           {
-            sourceUri: ROOT_URI,
-            mediaUri: 'https://example.test/image.jpg',
-            mediaType: 'image',
+            mediaType: 'photo',
             summary: 'Image summary',
             confidence: 0.8,
             analysisStatus: 'complete',
-            moderationStatus: 'available',
+            moderationStatus: 'authoritative',
           },
         ],
       },
