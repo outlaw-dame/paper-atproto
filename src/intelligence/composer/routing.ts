@@ -112,11 +112,11 @@ export function shouldRunComposerEdgeClassifierStageForDraft(
     task: 'composer_refine',
     dataScope: 'private_draft',
     privacyMode: routingOptions.privacyMode ?? 'balanced',
-    ...(routingOptions.edgeAvailable === undefined ? {} : { edgeAvailable: routingOptions.edgeAvailable }),
+    edgeAvailable: routingOptions.edgeAvailable,
   }, {
     availability: {
-      ...(routingOptions.cloudflareWorkersAiAvailable === undefined ? {} : { cloudflareWorkersAi: routingOptions.cloudflareWorkersAiAvailable }),
-      ...(routingOptions.nodeHeuristicAvailable === undefined ? {} : { nodeHeuristic: routingOptions.nodeHeuristicAvailable }),
+      cloudflareWorkersAi: routingOptions.cloudflareWorkersAiAvailable,
+      nodeHeuristic: routingOptions.nodeHeuristicAvailable,
     },
   });
 
