@@ -1,6 +1,6 @@
-# Router and coordinator architecture
+# Router, coordinator, and writer architecture
 
-This document records the intended separation between the router model and the coordinator runtime/model. These are separate jobs.
+This document records the intended separation between the router model, coordinator runtime/model, and writer model roles. These are separate jobs.
 
 ## Router model
 
@@ -30,12 +30,32 @@ Coordinator responsibilities:
 - routing policy enforcement
 - privacy and data-scope enforcement
 - provider availability checks
+- component status tracking
 - source-token guarding for async outputs
 - stale output rejection
 - retry and fallback sequencing
 - result validation
 - session state updates
 - reuse of existing outputs when context has not meaningfully changed
+
+The first shared status vocabulary for coordinator supervision lives in `src/intelligence/modelRoles.ts`.
+
+## Writer model role
+
+The interpolator writer is not the router and is not the coordinator. It is a grounded prose-production role that may use validated context, but may not invent unsupported entities, claims, evidence, users, sources, facts, or relationships.
+
+The recovered writer foundation lives in:
+
+- `src/runtime/interpolatorWriterRoutingPolicy.ts`
+  - Selects a valid writer execution plan across deterministic projection, local Qwen/Ollama, local or LiteRT Gemma, browser-small writer, Cloudflare Workers AI writer, and API enhancer writers.
+
+- `src/runtime/interpolatorWriterEvalContract.ts`
+  - Evaluates writer output against allowed entities, allowed claims, allowed evidence, required coverage, thinking-disclosure rules, and groundedness/quality/efficiency scores.
+
+- `src/runtime/interpolatorWriterPromptContract.ts`
+  - Builds the JSON-only prompt contract for raw writer candidates and explicitly passes allowed/required entity, claim, and evidence IDs.
+
+Important rule: **do not invent entities** means do not fabricate unsupported entities. It does not mean ignore known entities. The writer should use supplied authors, participants, linked Wikidata/DBpedia entities, claims, and evidence when those are present in the fixture/grounding context.
 
 ## Current implementation map
 
@@ -45,9 +65,21 @@ Coordinator responsibilities:
 - `src/intelligence/intelligenceRoutingPolicy.ts`
   - Deterministic lane policy for tasks.
 
+- `src/intelligence/modelRoles.ts`
+  - Shared role/status/action vocabulary for router, coordinator, writer, media, embedding, classification, reranking, entity linking, fact-check enrichment, projection, and component supervision.
+
 - `src/intelligence/edge/edgeProviderPlanner.ts`
   - Narrow edge provider planner. It maps edge-eligible tasks to implemented edge providers and endpoints.
   - This is not the full coordinator.
+
+- `src/runtime/interpolatorWriterRoutingPolicy.ts`
+  - Writer-specific execution routing policy. This is separate from router/coordinator policy.
+
+- `src/runtime/interpolatorWriterEvalContract.ts`
+  - Writer grounding/evaluation contract.
+
+- `src/runtime/interpolatorWriterPromptContract.ts`
+  - Writer prompt/schema contract.
 
 - `server/src/ai/providerRouter.ts`
   - Server-side provider router for premium API-model lanes.
@@ -67,6 +99,18 @@ User/system event
   -> session/projection update
 ```
 
+Writer-specific flow:
+
+```txt
+Validated conversation fixture
+  -> writer routing policy
+  -> writer prompt contract
+  -> writer candidate output
+  -> output adapter/finalizer
+  -> writer eval contract
+  -> coordinator accept/retry/fallback decision
+```
+
 ## Provider lanes
 
 The coordinator treats providers as replaceable execution options, not as the architecture itself.
@@ -76,15 +120,28 @@ The coordinator treats providers as replaceable execution options, not as the ar
 - FunctionGemma router
 - Cloudflare Workers AI edge provider
 - node heuristic fallback
+- local writer models
 - server writer/default model routes
 - premium API-provider lanes
+
+## Recovered branch trail
+
+Relevant older branches that should be treated as source material, not blindly merged:
+
+- `feat/interpolator-writer-eval-contract`
+- `feat/interpolator-writer-routing-policy`
+- `feat/interpolator-writer-prompt-contract`
+- `feat/interpolator-writer-output-adapter`
+- `feat/interpolator-writer-fallback-controller`
+- `feat/interpolator-writer-execution-finalizer`
+- `feat/interpolator-writer-eval-harness`
 
 ## Naming rule
 
 Do not call every planner a coordinator.
 
-A module that maps one lane to a provider endpoint should be named as a planner or provider router. The coordinator is the broader session/intelligence runtime that supervises work across local, edge, server, and premium-provider lanes.
+A module that maps one lane to a provider endpoint should be named as a planner or provider router. The coordinator is the broader session/intelligence runtime that supervises work across local, edge, server, writer, router, media, and premium-provider lanes.
 
 ## Implementation implication
 
-Future implementation should extract a top-level intelligence coordinator boundary that composes the existing session assembler, deterministic routing policy, provider routers, edge planner, and task executors without duplicating their logic.
+Future implementation should extract a top-level intelligence coordinator boundary that composes the existing session assembler, deterministic routing policy, router model, provider routers, edge planner, writer routing/eval/prompt contracts, and task executors without duplicating their logic.
