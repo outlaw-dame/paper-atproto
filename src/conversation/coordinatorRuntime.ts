@@ -109,7 +109,6 @@ export function createConversationCoordinatorContextSnapshot(
   const reasonCodes = createReasonCodes({
     session,
     sourceToken,
-    modelStages,
     activeStages,
     errorStages,
     staleStages,
@@ -216,7 +215,6 @@ function createStageSnapshot(
 function createReasonCodes(params: {
   session: ConversationSession;
   sourceToken: string | null;
-  modelStages: ConversationCoordinatorContextSnapshot['modelStages'];
   activeStages: ConversationCoordinatorContextSnapshot['activeStages'];
   errorStages: ConversationCoordinatorContextSnapshot['errorStages'];
   staleStages: ConversationCoordinatorContextSnapshot['staleStages'];
@@ -268,12 +266,8 @@ function buildDecision(params: {
 }
 
 function buildSafeSourceToken(session: ConversationSession): string | null {
-  try {
-    const token = buildConversationModelSourceToken(session).trim();
-    return token.length > 0 ? token : null;
-  } catch {
-    return null;
-  }
+  const token = buildConversationModelSourceToken(session).trim();
+  return token.length > 0 ? token : null;
 }
 
 function detectMutationChurn(session: ConversationSession): boolean {
