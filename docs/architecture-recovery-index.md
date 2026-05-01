@@ -58,6 +58,7 @@ Current `master` now includes these foundational pieces:
 
 - `docs/router-coordinator-architecture.md`
 - `docs/architecture-recovery-index.md`
+- `docs/coordinator-runtime-extraction-plan.md`
 - `src/intelligence/modelRoles.ts`
 - `src/intelligence/edge/edgeProviderPlanner.ts`
 - `src/intelligence/edge/edgeProviderPlanner.test.ts`
@@ -106,7 +107,7 @@ Current `master` now includes these foundational pieces:
 8. [DONE] Interpolator writer fallback controller.
 9. [DONE] Interpolator writer execution finalizer.
 10. [DONE] Interpolator writer eval harness and fixture fixes.
-11. Extract coordinator runtime around `sessionAssembler.ts`.
+11. [PLANNED] Coordinator runtime extraction around `sessionAssembler.ts`; follow `docs/coordinator-runtime-extraction-plan.md` before code changes.
 12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
