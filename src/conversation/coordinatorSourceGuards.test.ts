@@ -105,6 +105,22 @@ describe('coordinator source token guards', () => {
     });
   });
 
+  it('normalizes candidate whitespace before applying a fresh result', () => {
+    const session = createSession();
+    const token = buildConversationModelSourceToken(session);
+
+    expect(isCoordinatorSourceFresh(session, `  ${token}\n`)).toBe(true);
+    expect(selectCoordinatorSourceApplication(session, `  ${token}\n`, 'writer')).toEqual({
+      schemaVersion: 1,
+      action: 'apply',
+      stage: 'writer',
+      fresh: true,
+      currentSourceToken: token,
+      candidateSourceToken: token,
+      reasonCodes: ['source_token_fresh'],
+    });
+  });
+
   it('discards a stale multimodal result', () => {
     const session = createSession({
       mutations: {
