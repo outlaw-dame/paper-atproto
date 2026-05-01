@@ -31,14 +31,14 @@
     "typecheck": "tsc --noEmit",
     "typecheck:cf": "tsc --noEmit --project functions/tsconfig.json",
     "check:selector-stability": "node scripts/check_selector_stability.mjs",
-    "ci:checks": "pnpm run typecheck && pnpm run check:selector-stability",
+    "ci:checks": "pnpm run typecheck && pnpm run typecheck:cf && pnpm run check:selector-stability",
     "test": "vitest run",
     "test:search": "vitest run src/search.test.ts src/search/runtime.test.ts",
     "test:watch": "vitest",
     "deploy": "gh-pages -d dist",
     "build:cf": "VITE_DEPLOY_TARGET=cloudflare vite build",
     "deploy:cf": "pnpm run build:cf && wrangler pages deploy dist --project-name=glimpse",
-    "cf:dev": "wrangler pages dev dist --compatibility-date=2025-04-01 --compatibility-flag nodejs_compat"
+    "cf:dev": "wrangler pages dev dist --compatibility-date=2025-04-01 --compatibility-flag nodejs_compat --ai AI"
   },
   "keywords": [],
   "author": "",
