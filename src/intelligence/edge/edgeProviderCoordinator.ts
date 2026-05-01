@@ -7,7 +7,6 @@ const ENDPOINTS = {
   composer: '/api/llm/analyze/composer-classifier',
   search: '/api/llm/rerank/search',
   media: '/api/llm/analyze/media',
-  story: '/api/llm/summarize/story',
 } as const;
 
 type EdgeCoordinatorInput = Omit<IntelligenceRoutingInput, 'edgeAvailable'> & {
@@ -60,33 +59,28 @@ function resolveCapabilityPlan(task: IntelligenceTask, options: EdgeProviderCoor
   if (task === 'media_analysis') {
     return { capability: 'media_classify', endpoint: ENDPOINTS.media, provider: 'cloudflare-workers-ai' };
   }
-  if (task === 'story_summary') {
-    return { capability: 'story_summarize', endpoint: ENDPOINTS.story, provider: 'cloudflare-workers-ai' };
-  }
   return null;
 }
 
-function isEdgeAvailableForTask(task: IntelligenceTask, options: EdgeProviderCoordinatorOptions): boolean {
-  return resolveCapabilityPlan(task, options) !== null;
-}
-
-function normalizeEdgeAvailable(input: EdgeCoordinatorInput, options: EdgeProviderCoordinatorOptions): boolean {
+function normalizeEdgeAvailable(
+  input: EdgeCoordinatorInput,
+  capabilityPlan: EdgeCapabilityPlan | null,
+): boolean {
   return typeof input.edgeAvailable === 'boolean'
     ? input.edgeAvailable
-    : isEdgeAvailableForTask(input.task, options);
+    : capabilityPlan !== null;
 }
 
 export function planEdgeExecution(
   input: EdgeCoordinatorInput,
   options: EdgeProviderCoordinatorOptions = {},
 ): EdgeExecutionPlan | null {
+  const capabilityPlan = resolveCapabilityPlan(input.task, options);
   const decision = chooseIntelligenceLane({
     ...input,
-    edgeAvailable: normalizeEdgeAvailable(input, options),
+    edgeAvailable: normalizeEdgeAvailable(input, capabilityPlan),
   });
   if (decision.lane !== 'edge_classifier' && decision.lane !== 'edge_reranker') return null;
-
-  const capabilityPlan = resolveCapabilityPlan(input.task, options);
   if (!capabilityPlan) return null;
 
   return {
