@@ -16,6 +16,7 @@ import type { ComposerMLSignals } from './composer/classifierContracts';
 
 export type ComposeToneToolKey =
   | 'heuristic'
+  | 'edge-classifier'
   | 'zero-shot-tone'
   | 'abuse-score'
   | 'sentiment-polarity'

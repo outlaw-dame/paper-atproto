@@ -8,6 +8,7 @@ export type ComposerGuidanceLevel = 'ok' | 'positive' | 'caution' | 'warning' | 
 export type ComposerGuidanceUiState = 'positive' | 'neutral' | 'caution' | 'warning' | 'alert';
 export type ComposerGuidanceTool =
   | 'heuristic'
+  | 'edge-classifier'
   | 'zero-shot-tone'
   | 'abuse-score'
   | 'sentiment-polarity'

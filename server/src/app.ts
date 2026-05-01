@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { verificationRouter } from './routes/verification.js';
 import { llmRouter } from './routes/llm.js';
+import { composerClassifierRouter } from './routes/composerClassifier.js';
 import { translateRouter } from './routes/translate.js';
 import { mediaRouter } from './routes/media.js';
 import { podcastIndexRouter } from './routes/podcastIndex.js';
@@ -41,6 +42,7 @@ app.use('/api/verify/*', simpleRateLimit({ windowMs: 60_000, max: 60 }));
 // LLM routes: per-endpoint token buckets to preserve bursts while bounding sustained load.
 app.use('/api/llm/write/interpolator', tokenBucketRateLimit({ refillWindowMs: 60_000, refillTokens: 24, burstCapacity: 12 }));
 app.use('/api/llm/analyze/media', tokenBucketRateLimit({ refillWindowMs: 60_000, refillTokens: 12, burstCapacity: 6 }));
+app.use('/api/llm/analyze/composer-classifier', tokenBucketRateLimit({ refillWindowMs: 60_000, refillTokens: 90, burstCapacity: 30 }));
 app.use('/api/llm/write/search-story', tokenBucketRateLimit({ refillWindowMs: 60_000, refillTokens: 18, burstCapacity: 9 }));
 app.use('/api/llm/write/composer-guidance', tokenBucketRateLimit({ refillWindowMs: 60_000, refillTokens: 30, burstCapacity: 15 }));
 // Backstop for any future /api/llm route without explicit policy.
@@ -57,6 +59,7 @@ app.use('/api/conversation/watch', tokenBucketRateLimit({ refillWindowMs: 60_000
 app.use('/api/push/*', simpleRateLimit({ windowMs: 60_000, max: 30 }));
 app.get('/health', (c) => c.json({ ok: true }));
 app.route('/api/verify', verificationRouter);
+app.route('/api/llm/analyze/composer-classifier', composerClassifierRouter);
 app.route('/api/llm', llmRouter);
 app.route('/api/translate', translateRouter);
 app.route('/api/media', mediaRouter);

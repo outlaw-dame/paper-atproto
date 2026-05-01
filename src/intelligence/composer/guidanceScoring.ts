@@ -257,6 +257,7 @@ export function uiStateToLevel(state: ComposerGuidanceUiState): ComposerGuidance
 export function normalizeToolsUsed(toolsUsed: string[]): ComposerGuidanceTool[] {
   return toolsUsed.filter((tool): tool is ComposerGuidanceTool => (
     tool === 'heuristic'
+    || tool === 'edge-classifier'
     || tool === 'zero-shot-tone'
     || tool === 'abuse-score'
     || tool === 'sentiment-polarity'

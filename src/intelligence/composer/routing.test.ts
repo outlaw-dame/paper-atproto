@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isAutomaticComposerBrowserMlAllowed,
+  shouldRunComposerEdgeClassifierStageForDraft,
   shouldRunComposerModelStageForDraft,
 } from './routing';
 import type { ComposerGuidanceResult } from './types';
@@ -113,6 +114,53 @@ describe('composer browser ML routing', () => {
         },
       }),
       { automaticBrowserMlEnabled: true, deviceMemoryGiB: 16, isMobile: false },
+    )).toBe(false);
+  });
+});
+
+describe('composer edge classifier routing', () => {
+  it('runs edge classifier by default for consumer composer refinement', () => {
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance(),
+    )).toBe(true);
+  });
+
+  it('does not run edge classifier when privacy mode is local only', () => {
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance(),
+      { privacyMode: 'local_only', edgeAvailable: true },
+    )).toBe(false);
+  });
+
+  it('does not run edge classifier when edge is unavailable', () => {
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance(),
+      { privacyMode: 'balanced', edgeAvailable: false },
+    )).toBe(false);
+  });
+
+  it('does not run edge classifier for alert or crisis guidance', () => {
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance({ level: 'alert' }),
+    )).toBe(false);
+
+    expect(shouldRunComposerEdgeClassifierStageForDraft(
+      'post',
+      'This draft is long enough for edge classifier refinement.',
+      guidance({
+        heuristics: {
+          ...guidance().heuristics,
+          hasMentalHealthCrisis: true,
+        },
+      }),
     )).toBe(false);
   });
 });

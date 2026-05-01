@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef } from 'react';
 import {
   analyzeComposerGuidance,
   analyzeComposerGuidanceImmediate,
+  analyzeComposerGuidanceWithEdgeClassifier,
 } from '../intelligence/composer/guidancePipeline';
 import { createEmptyComposerGuidanceResult } from '../intelligence/composer/guidanceScoring';
 import { maybeWriteComposerGuidance } from '../intelligence/composer/guidanceWriter';
@@ -11,6 +12,7 @@ import {
   hasComposerModelCoverage,
   hasComposerWriterCoverage,
   shouldReuseCachedComposerGuidance,
+  shouldRunComposerEdgeClassifierStageForDraft,
   shouldRunComposerModelStageForDraft,
   shouldRunComposerWriterStage,
 } from '../intelligence/composer/routing';
@@ -70,17 +72,22 @@ export function useComposerGuidance({
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
 
-    let latestGuidance: ComposerGuidanceResult = hasComposerModelCoverage(
-      reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode),
-    )
+    const cachedOrEmptyGuidance = reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode);
+    const hasCachedModelCoverage = hasComposerModelCoverage(cachedOrEmptyGuidance);
+    let latestGuidance: ComposerGuidanceResult = hasCachedModelCoverage
       ? (reusableCachedGuidance ?? immediateGuidance)
       : immediateGuidance;
 
-    if (!hasComposerModelCoverage(reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
+    if (!hasCachedModelCoverage) {
       setGuidance(draftId, immediateGuidance, contextFingerprint);
     }
 
     const shouldRunModelStage = shouldRunComposerModelStageForDraft(
+      deferredContext.mode,
+      deferredContext.draftText,
+      immediateGuidance,
+    );
+    const shouldRunEdgeClassifierStage = shouldRunComposerEdgeClassifierStageForDraft(
       deferredContext.mode,
       deferredContext.draftText,
       immediateGuidance,
@@ -92,45 +99,62 @@ export function useComposerGuidance({
       dismissedAt,
     );
 
-    if (!shouldRunModelStage && !shouldRunWriterFromImmediateGuidance) {
+    if (!shouldRunModelStage && !shouldRunEdgeClassifierStage && !shouldRunWriterFromImmediateGuidance) {
       return;
     }
 
-    const modelDebounceMs = getComposerModelDebounceMs(deferredContext.mode, debounceMs);
+    const refinementDebounceMs = getComposerModelDebounceMs(deferredContext.mode, debounceMs);
     const writerDebounceMs = getComposerWriterDebounceMs(deferredContext.mode);
+    const classifierAbort = new AbortController();
     const writerAbort = new AbortController();
-    let modelTimer: number | null = null;
+    let refinementTimer: number | null = null;
 
-    const runModelStage = async () => {
-      if (!shouldRunModelStage) {
+    const runRefinementStage = async () => {
+      if (hasComposerModelCoverage(latestGuidance)) {
         return latestGuidance;
       }
 
-      if (hasComposerModelCoverage(reusableCachedGuidance ?? createEmptyComposerGuidanceResult(deferredContext.mode))) {
+      if (hasCachedModelCoverage) {
         latestGuidance = reusableCachedGuidance ?? latestGuidance;
         return latestGuidance;
       }
 
-      const result = await analyzeComposerGuidance(deferredContext);
-      if (requestIdRef.current !== requestId) return latestGuidance;
-      latestGuidance = result;
-      setGuidance(draftId, result, contextFingerprint);
-      return result;
+      if (shouldRunModelStage) {
+        const result = await analyzeComposerGuidance(deferredContext);
+        if (requestIdRef.current !== requestId) return latestGuidance;
+        latestGuidance = result;
+        setGuidance(draftId, result, contextFingerprint);
+        return result;
+      }
+
+      if (shouldRunEdgeClassifierStage) {
+        const result = await analyzeComposerGuidanceWithEdgeClassifier(
+          deferredContext,
+          latestGuidance,
+          classifierAbort.signal,
+        );
+        if (requestIdRef.current !== requestId) return latestGuidance;
+        latestGuidance = result;
+        setGuidance(draftId, result, contextFingerprint);
+        return result;
+      }
+
+      return latestGuidance;
     };
 
-    if (shouldRunModelStage) {
-      modelTimer = window.setTimeout(() => {
-        void runModelStage().catch(() => {
-          // Keep the immediate local guidance result if the async refinement fails.
+    if (shouldRunModelStage || shouldRunEdgeClassifierStage) {
+      refinementTimer = window.setTimeout(() => {
+        void runRefinementStage().catch(() => {
+          // Keep the immediate local guidance result if async refinement fails.
         });
-      }, modelDebounceMs);
+      }, refinementDebounceMs);
     }
 
     const writerTimer = window.setTimeout(() => {
       void (async () => {
         const baseGuidance = hasComposerModelCoverage(latestGuidance)
           ? latestGuidance
-          : await runModelStage();
+          : await runRefinementStage();
 
         if (requestIdRef.current !== requestId) return;
         if (hasComposerWriterCoverage(baseGuidance)) return;
@@ -143,12 +167,15 @@ export function useComposerGuidance({
       })().catch(() => {
         // Writer guidance is optional; keep the local copy if the server-side pass fails.
       });
-    }, shouldRunModelStage ? Math.max(writerDebounceMs, modelDebounceMs + 700) : writerDebounceMs);
+    }, shouldRunModelStage || shouldRunEdgeClassifierStage
+      ? Math.max(writerDebounceMs, refinementDebounceMs + 700)
+      : writerDebounceMs);
 
     return () => {
-      if (modelTimer !== null) {
-        window.clearTimeout(modelTimer);
+      if (refinementTimer !== null) {
+        window.clearTimeout(refinementTimer);
       }
+      classifierAbort.abort();
       window.clearTimeout(writerTimer);
       writerAbort.abort();
     };

@@ -157,8 +157,98 @@ export const ExploreSynopsisResponseSchema = z.object({
   abstained: z.boolean(),
 });
 
+const ComposerModeSchema = z.enum(['post', 'reply', 'hosted_thread']);
+
+export const ComposerClassifierSchema = z.object({
+  mode: ComposerModeSchema,
+  draftText: z.string().min(1).max(1200),
+  parentText: z.string().max(500).optional(),
+  targetText: z.string().max(500).optional(),
+  contextSignals: z.array(z.string().max(200)).max(4).optional(),
+});
+
+const ComposerSentimentLabelSchema = z.enum(['negative', 'neutral', 'positive']);
+const ComposerEmotionLabelSchema = z.enum([
+  'anger',
+  'anticipation',
+  'disgust',
+  'fear',
+  'joy',
+  'love',
+  'optimism',
+  'pessimism',
+  'sadness',
+  'surprise',
+  'trust',
+]);
+const ComposerTargetedToneLabelSchema = z.enum([
+  'strongly_negative',
+  'negative',
+  'negative_or_neutral',
+  'positive',
+  'strongly_positive',
+]);
+const AbuseModelLabelSchema = z.enum([
+  'toxic',
+  'insult',
+  'obscene',
+  'identity_hate',
+  'threat',
+  'severe_toxic',
+]);
+
+export const ComposerClassifierResponseSchema = z.object({
+  provider: z.literal('edge-heuristic'),
+  model: z.literal('composer-edge-classifier-v1'),
+  confidence: z.number().min(0).max(1),
+  toolsUsed: z.array(z.enum([
+    'edge-classifier',
+    'sentiment-polarity',
+    'emotion',
+    'targeted-sentiment',
+    'quality-score',
+    'abuse-score',
+  ])).max(6),
+  ml: z.object({
+    sentiment: z.object({
+      label: ComposerSentimentLabelSchema,
+      confidence: z.number().min(0).max(1),
+    }).optional(),
+    emotions: z.array(z.object({
+      label: ComposerEmotionLabelSchema,
+      score: z.number().min(0).max(1),
+    })).max(4).optional(),
+    targetedTone: z.object({
+      label: ComposerTargetedToneLabelSchema,
+      confidence: z.number().min(0).max(1),
+    }).optional(),
+    conversationQuality: z.object({
+      constructive: z.number().min(0).max(1),
+      supportive: z.number().min(0).max(1),
+      clarifying: z.number().min(0).max(1),
+      dismissive: z.number().min(0).max(1),
+      hostile: z.number().min(0).max(1),
+      escalating: z.number().min(0).max(1),
+    }).optional(),
+  }),
+  abuseScore: z.object({
+    model: z.literal('composer-edge-abuse-v1'),
+    provider: z.literal('edge-heuristic'),
+    label: AbuseModelLabelSchema,
+    score: z.number().min(0).max(1),
+    scores: z.object({
+      toxic: z.number().min(0).max(1),
+      insult: z.number().min(0).max(1),
+      obscene: z.number().min(0).max(1),
+      identity_hate: z.number().min(0).max(1),
+      threat: z.number().min(0).max(1),
+      severe_toxic: z.number().min(0).max(1),
+    }),
+  }).nullable(),
+});
+
 export const ComposerGuidanceSchema = z.object({
-  mode: z.enum(['post', 'reply', 'hosted_thread']),
+  mode: ComposerModeSchema,
   draftText: z.string().min(1).max(1200),
   parentText: z.string().max(500).optional(),
   uiState: z.enum(['positive', 'caution', 'warning']),

@@ -7,6 +7,7 @@ import {
 import type { ComposerGuidanceResult, ComposerMode } from './types';
 
 const MODEL_TOOLS = new Set([
+  'edge-classifier',
   'zero-shot-tone',
   'abuse-score',
   'sentiment-polarity',
@@ -17,6 +18,7 @@ const MODEL_TOOLS = new Set([
 
 const WRITER_ELIGIBLE_STATES = new Set(['positive', 'caution', 'warning']);
 const MIN_MODEL_TEXT_LENGTH = 12;
+const MIN_EDGE_CLASSIFIER_TEXT_LENGTH = 12;
 const MIN_WRITER_TEXT_LENGTH = 24;
 
 export interface ComposerBrowserMlGateOptions {
@@ -24,6 +26,11 @@ export interface ComposerBrowserMlGateOptions {
   deviceMemoryGiB?: number | null;
   isMobile?: boolean;
   deviceTier?: DeviceTier;
+}
+
+export interface ComposerEdgeClassifierRoutingOptions {
+  privacyMode?: PrivacyMode;
+  edgeAvailable?: boolean;
 }
 
 export interface ComposerWriterRoutingOptions {
@@ -89,13 +96,27 @@ export function shouldRunComposerModelStageForDraft(
   if (guidance.heuristics.hasMentalHealthCrisis) return false;
   if (guidance.level === 'alert') return false;
 
-  return (
-    draftText.trim().length >= MIN_MODEL_TEXT_LENGTH
-    || mode === 'reply'
-    || mode === 'hosted_thread'
-    || guidance.level !== 'ok'
-    || guidance.heuristics.parentSignals.length > 0
-  );
+  return shouldRunRefinementForDraft(mode, draftText, guidance, MIN_MODEL_TEXT_LENGTH);
+}
+
+export function shouldRunComposerEdgeClassifierStageForDraft(
+  mode: ComposerMode,
+  draftText: string,
+  guidance: ComposerGuidanceResult,
+  routingOptions: ComposerEdgeClassifierRoutingOptions = {},
+): boolean {
+  const decision = chooseIntelligenceLane({
+    task: 'composer_refine',
+    dataScope: 'private_draft',
+    privacyMode: routingOptions.privacyMode ?? 'balanced',
+    edgeAvailable: routingOptions.edgeAvailable ?? true,
+  });
+
+  if (decision.lane !== 'edge_classifier') return false;
+  if (guidance.heuristics.hasMentalHealthCrisis) return false;
+  if (guidance.level === 'alert') return false;
+
+  return shouldRunRefinementForDraft(mode, draftText, guidance, MIN_EDGE_CLASSIFIER_TEXT_LENGTH);
 }
 
 export function shouldRunComposerWriterStage(
@@ -138,6 +159,21 @@ export function shouldReuseCachedComposerGuidance(
   if (!writerNeeded) return true;
 
   return hasComposerWriterCoverage(guidance);
+}
+
+function shouldRunRefinementForDraft(
+  mode: ComposerMode,
+  draftText: string,
+  guidance: ComposerGuidanceResult,
+  minTextLength: number,
+): boolean {
+  return (
+    draftText.trim().length >= minTextLength
+    || mode === 'reply'
+    || mode === 'hosted_thread'
+    || guidance.level !== 'ok'
+    || guidance.heuristics.parentSignals.length > 0
+  );
 }
 
 function readBooleanEnv(value: string | undefined): boolean {
