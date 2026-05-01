@@ -104,6 +104,7 @@ Use this checklist before opening a major intelligence PR:
 - [ ] Identify whether the work is contract, runtime, UI, diagnostics, or provider integration.
 - [ ] Recover contract/test slices before runtime wiring.
 - [ ] Avoid broad file rewrites unless required.
+- [ ] Preserve strict privacy boundaries: no provider secrets in browser code.
 - [ ] Preserve local-only privacy behavior.
 - [ ] Preserve source-token/staleness checks for async output.
 - [ ] Run full CI before merge.
