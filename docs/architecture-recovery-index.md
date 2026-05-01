@@ -25,7 +25,7 @@ Before implementing a major intelligence feature:
 | `feat/interpolator-writer-output-adapter` | Foundational output-adapter work; equivalent files are already present on `master`. | Keep as historical source material. |
 | `fix/interpolator-writer-output-adapter-review` | Direct source/test comparison against `master` shows no remaining output-adapter delta. | Keep as historical source material. |
 | `feat/interpolator-writer-fallback-controller` | Fallback controller and tests are recovered on `master`. | Keep as historical source material. |
-| `feat/interpolator-writer-execution-finalizer` | Foundational execution finalizer work is already present on `master`. | Keep as historical source material. |
+| `feat/interpolator-writer-execution-finalizer` | Execution finalizer and tests are recovered on `master`. | Keep as historical source material. |
 | `feat/interpolator-writer-eval-harness` | Diverged branch for eval harness. | Recover next. |
 | `fix/interpolator-writer-eval-harness-fixture-test` | Follow-up test/fix branch for eval harness. | Inspect alongside eval-harness recovery. |
 
@@ -87,10 +87,10 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/interpolatorWriterPromptContract.test.ts`
 - `src/runtime/interpolatorWriterOutputAdapter.ts`
 - `src/runtime/interpolatorWriterOutputAdapter.test.ts`
-- `src/runtime/interpolatorWriterExecutionFinalizer.ts`
-- `src/runtime/interpolatorWriterExecutionFinalizer.test.ts`
 - `src/runtime/interpolatorWriterFallbackController.ts`
 - `src/runtime/interpolatorWriterFallbackController.test.ts`
+- `src/runtime/interpolatorWriterExecutionFinalizer.ts`
+- `src/runtime/interpolatorWriterExecutionFinalizer.test.ts`
 
 ## Safe recovery order
 
