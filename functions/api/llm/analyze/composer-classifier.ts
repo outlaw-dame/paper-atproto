@@ -8,6 +8,10 @@ interface Env {
 
 const MODEL_ID = '@cf/huggingface/distilbert-sst-2-int8' as const;
 const RETRIES = 2;
+const RAW_DRAFT_SCAN_LIMIT = 2_000;
+const NORMALIZED_DRAFT_LIMIT = 1_200;
+
+type SentimentLabel = 'negative' | 'neutral' | 'positive';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -31,7 +35,11 @@ function json(body: unknown, status = 200): Response {
 
 function getDraftText(value: unknown): string | null {
   if (!isRecord(value) || typeof value.draftText !== 'string') return null;
-  const draftText = value.draftText.replace(/\s+/g, ' ').trim().slice(0, 1200);
+  const draftText = value.draftText
+    .slice(0, RAW_DRAFT_SCAN_LIMIT)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, NORMALIZED_DRAFT_LIMIT);
   return draftText.length > 0 ? draftText : null;
 }
 
@@ -43,13 +51,19 @@ function extractCandidates(raw: unknown): Array<{ label?: unknown; score?: unkno
   return [];
 }
 
-function normalizeSentiment(raw: unknown) {
+function normalizeSentimentLabel(value: unknown): SentimentLabel {
+  const labelText = String(value ?? '').trim().toLowerCase();
+  if (labelText.includes('negative') || labelText === 'label_0') return 'negative';
+  if (labelText.includes('positive') || labelText === 'label_1') return 'positive';
+  return 'neutral';
+}
+
+function normalizeSentiment(raw: unknown): { label: SentimentLabel; confidence: number } {
   const top = extractCandidates(raw)
-    .map((entry) => {
-      const labelText = String(entry.label ?? '').toLowerCase();
-      const label = labelText.includes('negative') ? 'negative' : labelText.includes('positive') ? 'positive' : 'neutral';
-      return { label, score: clamp01(Number(entry.score ?? 0)) };
-    })
+    .map((entry) => ({
+      label: normalizeSentimentLabel(entry.label),
+      score: clamp01(Number(entry.score ?? 0)),
+    }))
     .sort((left, right) => right.score - left.score)[0];
   return top ? { label: top.label, confidence: Math.round(Math.max(top.score, 0.01) * 1000) / 1000 } : { label: 'neutral', confidence: 0.5 };
 }
