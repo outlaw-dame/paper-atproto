@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { z } from 'zod';
 import { ComposerClassifierResponseSchema, ComposerClassifierSchema } from '../llm/schemas.js';
 import {
@@ -32,8 +33,8 @@ function buildRequestId(): string {
   return `composer-classifier-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function requestIdFromContext(c: any): string {
-  return (c.get('requestId') as string | undefined) ?? buildRequestId();
+function requestIdFromContext(c: Context<ComposerClassifierRouterContext>): string {
+  return c.get('requestId') ?? buildRequestId();
 }
 
 function validationIssues(error: ValidationError): unknown {
