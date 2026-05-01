@@ -22,8 +22,8 @@ type EdgeCapabilityPlan = {
 };
 
 export interface EdgeProviderAvailability {
-  cloudflareWorkersAi?: boolean;
-  nodeHeuristic?: boolean;
+  cloudflareWorkersAi?: boolean | undefined;
+  nodeHeuristic?: boolean | undefined;
 }
 
 export interface EdgeProviderCoordinatorOptions {
