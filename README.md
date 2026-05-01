@@ -211,6 +211,44 @@ Production builds also generate precompressed static files (`.gz` and `.zst`) fo
 Detailed edge/CDN examples are available in `docs/compression-deployment.md`.
 You can run local size/latency benchmarks with `npm run benchmark:compression`.
 
+## Cloudflare Workers AI composer classifier
+
+Cloudflare Workers AI is wired for the composer classifier only when the app is running through Cloudflare Pages Functions. The Pages Function at `/api/llm/analyze/composer-classifier` uses a Workers AI binding named `AI` and calls `env.AI.run(...)`. The Node verify-server composer classifier remains a deterministic fallback for non-Cloudflare/local server development.
+
+Setup for deployed Cloudflare Pages:
+
+1. Ensure `wrangler.toml` contains the Workers AI binding:
+
+```toml
+[ai]
+binding = "AI"
+```
+
+2. In the Cloudflare dashboard, open the Pages project, go to the target environment settings, add a **Workers AI** binding named `AI`, and redeploy.
+
+Local Cloudflare Pages smoke test:
+
+```bash
+pnpm run build:cf
+pnpm run cf:dev
+curl -X POST http://127.0.0.1:8788/api/llm/analyze/composer-classifier \
+  -H 'content-type: application/json' \
+  --data '{"mode":"post","draftText":"Thanks for the source, but I think this needs more context."}'
+```
+
+A successful Workers AI response includes:
+
+```json
+{
+  "provider": "cloudflare-workers-ai",
+  "model": "@cf/huggingface/distilbert-sst-2-int8"
+}
+```
+
+If the `AI` binding is missing, the Pages Function returns `503` with `WORKERS_AI_UNAVAILABLE`. The client still fails soft and preserves immediate local composer guidance.
+
+REST API note: Cloudflare's REST path is for non-Worker callers and requires a Cloudflare Account ID plus a Workers AI API token. Do not expose those values to the browser.
+
 ## Google Gemini Integration
 
 The server already uses `@google/genai` for three Gemini-backed lanes:

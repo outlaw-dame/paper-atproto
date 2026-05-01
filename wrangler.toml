@@ -23,6 +23,11 @@ compatibility_flags = ["nodejs_compat"]
 # Vite output directory produced by `pnpm run build:cf`
 pages_build_output_dir = "dist"
 
+# Workers AI binding for Cloudflare Pages Functions.
+# Local dev uses `pnpm run cf:dev`, which passes `--ai AI` to Wrangler.
+[ai]
+binding = "AI"
+
 [placement]
 # "smart" routes each request to the closest datacenter that has a warm
 # isolate, minimising cold-start latency for authenticated users.

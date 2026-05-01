@@ -10,9 +10,11 @@ export interface ComposerEdgeClassifierRequest {
   contextSignals?: string[];
 }
 
+export type ComposerEdgeClassifierProvider = 'edge-heuristic' | 'cloudflare-workers-ai';
+
 export interface ComposerEdgeClassifierResponse {
-  provider: 'edge-heuristic';
-  model: 'composer-edge-classifier-v1';
+  provider: ComposerEdgeClassifierProvider;
+  model: 'composer-edge-classifier-v1' | '@cf/huggingface/distilbert-sst-2-int8';
   confidence: number;
   toolsUsed: Array<
     | 'edge-classifier'
