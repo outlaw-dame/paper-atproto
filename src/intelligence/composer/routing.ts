@@ -4,6 +4,7 @@ import {
   type DeviceTier,
   type PrivacyMode,
 } from '../intelligenceRoutingPolicy';
+import { planEdgeExecution } from '../edge/edgeProviderCoordinator';
 import type { ComposerGuidanceResult, ComposerMode } from './types';
 
 const MODEL_TOOLS = new Set([
@@ -31,6 +32,8 @@ export interface ComposerBrowserMlGateOptions {
 export interface ComposerEdgeClassifierRoutingOptions {
   privacyMode?: PrivacyMode;
   edgeAvailable?: boolean;
+  cloudflareWorkersAiAvailable?: boolean;
+  nodeHeuristicAvailable?: boolean;
 }
 
 export interface ComposerWriterRoutingOptions {
@@ -105,14 +108,19 @@ export function shouldRunComposerEdgeClassifierStageForDraft(
   guidance: ComposerGuidanceResult,
   routingOptions: ComposerEdgeClassifierRoutingOptions = {},
 ): boolean {
-  const decision = chooseIntelligenceLane({
+  const plan = planEdgeExecution({
     task: 'composer_refine',
     dataScope: 'private_draft',
     privacyMode: routingOptions.privacyMode ?? 'balanced',
-    edgeAvailable: routingOptions.edgeAvailable ?? true,
+    ...(routingOptions.edgeAvailable === undefined ? {} : { edgeAvailable: routingOptions.edgeAvailable }),
+  }, {
+    availability: {
+      ...(routingOptions.cloudflareWorkersAiAvailable === undefined ? {} : { cloudflareWorkersAi: routingOptions.cloudflareWorkersAiAvailable }),
+      ...(routingOptions.nodeHeuristicAvailable === undefined ? {} : { nodeHeuristic: routingOptions.nodeHeuristicAvailable }),
+    },
   });
 
-  if (decision.lane !== 'edge_classifier') return false;
+  if (!plan || plan.lane !== 'edge_classifier') return false;
   if (guidance.heuristics.hasMentalHealthCrisis) return false;
   if (guidance.level === 'alert') return false;
 
