@@ -13,7 +13,7 @@ import { CircuitBreaker, CircuitOpenError } from '../lib/circuit-breaker.js';
 
 type ComposerClassifierRouterContext = {
   Variables: {
-    requestId: string;
+    requestId?: string;
   };
 };
 
