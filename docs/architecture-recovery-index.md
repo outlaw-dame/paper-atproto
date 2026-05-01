@@ -69,6 +69,8 @@ Current `master` now includes these foundational pieces:
 - `src/runtime/routerExecutionAdapter.test.ts`
 - `src/runtime/prompts/routerPrompt.ts`
 - `src/runtime/prompts/coordinatorPrompt.ts`
+- `src/runtime/prompts/promptSchemas.ts`
+- `src/runtime/prompts/promptJsonSchemas.ts`
 - `src/runtime/prompts/promptRegistry.ts`
 - `src/runtime/prompts/promptRegistry.test.ts`
 - `src/runtime/functionGemmaRouterInvoker.ts`
