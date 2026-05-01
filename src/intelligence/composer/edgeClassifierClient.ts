@@ -22,6 +22,28 @@ type AttemptSignal = {
   cleanup: () => void;
 };
 
+type EdgeClassifierTool = ComposerEdgeClassifierResponse['toolsUsed'][number];
+type EdgeClassifierAbuseScore = NonNullable<ComposerEdgeClassifierResponse['abuseScore']>;
+type EdgeClassifierAbuseLabel = EdgeClassifierAbuseScore['label'];
+
+const EDGE_CLASSIFIER_TOOLS = new Set<EdgeClassifierTool>([
+  'edge-classifier',
+  'sentiment-polarity',
+  'emotion',
+  'targeted-sentiment',
+  'quality-score',
+  'abuse-score',
+]);
+
+const ABUSE_LABELS = new Set<EdgeClassifierAbuseLabel>([
+  'toxic',
+  'insult',
+  'obscene',
+  'identity_hate',
+  'threat',
+  'severe_toxic',
+]);
+
 function clamp01(value: unknown): number | null {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
@@ -46,6 +68,60 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function normalizeToolsUsed(value: unknown): EdgeClassifierTool[] {
+  const toolsUsed = isStringArray(value)
+    ? value.filter((tool): tool is EdgeClassifierTool => EDGE_CLASSIFIER_TOOLS.has(tool as EdgeClassifierTool))
+    : [];
+
+  if (!toolsUsed.includes('edge-classifier')) {
+    toolsUsed.unshift('edge-classifier');
+  }
+
+  return toolsUsed;
+}
+
+function normalizeAbuseScore(value: unknown): ComposerEdgeClassifierResponse['abuseScore'] {
+  if (!isRecord(value) || !isRecord(value.scores)) return null;
+  const label = typeof value.label === 'string' && ABUSE_LABELS.has(value.label as EdgeClassifierAbuseLabel)
+    ? value.label as EdgeClassifierAbuseLabel
+    : null;
+  const score = clamp01(value.score);
+  if (!label || score === null) return null;
+
+  const toxic = clamp01(value.scores.toxic);
+  const insult = clamp01(value.scores.insult);
+  const obscene = clamp01(value.scores.obscene);
+  const identityHate = clamp01(value.scores.identity_hate);
+  const threat = clamp01(value.scores.threat);
+  const severeToxic = clamp01(value.scores.severe_toxic);
+
+  if (
+    toxic === null
+    || insult === null
+    || obscene === null
+    || identityHate === null
+    || threat === null
+    || severeToxic === null
+  ) {
+    return null;
+  }
+
+  return {
+    model: 'composer-edge-abuse-v1',
+    provider: 'edge-heuristic',
+    label,
+    score,
+    scores: {
+      toxic,
+      insult,
+      obscene,
+      identity_hate: identityHate,
+      threat,
+      severe_toxic: severeToxic,
+    },
+  };
+}
+
 function validateEdgeClassifierResponse(value: unknown): ComposerEdgeClassifierResponse {
   if (!isRecord(value)) {
     throw new Error('Composer edge classifier returned non-object response');
@@ -57,28 +133,13 @@ function validateEdgeClassifierResponse(value: unknown): ComposerEdgeClassifierR
     throw new Error('Composer edge classifier returned invalid confidence');
   }
 
-  const toolsUsed = isStringArray(value.toolsUsed)
-    ? value.toolsUsed.filter((tool): tool is ComposerEdgeClassifierResponse['toolsUsed'][number] => (
-        tool === 'edge-classifier'
-        || tool === 'sentiment-polarity'
-        || tool === 'emotion'
-        || tool === 'targeted-sentiment'
-        || tool === 'quality-score'
-        || tool === 'abuse-score'
-      ))
-    : [];
-
-  if (!toolsUsed.includes('edge-classifier')) {
-    toolsUsed.unshift('edge-classifier');
-  }
-
   return {
     provider: 'edge-heuristic',
     model: 'composer-edge-classifier-v1',
     confidence,
-    toolsUsed,
+    toolsUsed: normalizeToolsUsed(value.toolsUsed),
     ml: ml as ComposerEdgeClassifierResponse['ml'],
-    abuseScore: isRecord(value.abuseScore) ? value.abuseScore as ComposerEdgeClassifierResponse['abuseScore'] : null,
+    abuseScore: normalizeAbuseScore(value.abuseScore),
   };
 }
 
