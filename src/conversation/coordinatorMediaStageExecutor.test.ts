@@ -193,6 +193,44 @@ describe('coordinator media stage executor', () => {
     });
   });
 
+  it('starts independent media analysis requests in parallel', async () => {
+    const started: string[] = [];
+    const resolvers: Array<(result: MediaAnalysisResult) => void> = [];
+    const execution = executeConversationCoordinatorMediaStage({
+      threadId: ROOT_URI,
+      requests: [
+        MEDIA_REQUEST,
+        { ...MEDIA_REQUEST, mediaUrl: 'https://example.test/second.jpg' },
+      ],
+      analyzeMedia: async (request) => {
+        started.push(request.mediaUrl);
+        return new Promise<MediaAnalysisResult>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(started).toEqual([
+      'https://example.test/image.jpg',
+      'https://example.test/second.jpg',
+    ]);
+    expect(resolvers).toHaveLength(2);
+
+    resolvers[1]?.(createMediaResult({ mediaSummary: 'Second image.', confidence: 0.7 }));
+    resolvers[0]?.(createMediaResult({ mediaSummary: 'First image.', confidence: 0.8 }));
+
+    const outcome = await execution;
+
+    expect(outcome.status).toBe('ready');
+    if (outcome.status !== 'ready') throw new Error('Expected ready outcome.');
+    expect(outcome.findings.map((finding) => finding.summary)).toEqual([
+      'The image shows a chart.',
+      'Second image.',
+    ]);
+  });
+
   it('degrades softly on partial media failures', async () => {
     const events: ConversationCoordinatorMediaFailureLogEvent[] = [];
     const outcome = await executeConversationCoordinatorMediaStage({
