@@ -163,7 +163,15 @@ function normalizeWriterResult(raw: unknown, fallbackMode: SummaryMode): Normali
   }
 
   const contributorBlurbs = normalizeContributorBlurbs(rawContributorBlurbs);
-  if (contributorBlurbs.length !== rawContributorBlurbs.length) {
+  if (
+    contributorBlurbs.length !== rawContributorBlurbs.length
+    || contributorBlurbs.some((entry, index) => {
+      const rawEntry = rawContributorBlurbs[index];
+      return !isRecord(rawEntry)
+        || entry.handle !== rawEntry.handle
+        || entry.blurb !== rawEntry.blurb;
+    })
+  ) {
     normalized = true;
   }
 
@@ -236,7 +244,8 @@ function normalizeHandle(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^@+/, '')
-    .slice(0, 120);
+    .slice(0, 120)
+    .trim();
 }
 
 function normalizeText(value: string, maxChars: number): string {
