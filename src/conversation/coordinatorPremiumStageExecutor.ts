@@ -409,7 +409,11 @@ function isLikelyPropertyAccessTypeError(lowerMessage: string): boolean {
     || lowerMessage.includes('reading ')
     || lowerMessage.includes('setting ')
     || lowerMessage.includes('property ')
-    || lowerMessage.includes('is not a function');
+    || lowerMessage.includes('is not a function')
+    || lowerMessage.includes('is not a constructor')
+    || lowerMessage.includes('is not an object')
+    || lowerMessage.includes('is undefined')
+    || lowerMessage.includes('is null');
 }
 
 function buildNonReadyOutcome(params: {
