@@ -45,6 +45,8 @@ export type ConversationCoordinatorPremiumSleep = (
   signal?: AbortSignal,
 ) => Promise<void>;
 
+export type ConversationCoordinatorNowIso = () => string;
+
 export type ConversationCoordinatorPremiumOutcome =
   | {
       schemaVersion: typeof CONVERSATION_COORDINATOR_PREMIUM_STAGE_VERSION;
@@ -84,6 +86,7 @@ export interface ConversationCoordinatorPremiumExecutionInput {
   retryPolicy?: ConversationCoordinatorPremiumRetryPolicy;
   sleep?: ConversationCoordinatorPremiumSleep;
   nowMs?: () => number;
+  nowIso?: ConversationCoordinatorNowIso;
   random?: () => number;
 }
 
@@ -101,6 +104,7 @@ export async function executeConversationCoordinatorPremiumStage(
   input: ConversationCoordinatorPremiumExecutionInput,
 ): Promise<ConversationCoordinatorPremiumOutcome> {
   const now = input.nowMs ?? defaultNowMs;
+  const getNowIso = input.nowIso ?? defaultNowIso;
   const startedAt = now();
   const provider = selectProvider(input.entitlements);
 
@@ -161,7 +165,7 @@ export async function executeConversationCoordinatorPremiumStage(
       });
       assertNotAborted(input.signal);
 
-      const normalized = normalizePremiumResult(rawResult, provider, nowIso());
+      const normalized = normalizePremiumResult(rawResult, provider, getNowIso());
       if (!normalized) {
         return buildNonReadyOutcome({
           status: 'error',
@@ -379,7 +383,21 @@ function isRetryableError(error: unknown): boolean {
     if (status !== undefined && status >= 500) return true;
   }
 
-  return error instanceof TypeError;
+  return error instanceof TypeError && isNetworkTypeErrorMessage(error.message);
+}
+
+function isNetworkTypeErrorMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('failed to fetch')
+    || lower.includes('networkerror')
+    || lower.includes('network error')
+    || lower.includes('load failed')
+    || lower.includes('connection')
+    || lower.includes('timed out')
+    || lower.includes('timeout')
+    || lower.includes('socket')
+    || lower.includes('econnreset')
+    || lower.includes('fetch failed');
 }
 
 function buildNonReadyOutcome(params: {
@@ -485,7 +503,7 @@ function defaultNowMs(): number {
     : Date.now();
 }
 
-function nowIso(): string {
+function defaultNowIso(): string {
   return new Date().toISOString();
 }
 
