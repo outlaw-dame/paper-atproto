@@ -134,7 +134,7 @@ describe('coordinator model stage planner', () => {
     expect(result.plans.premium).toMatchObject({
       stage: 'premium',
       action: 'skip',
-      reason: 'premium_ineligible',
+      reason: 'interpolator_disabled',
     });
   });
 
@@ -161,7 +161,7 @@ describe('coordinator model stage planner', () => {
     expect(result.plans.premium.reason).toBe('no_meaningful_change');
   });
 
-  it('blocks downstream stages when the writer gate rejects the session', () => {
+  it('blocks downstream stages with the writer gate reason when the writer gate rejects the session', () => {
     const result = plan({
       replyCount: 0,
       premiumEntitlements: PRO_ENTITLEMENTS,
@@ -183,7 +183,7 @@ describe('coordinator model stage planner', () => {
     });
     expect(result.plans.premium).toMatchObject({
       action: 'skip',
-      reason: 'premium_ineligible',
+      reason: 'insufficient_signal',
     });
   });
 
@@ -236,6 +236,27 @@ describe('coordinator model stage planner', () => {
       action: 'skip',
       reason: 'not_entitled',
       reasonCodes: ['premium_provider_unavailable'],
+    });
+  });
+
+  it('skips premium with insufficient_signal while preserving a premium-specific reason code', () => {
+    const session = createSession({
+      interpretation: {
+        ...createSession().interpretation,
+        confidence: {
+          surfaceConfidence: 0.35,
+          entityConfidence: 0.1,
+          interpretiveConfidence: 0.1,
+        },
+      },
+    });
+    const result = plan({ session, replyCount: 2 });
+
+    expect(result.plans.writer.action).toBe('run');
+    expect(result.plans.premium).toMatchObject({
+      action: 'skip',
+      reason: 'insufficient_signal',
+      reasonCodes: ['premium_signal_insufficient'],
     });
   });
 

@@ -13,7 +13,6 @@ import {
 export const CONVERSATION_COORDINATOR_STAGE_PLANNER_VERSION = 1 as const;
 
 export type ConversationCoordinatorPlannedStage = 'writer' | 'multimodal' | 'premium';
-
 export type ConversationCoordinatorStagePlanAction = 'run' | 'skip';
 
 export type ConversationCoordinatorStagePlannerReasonCode =
@@ -25,7 +24,6 @@ export type ConversationCoordinatorStagePlannerReasonCode =
   | 'multimodal_plan_not_needed'
   | 'multimodal_plan_no_candidates'
   | 'premium_entitled'
-  | 'premium_not_entitled'
   | 'premium_provider_unavailable'
   | 'premium_capability_missing'
   | 'premium_signal_insufficient';
@@ -80,7 +78,7 @@ export function planConversationCoordinatorModelStages(
     return buildPlan({
       writer: skipPlan('writer', 'interpolator_disabled', ['interpolator_disabled']),
       multimodal: skipPlan('multimodal', 'interpolator_disabled', ['interpolator_disabled']),
-      premium: skipPlan('premium', 'premium_ineligible', ['interpolator_disabled']),
+      premium: skipPlan('premium', 'interpolator_disabled', ['interpolator_disabled']),
     });
   }
 
@@ -97,7 +95,7 @@ export function planConversationCoordinatorModelStages(
     return buildPlan({
       writer: skipPlan('writer', writerGate.reason, ['writer_gate_blocked']),
       multimodal: skipPlan('multimodal', writerGate.reason, ['writer_gate_blocked']),
-      premium: skipPlan('premium', 'premium_ineligible', ['writer_gate_blocked']),
+      premium: skipPlan('premium', writerGate.reason, ['writer_gate_blocked']),
     });
   }
 
@@ -144,7 +142,7 @@ function planPremiumStage(params: {
   }
 
   if (!shouldRunPremiumDeepInterpolator(session, replyCount, entitlements)) {
-    return skipPlan('premium', 'premium_ineligible', ['premium_signal_insufficient']);
+    return skipPlan('premium', 'insufficient_signal', ['premium_signal_insufficient']);
   }
 
   return runPlan('premium', ['premium_entitled']);
