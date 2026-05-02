@@ -157,7 +157,7 @@ export async function executeConversationCoordinatorPremiumStage(
       const rawResult = await input.executePremium(input.request, {
         provider,
         attempt: attempts,
-        signal: input.signal,
+        ...(input.signal ? { signal: input.signal } : {}),
       });
       assertNotAborted(input.signal);
 
