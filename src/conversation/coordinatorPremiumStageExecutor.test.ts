@@ -409,6 +409,10 @@ describe('coordinator premium stage executor', () => {
     for (const message of [
       "Cannot read properties of undefined (reading 'socket')",
       "Cannot read properties of undefined (reading 'connection')",
+      "undefined is not an object (evaluating 'req.socket')",
+      'req.connection is undefined',
+      'socket is not a constructor',
+      'connection is null',
     ]) {
       let attempts = 0;
       const outcome = await executeConversationCoordinatorPremiumStage({
