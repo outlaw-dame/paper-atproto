@@ -240,7 +240,17 @@ describe('coordinator model stage planner', () => {
   });
 
   it('skips premium with insufficient_signal while preserving a premium-specific reason code', () => {
-    const result = plan({ replyCount: 1 });
+    const session = createSession({
+      interpretation: {
+        ...createSession().interpretation,
+        confidence: {
+          surfaceConfidence: 0.35,
+          entityConfidence: 0.1,
+          interpretiveConfidence: 0.1,
+        },
+      },
+    });
+    const result = plan({ session, replyCount: 2 });
 
     expect(result.plans.writer.action).toBe('run');
     expect(result.plans.premium).toMatchObject({
