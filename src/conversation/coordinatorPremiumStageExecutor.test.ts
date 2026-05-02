@@ -413,6 +413,8 @@ describe('coordinator premium stage executor', () => {
       'req.connection is undefined',
       'socket is not a constructor',
       'connection is null',
+      'socket is not iterable',
+      "Cannot use 'in' operator to search for 'socket' in undefined",
     ]) {
       let attempts = 0;
       const outcome = await executeConversationCoordinatorPremiumStage({

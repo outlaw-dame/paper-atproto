@@ -412,6 +412,8 @@ function isLikelyPropertyAccessTypeError(lowerMessage: string): boolean {
     || lowerMessage.includes('is not a function')
     || lowerMessage.includes('is not a constructor')
     || lowerMessage.includes('is not an object')
+    || lowerMessage.includes('is not iterable')
+    || lowerMessage.includes("cannot use 'in' operator")
     || lowerMessage.includes('is undefined')
     || lowerMessage.includes('is null');
 }
