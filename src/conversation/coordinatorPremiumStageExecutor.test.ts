@@ -187,6 +187,34 @@ describe('coordinator premium stage executor', () => {
     });
   });
 
+  it('uses injected wall-clock ISO time for missing updatedAt fallback', async () => {
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: REQUEST,
+      entitlements: BASE_ENTITLEMENTS,
+      redactionVerified: true,
+      nowMs: createClock([0, 1]),
+      nowIso: () => '2026-05-02T17:45:00.000Z',
+      executePremium: async () => ({
+        summary: 'Premium summary without provider timestamp.',
+        perspectiveGaps: [],
+        followUpQuestions: [],
+        confidence: 0.5,
+        provider: 'gemini',
+      }),
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'ready',
+      result: {
+        updatedAt: '2026-05-02T17:45:00.000Z',
+      },
+      diagnostics: {
+        normalized: true,
+      },
+    });
+    expect(outcome.reasonCodes).toContain('premium_result_normalized');
+  });
+
   it('normalizes noisy premium results and flags safety metadata', async () => {
     const outcome = await executeConversationCoordinatorPremiumStage({
       request: REQUEST,
@@ -318,6 +346,62 @@ describe('coordinator premium stage executor', () => {
       status: 'ready',
       attempts: 2,
       reasonCodes: ['premium_entitlement_allowed', 'premium_retry_attempted', 'premium_result_ready'],
+    });
+  });
+
+  it('retries network-shaped TypeError failures', async () => {
+    const sleeps: number[] = [];
+    let attempts = 0;
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: REQUEST,
+      entitlements: BASE_ENTITLEMENTS,
+      redactionVerified: true,
+      retryPolicy: {
+        maxAttempts: 2,
+        baseDelayMs: 10,
+        jitterRatio: 0,
+      },
+      sleep: async (delayMs) => {
+        sleeps.push(delayMs);
+      },
+      nowMs: createClock([0, 2]),
+      executePremium: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('fetch failed');
+        return createResult();
+      },
+    });
+
+    expect(sleeps).toEqual([10]);
+    expect(outcome).toMatchObject({
+      status: 'ready',
+      attempts: 2,
+      reasonCodes: ['premium_entitlement_allowed', 'premium_retry_attempted', 'premium_result_ready'],
+    });
+  });
+
+  it('does not retry plain TypeError logic failures', async () => {
+    let attempts = 0;
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: REQUEST,
+      entitlements: BASE_ENTITLEMENTS,
+      redactionVerified: true,
+      retryPolicy: {
+        maxAttempts: 3,
+      },
+      nowMs: createClock([0, 4]),
+      executePremium: async () => {
+        attempts += 1;
+        throw new TypeError('Cannot read properties of undefined');
+      },
+    });
+
+    expect(attempts).toBe(1);
+    expect(outcome).toMatchObject({
+      status: 'error',
+      error: 'Cannot read properties of undefined',
+      attempts: 1,
+      reasonCodes: ['premium_entitlement_allowed', 'premium_execution_failed'],
     });
   });
 
