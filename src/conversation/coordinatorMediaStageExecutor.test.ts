@@ -226,7 +226,7 @@ describe('coordinator media stage executor', () => {
     expect(outcome.status).toBe('ready');
     if (outcome.status !== 'ready') throw new Error('Expected ready outcome.');
     expect(outcome.findings.map((finding) => finding.summary)).toEqual([
-      'The image shows a chart.',
+      'First image.',
       'Second image.',
     ]);
   });
