@@ -142,27 +142,33 @@ function normalizeWriterResult(raw: unknown, fallbackMode: SummaryMode): Normali
   if (!Array.isArray(raw.contributorBlurbs)) return null;
   if (typeof raw.abstained !== 'boolean') return null;
 
+  const rawCollapsedSummary = raw.collapsedSummary;
+  const rawExpandedSummary = raw.expandedSummary;
+  const rawWhatChanged = raw.whatChanged;
+  const rawContributorBlurbs = raw.contributorBlurbs;
+  const rawMode = raw.mode;
+
   let normalized = false;
-  const collapsedSummary = normalizeText(raw.collapsedSummary, 1_200);
-  if (collapsedSummary !== raw.collapsedSummary) normalized = true;
+  const collapsedSummary = normalizeText(rawCollapsedSummary, 1_200);
+  if (collapsedSummary !== rawCollapsedSummary) normalized = true;
 
-  const expandedSummary = typeof raw.expandedSummary === 'string'
-    ? normalizeText(raw.expandedSummary, 4_000)
+  const expandedSummary = typeof rawExpandedSummary === 'string'
+    ? normalizeText(rawExpandedSummary, 4_000)
     : undefined;
-  if (expandedSummary !== undefined && expandedSummary !== raw.expandedSummary) normalized = true;
+  if (expandedSummary !== undefined && expandedSummary !== rawExpandedSummary) normalized = true;
 
-  const whatChanged = normalizeStringArray(raw.whatChanged, 8, 280);
-  if (whatChanged.length !== raw.whatChanged.length || whatChanged.some((value, index) => value !== raw.whatChanged[index])) {
+  const whatChanged = normalizeStringArray(rawWhatChanged, 8, 280);
+  if (whatChanged.length !== rawWhatChanged.length || whatChanged.some((value, index) => value !== rawWhatChanged[index])) {
     normalized = true;
   }
 
-  const contributorBlurbs = normalizeContributorBlurbs(raw.contributorBlurbs);
-  if (contributorBlurbs.length !== raw.contributorBlurbs.length) {
+  const contributorBlurbs = normalizeContributorBlurbs(rawContributorBlurbs);
+  if (contributorBlurbs.length !== rawContributorBlurbs.length) {
     normalized = true;
   }
 
-  const mode = normalizeSummaryMode(raw.mode, fallbackMode);
-  if (mode !== raw.mode) normalized = true;
+  const mode = normalizeSummaryMode(rawMode, fallbackMode);
+  if (mode !== rawMode) normalized = true;
 
   return {
     result: {
