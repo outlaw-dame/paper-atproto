@@ -388,6 +388,8 @@ function isRetryableError(error: unknown): boolean {
 
 function isNetworkTypeErrorMessage(message: string): boolean {
   const lower = message.toLowerCase();
+  if (isLikelyPropertyAccessTypeError(lower)) return false;
+
   return lower.includes('failed to fetch')
     || lower.includes('networkerror')
     || lower.includes('network error')
@@ -398,6 +400,16 @@ function isNetworkTypeErrorMessage(message: string): boolean {
     || lower.includes('socket')
     || lower.includes('econnreset')
     || lower.includes('fetch failed');
+}
+
+function isLikelyPropertyAccessTypeError(lowerMessage: string): boolean {
+  return lowerMessage.includes('cannot read')
+    || lowerMessage.includes('cannot set')
+    || lowerMessage.includes('read properties')
+    || lowerMessage.includes('reading ')
+    || lowerMessage.includes('setting ')
+    || lowerMessage.includes('property ')
+    || lowerMessage.includes('is not a function');
 }
 
 function buildNonReadyOutcome(params: {
