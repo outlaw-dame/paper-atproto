@@ -142,6 +142,67 @@ describe('coordinator writer stage executor', () => {
     expect(outcome.reasonCodes).toContain('writer_result_normalized');
   });
 
+  it('marks contributor blurb cleanup as normalized when count is unchanged', async () => {
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT,
+      write: async () => ({
+        collapsedSummary: 'Summary stays valid.',
+        whatChanged: ['No structural change.'],
+        contributorBlurbs: [
+          { handle: '@reply.example', blurb: '  Adds\ncontext. ' },
+        ],
+        abstained: false,
+        mode: 'normal',
+      }),
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'ready',
+      result: {
+        contributorBlurbs: [
+          {
+            handle: 'reply.example',
+            blurb: 'Adds context.',
+          },
+        ],
+      },
+      diagnostics: {
+        normalized: true,
+      },
+    });
+    expect(outcome.reasonCodes).toContain('writer_result_normalized');
+  });
+
+  it('trims handles after truncation', async () => {
+    const rawHandle = `${'a'.repeat(119)}  suffix`;
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT,
+      write: async () => createWriterResult({
+        contributorBlurbs: [
+          {
+            handle: rawHandle,
+            blurb: 'Still valid.',
+          },
+        ],
+      }),
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'ready',
+      result: {
+        contributorBlurbs: [
+          {
+            handle: 'a'.repeat(119),
+            blurb: 'Still valid.',
+          },
+        ],
+      },
+      diagnostics: {
+        normalized: true,
+      },
+    });
+  });
+
   it('returns an error outcome for invalid writer output', async () => {
     const outcome = await executeConversationCoordinatorWriterStage({
       writerInput: WRITER_INPUT,
