@@ -405,6 +405,36 @@ describe('coordinator premium stage executor', () => {
     });
   });
 
+  it('does not retry property-access TypeErrors that mention socket or connection', async () => {
+    for (const message of [
+      "Cannot read properties of undefined (reading 'socket')",
+      "Cannot read properties of undefined (reading 'connection')",
+    ]) {
+      let attempts = 0;
+      const outcome = await executeConversationCoordinatorPremiumStage({
+        request: REQUEST,
+        entitlements: BASE_ENTITLEMENTS,
+        redactionVerified: true,
+        retryPolicy: {
+          maxAttempts: 3,
+        },
+        nowMs: createClock([0, 4]),
+        executePremium: async () => {
+          attempts += 1;
+          throw new TypeError(message);
+        },
+      });
+
+      expect(attempts).toBe(1);
+      expect(outcome).toMatchObject({
+        status: 'error',
+        error: message,
+        attempts: 1,
+        reasonCodes: ['premium_entitlement_allowed', 'premium_execution_failed'],
+      });
+    }
+  });
+
   it('does not retry non-retryable provider errors', async () => {
     let attempts = 0;
     const outcome = await executeConversationCoordinatorPremiumStage({
