@@ -130,15 +130,27 @@ export async function executeConversationCoordinatorMediaStage(
     };
   }
 
+  assertNotAborted(input.signal);
+
+  const settledResults = await Promise.all(
+    requests.map(async (request): Promise<{ success: true; result: MediaAnalysisResult } | { success: false }> => {
+      try {
+        const result = await input.analyzeMedia(request, input.signal);
+        return { success: true, result };
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        return { success: false };
+      }
+    }),
+  );
+
   const results: MediaAnalysisResult[] = [];
   let failures = 0;
 
-  for (const request of requests) {
-    assertNotAborted(input.signal);
-    try {
-      results.push(await input.analyzeMedia(request, input.signal));
-    } catch (error) {
-      if (isAbortError(error)) throw error;
+  for (const entry of settledResults) {
+    if (entry.success) {
+      results.push(entry.result);
+    } else {
       failures += 1;
     }
   }
@@ -186,7 +198,12 @@ function buildSkippedPlan(reason: ConversationCoordinatorMediaSkipReason): Conve
 }
 
 function assertNotAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
+  if (!signal) return;
+  if (typeof signal.throwIfAborted === 'function') {
+    signal.throwIfAborted();
+    return;
+  }
+  if (!signal.aborted) return;
   throw createAbortError();
 }
 
