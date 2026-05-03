@@ -54,6 +54,25 @@ function dedupePostsById(items: MockPost[]): MockPost[] {
   return deduped;
 }
 
+function scoreAdaptiveFeedPost(post: MockPost): number {
+  const now = Date.now();
+  const createdAtMs = Number.isFinite(Date.parse(post.createdAt)) ? Date.parse(post.createdAt) : now;
+  const hoursOld = Math.max(1, (now - createdAtMs) / (1000 * 60 * 60));
+  const engagement = (post.likeCount * 1.0) + (post.repostCount * 1.6) + (post.replyCount * 1.2);
+  const recencyWeight = 1 / Math.sqrt(hoursOld);
+  return (Math.log10(engagement + 1) * 3.5) + recencyWeight;
+}
+
+function applyAdaptiveFeedRanking(posts: MockPost[]): MockPost[] {
+  return posts
+    .map((post, index) => ({ post, index, score: scoreAdaptiveFeedPost(post) }))
+    .sort((a, b) => {
+      if (a.score !== b.score) return b.score - a.score;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.post);
+}
+
 function Spinner({ small }: { small?: boolean }) {
   const s = small ? 18 : 28;
   return (
@@ -81,7 +100,14 @@ function EmptyState({ label }: { label: string }) {
 
 export default function HomeTab({ onOpenStory }: Props) {
   const { agent, session, profile } = useSessionStore();
-  const { openProfile, openComposeReply, homeFeedMode, setHomeFeedMode } = useUiStore();
+  const {
+    openProfile,
+    openComposeReply,
+    homeFeedMode,
+    setHomeFeedMode,
+    feedsAdaptiveRanking,
+    toggleFeedsAdaptiveRanking,
+  } = useUiStore();
   const translationPolicy = useTranslationStore((state) => state.policy);
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
@@ -437,6 +463,9 @@ export default function HomeTab({ onOpenStory }: Props) {
           if (backgroundRefresh && currentPosts.length > 0 && freshPosts.length === 0) {
             return currentPosts;
           }
+          if (m === 'Feeds' && feedsAdaptiveRanking) {
+            return applyAdaptiveFeedRanking(freshPosts);
+          }
           return freshPosts;
         });
 
@@ -455,7 +484,13 @@ export default function HomeTab({ onOpenStory }: Props) {
           setFeedUnreadCount(session.did, m, unreadCount);
         }
       } else {
-        setPosts(prev => dedupePostsById([...prev, ...freshPosts]));
+        setPosts((prev) => {
+          const merged = dedupePostsById([...prev, ...freshPosts]);
+          if (m === 'Feeds' && feedsAdaptiveRanking) {
+            return applyAdaptiveFeedRanking(merged);
+          }
+          return merged;
+        });
       }
       setCursor(nextCursor);
     } catch (err: any) {
@@ -470,7 +505,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         setLoadingMore(false);
       }
     }
-  }, [activeAccountFeed, agent, session, getFeedCache, hasLimitedScopeSession, publicReadAgent, buildViewResumeKey, setFeedUnreadCount]);
+  }, [activeAccountFeed, agent, session, getFeedCache, hasLimitedScopeSession, publicReadAgent, buildViewResumeKey, feedsAdaptiveRanking, setFeedUnreadCount]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -844,6 +879,22 @@ export default function HomeTab({ onOpenStory }: Props) {
                 Saved feed metadata is refreshing in the background. If labels look stale, pull to refresh.
               </p>
             </div>
+          </div>
+        )}
+
+        {mode === 'Feeds' && (
+          <div style={{ padding: '0 16px 10px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={feedsAdaptiveRanking}
+                onChange={() => toggleFeedsAdaptiveRanking()}
+                style={{ width: 14, height: 14 }}
+              />
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, lineHeight: '16px', fontWeight: 600, color: 'var(--label-2)' }}>
+                Adaptive ranking (improve feed relevance while preserving raw fallback)
+              </span>
+            </label>
           </div>
         )}
       </div>

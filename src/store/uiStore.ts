@@ -27,6 +27,7 @@ export interface UiResumeState {
   activeTab: TabId;
   prevTab: TabId;
   homeFeedMode: HomeFeedMode;
+  feedsAdaptiveRanking: boolean;
   profileDid: string | null;
   story: StoryEntry | null;
   exploreSearchQuery: string | null;
@@ -79,6 +80,7 @@ export function sanitizeUiResumeState(value: unknown): UiResumeState {
     activeTab: activeTab === 'profile' && !profileDid ? 'home' : activeTab,
     prevTab,
     homeFeedMode,
+    feedsAdaptiveRanking: source.feedsAdaptiveRanking === true,
     profileDid,
     story: sanitizeStoryEntry(source.story),
     exploreSearchQuery: sanitizeBoundedString(source.exploreSearchQuery, MAX_QUERY_LENGTH),
@@ -94,6 +96,7 @@ interface UiState {
   activeTab: TabId;
   prevTab: TabId;
   homeFeedMode: HomeFeedMode;
+  feedsAdaptiveRanking: boolean;
   showCompose: boolean;
   showPromptComposer: boolean;
   /** Post being replied to, or null for a new top-level post. */
@@ -130,6 +133,7 @@ interface UiState {
   openProfile: (did: string) => void;
   exploreAiInsightEnabled: boolean;
   toggleExploreAiInsight: () => void;
+  toggleFeedsAdaptiveRanking: () => void;
 }
 
 export function selectUiResumeState(state: UiState): UiResumeState {
@@ -137,6 +141,7 @@ export function selectUiResumeState(state: UiState): UiResumeState {
     activeTab: state.activeTab,
     prevTab: state.prevTab,
     homeFeedMode: state.homeFeedMode,
+    feedsAdaptiveRanking: state.feedsAdaptiveRanking,
     profileDid: state.profileDid,
     story: state.story,
     exploreSearchQuery: state.exploreSearchQuery,
@@ -152,6 +157,7 @@ export const useUiStore = create<UiState>()(
       activeTab: 'home' as TabId,
       prevTab: 'home' as TabId,
       homeFeedMode: 'Following' as HomeFeedMode,
+      feedsAdaptiveRanking: false,
       showCompose: false,
       showPromptComposer: false,
       replyTarget: null,
@@ -204,12 +210,14 @@ export const useUiStore = create<UiState>()(
       setUnreadCount: (n) => set({ unreadCount: n }),
       openProfile: (did) => set((s) => ({ profileDid: did, prevTab: s.activeTab, activeTab: 'profile' as TabId })),
       toggleExploreAiInsight: () => set((s) => ({ exploreAiInsightEnabled: !s.exploreAiInsightEnabled })),
+      toggleFeedsAdaptiveRanking: () => set((s) => ({ feedsAdaptiveRanking: !s.feedsAdaptiveRanking })),
 
     }),
     {
       name: 'glympse.ui.state.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 3,
+      // v4 adds feedsAdaptiveRanking toggle state
+      version: 4,
       partialize: selectUiResumeState,
       migrate: (persistedState) => sanitizeUiResumeState(persistedState),
       onRehydrateStorage: () => (_state, error) => {
