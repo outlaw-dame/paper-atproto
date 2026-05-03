@@ -6,7 +6,9 @@ import type {
   EdgeProviderId,
   EdgeRuntimeRequest,
   EdgeRuntimeResponse,
+  SearchRerankResponsePayload,
 } from './edgeProviderContracts';
+import type { MediaAnalysisResult } from '../llmContracts';
 
 function toEdgeProviderId(provider: ComposerEdgeClassifierProvider): EdgeProviderId {
   return provider === 'cloudflare-workers-ai' ? 'cloudflare-workers-ai' : 'node-heuristic';
@@ -58,6 +60,50 @@ export class EdgeProviderMismatchError extends Error {
   }
 }
 
+export class UnsupportedEdgeProviderError extends Error {
+  readonly capability: EdgeExecutionPlan['capability'];
+  readonly provider: EdgeProviderId;
+
+  constructor(capability: EdgeExecutionPlan['capability'], provider: EdgeProviderId) {
+    super(`Edge runtime provider is not supported for capability ${capability}: ${provider}`);
+    this.name = 'UnsupportedEdgeProviderError';
+    this.capability = capability;
+    this.provider = provider;
+  }
+}
+
+async function postEdgeJson<TResponse>(
+  endpoint: string,
+  payload: unknown,
+  signal?: AbortSignal,
+): Promise<TResponse> {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    signal: signal ?? null,
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Edge endpoint request failed (${response.status}) for ${endpoint}`);
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.toLowerCase().includes('application/json')) {
+    throw new Error(`Expected JSON response from ${endpoint} but got ${contentType ?? 'none'}`);
+  }
+
+  return response.json() as Promise<TResponse>;
+}
+
+function assertCloudflareProvider(plan: EdgeExecutionPlan): void {
+  if (plan.provider !== 'cloudflare-workers-ai') {
+    throw new UnsupportedEdgeProviderError(plan.capability, plan.provider);
+  }
+}
+
 /**
  * Dispatches edge execution by planned capability.
  *
@@ -84,6 +130,27 @@ export async function runEdgeExecution(
       throw new EdgeProviderMismatchError(plan.provider, response.provider);
     }
     return response;
+  }
+
+  if (request.capability === 'search_rerank') {
+    // Route guard: this capability is planned, but the canonical server
+    // endpoint (`/api/llm/rerank/search`) is not mounted yet. Keep this
+    // explicit until that route lands to avoid runtime 404 regressions.
+    throw new UnsupportedEdgeCapabilityError(request.capability);
+  }
+
+  if (request.capability === 'media_classify') {
+    assertCloudflareProvider(plan);
+    const output = await postEdgeJson<MediaAnalysisResult>(
+      plan.endpoint,
+      request.input,
+      signal,
+    );
+    return {
+      capability: 'media_classify',
+      provider: plan.provider,
+      output,
+    };
   }
 
   throw new UnsupportedEdgeCapabilityError(request.capability);
