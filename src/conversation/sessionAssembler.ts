@@ -1162,6 +1162,246 @@ async function runConversationWriterStage(
   return { kind: 'continue', writerInput, filteredWriterResult };
 }
 
+interface ConversationPremiumStageParams {
+  sessionId: string;
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  replyCount: number;
+  writerInput: ThreadStateForWriter | null;
+  filteredWriterResult: InterpolatorWriteResult | null;
+  signal?: AbortSignal;
+}
+
+/**
+ * Item 7e (coordinator runtime extraction): isolates the premium deep
+ * interpolator stage.
+ *
+ * Owns:
+ * - actorDid resolution from the session store; not_entitled skip when missing
+ * - markConversationModelLoading('premium') + interpretation.premium.status='loading'
+ * - hydrate.premium_entitlements timing (getPremiumAiEntitlements)
+ * - shouldRunPremiumDeepInterpolator gate -> premium_ineligible/not_entitled skip
+ * - redactPremiumInterpolatorInputByUserRules + buildPremiumInterpolatorRequest
+ * - executeConversationCoordinatorPremiumStage (with retryPolicy maxAttempts:1
+ *   to avoid stacking with callPremiumDeepInterpolator's internal retries)
+ * - hydrate.premium_deep timing
+ * - ready/error/discard store transitions plus
+ *   applyShadowConversationSupervisor('premium_completed') for each terminal arm
+ * - inner try/catch with AbortError silent-return + sanitizeErrorMessage path
+ *
+ * The helper is self-contained: errors from the executor are caught locally,
+ * so this is the final stage and returning here ends hydration normally.
+ */
+async function runConversationPremiumStage(
+  params: ConversationPremiumStageParams,
+): Promise<void> {
+  const {
+    sessionId,
+    modelSourceToken,
+    replyCount,
+    writerInput,
+    filteredWriterResult,
+    signal,
+  } = params;
+  const store = useConversationSessionStore.getState();
+
+  const actorDid = useSessionStore.getState().session?.did?.trim();
+  if (!actorDid) {
+    store.updateSession(sessionId, (current) => (
+      applyShadowConversationSupervisor(markConversationModelSkipped({
+        ...current,
+        interpretation: {
+          ...current.interpretation,
+          premium: {
+            status: 'not_entitled',
+          },
+        },
+      }, 'premium', {
+        reason: 'not_entitled',
+        sourceToken: modelSourceToken,
+      }), 'premium_completed')
+    ));
+    return;
+  }
+
+  const premiumRequestedAt = new Date().toISOString();
+  store.updateSession(sessionId, (current) => ({
+    ...markConversationModelLoading(current, 'premium', {
+      sourceToken: modelSourceToken,
+      requestedAt: premiumRequestedAt,
+    }),
+    interpretation: {
+      ...current.interpretation,
+      premium: {
+        ...(current.interpretation.premium.entitlements
+          ? { entitlements: current.interpretation.premium.entitlements }
+          : {}),
+        status: 'loading',
+      },
+    },
+  }));
+
+  try {
+    const premiumEntitlementsStartedAt = nowMs();
+    const entitlements = await getPremiumAiEntitlements(actorDid, signal);
+    recordInterpolatorStageTiming('hydrate.premium_entitlements', nowMs() - premiumEntitlementsStartedAt);
+    store.updateSession(sessionId, (current) => ({
+      ...current,
+      interpretation: {
+        ...current.interpretation,
+        premium: {
+          entitlements,
+          status: entitlements.capabilities.includes('deep_interpolator')
+            ? 'idle'
+            : 'not_entitled',
+        },
+      },
+    }));
+
+    const currentSession = store.getSession(sessionId);
+    if (!currentSession) return;
+    if (selectCoordinatorSourceApplication(currentSession, modelSourceToken, 'premium').action === 'discard_stale') {
+      store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
+      return;
+    }
+
+    if (!shouldRunPremiumDeepInterpolator(currentSession, replyCount, entitlements)) {
+      store.updateSession(sessionId, (current) => (
+        applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
+          reason: entitlements.capabilities.includes('deep_interpolator')
+            ? 'premium_ineligible'
+            : 'not_entitled',
+          sourceToken: modelSourceToken,
+        }), 'premium_completed')
+      ));
+      return;
+    }
+
+    store.updateSession(sessionId, (current) => ({
+      ...current,
+      interpretation: {
+        ...current.interpretation,
+        premium: {
+          entitlements,
+          status: 'loading',
+        },
+      },
+    }));
+
+    const baseSummary = filteredWriterResult && !filteredWriterResult.abstained
+      ? filteredWriterResult.collapsedSummary
+      : currentSession.interpretation.interpolator?.summaryText;
+
+    const premiumInput = redactPremiumInterpolatorInputByUserRules(
+      buildPremiumInterpolatorRequest({
+        actorDid,
+        writerInput: writerInput!,
+        threadState: currentSession.interpretation.threadState,
+        interpretiveExplanation: currentSession.interpretation.interpretiveExplanation,
+        ...(baseSummary ? { baseSummary } : {}),
+      }),
+    );
+
+    const deepInterpolatorStartedAt = nowMs();
+    const premiumOutcome = await executeConversationCoordinatorPremiumStage({
+      request: premiumInput,
+      entitlements,
+      executePremium: (request, ctx) => callPremiumDeepInterpolator(request, ctx.signal),
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+      ...(signal ? { signal } : {}),
+    });
+    recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
+
+    if (premiumOutcome.status !== 'ready') {
+      const errorMessage = premiumOutcome.error;
+      store.updateSession(sessionId, (current) => ({
+        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
+          ? applyShadowConversationSupervisor(markConversationModelError({
+              ...current,
+              interpretation: {
+                ...current.interpretation,
+                premium: {
+                  ...(current.interpretation.premium.entitlements
+                    ? { entitlements: current.interpretation.premium.entitlements }
+                    : {}),
+                  status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
+                    ? 'error'
+                    : current.interpretation.premium.status,
+                  ...(errorMessage
+                    ? { lastError: errorMessage }
+                    : {}),
+                },
+              },
+            }, 'premium', {
+              sourceToken: modelSourceToken,
+              requestedAt: premiumRequestedAt,
+              error: errorMessage,
+            }), 'premium_completed')
+          : markConversationModelDiscarded(current, 'premium')),
+      }));
+      console.warn('[conversation] premium interpolation failed', errorMessage);
+      return;
+    }
+
+    const deepInterpolator = premiumOutcome.result;
+    const sourceComputedAt = currentSession.interpretation.lastComputedAt;
+
+    store.updateSession(sessionId, (current) => ({
+      ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
+        ? applyShadowConversationSupervisor(markConversationModelReady({
+            ...current,
+            interpretation: {
+              ...current.interpretation,
+              premium: {
+                entitlements,
+                status: 'ready',
+                deepInterpolator: {
+                  ...deepInterpolator,
+                  ...(sourceComputedAt ? { sourceComputedAt } : {}),
+                },
+              },
+            },
+          }, 'premium', {
+            sourceToken: modelSourceToken,
+            requestedAt: premiumRequestedAt,
+          }), 'premium_completed')
+        : markConversationModelDiscarded(current, 'premium')),
+    }));
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      return;
+    }
+
+    const errorMessage = sanitizeErrorMessage(err);
+    store.updateSession(sessionId, (current) => ({
+      ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
+        ? applyShadowConversationSupervisor(markConversationModelError({
+            ...current,
+            interpretation: {
+              ...current.interpretation,
+              premium: {
+                ...(current.interpretation.premium.entitlements
+                  ? { entitlements: current.interpretation.premium.entitlements }
+                  : {}),
+                status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
+                  ? 'error'
+                  : current.interpretation.premium.status,
+                ...(errorMessage
+                  ? { lastError: errorMessage }
+                  : {}),
+              },
+            },
+          }, 'premium', {
+            sourceToken: modelSourceToken,
+            requestedAt: premiumRequestedAt,
+            error: errorMessage,
+          }), 'premium_completed')
+        : markConversationModelDiscarded(current, 'premium')),
+    }));
+    console.warn('[conversation] premium interpolation failed', errorMessage);
+  }
+}
+
 export async function hydrateConversationSession(
   params: HydrateConversationSessionParams,
 ): Promise<void> {
@@ -1349,202 +1589,14 @@ export async function hydrateConversationSession(
       return;
     }
 
-    const actorDid = useSessionStore.getState().session?.did?.trim();
-    if (!actorDid) {
-      store.updateSession(sessionId, (current) => (
-        applyShadowConversationSupervisor(markConversationModelSkipped({
-          ...current,
-          interpretation: {
-            ...current.interpretation,
-            premium: {
-              status: 'not_entitled',
-            },
-          },
-        }, 'premium', {
-          reason: 'not_entitled',
-          sourceToken: modelSourceToken,
-        }), 'premium_completed')
-      ));
-      return;
-    }
-
-    const premiumRequestedAt = new Date().toISOString();
-    store.updateSession(sessionId, (current) => ({
-      ...markConversationModelLoading(current, 'premium', {
-        sourceToken: modelSourceToken,
-        requestedAt: premiumRequestedAt,
-      }),
-      interpretation: {
-        ...current.interpretation,
-        premium: {
-          ...(current.interpretation.premium.entitlements
-            ? { entitlements: current.interpretation.premium.entitlements }
-            : {}),
-          status: 'loading',
-        },
-      },
-    }));
-
-    try {
-      const premiumEntitlementsStartedAt = nowMs();
-      const entitlements = await getPremiumAiEntitlements(actorDid, signal);
-      recordInterpolatorStageTiming('hydrate.premium_entitlements', nowMs() - premiumEntitlementsStartedAt);
-      store.updateSession(sessionId, (current) => ({
-        ...current,
-        interpretation: {
-          ...current.interpretation,
-          premium: {
-            entitlements,
-            status: entitlements.capabilities.includes('deep_interpolator')
-              ? 'idle'
-              : 'not_entitled',
-          },
-        },
-      }));
-
-      const currentSession = store.getSession(sessionId);
-      if (!currentSession) return;
-      if (selectCoordinatorSourceApplication(currentSession, modelSourceToken, 'premium').action === 'discard_stale') {
-        store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
-        return;
-      }
-
-      if (!shouldRunPremiumDeepInterpolator(currentSession, allReplies.length, entitlements)) {
-        store.updateSession(sessionId, (current) => (
-          applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
-            reason: entitlements.capabilities.includes('deep_interpolator')
-              ? 'premium_ineligible'
-              : 'not_entitled',
-            sourceToken: modelSourceToken,
-          }), 'premium_completed')
-        ));
-        return;
-      }
-
-      store.updateSession(sessionId, (current) => ({
-        ...current,
-        interpretation: {
-          ...current.interpretation,
-          premium: {
-            entitlements,
-            status: 'loading',
-          },
-        },
-      }));
-
-      const baseSummary = filteredWriterResult && !filteredWriterResult.abstained
-        ? filteredWriterResult.collapsedSummary
-        : currentSession.interpretation.interpolator?.summaryText;
-
-      const premiumInput = redactPremiumInterpolatorInputByUserRules(
-        buildPremiumInterpolatorRequest({
-          actorDid,
-          writerInput: writerInput!,
-          threadState: currentSession.interpretation.threadState,
-          interpretiveExplanation: currentSession.interpretation.interpretiveExplanation,
-          ...(baseSummary ? { baseSummary } : {}),
-        }),
-      );
-
-      const deepInterpolatorStartedAt = nowMs();
-      const premiumOutcome = await executeConversationCoordinatorPremiumStage({
-        request: premiumInput,
-        entitlements,
-        executePremium: (request, ctx) => callPremiumDeepInterpolator(request, ctx.signal),
-        redactionVerified: true,
-        retryPolicy: { maxAttempts: 1 },
-        ...(signal ? { signal } : {}),
-      });
-      recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
-
-      if (premiumOutcome.status !== 'ready') {
-        const errorMessage = premiumOutcome.error;
-        store.updateSession(sessionId, (current) => ({
-          ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-            ? applyShadowConversationSupervisor(markConversationModelError({
-                ...current,
-                interpretation: {
-                  ...current.interpretation,
-                  premium: {
-                    ...(current.interpretation.premium.entitlements
-                      ? { entitlements: current.interpretation.premium.entitlements }
-                      : {}),
-                    status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-                      ? 'error'
-                      : current.interpretation.premium.status,
-                    ...(errorMessage
-                      ? { lastError: errorMessage }
-                      : {}),
-                  },
-                },
-              }, 'premium', {
-                sourceToken: modelSourceToken,
-                requestedAt: premiumRequestedAt,
-                error: errorMessage,
-              }), 'premium_completed')
-            : markConversationModelDiscarded(current, 'premium')),
-        }));
-        console.warn('[conversation] premium interpolation failed', errorMessage);
-        return;
-      }
-
-      const deepInterpolator = premiumOutcome.result;
-      const sourceComputedAt = currentSession.interpretation.lastComputedAt;
-
-      store.updateSession(sessionId, (current) => ({
-        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-          ? applyShadowConversationSupervisor(markConversationModelReady({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                premium: {
-                  entitlements,
-                  status: 'ready',
-                  deepInterpolator: {
-                    ...deepInterpolator,
-                    ...(sourceComputedAt ? { sourceComputedAt } : {}),
-                  },
-                },
-              },
-            }, 'premium', {
-              sourceToken: modelSourceToken,
-              requestedAt: premiumRequestedAt,
-            }), 'premium_completed')
-          : markConversationModelDiscarded(current, 'premium')),
-      }));
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        return;
-      }
-
-      const errorMessage = sanitizeErrorMessage(err);
-      store.updateSession(sessionId, (current) => ({
-        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-          ? applyShadowConversationSupervisor(markConversationModelError({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                premium: {
-                  ...(current.interpretation.premium.entitlements
-                    ? { entitlements: current.interpretation.premium.entitlements }
-                    : {}),
-                  status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-                    ? 'error'
-                    : current.interpretation.premium.status,
-                  ...(errorMessage
-                    ? { lastError: errorMessage }
-                    : {}),
-                },
-              },
-            }, 'premium', {
-              sourceToken: modelSourceToken,
-              requestedAt: premiumRequestedAt,
-              error: errorMessage,
-            }), 'premium_completed')
-          : markConversationModelDiscarded(current, 'premium')),
-      }));
-      console.warn('[conversation] premium interpolation failed', errorMessage);
-    }
+    await runConversationPremiumStage({
+      sessionId,
+      modelSourceToken,
+      replyCount: allReplies.length,
+      writerInput,
+      filteredWriterResult,
+      ...(signal ? { signal } : {}),
+    });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       return;
