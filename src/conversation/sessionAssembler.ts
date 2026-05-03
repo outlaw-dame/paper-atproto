@@ -793,18 +793,23 @@ function runConversationWriterPreflight(
 
   const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
   if (!interpolatorEnabled) {
-    store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'writer', {
-      reason: 'interpolator_disabled',
-      sourceToken: modelSourceToken,
-    }));
-    store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'multimodal', {
-      reason: 'interpolator_disabled',
-      sourceToken: modelSourceToken,
-    }));
-    store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'premium', {
-      reason: 'premium_ineligible',
-      sourceToken: modelSourceToken,
-    }));
+    // Address Gemini PR #76 review: consolidate three sequential
+    // updateSession calls into one atomic update so subscribers see a single
+    // consistent transition instead of three intermediate states.
+    store.updateSession(sessionId, (current) => {
+      let next = markConversationModelSkipped(current, 'writer', {
+        reason: 'interpolator_disabled',
+        sourceToken: modelSourceToken,
+      });
+      next = markConversationModelSkipped(next, 'multimodal', {
+        reason: 'interpolator_disabled',
+        sourceToken: modelSourceToken,
+      });
+      return markConversationModelSkipped(next, 'premium', {
+        reason: 'premium_ineligible',
+        sourceToken: modelSourceToken,
+      });
+    });
     return { kind: 'short_circuit' };
   }
 
@@ -833,45 +838,41 @@ function runConversationWriterPreflight(
 
   const writerSkipReason = coerceSkipReason(writerPreflightPlan.reason, 'insufficient_signal');
   if (writerSkipReason === 'no_meaningful_change') {
-    store.updateSession(sessionId, (current) => (
-      markConversationModelSkipped(current, 'writer', {
+    // Address Gemini PR #76 review: single atomic write across writer +
+    // multimodal + premium so the UI never observes a partial-skip state.
+    store.updateSession(sessionId, (current) => {
+      let next = markConversationModelSkipped(current, 'writer', {
         reason: writerSkipReason,
         sourceToken: modelSourceToken,
-      })
-    ));
-    store.updateSession(sessionId, (current) => (
-      markConversationModelSkipped(current, 'multimodal', {
+      });
+      next = markConversationModelSkipped(next, 'multimodal', {
         reason: writerSkipReason,
         sourceToken: modelSourceToken,
-      })
-    ));
-    store.updateSession(sessionId, (current) => (
-      markConversationModelSkipped(current, 'premium', {
+      });
+      return markConversationModelSkipped(next, 'premium', {
         reason: 'no_meaningful_change',
         sourceToken: modelSourceToken,
-      })
-    ));
+      });
+    });
     return { kind: 'short_circuit' };
   }
 
-  store.updateSession(sessionId, (current) => (
-    markConversationModelSkipped(current, 'writer', {
+  // Address Gemini PR #76 review: collapse the generic insufficient-signal
+  // fan-out into a single atomic updateSession call.
+  store.updateSession(sessionId, (current) => {
+    let next = markConversationModelSkipped(current, 'writer', {
       reason: writerSkipReason,
       sourceToken: modelSourceToken,
-    })
-  ));
-  store.updateSession(sessionId, (current) => (
-    markConversationModelSkipped(current, 'multimodal', {
+    });
+    next = markConversationModelSkipped(next, 'multimodal', {
       reason: writerSkipReason,
       sourceToken: modelSourceToken,
-    })
-  ));
-  store.updateSession(sessionId, (current) => (
-    markConversationModelSkipped(current, 'premium', {
+    });
+    return markConversationModelSkipped(next, 'premium', {
       reason: 'premium_ineligible',
       sourceToken: modelSourceToken,
-    })
-  ));
+    });
+  });
   return { kind: 'short_circuit' };
 }
 
@@ -1346,8 +1347,10 @@ async function runConversationPremiumStage(
     const deepInterpolator = premiumOutcome.result;
     const sourceComputedAt = currentSession.interpretation.lastComputedAt;
 
-    store.updateSession(sessionId, (current) => ({
-      ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
+    // Address Gemini PR #76 review: drop the unnecessary `{ ...(...) }`
+    // wrapper around the ternary; return the session object directly.
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
         ? applyShadowConversationSupervisor(markConversationModelReady({
             ...current,
             interpretation: {
@@ -1365,8 +1368,8 @@ async function runConversationPremiumStage(
             sourceToken: modelSourceToken,
             requestedAt: premiumRequestedAt,
           }), 'premium_completed')
-        : markConversationModelDiscarded(current, 'premium')),
-    }));
+        : markConversationModelDiscarded(current, 'premium')
+    ));
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       return;
