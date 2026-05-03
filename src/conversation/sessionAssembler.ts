@@ -931,11 +931,16 @@ async function runConversationMediaStage(
     nearbyTextByUri,
   });
 
+  // Address Gemini PR #73 review: thread the real planner inputs instead of
+  // hardcoding `true`/`true`. Although `runConversationWriterPreflight` would
+  // have already short-circuited if `interpolatorEnabled` were false or
+  // `didMeaningfullyChange` were false (skip path), reading the live values
+  // keeps the coordinator planner honest and avoids future drift.
   const multimodalStagePlan = planConversationCoordinatorModelStages({
     session: sessionAfterTranslation,
     replyCount: allReplies.length,
-    interpolatorEnabled: true,
-    didMeaningfullyChange: true,
+    interpolatorEnabled: useInterpolatorSettingsStore.getState().enabled,
+    didMeaningfullyChange: pipeline.didMeaningfullyChange,
     multimodalPlan: toCoordinatorMultimodalPlanningInput(mediaPlan),
     premiumEntitlements: resolveCoordinatorPlannerEntitlements(sessionAfterTranslation),
   }).plans.multimodal;
@@ -953,17 +958,12 @@ async function runConversationMediaStage(
     return { kind: 'continue', mediaFindings: [] };
   }
 
-  if (!mediaPlan.shouldRun) {
-    store.updateSession(sessionId, (current) => (
-      selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-        ? markConversationModelSkipped(current, 'multimodal', {
-            reason: 'multimodal_not_needed',
-            sourceToken: modelSourceToken,
-          })
-        : markConversationModelDiscarded(current, 'multimodal')
-    ));
-    return { kind: 'short_circuit' };
-  }
+  // Address Gemini PR #73 review: the previous `if (!mediaPlan.shouldRun)`
+  // guard was dead — when `multimodalStagePlan.action === 'run'` the
+  // coordinator planner has already required `mediaPlan.shouldRun` via
+  // `toCoordinatorMultimodalPlanningInput`. Worse, that branch returned
+  // `short_circuit` which would have wrongly skipped the writer stage. The
+  // only reachable path here is `action === 'run'` with non-empty requests.
 
   const multimodalRequestedAt = new Date().toISOString();
   store.updateSession(sessionId, (current) => (
