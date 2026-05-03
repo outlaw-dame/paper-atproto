@@ -208,6 +208,31 @@ describe('runEdgeExecution', () => {
     expect(snapshot.failureReasons.endpoint_http_error).toBe(1);
   });
 
+  it('records endpoint aborts for media dispatch', async () => {
+    const abortError = new Error('Aborted');
+    abortError.name = 'AbortError';
+    fetchMock.mockRejectedValueOnce(abortError);
+
+    await expect(runEdgeExecution({
+      ...plan('media_classify'),
+      endpoint: '/api/llm/analyze/media',
+      task: 'media_analysis',
+    }, {
+      capability: 'media_classify',
+      input: {
+        threadId: 'at://example/thread',
+        mediaUrl: 'https://example.com/image.jpg',
+        nearbyText: 'demo',
+        candidateEntities: [],
+        factualHints: [],
+      },
+    })).rejects.toThrow('Aborted');
+
+    const snapshot = getEdgeRuntimeTelemetrySnapshot();
+    expect(snapshot.failedByCapability.media_classify).toBe(1);
+    expect(snapshot.failureReasons.endpoint_abort).toBe(1);
+  });
+
   it('keeps search unsupported even when provider is non-cloudflare', async () => {
     await expect(runEdgeExecution({
       ...plan('search_rerank'),

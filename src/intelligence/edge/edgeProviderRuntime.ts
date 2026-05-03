@@ -200,6 +200,8 @@ export async function runEdgeExecution(
         recordEdgeRuntimeFailure(request.capability, 'endpoint_http_error');
       } else if (error instanceof EdgeEndpointResponseTypeError) {
         recordEdgeRuntimeFailure(request.capability, 'endpoint_non_json');
+      } else if (error instanceof Error && error.name === 'AbortError') {
+        recordEdgeRuntimeFailure(request.capability, 'endpoint_abort');
       } else {
         recordEdgeRuntimeFailure(request.capability, 'endpoint_network_error');
       }

@@ -8,7 +8,8 @@ export type EdgeRuntimeFailureReason =
   | 'provider_execution_error'
   | 'endpoint_http_error'
   | 'endpoint_non_json'
-  | 'endpoint_network_error';
+  | 'endpoint_network_error'
+  | 'endpoint_abort';
 
 type EdgeCapabilityCounters = Record<EdgeCapability, number>;
 
@@ -35,6 +36,7 @@ const ZERO_FAILURE_REASONS: Record<EdgeRuntimeFailureReason, number> = {
   endpoint_http_error: 0,
   endpoint_non_json: 0,
   endpoint_network_error: 0,
+  endpoint_abort: 0,
 };
 
 const telemetry: EdgeRuntimeTelemetrySnapshot = {
