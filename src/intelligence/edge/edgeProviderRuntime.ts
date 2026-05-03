@@ -7,7 +7,6 @@ import type {
   EdgeRuntimeRequest,
   EdgeRuntimeResponse,
 } from './edgeProviderContracts';
-import type { EdgeProviderPlannerOptions } from './edgeProviderPlanner';
 
 function toEdgeProviderId(provider: ComposerEdgeClassifierProvider): EdgeProviderId {
   return provider === 'cloudflare-workers-ai' ? 'cloudflare-workers-ai' : 'node-heuristic';
@@ -15,7 +14,6 @@ function toEdgeProviderId(provider: ComposerEdgeClassifierProvider): EdgeProvide
 
 export async function runComposerClassifyOnEdge(
   input: ComposerEdgeClassifierRequest,
-  _options: EdgeProviderPlannerOptions = {},
   signal?: AbortSignal,
 ): Promise<ComposerClassifyEdgeResponse> {
   const output = await callComposerEdgeClassifier(input, signal);
@@ -48,6 +46,18 @@ export class EdgeCapabilityMismatchError extends Error {
   }
 }
 
+export class EdgeProviderMismatchError extends Error {
+  readonly expected: EdgeProviderId;
+  readonly actual: EdgeProviderId;
+
+  constructor(expected: EdgeProviderId, actual: EdgeProviderId) {
+    super(`Edge runtime provider mismatch: plan=${expected} response=${actual}`);
+    this.name = 'EdgeProviderMismatchError';
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
 /**
  * Dispatches edge execution by planned capability.
  *
@@ -58,7 +68,6 @@ export class EdgeCapabilityMismatchError extends Error {
 export async function runEdgeExecution(
   plan: EdgeExecutionPlan,
   request: EdgeRuntimeRequest,
-  options: EdgeProviderPlannerOptions = {},
   signal?: AbortSignal,
 ): Promise<EdgeRuntimeResponse> {
   if (plan.capability !== request.capability) {
@@ -66,7 +75,15 @@ export async function runEdgeExecution(
   }
 
   if (request.capability === 'composer_classify') {
-    return runComposerClassifyOnEdge(request.input, options, signal);
+    const response = await runComposerClassifyOnEdge(request.input, signal);
+    const allowedProviders = new Set<EdgeProviderId>([
+      plan.provider,
+      ...(plan.fallbackProvider ? [plan.fallbackProvider] : []),
+    ]);
+    if (!allowedProviders.has(response.provider)) {
+      throw new EdgeProviderMismatchError(plan.provider, response.provider);
+    }
+    return response;
   }
 
   throw new UnsupportedEdgeCapabilityError(request.capability);

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EdgeExecutionPlan } from './edgeProviderContracts';
 import {
   EdgeCapabilityMismatchError,
+  EdgeProviderMismatchError,
   UnsupportedEdgeCapabilityError,
   runEdgeExecution,
 } from './edgeProviderRuntime';
@@ -56,6 +57,19 @@ describe('runEdgeExecution', () => {
       capability: 'media_classify',
       input: { media: [] },
     })).rejects.toBeInstanceOf(EdgeCapabilityMismatchError);
+  });
+
+  it('fails when classifier returns a provider not allowed by the plan', async () => {
+    await expect(runEdgeExecution({
+      ...plan('composer_classify'),
+      provider: 'node-heuristic',
+    }, {
+      capability: 'composer_classify',
+      input: {
+        mode: 'post',
+        draftText: 'Provider mismatch should fail fast.',
+      },
+    })).rejects.toBeInstanceOf(EdgeProviderMismatchError);
   });
 
   it('marks non-composer capabilities as explicitly unsupported for this slice', async () => {
