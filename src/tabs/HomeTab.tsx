@@ -12,6 +12,7 @@ import { useBookmarksStore } from '../store/bookmarksStore';
 import { useUiStore, type HomeFeedMode } from '../store/uiStore';
 import { useTranslationStore } from '../store/translationStore';
 import { useFeedCacheStore } from '../store/feedCacheStore';
+import { useAccountFeedsStore } from '../store/accountFeedsStore';
 import { mapFeedViewPost, hasDisplayableRecordContent } from '../atproto/mappers';
 import { atpCall, atpMutate } from '../lib/atproto/client';
 import { qk } from '../lib/atproto/queries';
@@ -25,6 +26,7 @@ import { countNewPostsAboveAnchor } from '../lib/feedResume';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
 import type { MockPost } from '../data/mockData';
 import type { StoryEntry } from '../App';
+import type { AccountFeedSource } from '../lib/atproto/accountFeeds';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -142,7 +144,32 @@ export default function HomeTab({ onOpenStory }: Props) {
   const saveFeedCache = useFeedCacheStore((state) => state.saveCache);
   const setFeedUnreadCount = useFeedCacheStore((state) => state.setUnreadCount);
   const updateFeedScrollPosition = useFeedCacheStore((state) => state.updateScrollPosition);
+  const accountFeedSources = useAccountFeedsStore((state) => state.getSources(session?.did));
+  const accountFeedsStale = useAccountFeedsStore((state) => state.isStale(session?.did));
+  const selectedAccountFeedId = useAccountFeedsStore((state) => state.getSelectedFeedId(session?.did));
+  const setSelectedAccountFeedId = useAccountFeedsStore((state) => state.setSelectedFeedId);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+
+  const activeAccountFeed = useMemo<AccountFeedSource | null>(() => {
+    if (accountFeedSources.length === 0) return null;
+    const explicit = selectedAccountFeedId
+      ? accountFeedSources.find((feedSource) => feedSource.id === selectedAccountFeedId)
+      : null;
+    if (explicit) return explicit;
+    return accountFeedSources.find((feedSource) => feedSource.pinned) ?? accountFeedSources[0] ?? null;
+  }, [accountFeedSources, selectedAccountFeedId]);
+
+  useEffect(() => {
+    if (!session || mode !== 'Feeds' || accountFeedSources.length === 0) return;
+    if (activeAccountFeed) {
+      if (!selectedAccountFeedId || selectedAccountFeedId !== activeAccountFeed.id) {
+        setSelectedAccountFeedId(session.did, activeAccountFeed.id);
+      }
+      return;
+    }
+
+    setSelectedAccountFeedId(session.did, accountFeedSources[0]!.id);
+  }, [activeAccountFeed, accountFeedSources, mode, selectedAccountFeedId, session, setSelectedAccountFeedId]);
 
   /**
    * Calculate top visible post index based on scroll position
@@ -317,6 +344,7 @@ export default function HomeTab({ onOpenStory }: Props) {
     options?: {
       backgroundRefresh?: boolean;
       cached?: ReturnType<typeof getFeedCache>;
+      selectedFeedOverride?: AccountFeedSource | null;
     },
   ) => {
     if (!session) return;
@@ -356,10 +384,40 @@ export default function HomeTab({ onOpenStory }: Props) {
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else {
-        const params: any = { actor: session.did, limit: 30, ...(cur ? { cursor: cur } : {}) };
-        const res = await atpCall(s => readAgent.getAuthorFeed(params));
-        feed = res.data.feed;
-        nextCursor = res.data.cursor;
+        const selectedFeed = options?.selectedFeedOverride ?? activeAccountFeed;
+        if (!selectedFeed) {
+          const params: any = { actor: session.did, limit: 30, ...(cur ? { cursor: cur } : {}) };
+          const res = await atpCall(s => readAgent.getAuthorFeed(params));
+          feed = res.data.feed;
+          nextCursor = res.data.cursor;
+        } else if (selectedFeed.kind === 'timeline') {
+          if (selectedFeed.value === 'following') {
+            if (hasLimitedScopeSession) {
+              throw new Error(LIMITED_SCOPE_BANNER_COPY);
+            }
+            const params: any = { limit: 30, ...(cur ? { cursor: cur } : {}) };
+            const res = await atpCall(s => agent.getTimeline(params));
+            feed = res.data.feed;
+            nextCursor = res.data.cursor;
+          } else if (selectedFeed.value === 'discover') {
+            const params: any = { feed: DISCOVER_FEED_URI, limit: 30, ...(cur ? { cursor: cur } : {}) };
+            const res = await atpCall(s => readAgent.app.bsky.feed.getFeed(params));
+            feed = res.data.feed;
+            nextCursor = res.data.cursor;
+          } else {
+            throw new Error('This timeline feed is not yet supported.');
+          }
+        } else if (selectedFeed.kind === 'feed') {
+          const params: any = { feed: selectedFeed.value, limit: 30, ...(cur ? { cursor: cur } : {}) };
+          const res = await atpCall(s => readAgent.app.bsky.feed.getFeed(params));
+          feed = res.data.feed;
+          nextCursor = res.data.cursor;
+        } else {
+          const params: any = { list: selectedFeed.value, limit: 30, ...(cur ? { cursor: cur } : {}) };
+          const res = await atpCall(s => readAgent.app.bsky.feed.getListFeed(params));
+          feed = res.data.feed;
+          nextCursor = res.data.cursor;
+        }
       }
 
       const mapped = feed
@@ -412,7 +470,7 @@ export default function HomeTab({ onOpenStory }: Props) {
         setLoadingMore(false);
       }
     }
-  }, [agent, session, getFeedCache, hasLimitedScopeSession, publicReadAgent, buildViewResumeKey, setFeedUnreadCount]);
+  }, [activeAccountFeed, agent, session, getFeedCache, hasLimitedScopeSession, publicReadAgent, buildViewResumeKey, setFeedUnreadCount]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -732,6 +790,62 @@ export default function HomeTab({ onOpenStory }: Props) {
             );
           })}
         </div>
+
+        {mode === 'Feeds' && accountFeedSources.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 16px 10px' }}>
+            {accountFeedSources.map((feedSource) => {
+              const isSelected = activeAccountFeed?.id === feedSource.id;
+              return (
+                <button
+                  key={feedSource.id}
+                  onClick={() => {
+                    if (!session) return;
+                    setSelectedAccountFeedId(session.did, feedSource.id);
+                    setPosts([]);
+                    setCursor(undefined);
+                    void fetchFeed('Feeds', undefined, { selectedFeedOverride: feedSource });
+                  }}
+                  style={{
+                    minHeight: 30,
+                    padding: '0 10px',
+                    borderRadius: 999,
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: isSelected ? 'var(--blue)' : 'var(--fill-2)',
+                    color: isSelected ? '#fff' : 'var(--label-2)',
+                    fontFamily: 'var(--font-ui)',
+                    fontSize: 12,
+                    fontWeight: isSelected ? 700 : 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {feedSource.pinned && <span aria-hidden="true">★</span>}
+                  <span>{feedSource.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {mode === 'Feeds' && accountFeedsStale && (
+          <div style={{ padding: '0 16px 10px' }}>
+            <div
+              role="status"
+              style={{
+                borderRadius: 12,
+                border: '1px solid color-mix(in srgb, var(--yellow) 36%, var(--sep))',
+                background: 'color-mix(in srgb, var(--surface) 90%, var(--yellow) 10%)',
+                padding: '8px 10px',
+              }}
+            >
+              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12, lineHeight: '16px', fontWeight: 600, color: 'var(--label-2)' }}>
+                Saved feed metadata is refreshing in the background. If labels look stale, pull to refresh.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Feed scroll */}

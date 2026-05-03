@@ -34,6 +34,8 @@ import {
   getOAuthCallbackError,
   hasOAuthCallbackParams,
 } from './oauthCallback';
+import { loadAccountFeedSources } from '../lib/atproto/accountFeeds';
+import { useAccountFeedsStore } from '../store/accountFeedsStore';
 
 const OAUTH_INIT_TIMEOUT_MS = 8_000;
 let hasWarnedMissingAtpProvider = false;
@@ -437,6 +439,9 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
   const setError = useSessionStore((state) => state.setError);
   const setSessionReady = useSessionStore((state) => state.setSessionReady);
   const resetAgent = useSessionStore((state) => state.resetAgent);
+  const hydrateAccountFeeds = useAccountFeedsStore((state) => state.hydrateForDid);
+  const clearAccountFeedsForDid = useAccountFeedsStore((state) => state.clearDid);
+  const markAccountFeedsStale = useAccountFeedsStore((state) => state.markStale);
   const oauthRuntimeConfig = getOAuthRuntimeConfigStatus();
 
   useEffect(() => {
@@ -447,13 +452,16 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
       setSession(null);
       setProfile(null);
       setSessionReady(false);
+      if (session?.did) {
+        clearAccountFeedsForDid(session.did);
+      }
       setLoading(false);
       setError(detail?.message ?? 'Your session is no longer valid. Please sign in again.');
     };
 
     window.addEventListener(ATP_AUTH_EXPIRED_EVENT, handleAuthExpired);
     return () => window.removeEventListener(ATP_AUTH_EXPIRED_EVENT, handleAuthExpired);
-  }, [resetAgent, setError, setLoading, setProfile, setSession, setSessionReady]);
+  }, [clearAccountFeedsForDid, resetAgent, session?.did, setError, setLoading, setProfile, setSession, setSessionReady]);
 
   // Restore OAuth session and process OAuth callbacks on first mount.
   useEffect(() => {
@@ -645,6 +653,36 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
+        // Feed hydration is decoupled from auth readiness so transient feed lookup
+        // failures do not block sign-in. Failures are marked stale and retried once.
+        const hydrateFeeds = async () => {
+          try {
+            const sources = await loadAccountFeedSources(authedAgent);
+            if (!cancelled) {
+              hydrateAccountFeeds(oauthSession.did, sources);
+            }
+          } catch {
+            if (!cancelled) {
+              markAccountFeedsStale(oauthSession.did);
+            }
+            // Self-heal once after a short delay for transient network/provider blips.
+            setTimeout(() => {
+              if (cancelled) return;
+              void loadAccountFeedSources(authedAgent)
+                .then((sources) => {
+                  if (cancelled) return;
+                  hydrateAccountFeeds(oauthSession.did, sources);
+                })
+                .catch(() => {
+                  if (cancelled) return;
+                  markAccountFeedsStale(oauthSession.did);
+                });
+            }, 2_000);
+          }
+        };
+
+        void hydrateFeeds();
+
         if (!cancelled) {
           recordOAuthBootstrapDebug('restored_session', {
             hadCallbackParams,
@@ -703,7 +741,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       window.removeEventListener('pageshow', handlePageShow);
     };
-  }, [resetAgent, setAgent, setError, setLoading, setProfile, setSession, setSessionReady]);
+  }, [hydrateAccountFeeds, markAccountFeedsStale, resetAgent, setAgent, setError, setLoading, setProfile, setSession, setSessionReady]);
 
   // ── Login ────────────────────────────────────────────────────────────────
   const login = useCallback(async (identifier: string) => {
@@ -713,6 +751,9 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
   // ── Logout ───────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {
     await runLogout(session?.did, resetAgent, setError, setLoading);
+    if (session?.did) {
+      clearAccountFeedsForDid(session.did);
+    }
   }, [resetAgent, session?.did, setError, setLoading]);
 
   return (
