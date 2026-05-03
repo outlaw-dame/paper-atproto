@@ -1017,6 +1017,151 @@ async function runConversationMediaStage(
   return { kind: 'continue', mediaFindings };
 }
 
+interface ConversationWriterStageParams {
+  sessionId: string;
+  rootUri: AtUri;
+  rootNode: ThreadNode;
+  allReplies: ThreadNode[];
+  pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+  nextSession: ConversationSession;
+  translationById: SessionTranslationState['byUri'];
+  mediaFindings: WriterMediaFinding[];
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  writerRequestedAt: string;
+  signal?: AbortSignal;
+}
+
+type ConversationWriterStageOutcome =
+  | { kind: 'continue'; writerInput: ThreadStateForWriter; filteredWriterResult: InterpolatorWriteResult | null }
+  | { kind: 'short_circuit' };
+
+/**
+ * Item 7d (coordinator runtime extraction): isolates the writer stage.
+ *
+ * Owns the post-media writer source-token guard, `buildThreadStateForWriter`,
+ * the `writerEntities` store update, the `executeConversationCoordinatorWriterStage`
+ * invocation with `redactWriterResultByUserRules`, the `hydrate.writer` timing
+ * label, and the writer ready/error/discard store transitions plus the
+ * `applyShadowConversationSupervisor('writer_completed')` event.
+ *
+ * Errors thrown out of the writer execution propagate to the caller's outer
+ * try/catch (which handles the AbortError/sanitize-and-mark-error path shared
+ * with the translation phase).
+ */
+async function runConversationWriterStage(
+  params: ConversationWriterStageParams,
+): Promise<ConversationWriterStageOutcome> {
+  const {
+    sessionId,
+    rootUri,
+    rootNode,
+    allReplies,
+    pipeline,
+    nextSession,
+    translationById,
+    mediaFindings,
+    modelSourceToken,
+    writerRequestedAt,
+    signal,
+  } = params;
+  const store = useConversationSessionStore.getState();
+
+  const sessionAfterMedia = store.getSession(sessionId);
+  if (!sessionAfterMedia) return { kind: 'short_circuit' };
+  if (selectCoordinatorSourceApplication(sessionAfterMedia, modelSourceToken, 'writer').action === 'discard_stale') {
+    store.updateSession(sessionId, (current) => markConversationModelDiscarded(
+      markConversationModelDiscarded(current, 'multimodal'),
+      'writer',
+    ));
+    return { kind: 'short_circuit' };
+  }
+
+  const writerInput = buildThreadStateForWriter(
+    rootUri,
+    rootNode.text,
+    pipeline.interpolator,
+    pipeline.scores,
+    allReplies,
+    nextSession.interpretation.confidence ?? pipeline.confidence,
+    Object.fromEntries(
+      Object.entries(translationById).map(([uri, value]) => [
+        uri,
+        {
+          ...(value.translatedText ? { translatedText: value.translatedText } : {}),
+          ...(value.sourceLang ? { sourceLang: value.sourceLang } : {}),
+        },
+      ]),
+    ),
+    rootNode.authorHandle ?? undefined,
+    {
+      summaryMode: nextSession.interpretation.deltaDecision?.summaryMode ?? nextSession.interpretation.summaryMode ?? pipeline.deltaDecision.summaryMode,
+      ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
+      deltaDecision: nextSession.interpretation.deltaDecision ?? pipeline.deltaDecision,
+    },
+  );
+  const preparedWriterInput = writerInput;
+
+  store.updateSession(sessionId, (current) => (
+    selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
+      ? {
+          ...current,
+          entities: {
+            ...current.entities,
+            writerEntities: preparedWriterInput.safeEntities,
+          },
+        }
+      : markConversationModelDiscarded(current, 'writer')
+  ));
+
+  const writerStartedAt = nowMs();
+  const writerOutcome = await executeConversationCoordinatorWriterStage({
+    writerInput: preparedWriterInput,
+    write: (input, sig) => callInterpolatorWriter(input, sig),
+    redactResult: redactWriterResultByUserRules,
+    ...(signal ? { signal } : {}),
+  });
+  recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
+
+  if (writerOutcome.status === 'error') {
+    const errorMessage = writerOutcome.error;
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
+        ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
+            sourceToken: modelSourceToken,
+            requestedAt: writerRequestedAt,
+            error: errorMessage,
+          }), 'writer_completed')
+        : markConversationModelDiscarded(current, 'writer')
+    ));
+    console.warn('[conversation] writer step failed', errorMessage);
+    return { kind: 'short_circuit' };
+  }
+
+  const filteredWriterResult = writerOutcome.result;
+  store.updateSession(sessionId, (current) => {
+    if (selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'discard_stale') {
+      return markConversationModelDiscarded(current, 'writer');
+    }
+
+    const nextCurrent = !filteredWriterResult?.abstained
+      ? updateConversationContinuitySnapshots({
+          ...current,
+          interpretation: {
+            ...current.interpretation,
+            writerResult: filteredWriterResult,
+          },
+        })
+      : current;
+
+    return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'writer', {
+      sourceToken: modelSourceToken,
+      requestedAt: writerRequestedAt,
+    }), 'writer_completed');
+  });
+
+  return { kind: 'continue', writerInput, filteredWriterResult };
+}
+
 export async function hydrateConversationSession(
   params: HydrateConversationSessionParams,
 ): Promise<void> {
@@ -1167,98 +1312,24 @@ export async function hydrateConversationSession(
       }
       mediaFindings = mediaOutcome.mediaFindings;
 
-      const sessionAfterMedia = store.getSession(sessionId);
-      if (!sessionAfterMedia) return;
-      if (selectCoordinatorSourceApplication(sessionAfterMedia, modelSourceToken, 'writer').action === 'discard_stale') {
-        store.updateSession(sessionId, (current) => markConversationModelDiscarded(
-          markConversationModelDiscarded(current, 'multimodal'),
-          'writer',
-        ));
-        return;
-      }
-
-      writerInput = buildThreadStateForWriter(
+      const writerStageOutcome = await runConversationWriterStage({
+        sessionId,
         rootUri,
-        rootNode.text,
-        pipeline.interpolator,
-        pipeline.scores,
+        rootNode,
         allReplies,
-        nextSession.interpretation.confidence ?? pipeline.confidence,
-        Object.fromEntries(
-          Object.entries(translationById).map(([uri, value]) => [
-            uri,
-            {
-              ...(value.translatedText ? { translatedText: value.translatedText } : {}),
-              ...(value.sourceLang ? { sourceLang: value.sourceLang } : {}),
-            },
-          ]),
-        ),
-        rootNode.authorHandle ?? undefined,
-        {
-          summaryMode: nextSession.interpretation.deltaDecision?.summaryMode ?? nextSession.interpretation.summaryMode ?? pipeline.deltaDecision.summaryMode,
-          ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
-          deltaDecision: nextSession.interpretation.deltaDecision ?? pipeline.deltaDecision,
-        },
-      );
-      const preparedWriterInput = writerInput;
-
-      store.updateSession(sessionId, (current) => (
-        selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
-          ? {
-              ...current,
-              entities: {
-                ...current.entities,
-                writerEntities: preparedWriterInput.safeEntities,
-              },
-            }
-          : markConversationModelDiscarded(current, 'writer')
-      ));
-
-      const writerStartedAt = nowMs();
-      const writerOutcome = await executeConversationCoordinatorWriterStage({
-        writerInput: preparedWriterInput,
-        write: (input, sig) => callInterpolatorWriter(input, sig),
-        redactResult: redactWriterResultByUserRules,
+        pipeline,
+        nextSession,
+        translationById,
+        mediaFindings,
+        modelSourceToken,
+        writerRequestedAt,
         ...(signal ? { signal } : {}),
       });
-      recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
-
-      if (writerOutcome.status === 'error') {
-        const errorMessage = writerOutcome.error;
-        store.updateSession(sessionId, (current) => (
-          selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
-            ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
-                sourceToken: modelSourceToken,
-                requestedAt: writerRequestedAt,
-                error: errorMessage,
-              }), 'writer_completed')
-            : markConversationModelDiscarded(current, 'writer')
-        ));
-        console.warn('[conversation] writer step failed', errorMessage);
+      if (writerStageOutcome.kind === 'short_circuit') {
         return;
       }
-
-      filteredWriterResult = writerOutcome.result;
-      store.updateSession(sessionId, (current) => {
-        if (selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'discard_stale') {
-          return markConversationModelDiscarded(current, 'writer');
-        }
-
-        const nextCurrent = !filteredWriterResult?.abstained
-          ? updateConversationContinuitySnapshots({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                writerResult: filteredWriterResult,
-              },
-            })
-          : current;
-
-        return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'writer', {
-          sourceToken: modelSourceToken,
-          requestedAt: writerRequestedAt,
-        }), 'writer_completed');
-      });
+      writerInput = writerStageOutcome.writerInput;
+      filteredWriterResult = writerStageOutcome.filteredWriterResult;
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         return;
