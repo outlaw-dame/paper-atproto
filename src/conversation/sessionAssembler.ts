@@ -542,6 +542,225 @@ export interface HydrateConversationSessionParams {
   signal?: AbortSignal;
 }
 
+interface ConversationHydrationBaselineParams {
+  sessionId: string;
+  rootUri: string;
+  agent: ThreadAgent;
+  providers: VerificationProviders;
+  cache: VerificationCache;
+  signal?: AbortSignal;
+}
+
+type ConversationHydrationBaselineOutcome =
+  | {
+      kind: 'ready';
+      nextSession: ConversationSession;
+      rootNode: ThreadNode;
+      allReplies: ThreadNode[];
+      pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+      modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+    }
+  | { kind: 'thread_not_found' }
+  | { kind: 'session_dropped' };
+
+/**
+ * Item 7a (coordinator runtime extraction): isolates the baseline hydration
+ * phase — thread fetch, verified pipeline run, store annotations, mental-health
+ * scan, quality/policy/continuity transforms, shadow supervisor invocation,
+ * coordinator runtime advisory log, and source-token build.
+ *
+ * Pure cut from `hydrateConversationSession`; callers are still responsible
+ * for `ensureSession`, the initial `status: 'loading'` write, the AT URI
+ * pre-check, and the `hydrate.total` timing wrapper. Throws on AbortError or
+ * unexpected errors so the caller's outer catch handles them as before.
+ */
+async function hydrateConversationBaseline(
+  params: ConversationHydrationBaselineParams,
+): Promise<ConversationHydrationBaselineOutcome> {
+  const { sessionId, rootUri, agent, providers, cache, signal } = params;
+  const store = useConversationSessionStore.getState();
+
+  const threadFetchStartedAt = nowMs();
+  const response = await atpCall(
+    () => agent.getPostThread({ uri: rootUri, depth: 6 }),
+    {
+      ...THREAD_RETRY_DEFAULTS,
+      ...(signal ? { signal } : {}),
+    },
+  );
+  recordInterpolatorStageTiming('hydrate.fetch_thread', nowMs() - threadFetchStartedAt);
+
+  const envelope = asThreadPostEnvelope(response);
+  const threadData = envelope.data?.thread;
+  if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') {
+    return { kind: 'thread_not_found' };
+  }
+
+  const rootNode = resolveThread(threadData as never);
+  const allReplies = flattenThreadReplies(rootNode.replies ?? []);
+  const graph = buildSessionGraph(rootNode);
+
+  const pipelineStartedAt = nowMs();
+  const pipeline = await runVerifiedThreadPipeline({
+    input: {
+      rootUri,
+      rootText: rootNode.text,
+      rootPost: nodeToThreadPost(rootNode),
+      replies: allReplies,
+    },
+    previous: store.getSession(sessionId)?.interpretation.interpolator ?? null,
+    providers,
+    cache,
+    ...(signal ? { signal } : {}),
+  });
+  recordInterpolatorStageTiming('hydrate.verified_pipeline', nowMs() - pipelineStartedAt);
+
+  store.updateSession(sessionId, (current) => {
+    const preserveExistingOutputs = !pipeline.didMeaningfullyChange;
+
+    return {
+      ...current,
+      graph,
+      interpretation: {
+        ...current.interpretation,
+        interpolator: pipeline.interpolator,
+        scoresByUri: pipeline.scores,
+        confidence: pipeline.confidence,
+        summaryMode: pipeline.summaryMode,
+        deltaDecision: pipeline.deltaDecision,
+        writerResult: preserveExistingOutputs
+          ? current.interpretation.writerResult
+          : null,
+        mediaFindings: preserveExistingOutputs
+          ? (current.interpretation.mediaFindings ?? [])
+          : [],
+        threadState: null,
+        interpretiveExplanation: null,
+        ...(
+          preserveExistingOutputs
+            ? (
+                current.interpretation.lastComputedAt
+                  ? { lastComputedAt: current.interpretation.lastComputedAt }
+                  : {}
+              )
+            : { lastComputedAt: new Date().toISOString() }
+        ),
+        premium: preserveExistingOutputs
+          ? current.interpretation.premium
+          : {
+              status: 'idle',
+              ...(current.interpretation.premium.entitlements
+                ? { entitlements: current.interpretation.premium.entitlements }
+                : {}),
+            },
+      },
+      evidence: {
+        verificationByUri: pipeline.verificationByPost,
+        rootVerification: pipeline.rootVerification,
+      },
+      entities: {
+        ...current.entities,
+        entityLandscape: pipeline.interpolator.entityLandscape ?? [],
+      },
+      contributors: {
+        contributors: pipeline.interpolator.topContributors ?? [],
+        topContributorDids: (pipeline.interpolator.topContributors ?? []).map((c) => c.did),
+      },
+      trajectory: {
+        ...current.trajectory,
+        heatLevel: pipeline.interpolator.heatLevel ?? 0,
+        repetitionLevel: pipeline.interpolator.repetitionLevel ?? 0,
+      },
+      meta: {
+        status: 'ready',
+        error: null,
+        lastHydratedAt: new Date().toISOString(),
+      },
+    };
+  });
+
+  let nextSession = store.getSession(sessionId);
+  if (!nextSession) return { kind: 'session_dropped' };
+
+  nextSession = await applyModerationFlagsFromUserFilters(nextSession);
+
+  // ─── Mental health crisis scan ─────────────────────────────────────
+  // Check root post + top replies for crisis signals. Runs regardless of
+  // whether the Interpolator is enabled — safety is not opt-out.
+  const mhTexts = [
+    rootNode.text,
+    ...allReplies.slice(0, 10).map((r) => r.text),
+  ];
+  let mentalHealthSignal: { detected: boolean; category?: MentalHealthCrisisCategory } = {
+    detected: false,
+  };
+  for (const text of mhTexts) {
+    const mhResult = detectMentalHealthCrisis(text);
+    if (mhResult.hasCrisis) {
+      mentalHealthSignal = mhResult.category
+        ? { detected: true, category: mhResult.category }
+        : { detected: true };
+      break;
+    }
+  }
+  nextSession = {
+    ...nextSession,
+    interpretation: {
+      ...nextSession.interpretation,
+      mentalHealthSignal,
+    },
+  };
+  // ──────────────────────────────────────────────────────────────────
+
+  nextSession = annotateConversationQuality(nextSession);
+  nextSession = applyInterpretiveConfidence(nextSession);
+  nextSession = {
+    ...nextSession,
+    interpretation: {
+      ...nextSession.interpretation,
+      threadState: deriveThreadStateSignal(nextSession),
+    },
+  };
+  nextSession = finalizeConversationDeltaDecision(nextSession, pipeline.deltaDecision);
+  nextSession = assignDeferredReasons(nextSession, defaultAnchorLinearPolicy);
+  nextSession = {
+    ...nextSession,
+    trajectory: {
+      ...nextSession.trajectory,
+      direction: deriveConversationDirection(nextSession),
+    },
+  };
+  nextSession = updateConversationContinuitySnapshots(nextSession);
+  nextSession = applyShadowConversationSupervisor(nextSession, 'session_hydrated');
+
+  store.updateSession(sessionId, () => nextSession!);
+
+  const coordinatorSnapshotStartedAt = nowMs();
+  const coordinatorRuntimeAdvisory = summarizeConversationCoordinatorRuntimeAdvisory(nextSession);
+  recordInterpolatorStageTiming('hydrate.coordinator_snapshot', nowMs() - coordinatorSnapshotStartedAt);
+  if (coordinatorRuntimeAdvisory.action !== 'continue') {
+    console.warn('[conversation] coordinator runtime advisory', {
+      sessionId,
+      action: coordinatorRuntimeAdvisory.action,
+      reasonCodes: coordinatorRuntimeAdvisory.reasonCodes,
+      activeStageCount: coordinatorRuntimeAdvisory.activeStageCount,
+      errorStageCount: coordinatorRuntimeAdvisory.errorStageCount,
+      staleStageCount: coordinatorRuntimeAdvisory.staleStageCount,
+    });
+  }
+
+  const modelSourceToken = buildConversationModelSourceToken(nextSession);
+
+  return {
+    kind: 'ready',
+    nextSession,
+    rootNode,
+    allReplies,
+    pipeline,
+    modelSourceToken,
+  };
+}
+
 export async function hydrateConversationSession(
   params: HydrateConversationSessionParams,
 ): Promise<void> {
@@ -576,177 +795,22 @@ export async function hydrateConversationSession(
 
   const hydrateStartedAt = nowMs();
   try {
-    const threadFetchStartedAt = nowMs();
-    const response = await atpCall(
-      () => agent.getPostThread({ uri: rootUri, depth: 6 }),
-      {
-        ...THREAD_RETRY_DEFAULTS,
-        ...(signal ? { signal } : {}),
-      },
-    );
-    recordInterpolatorStageTiming('hydrate.fetch_thread', nowMs() - threadFetchStartedAt);
-
-    const envelope = asThreadPostEnvelope(response);
-    const threadData = envelope.data?.thread;
-    if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') {
-      setSessionError(sessionId, 'Thread not found.');
-      return;
-    }
-
-    const rootNode = resolveThread(threadData as never);
-    const allReplies = flattenThreadReplies(rootNode.replies ?? []);
-    const graph = buildSessionGraph(rootNode);
-
-    const pipelineStartedAt = nowMs();
-    const pipeline = await runVerifiedThreadPipeline({
-      input: {
-        rootUri,
-        rootText: rootNode.text,
-        rootPost: nodeToThreadPost(rootNode),
-        replies: allReplies,
-      },
-      previous: store.getSession(sessionId)?.interpretation.interpolator ?? null,
+    const baseline = await hydrateConversationBaseline({
+      sessionId,
+      rootUri,
+      agent,
       providers,
       cache,
       ...(signal ? { signal } : {}),
     });
-    recordInterpolatorStageTiming('hydrate.verified_pipeline', nowMs() - pipelineStartedAt);
-
-    store.updateSession(sessionId, (current) => {
-      const preserveExistingOutputs = !pipeline.didMeaningfullyChange;
-
-      return {
-        ...current,
-        graph,
-        interpretation: {
-          ...current.interpretation,
-          interpolator: pipeline.interpolator,
-          scoresByUri: pipeline.scores,
-          confidence: pipeline.confidence,
-          summaryMode: pipeline.summaryMode,
-          deltaDecision: pipeline.deltaDecision,
-          writerResult: preserveExistingOutputs
-            ? current.interpretation.writerResult
-            : null,
-          mediaFindings: preserveExistingOutputs
-            ? (current.interpretation.mediaFindings ?? [])
-            : [],
-          threadState: null,
-          interpretiveExplanation: null,
-          ...(
-            preserveExistingOutputs
-              ? (
-                  current.interpretation.lastComputedAt
-                    ? { lastComputedAt: current.interpretation.lastComputedAt }
-                    : {}
-                )
-              : { lastComputedAt: new Date().toISOString() }
-          ),
-          premium: preserveExistingOutputs
-            ? current.interpretation.premium
-            : {
-                status: 'idle',
-                ...(current.interpretation.premium.entitlements
-                  ? { entitlements: current.interpretation.premium.entitlements }
-                  : {}),
-              },
-        },
-        evidence: {
-          verificationByUri: pipeline.verificationByPost,
-          rootVerification: pipeline.rootVerification,
-        },
-        entities: {
-          ...current.entities,
-          entityLandscape: pipeline.interpolator.entityLandscape ?? [],
-        },
-        contributors: {
-          contributors: pipeline.interpolator.topContributors ?? [],
-          topContributorDids: (pipeline.interpolator.topContributors ?? []).map((c) => c.did),
-        },
-        trajectory: {
-          ...current.trajectory,
-          heatLevel: pipeline.interpolator.heatLevel ?? 0,
-          repetitionLevel: pipeline.interpolator.repetitionLevel ?? 0,
-        },
-        meta: {
-          status: 'ready',
-          error: null,
-          lastHydratedAt: new Date().toISOString(),
-        },
-      };
-    });
-
-    let nextSession = store.getSession(sessionId);
-    if (!nextSession) return;
-
-    nextSession = await applyModerationFlagsFromUserFilters(nextSession);
-
-    // ─── Mental health crisis scan ─────────────────────────────────────
-    // Check root post + top replies for crisis signals. Runs regardless of
-    // whether the Interpolator is enabled — safety is not opt-out.
-    const mhTexts = [
-      rootNode.text,
-      ...allReplies.slice(0, 10).map((r) => r.text),
-    ];
-    let mentalHealthSignal: { detected: boolean; category?: MentalHealthCrisisCategory } = {
-      detected: false,
-    };
-    for (const text of mhTexts) {
-      const mhResult = detectMentalHealthCrisis(text);
-      if (mhResult.hasCrisis) {
-        mentalHealthSignal = mhResult.category
-          ? { detected: true, category: mhResult.category }
-          : { detected: true };
-        break;
-      }
+    if (baseline.kind === 'thread_not_found') {
+      setSessionError(sessionId, 'Thread not found.');
+      return;
     }
-    nextSession = {
-      ...nextSession,
-      interpretation: {
-        ...nextSession.interpretation,
-        mentalHealthSignal,
-      },
-    };
-    // ──────────────────────────────────────────────────────────────────
-
-    nextSession = annotateConversationQuality(nextSession);
-    nextSession = applyInterpretiveConfidence(nextSession);
-    nextSession = {
-      ...nextSession,
-      interpretation: {
-        ...nextSession.interpretation,
-        threadState: deriveThreadStateSignal(nextSession),
-      },
-    };
-    nextSession = finalizeConversationDeltaDecision(nextSession, pipeline.deltaDecision);
-    nextSession = assignDeferredReasons(nextSession, defaultAnchorLinearPolicy);
-    nextSession = {
-      ...nextSession,
-      trajectory: {
-        ...nextSession.trajectory,
-        direction: deriveConversationDirection(nextSession),
-      },
-    };
-    nextSession = updateConversationContinuitySnapshots(nextSession);
-    nextSession = applyShadowConversationSupervisor(nextSession, 'session_hydrated');
-
-    store.updateSession(sessionId, () => nextSession!);
-
-    const coordinatorSnapshotStartedAt = nowMs();
-    const coordinatorRuntimeAdvisory = summarizeConversationCoordinatorRuntimeAdvisory(nextSession);
-    recordInterpolatorStageTiming('hydrate.coordinator_snapshot', nowMs() - coordinatorSnapshotStartedAt);
-    if (coordinatorRuntimeAdvisory.action !== 'continue') {
-      console.warn('[conversation] coordinator runtime advisory', {
-        sessionId,
-        action: coordinatorRuntimeAdvisory.action,
-        reasonCodes: coordinatorRuntimeAdvisory.reasonCodes,
-        activeStageCount: coordinatorRuntimeAdvisory.activeStageCount,
-        errorStageCount: coordinatorRuntimeAdvisory.errorStageCount,
-        staleStageCount: coordinatorRuntimeAdvisory.staleStageCount,
-      });
+    if (baseline.kind === 'session_dropped') {
+      return;
     }
-
-    const modelSourceToken = buildConversationModelSourceToken(nextSession);
+    const { nextSession, rootNode, allReplies, pipeline, modelSourceToken } = baseline;
 
     const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
     if (!interpolatorEnabled) {
