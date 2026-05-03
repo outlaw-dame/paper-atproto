@@ -1,5 +1,6 @@
 import type { IntelligenceLane, IntelligenceTask, PrivacyMode } from '../intelligenceRoutingPolicy';
 import type { ComposerEdgeClassifierRequest, ComposerEdgeClassifierResponse } from '../composer/edgeClassifierContracts';
+import type { MediaAnalysisRequest, MediaAnalysisResult } from '../llmContracts';
 
 export type EdgeProviderId = 'cloudflare-workers-ai' | 'node-heuristic';
 export type EdgeCapability = 'composer_classify' | 'search_rerank' | 'media_classify' | 'story_summarize';
@@ -32,28 +33,50 @@ export interface ComposerClassifyEdgeResponse {
 
 export interface SearchRerankEdgeRequest {
   capability: 'search_rerank';
-  // TODO(item-12): replace with concrete rerank request contract.
-  input: Record<string, unknown>;
+  input: SearchRerankRequestPayload;
 }
 
 export interface SearchRerankEdgeResponse {
   capability: 'search_rerank';
   provider: EdgeProviderId;
-  // TODO(item-12): replace with concrete rerank response contract.
-  output: Record<string, unknown>;
+  output: SearchRerankResponsePayload;
 }
 
 export interface MediaClassifyEdgeRequest {
   capability: 'media_classify';
-  // TODO(item-12): replace with concrete media classification request contract.
-  input: Record<string, unknown>;
+  input: MediaAnalysisRequest;
 }
 
 export interface MediaClassifyEdgeResponse {
   capability: 'media_classify';
   provider: EdgeProviderId;
-  // TODO(item-12): replace with concrete media classification response contract.
-  output: Record<string, unknown>;
+  output: MediaAnalysisResult;
+}
+
+export interface SearchRerankCandidate {
+  id: string;
+  text: string;
+  lexicalScore?: number | undefined;
+  semanticScore?: number | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface SearchRerankRequestPayload {
+  query: string;
+  candidates: SearchRerankCandidate[];
+  limit?: number | undefined;
+  locale?: string | undefined;
+}
+
+export interface SearchRerankResultItem {
+  id: string;
+  score: number;
+  reason?: string | undefined;
+}
+
+export interface SearchRerankResponsePayload {
+  results: SearchRerankResultItem[];
+  model?: string | undefined;
 }
 
 export interface StorySummarizeEdgeRequest {
