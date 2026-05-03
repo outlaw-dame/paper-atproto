@@ -18,6 +18,9 @@ import {
   executeConversationCoordinatorMediaStage,
   type ConversationCoordinatorMediaPlan,
 } from './coordinatorMediaStageExecutor';
+import {
+  executeConversationCoordinatorWriterStage,
+} from './coordinatorWriterStageExecutor';
 import { translateWriterInput } from '../lib/i18n/threadTranslation';
 import type { VerificationProviders } from '../intelligence/verification/types';
 import type { VerificationCache } from '../intelligence/verification/cache';
@@ -1034,9 +1037,30 @@ export async function hydrateConversationSession(
       ));
 
       const writerStartedAt = nowMs();
-      const writerResult = await callInterpolatorWriter(preparedWriterInput, signal);
+      const writerOutcome = await executeConversationCoordinatorWriterStage({
+        writerInput: preparedWriterInput,
+        write: (input, sig) => callInterpolatorWriter(input, sig),
+        redactResult: redactWriterResultByUserRules,
+        ...(signal ? { signal } : {}),
+      });
       recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
-      filteredWriterResult = redactWriterResultByUserRules(writerResult);
+
+      if (writerOutcome.status === 'error') {
+        const errorMessage = writerOutcome.error;
+        store.updateSession(sessionId, (current) => (
+          selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
+            ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
+                sourceToken: modelSourceToken,
+                requestedAt: writerRequestedAt,
+                error: errorMessage,
+              }), 'writer_completed')
+            : markConversationModelDiscarded(current, 'writer')
+        ));
+        console.warn('[conversation] writer step failed', errorMessage);
+        return;
+      }
+
+      filteredWriterResult = writerOutcome.result;
       store.updateSession(sessionId, (current) => {
         if (selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'discard_stale') {
           return markConversationModelDiscarded(current, 'writer');

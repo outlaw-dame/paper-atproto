@@ -13,6 +13,11 @@ import {
   CONVERSATION_COORDINATOR_MEDIA_STAGE_VERSION,
 } from './coordinatorMediaStageExecutor';
 import type { ConversationCoordinatorMediaAnalyzer } from './coordinatorMediaStageExecutor';
+import {
+  executeConversationCoordinatorWriterStage,
+  CONVERSATION_COORDINATOR_WRITER_STAGE_VERSION,
+} from './coordinatorWriterStageExecutor';
+import type { InterpolatorWriteResult, ThreadStateForWriter } from '../intelligence/llmContracts';
 
 const ROOT_URI = 'at://did:plc:test/app.bsky.feed.post/root';
 
@@ -230,5 +235,131 @@ describe('executeConversationCoordinatorMediaStage', () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 5: coordinatorWriterStageExecutor delegation
+// Validates that the writer stage now delegated by sessionAssembler produces
+// the same ready/error outcomes the inline writer call did, plus the new
+// defensive validation/normalization guards.
+// ---------------------------------------------------------------------------
+
+const WRITER_INPUT_STUB = {
+  rootUri: THREAD_ID,
+  rootText: 'root',
+  replies: [],
+  scores: {},
+  contributors: [],
+  safeEntities: [],
+  summaryMode: 'normal',
+} as unknown as ThreadStateForWriter;
+
+function buildWriterResult(overrides?: Partial<InterpolatorWriteResult>): InterpolatorWriteResult {
+  return {
+    collapsedSummary: 'a tidy summary of the thread',
+    expandedSummary: 'a longer expanded summary',
+    whatChanged: ['something changed'],
+    contributorBlurbs: [{ handle: 'alice.bsky', blurb: 'agreed' }],
+    abstained: false,
+    mode: 'normal',
+    ...overrides,
+  };
+}
+
+describe('executeConversationCoordinatorWriterStage', () => {
+  it('returns ready outcome and exposes redacted result when redactor is provided', async () => {
+    const redacted = buildWriterResult({ collapsedSummary: 'redacted summary' });
+    const write = vi.fn().mockResolvedValue(buildWriterResult());
+    const redactResult = vi.fn().mockReturnValue(redacted);
+
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT_STUB,
+      write,
+      redactResult,
+    });
+
+    expect(outcome.status).toBe('ready');
+    expect(outcome.schemaVersion).toBe(CONVERSATION_COORDINATOR_WRITER_STAGE_VERSION);
+    expect(write).toHaveBeenCalledOnce();
+    expect(redactResult).toHaveBeenCalledOnce();
+    if (outcome.status === 'ready') {
+      expect(outcome.result.collapsedSummary).toBe('redacted summary');
+      expect(outcome.diagnostics.redacted).toBe(true);
+      expect(outcome.reasonCodes).toContain('writer_result_ready');
+      expect(outcome.reasonCodes).toContain('writer_result_redacted');
+    }
+  });
+
+  it('returns error outcome when writer returns an empty summary', async () => {
+    const write = vi.fn().mockResolvedValue(buildWriterResult({ collapsedSummary: '' }));
+
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT_STUB,
+      write,
+    });
+
+    expect(outcome.status).toBe('error');
+    if (outcome.status === 'error') {
+      expect(outcome.reasonCodes).toContain('writer_result_missing_summary');
+    }
+  });
+
+  it('returns error outcome when writer returns an invalid shape', async () => {
+    const write = vi.fn().mockResolvedValue({ collapsedSummary: 42 });
+
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT_STUB,
+      write,
+    });
+
+    expect(outcome.status).toBe('error');
+    if (outcome.status === 'error') {
+      expect(outcome.reasonCodes).toContain('writer_result_invalid');
+    }
+  });
+
+  it('returns error outcome when writer throws a non-abort error', async () => {
+    const write = vi.fn().mockRejectedValue(new Error('boom'));
+
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT_STUB,
+      write,
+    });
+
+    expect(outcome.status).toBe('error');
+    if (outcome.status === 'error') {
+      expect(outcome.reasonCodes).toContain('writer_execution_failed');
+      expect(outcome.error).toContain('boom');
+    }
+  });
+
+  it('re-throws AbortError instead of swallowing it', async () => {
+    const abortError = new Error('aborted');
+    abortError.name = 'AbortError';
+    const write = vi.fn().mockRejectedValue(abortError);
+
+    await expect(
+      executeConversationCoordinatorWriterStage({
+        writerInput: WRITER_INPUT_STUB,
+        write,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('flags normalized output when collapsedSummary contains control chars', async () => {
+    const write = vi.fn().mockResolvedValue(buildWriterResult({ collapsedSummary: 'noisy\u0000summary' }));
+
+    const outcome = await executeConversationCoordinatorWriterStage({
+      writerInput: WRITER_INPUT_STUB,
+      write,
+    });
+
+    expect(outcome.status).toBe('ready');
+    if (outcome.status === 'ready') {
+      expect(outcome.diagnostics.normalized).toBe(true);
+      expect(outcome.reasonCodes).toContain('writer_result_normalized');
+      expect(outcome.result.collapsedSummary).not.toContain('\u0000');
+    }
   });
 });
