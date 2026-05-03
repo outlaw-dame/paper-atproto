@@ -119,7 +119,7 @@ Current `master` now includes these foundational pieces:
 8. [DONE] Interpolator writer fallback controller.
 9. [DONE] Interpolator writer execution finalizer.
 10. [DONE] Interpolator writer eval harness and fixture fixes.
-11. [IN PROGRESS] Coordinator runtime extraction around `sessionAssembler.ts`; context snapshot, source-token guard, model-stage planner, media-stage executor, writer-stage executor, and premium-stage executor slices are implemented. Follow `docs/coordinator-runtime-extraction-plan.md` for the next slices.
+11. [IN PROGRESS] Coordinator runtime extraction around `sessionAssembler.ts`; extracted slices remain additive, and runtime integration is now underway: source-token guard decisions, coordinator context snapshot diagnostics, model-stage planner run/skip gating, and media stage executor delegation are integrated (`coordinatorMediaStageExecutor` now owns plan + execute, inline functions removed). Writer/premium stage executor delegation still pending. Follow `docs/coordinator-runtime-extraction-plan.md` for the next slices.
 12. Expand Cloudflare Workers AI provider support only after router/coordinator/writer contracts remain stable.
 
 ## Preflight checklist for future PRs
