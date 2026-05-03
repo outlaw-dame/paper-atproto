@@ -29,3 +29,48 @@ export interface ComposerClassifyEdgeResponse {
   provider: EdgeProviderId;
   output: ComposerEdgeClassifierResponse;
 }
+
+export interface SearchRerankEdgeRequest {
+  capability: 'search_rerank';
+  input: unknown;
+}
+
+export interface SearchRerankEdgeResponse {
+  capability: 'search_rerank';
+  provider: EdgeProviderId;
+  output: unknown;
+}
+
+export interface MediaClassifyEdgeRequest {
+  capability: 'media_classify';
+  input: unknown;
+}
+
+export interface MediaClassifyEdgeResponse {
+  capability: 'media_classify';
+  provider: EdgeProviderId;
+  output: unknown;
+}
+
+export interface StorySummarizeEdgeRequest {
+  capability: 'story_summarize';
+  input: unknown;
+}
+
+export interface StorySummarizeEdgeResponse {
+  capability: 'story_summarize';
+  provider: EdgeProviderId;
+  output: unknown;
+}
+
+export type EdgeRuntimeRequest =
+  | ComposerClassifyEdgeRequest
+  | SearchRerankEdgeRequest
+  | MediaClassifyEdgeRequest
+  | StorySummarizeEdgeRequest;
+
+export type EdgeRuntimeResponse =
+  | ComposerClassifyEdgeResponse
+  | SearchRerankEdgeResponse
+  | MediaClassifyEdgeResponse
+  | StorySummarizeEdgeResponse;
