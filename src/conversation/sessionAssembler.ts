@@ -1314,31 +1314,31 @@ async function runConversationPremiumStage(
 
     if (premiumOutcome.status !== 'ready') {
       const errorMessage = premiumOutcome.error;
-      store.updateSession(sessionId, (current) => ({
-        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-          ? applyShadowConversationSupervisor(markConversationModelError({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                premium: {
-                  ...(current.interpretation.premium.entitlements
-                    ? { entitlements: current.interpretation.premium.entitlements }
-                    : {}),
-                  status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-                    ? 'error'
-                    : current.interpretation.premium.status,
-                  ...(errorMessage
-                    ? { lastError: errorMessage }
-                    : {}),
-                },
-              },
-            }, 'premium', {
-              sourceToken: modelSourceToken,
-              requestedAt: premiumRequestedAt,
-              error: errorMessage,
-            }), 'premium_completed')
-          : markConversationModelDiscarded(current, 'premium')),
-      }));
+      // Address Gemini PR #75 review: guarantee a terminal premium.status so
+      // the UI never hangs in 'loading' when the executor reports
+      // 'not_entitled'/'skipped'/'error'. Map 'error' -> 'error' and treat
+      // 'not_entitled' / 'skipped' as 'not_entitled' (the only non-error
+      // terminal state on SessionAiInterpretation['premium']['status']).
+      store.updateSession(sessionId, (current) => {
+        if (selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action !== 'apply') {
+          return markConversationModelDiscarded(current, 'premium');
+        }
+        return applyShadowConversationSupervisor(markConversationModelError({
+          ...current,
+          interpretation: {
+            ...current.interpretation,
+            premium: {
+              ...current.interpretation.premium,
+              status: premiumOutcome.status === 'error' ? 'error' : 'not_entitled',
+              ...(errorMessage ? { lastError: errorMessage } : {}),
+            },
+          },
+        }, 'premium', {
+          sourceToken: modelSourceToken,
+          requestedAt: premiumRequestedAt,
+          error: errorMessage,
+        }), 'premium_completed');
+      });
       console.warn('[conversation] premium interpolation failed', errorMessage);
       return;
     }
@@ -1373,31 +1373,29 @@ async function runConversationPremiumStage(
     }
 
     const errorMessage = sanitizeErrorMessage(err);
-    store.updateSession(sessionId, (current) => ({
-      ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-        ? applyShadowConversationSupervisor(markConversationModelError({
-            ...current,
-            interpretation: {
-              ...current.interpretation,
-              premium: {
-                ...(current.interpretation.premium.entitlements
-                  ? { entitlements: current.interpretation.premium.entitlements }
-                  : {}),
-                status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-                  ? 'error'
-                  : current.interpretation.premium.status,
-                ...(errorMessage
-                  ? { lastError: errorMessage }
-                  : {}),
-              },
-            },
-          }, 'premium', {
-            sourceToken: modelSourceToken,
-            requestedAt: premiumRequestedAt,
-            error: errorMessage,
-          }), 'premium_completed')
-        : markConversationModelDiscarded(current, 'premium')),
-    }));
+    // Address Gemini PR #75 review: thrown exceptions always indicate an
+    // error condition; force premium.status to 'error' so we never leave it
+    // stuck on 'loading' when entitlements happen to be missing.
+    store.updateSession(sessionId, (current) => {
+      if (selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action !== 'apply') {
+        return markConversationModelDiscarded(current, 'premium');
+      }
+      return applyShadowConversationSupervisor(markConversationModelError({
+        ...current,
+        interpretation: {
+          ...current.interpretation,
+          premium: {
+            ...current.interpretation.premium,
+            status: 'error',
+            ...(errorMessage ? { lastError: errorMessage } : {}),
+          },
+        },
+      }, 'premium', {
+        sourceToken: modelSourceToken,
+        requestedAt: premiumRequestedAt,
+        error: errorMessage,
+      }), 'premium_completed');
+    });
     console.warn('[conversation] premium interpolation failed', errorMessage);
   }
 }
