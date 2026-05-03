@@ -3,11 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EdgeExecutionPlan } from './edgeProviderContracts';
 import {
   EdgeCapabilityMismatchError,
+  EdgeEndpointRequestError,
   EdgeProviderMismatchError,
   UnsupportedEdgeProviderError,
   UnsupportedEdgeCapabilityError,
   runEdgeExecution,
 } from './edgeProviderRuntime';
+import {
+  getEdgeRuntimeTelemetrySnapshot,
+  resetEdgeRuntimeTelemetry,
+} from './edgeProviderRuntimeTelemetry';
 
 vi.mock('../composer/edgeClassifierClient', () => ({
   callComposerEdgeClassifier: vi.fn(async () => ({
@@ -41,6 +46,7 @@ describe('runEdgeExecution', () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+    resetEdgeRuntimeTelemetry();
   });
 
   afterEach(() => {
@@ -62,6 +68,11 @@ describe('runEdgeExecution', () => {
       throw new Error('Expected composer_classify response');
     }
     expect(result.output.model).toBe('@cf/huggingface/distilbert-sst-2-int8');
+
+    const snapshot = getEdgeRuntimeTelemetrySnapshot();
+    expect(snapshot.attemptedByCapability.composer_classify).toBe(1);
+    expect(snapshot.succeededByCapability.composer_classify).toBe(1);
+    expect(snapshot.failedByCapability.composer_classify).toBe(0);
   });
 
   it('fails fast when request capability does not match planner capability', async () => {
@@ -138,6 +149,11 @@ describe('runEdgeExecution', () => {
     expect(result.capability).toBe('media_classify');
     expect(result.provider).toBe('cloudflare-workers-ai');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const snapshot = getEdgeRuntimeTelemetrySnapshot();
+    expect(snapshot.attemptedByCapability.media_classify).toBe(1);
+    expect(snapshot.succeededByCapability.media_classify).toBe(1);
+    expect(snapshot.failureReasons.endpoint_http_error).toBe(0);
   });
 
   it('rejects non-JSON media responses with explicit error', async () => {
@@ -160,6 +176,36 @@ describe('runEdgeExecution', () => {
         factualHints: [],
       },
     })).rejects.toThrow('Expected JSON response');
+
+    const snapshot = getEdgeRuntimeTelemetrySnapshot();
+    expect(snapshot.failedByCapability.media_classify).toBe(1);
+    expect(snapshot.failureReasons.endpoint_non_json).toBe(1);
+  });
+
+  it('records endpoint HTTP failures for media dispatch', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('upstream down', {
+      status: 503,
+      headers: { 'content-type': 'text/plain' },
+    }));
+
+    await expect(runEdgeExecution({
+      ...plan('media_classify'),
+      endpoint: '/api/llm/analyze/media',
+      task: 'media_analysis',
+    }, {
+      capability: 'media_classify',
+      input: {
+        threadId: 'at://example/thread',
+        mediaUrl: 'https://example.com/image.jpg',
+        nearbyText: 'celebration image',
+        candidateEntities: ['player'],
+        factualHints: [],
+      },
+    })).rejects.toBeInstanceOf(EdgeEndpointRequestError);
+
+    const snapshot = getEdgeRuntimeTelemetrySnapshot();
+    expect(snapshot.failedByCapability.media_classify).toBe(1);
+    expect(snapshot.failureReasons.endpoint_http_error).toBe(1);
   });
 
   it('keeps search unsupported even when provider is non-cloudflare', async () => {
@@ -175,6 +221,11 @@ describe('runEdgeExecution', () => {
         candidates: [{ id: '1', text: 'x' }],
       },
     })).rejects.toBeInstanceOf(UnsupportedEdgeCapabilityError);
+
+    const snapshot = getEdgeRuntimeTelemetrySnapshot();
+    expect(snapshot.attemptedByCapability.search_rerank).toBe(1);
+    expect(snapshot.failedByCapability.search_rerank).toBe(1);
+    expect(snapshot.failureReasons.capability_unsupported).toBe(1);
   });
 
   it('fails fast for media when planned provider is unsupported', async () => {
