@@ -202,6 +202,18 @@ export default function AudioEmbed({ url, title, description, thumbnail, classNa
     }
   }, [togglePlay]);
 
+  // Re-seek to clipStart when the prop changes after metadata is already loaded.
+  // onLoadedMetadata only fires once, so switching back from "full episode" mode
+  // requires an explicit seek here.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !Number.isFinite(audio.duration) || audio.duration === 0) return;
+    if (clipStart !== undefined && Number.isFinite(clipStart) && clipStart > 0) {
+      audio.currentTime = clipStart;
+      setCurrentTime(clipStart);
+    }
+  }, [clipStart]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
