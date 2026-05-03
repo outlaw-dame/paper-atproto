@@ -21,6 +21,9 @@ import {
 import {
   executeConversationCoordinatorWriterStage,
 } from './coordinatorWriterStageExecutor';
+import {
+  executeConversationCoordinatorPremiumStage,
+} from './coordinatorPremiumStageExecutor';
 import { translateWriterInput } from '../lib/i18n/threadTranslation';
 import type { VerificationProviders } from '../intelligence/verification/types';
 import type { VerificationCache } from '../intelligence/verification/cache';
@@ -1198,8 +1201,48 @@ export async function hydrateConversationSession(
       );
 
       const deepInterpolatorStartedAt = nowMs();
-      const deepInterpolator = await callPremiumDeepInterpolator(premiumInput, signal);
+      const premiumOutcome = await executeConversationCoordinatorPremiumStage({
+        request: premiumInput,
+        entitlements,
+        executePremium: (request, ctx) => callPremiumDeepInterpolator(request, ctx.signal),
+        redactionVerified: true,
+        retryPolicy: { maxAttempts: 1 },
+        ...(signal ? { signal } : {}),
+      });
       recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
+
+      if (premiumOutcome.status !== 'ready') {
+        const errorMessage = premiumOutcome.error;
+        store.updateSession(sessionId, (current) => ({
+          ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
+            ? applyShadowConversationSupervisor(markConversationModelError({
+                ...current,
+                interpretation: {
+                  ...current.interpretation,
+                  premium: {
+                    ...(current.interpretation.premium.entitlements
+                      ? { entitlements: current.interpretation.premium.entitlements }
+                      : {}),
+                    status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
+                      ? 'error'
+                      : current.interpretation.premium.status,
+                    ...(errorMessage
+                      ? { lastError: errorMessage }
+                      : {}),
+                  },
+                },
+              }, 'premium', {
+                sourceToken: modelSourceToken,
+                requestedAt: premiumRequestedAt,
+                error: errorMessage,
+              }), 'premium_completed')
+            : markConversationModelDiscarded(current, 'premium')),
+        }));
+        console.warn('[conversation] premium interpolation failed', errorMessage);
+        return;
+      }
+
+      const deepInterpolator = premiumOutcome.result;
       const sourceComputedAt = currentSession.interpretation.lastComputedAt;
 
       store.updateSession(sessionId, (current) => ({

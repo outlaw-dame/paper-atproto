@@ -18,6 +18,14 @@ import {
   CONVERSATION_COORDINATOR_WRITER_STAGE_VERSION,
 } from './coordinatorWriterStageExecutor';
 import type { InterpolatorWriteResult, ThreadStateForWriter } from '../intelligence/llmContracts';
+import {
+  executeConversationCoordinatorPremiumStage,
+  CONVERSATION_COORDINATOR_PREMIUM_STAGE_VERSION,
+} from './coordinatorPremiumStageExecutor';
+import type {
+  PremiumAiEntitlements,
+  PremiumInterpolatorRequest,
+} from '../intelligence/premiumContracts';
 
 const ROOT_URI = 'at://did:plc:test/app.bsky.feed.post/root';
 
@@ -361,5 +369,170 @@ describe('executeConversationCoordinatorWriterStage', () => {
       expect(outcome.reasonCodes).toContain('writer_result_normalized');
       expect(outcome.result.collapsedSummary).not.toContain('\u0000');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 6: coordinatorPremiumStageExecutor delegation
+// Validates that the premium stage now delegated by sessionAssembler produces
+// the same ready/error outcomes the inline callPremiumDeepInterpolator did,
+// while preserving the inner retry behavior (outer retry disabled).
+// ---------------------------------------------------------------------------
+
+const PREMIUM_REQUEST_STUB = {
+  actorDid: 'did:plc:user',
+  threadId: THREAD_ID,
+  contributorBlurbs: [],
+  whatChanged: [],
+} as unknown as PremiumInterpolatorRequest;
+
+function buildEntitlements(overrides?: Partial<PremiumAiEntitlements>): PremiumAiEntitlements {
+  return {
+    tier: 'premium',
+    capabilities: ['deep_interpolator'],
+    providerAvailable: true,
+    provider: 'azure_openai',
+    ...overrides,
+  } as PremiumAiEntitlements;
+}
+
+function buildPremiumResult(overrides?: Record<string, unknown>) {
+  return {
+    summary: 'a deep summary',
+    perspectiveGaps: ['gap one'],
+    followUpQuestions: ['why?'],
+    confidence: 0.8,
+    provider: 'azure_openai',
+    updatedAt: '2026-05-02T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('executeConversationCoordinatorPremiumStage', () => {
+  it('returns ready outcome when provider call succeeds', async () => {
+    const executePremium = vi.fn().mockResolvedValue(buildPremiumResult());
+
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: PREMIUM_REQUEST_STUB,
+      entitlements: buildEntitlements(),
+      executePremium,
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    expect(outcome.status).toBe('ready');
+    expect(outcome.schemaVersion).toBe(CONVERSATION_COORDINATOR_PREMIUM_STAGE_VERSION);
+    expect(executePremium).toHaveBeenCalledOnce();
+    if (outcome.status === 'ready') {
+      expect(outcome.result.summary).toBe('a deep summary');
+      expect(outcome.reasonCodes).toContain('premium_result_ready');
+      expect(outcome.attempts).toBe(1);
+    }
+  });
+
+  it('returns skipped outcome when redaction is not verified', async () => {
+    const executePremium = vi.fn();
+
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: PREMIUM_REQUEST_STUB,
+      entitlements: buildEntitlements(),
+      executePremium,
+      redactionVerified: false,
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    expect(outcome.status).toBe('skipped');
+    expect(executePremium).not.toHaveBeenCalled();
+    if (outcome.status !== 'ready') {
+      expect(outcome.reasonCodes).toContain('premium_redaction_required');
+    }
+  });
+
+  it('returns not_entitled outcome when provider is unavailable', async () => {
+    const executePremium = vi.fn();
+
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: PREMIUM_REQUEST_STUB,
+      entitlements: buildEntitlements({ providerAvailable: false }),
+      executePremium,
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    expect(outcome.status).toBe('not_entitled');
+    expect(executePremium).not.toHaveBeenCalled();
+    if (outcome.status !== 'ready') {
+      expect(outcome.reasonCodes).toContain('premium_provider_unavailable');
+    }
+  });
+
+  it('returns error outcome when provider returns invalid shape', async () => {
+    const executePremium = vi.fn().mockResolvedValue({ summary: 42 });
+
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: PREMIUM_REQUEST_STUB,
+      entitlements: buildEntitlements(),
+      executePremium,
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    expect(outcome.status).toBe('error');
+    if (outcome.status !== 'ready') {
+      expect(outcome.reasonCodes).toContain('premium_result_invalid');
+    }
+  });
+
+  it('returns error outcome when provider throws non-abort error', async () => {
+    const executePremium = vi.fn().mockRejectedValue(new Error('provider down'));
+
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: PREMIUM_REQUEST_STUB,
+      entitlements: buildEntitlements(),
+      executePremium,
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    expect(outcome.status).toBe('error');
+    expect(executePremium).toHaveBeenCalledOnce();
+    if (outcome.status !== 'ready') {
+      expect(outcome.reasonCodes).toContain('premium_execution_failed');
+      expect(outcome.error).toContain('provider down');
+    }
+  });
+
+  it('does not retry when retryPolicy.maxAttempts is 1', async () => {
+    const executePremium = vi.fn().mockRejectedValue(Object.assign(new Error('500'), { status: 503 }));
+
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: PREMIUM_REQUEST_STUB,
+      entitlements: buildEntitlements(),
+      executePremium,
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    expect(executePremium).toHaveBeenCalledOnce();
+    expect(outcome.status).toBe('error');
+    if (outcome.status !== 'ready') {
+      expect(outcome.attempts).toBe(1);
+    }
+  });
+
+  it('re-throws AbortError', async () => {
+    const abortError = new Error('aborted');
+    abortError.name = 'AbortError';
+    const executePremium = vi.fn().mockRejectedValue(abortError);
+
+    await expect(
+      executeConversationCoordinatorPremiumStage({
+        request: PREMIUM_REQUEST_STUB,
+        entitlements: buildEntitlements(),
+        executePremium,
+        redactionVerified: true,
+        retryPolicy: { maxAttempts: 1 },
+      }),
+    ).rejects.toThrow();
   });
 });
