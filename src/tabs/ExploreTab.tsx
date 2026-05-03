@@ -47,6 +47,7 @@ import {
 import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
 import { normalizeExternalFeedUrl } from '../lib/feedUrls';
 import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
+import { isAtUri } from '../lib/resolver/atproto';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -69,6 +70,7 @@ import { sportsStore } from '../sports/sportsStore';
 import { sportsFeedService } from '../services/sportsFeed';
 import { WriterEntitySheet, EntityChip } from '../components/EntitySheet';
 import type { WriterEntity } from '../intelligence/llmContracts';
+import PodcastClipCard from '../components/PodcastClipCard';
 
 interface Props {
   onOpenStory: (e: StoryEntry) => void;
@@ -1087,8 +1089,17 @@ function LiveClusterCard({ title, summary, count, onTap }: { title: string; summ
 }
 
 // ─── FeedCard ─────────────────────────────────────────────────────────────
-function FeedCard({ gen, onFollow }: { gen: AppBskyFeedDefs.GeneratorView; onFollow: (uri: string) => void }) {
-  const [following, setFollowing] = useState(gen.viewer?.like !== undefined);
+function FeedCard({
+  gen,
+  onFollow,
+  isFollowing,
+  isPending,
+}: {
+  gen: AppBskyFeedDefs.GeneratorView;
+  onFollow: (uri: string) => Promise<void>;
+  isFollowing: boolean;
+  isPending: boolean;
+}) {
   const navigateToProfile = useProfileNavigation();
   return (
     <motion.div
@@ -1117,16 +1128,20 @@ function FeedCard({ gen, onFollow }: { gen: AppBskyFeedDefs.GeneratorView; onFol
         </button>
       </div>
       <button
-        onClick={e => { e.stopPropagation(); setFollowing(v => !v); onFollow(gen.uri); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          void onFollow(gen.uri);
+        }}
+        disabled={isPending || isFollowing}
         style={{
           padding: '5px 0', borderRadius: radius[8], marginTop: 'auto',
-          background: following ? disc.surfaceFocus : accent.primary,
-          color: following ? disc.textSecondary : '#fff',
+          background: isFollowing || isPending ? disc.surfaceFocus : accent.primary,
+          color: isFollowing || isPending ? disc.textSecondary : '#fff',
           fontSize: typeScale.metaLg[0], fontWeight: 600,
-          border: 'none', cursor: 'pointer',
+          border: 'none', cursor: isFollowing || isPending ? 'default' : 'pointer',
         }}
       >
-        {following ? 'Following' : 'Follow'}
+        {isPending ? 'Following...' : isFollowing ? 'Following' : 'Follow'}
       </button>
     </motion.div>
   );
@@ -1376,6 +1391,8 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const [activeFilter, setActiveFilter] = useState<QuickFilter | null>(null);
   const [searchSort, setSearchSort] = useState<'top' | 'latest'>('top');
   const [addingPodcastFeedByUrl, setAddingPodcastFeedByUrl] = useState<Record<string, boolean>>({});
+  const [followingFeedByUri, setFollowingFeedByUri] = useState<Record<string, boolean>>({});
+  const [followedFeedByUri, setFollowedFeedByUri] = useState<Record<string, boolean>>({});
   const [podcastFeedAddStatus, setPodcastFeedAddStatus] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [featuredIdx, setFeaturedIdx] = useState(0);
@@ -1426,6 +1443,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
     posts: searchPosts,
     actors: searchActors,
     feedItems: searchFeedItems,
+    podcastClips: searchPodcastClips,
     intent: searchIntent,
     semanticActorDids: searchSemanticActorDids,
     keywordActorDids: searchKeywordActorDids,
@@ -1446,6 +1464,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
     posts: searchPosts,
     actors: searchActors,
     feedItems: searchFeedItems,
+    podcastClips: searchPodcastClips,
     intent: searchIntent,
     postCursor: null,
     tagPostCursor: null,
@@ -1632,8 +1651,49 @@ export default function ExploreTab({ onOpenStory }: Props) {
   }, [addAppNotification]);
 
   const handleFollowFeed = useCallback(async (uri: string) => {
-    // Feed like/follow via ATProto
-  }, []);
+    const normalizedUri = String(uri ?? '').trim();
+    if (!isAtUri(normalizedUri)) {
+      addAppNotification({
+        title: 'Invalid feed identifier',
+        message: 'This feed cannot be followed because its identifier is malformed.',
+        level: 'warning',
+      });
+      return;
+    }
+
+    if (followingFeedByUri[normalizedUri] || followedFeedByUri[normalizedUri]) {
+      return;
+    }
+
+    if (!agent) return;
+
+    setFollowingFeedByUri((prev) => ({ ...prev, [normalizedUri]: true }));
+
+    try {
+      await atpCall(() => (agent as any).addSavedFeeds([
+        { type: 'feed', value: normalizedUri, pinned: false },
+      ]), {
+        maxAttempts: 4,
+        baseDelayMs: 250,
+        capDelayMs: 8_000,
+      });
+
+      addAppNotification({
+        title: 'Feed followed',
+        message: `Added ${normalizedUri} to your feeds.`,
+        level: 'success',
+      });
+      setFollowedFeedByUri((prev) => ({ ...prev, [normalizedUri]: true }));
+    } catch {
+      addAppNotification({
+        title: 'Follow failed',
+        message: 'Unable to follow this feed right now. Please try again.',
+        level: 'warning',
+      });
+    } finally {
+      setFollowingFeedByUri((prev) => ({ ...prev, [normalizedUri]: false }));
+    }
+  }, [addAppNotification, agent, followedFeedByUri, followingFeedByUri]);
 
   const openSearchStory = useCallback((rawQuery: string) => {
     const normalized = normalizeSearchStoryNavigationQuery(rawQuery);
@@ -2378,7 +2438,10 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         {searchFeedItems.slice(0, 10).map((item) => {
                           const isPodcast = item.source === 'podcast-index' || (item.enclosureType || '').startsWith('audio/');
+                          const isBskyFeed = item.source === 'bsky-feed' && isAtUri(item.id);
                           const isAdding = Boolean(addingPodcastFeedByUrl[item.link]);
+                          const isFollowingPending = isBskyFeed ? Boolean(followingFeedByUri[item.id]) : false;
+                          const isFollowing = isBskyFeed ? Boolean(followedFeedByUri[item.id]) : false;
                           return (
                             <div
                               key={item.id}
@@ -2394,6 +2457,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 {isPodcast && (
                                   <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '3px 8px', background: 'rgba(91,124,255,0.2)', color: accent.cyan400 }}>
                                     Podcast
+                                  </span>
+                                )}
+                                {isBskyFeed && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '3px 8px', background: 'rgba(124,233,255,0.18)', color: accent.cyan400 }}>
+                                    Bluesky Feed
                                   </span>
                                 )}
                               </div>
@@ -2438,6 +2506,25 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                     {isAdding ? 'Adding...' : 'Add Podcast'}
                                   </button>
                                 )}
+                                {isBskyFeed && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFollowFeed(item.id)}
+                                    disabled={isFollowingPending || isFollowing}
+                                    style={{
+                                      border: 'none',
+                                      borderRadius: 999,
+                                      padding: '5px 10px',
+                                      cursor: isFollowingPending || isFollowing ? 'default' : 'pointer',
+                                      background: isFollowingPending || isFollowing ? disc.surfaceFocus : accent.primary,
+                                      color: isFollowingPending || isFollowing ? disc.textSecondary : '#fff',
+                                      fontSize: 11,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    {isFollowingPending ? 'Following...' : isFollowing ? 'Following' : 'Follow Feed'}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           );
@@ -2450,7 +2537,17 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       </div>
                     </div>
                   )}
-                  {searchActors.length === 0 && searchPosts.length === 0 && searchFeedItems.length === 0 && (
+                  {searchPodcastClips.length > 0 && (
+                    <div style={{ marginBottom: 24 }}>
+                      <SectionHeader title="Podcast Clips" />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        {searchPodcastClips.slice(0, 6).map((clip) => (
+                          <PodcastClipCard key={clip.id} clip={clip} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {searchActors.length === 0 && searchPosts.length === 0 && searchFeedItems.length === 0 && searchPodcastClips.length === 0 && (
                     <div style={{ padding: '40px 0', textAlign: 'center' }}>
                       <p style={{ fontSize: typeScale.bodySm[0], color: disc.textTertiary }}>No results for "{debouncedQuery}"</p>
                     </div>
@@ -2777,7 +2874,15 @@ export default function ExploreTab({ onOpenStory }: Props) {
                     <div>
                       <SectionHeader title="Feeds to Follow" />
                       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 4 }}>
-                        {suggestedFeeds.map(gen => <FeedCard key={gen.uri} gen={gen} onFollow={handleFollowFeed} />)}
+                        {suggestedFeeds.map((gen) => (
+                          <FeedCard
+                            key={gen.uri}
+                            gen={gen}
+                            onFollow={handleFollowFeed}
+                            isFollowing={Boolean(followedFeedByUri[gen.uri] || gen.viewer?.like)}
+                            isPending={Boolean(followingFeedByUri[gen.uri])}
+                          />
+                        ))}
                       </div>
                     </div>
                   )}

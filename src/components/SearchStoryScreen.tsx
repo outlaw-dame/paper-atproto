@@ -965,6 +965,7 @@ export default function SearchStoryScreen({ query, onClose, onOpenStory }: Props
     posts: visiblePosts,
     actors: [],
     feedItems: [],
+    podcastClips: [],
     intent: {
       kind: 'general' as const,
       label: 'General discovery',

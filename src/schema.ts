@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, vector, customType, jsonb, integer } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, vector, customType, jsonb, integer, real } from 'drizzle-orm/pg-core';
 
 // Custom type for tsvector (Full-Text Search)
 const tsvector = customType<{ data: string }>({
@@ -57,8 +57,31 @@ export const feedItems = pgTable('feed_items', {
   transcriptUrl: text('transcript_url'),
   chaptersUrl: text('chapters_url'),
   valueConfig: jsonb('value_config'),
-  embedding: vector('embedding', { dimensions: 384 }), // For semantic search
-  searchVector: tsvector('search_vector'), // For full-text search
+  transcriptIndexedAt: timestamp('transcript_indexed_at'), // Set after successful transcript/chapter indexing
+  embedding: vector('embedding', { dimensions: 384 }),
+  searchVector: tsvector('search_vector'),
+});
+
+export const transcriptSegments = pgTable('transcript_segments', {
+  id: text('id').primaryKey(), // ${feedItemId}:seg:${startTime.toFixed(3)}
+  feedItemId: text('feed_item_id').notNull().references(() => feedItems.id, { onDelete: 'cascade' }),
+  startTime: real('start_time').notNull(),
+  endTime: real('end_time'),
+  text: text('text').notNull(),
+  speaker: text('speaker'),
+  embedding: vector('embedding', { dimensions: 384 }),
+  searchVector: tsvector('search_vector'),
+});
+
+export const podcastChapters = pgTable('podcast_chapters', {
+  id: text('id').primaryKey(), // ${feedItemId}:ch:${startTime.toFixed(3)}
+  feedItemId: text('feed_item_id').notNull().references(() => feedItems.id, { onDelete: 'cascade' }),
+  startTime: real('start_time').notNull(),
+  endTime: real('end_time'),
+  title: text('title'),
+  img: text('img'),
+  url: text('url'),
+  isHidden: integer('is_hidden').default(0).notNull(),
 });
 
 export type Post = typeof posts.$inferSelect;
@@ -69,3 +92,7 @@ export type Feed = typeof feeds.$inferSelect;
 export type NewFeed = typeof feeds.$inferInsert;
 export type FeedItem = typeof feedItems.$inferSelect;
 export type NewFeedItem = typeof feedItems.$inferInsert;
+export type TranscriptSegment = typeof transcriptSegments.$inferSelect;
+export type NewTranscriptSegment = typeof transcriptSegments.$inferInsert;
+export type PodcastChapter = typeof podcastChapters.$inferSelect;
+export type NewPodcastChapter = typeof podcastChapters.$inferInsert;

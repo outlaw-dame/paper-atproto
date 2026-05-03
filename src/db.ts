@@ -124,6 +124,31 @@ export class PaperDB {
       ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS transcript_url TEXT;
       ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS chapters_url TEXT;
       ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS value_config JSONB;
+      ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS transcript_indexed_at TIMESTAMP WITH TIME ZONE;
+
+      -- Transcript segments: one row per merged segment with FTS + semantic search
+      CREATE TABLE IF NOT EXISTS transcript_segments (
+        id TEXT PRIMARY KEY,
+        feed_item_id TEXT NOT NULL REFERENCES feed_items(id) ON DELETE CASCADE,
+        start_time REAL NOT NULL,
+        end_time REAL,
+        text TEXT NOT NULL,
+        speaker TEXT,
+        embedding vector(384),
+        search_vector tsvector
+      );
+
+      -- Podcast chapters: chapter markers for navigation
+      CREATE TABLE IF NOT EXISTS podcast_chapters (
+        id TEXT PRIMARY KEY,
+        feed_item_id TEXT NOT NULL REFERENCES feed_items(id) ON DELETE CASCADE,
+        start_time REAL NOT NULL,
+        end_time REAL,
+        title TEXT,
+        img TEXT,
+        url TEXT,
+        is_hidden INTEGER NOT NULL DEFAULT 0
+      );
 
       -- Create index for full-text search (GIN)
       CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN(search_vector);
@@ -134,6 +159,11 @@ export class PaperDB {
       CREATE INDEX IF NOT EXISTS idx_entities_post_id ON entities (post_id);
       CREATE INDEX IF NOT EXISTS idx_feed_items_feed_id_pub_date ON feed_items (feed_id, pub_date DESC);
       CREATE INDEX IF NOT EXISTS idx_feed_items_pub_date ON feed_items (pub_date DESC);
+
+      -- Transcript segment and chapter indexes
+      CREATE INDEX IF NOT EXISTS idx_transcript_segments_search_vector ON transcript_segments USING GIN (search_vector);
+      CREATE INDEX IF NOT EXISTS idx_transcript_segments_feed_item_id ON transcript_segments (feed_item_id);
+      CREATE INDEX IF NOT EXISTS idx_podcast_chapters_feed_item_id ON podcast_chapters (feed_item_id);
     `);
 
       // Trigger to update search_vector on insert/update
@@ -167,6 +197,20 @@ export class PaperDB {
       BEFORE INSERT OR UPDATE ON feed_items
       FOR EACH ROW EXECUTE FUNCTION feed_items_search_vector_update();
 
+      -- Trigger for transcript_segments FTS
+      CREATE OR REPLACE FUNCTION transcript_segments_search_vector_update() RETURNS trigger AS $$
+      BEGIN
+        new.search_vector :=
+          setweight(to_tsvector('english', coalesce(new.text, '')), 'B');
+        RETURN new;
+      END
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_transcript_segments_search_vector_update ON transcript_segments;
+      CREATE TRIGGER trg_transcript_segments_search_vector_update
+      BEFORE INSERT OR UPDATE ON transcript_segments
+      FOR EACH ROW EXECUTE FUNCTION transcript_segments_search_vector_update();
+
       -- Backfill existing rows so FTS works for data inserted before triggers.
       UPDATE posts
       SET search_vector =
@@ -178,6 +222,10 @@ export class PaperDB {
       SET search_vector =
         setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
         setweight(to_tsvector('english', coalesce(content, '')), 'D')
+      WHERE search_vector IS NULL;
+
+      UPDATE transcript_segments
+      SET search_vector = setweight(to_tsvector('english', coalesce(text, '')), 'B')
       WHERE search_vector IS NULL;
     `);
 
@@ -214,6 +262,8 @@ export class PaperDB {
         ON posts USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
       CREATE INDEX IF NOT EXISTS idx_feed_items_embedding
         ON feed_items USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+      CREATE INDEX IF NOT EXISTS idx_transcript_segments_embedding
+        ON transcript_segments USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
     `);
   }
 

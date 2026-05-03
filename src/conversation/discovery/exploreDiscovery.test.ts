@@ -11,6 +11,7 @@ import {
   buildExploreDiscoverState,
   collectTrendingTopicQueries,
   getPrimaryPostText,
+  rankSuggestedFeeds,
 } from './exploreDiscovery';
 
 function makePost(id: string, options?: {
@@ -115,5 +116,35 @@ describe('exploreDiscovery helpers', () => {
     expect(result.recentFeedItems).toEqual([
       { id: 'feed-item', title: 'Feed Item', link: 'https://example.com/feed' },
     ]);
+  });
+
+  it('ranks suggested feeds using semantic overlap with interests and trends', () => {
+    const ranked = rankSuggestedFeeds({
+      feeds: [
+        {
+          uri: 'at://did:plc:feed/app.bsky.feed.generator/ai-topics',
+          displayName: 'AI & ML Pulse',
+          description: 'Deep learning, AI policy, and model releases',
+          creator: { did: 'did:plc:feed', handle: 'feeds.bsky.social' },
+          likeCount: 120,
+        } as any,
+        {
+          uri: 'at://did:plc:feed/app.bsky.feed.generator/sports',
+          displayName: 'Sports Recap',
+          description: 'Daily sports scores and highlights',
+          creator: { did: 'did:plc:feed', handle: 'feeds.bsky.social' },
+          likeCount: 500,
+        } as any,
+      ],
+      interestTags: ['artificial intelligence', 'machine learning'],
+      trendingTopicQueries: ['AI safety', 'model benchmarks'],
+      whatsHotPosts: [
+        makePost('trend-ai', { content: 'Latest AI model benchmark discussion' }),
+      ],
+      maxResults: 2,
+    });
+
+    expect(ranked[0]?.uri).toBe('at://did:plc:feed/app.bsky.feed.generator/ai-topics');
+    expect(ranked).toHaveLength(2);
   });
 });

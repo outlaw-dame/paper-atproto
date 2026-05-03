@@ -14,7 +14,24 @@ export interface ExploreFeedResult {
   feedTitle?: string;
   feedCategory?: string;
   score?: number;
-  source?: 'local' | 'podcast-index';
+  source?: 'local' | 'podcast-index' | 'bsky-feed';
+}
+
+export interface PodcastClipResult {
+  id: string;
+  feedItemId: string;
+  episodeTitle: string;
+  enclosureUrl: string;
+  enclosureType?: string;
+  episodeLink: string;
+  feedTitle?: string;
+  feedCategory?: string;
+  startTime: number;
+  endTime?: number;
+  text: string;
+  speaker?: string;
+  pubDate?: string;
+  score?: number;
 }
 
 interface ResolveExploreSearchResultsInput {
@@ -23,18 +40,23 @@ interface ResolveExploreSearchResultsInput {
   localHybridPostRows?: any;
   actorsRes: any;
   feedRes: any;
+  bskyFeedSearchRes?: any;
   podcastIndexFeeds: any;
+  podcastClipsRes?: any;
   hasDisplayableRecordContent: (record: unknown) => boolean;
   mapPost: (postView: any) => MockPost;
   mapLocalHybridPost?: (row: any) => MockPost;
   mapFeedRow: (row: any) => ExploreFeedResult;
+  mapBskyFeed: (feed: any) => ExploreFeedResult;
   mapPodcastFeed: (feed: any) => ExploreFeedResult;
+  mapClipRow: (row: any) => PodcastClipResult;
 }
 
 export interface ResolvedExploreSearchResults {
   posts: MockPost[];
   actors: AppBskyActorDefs.ProfileView[];
   feedItems: ExploreFeedResult[];
+  podcastClips: PodcastClipResult[];
 }
 
 type RankedExplorePostSource = 'remote' | 'tag' | 'local';
@@ -483,6 +505,65 @@ export function mapPodcastFeedToExploreFeedResult(feed: any): ExploreFeedResult 
   };
 }
 
+function mapAtUriToBskyFeedLink(uri: string): string {
+  const parsed = parseAtUri(uri);
+  if (!parsed) {
+    return 'https://bsky.app';
+  }
+
+  return `https://bsky.app/profile/${encodeURIComponent(parsed.repo)}/feed/${encodeURIComponent(parsed.rkey)}`;
+}
+
+export function mapBskyFeedToExploreFeedResult(feed: any): ExploreFeedResult {
+  const uri = String(feed?.uri || '').trim();
+  const title = String(feed?.displayName || feed?.title || 'Bluesky feed');
+  const description = typeof feed?.description === 'string' ? feed.description : '';
+  const creatorHandle = String(feed?.creator?.handle || '').trim();
+  const creatorDid = String(feed?.creator?.did || '').trim();
+  const authorLabel = creatorHandle || creatorDid || undefined;
+  const link = uri ? mapAtUriToBskyFeedLink(uri) : 'https://bsky.app';
+
+  return {
+    id: uri || `bsky-feed:${title}`,
+    title,
+    ...(description ? { content: description } : {}),
+    link,
+    ...(authorLabel ? { author: authorLabel } : {}),
+    feedTitle: title,
+    feedCategory: 'Bluesky Feed',
+    source: 'bsky-feed',
+  };
+}
+
+export function mapClipRowToPodcastClipResult(row: any): PodcastClipResult {
+  const score = Number.isFinite(Number(row?.fused_score))
+    ? Number(row.fused_score)
+    : Number.isFinite(Number(row?.rrf_score))
+      ? Number(row.rrf_score)
+      : undefined;
+
+  const startTime = Number(row?.start_time ?? 0);
+  const rawEnd = row?.end_time;
+  const endTime = rawEnd != null && Number.isFinite(Number(rawEnd)) ? Number(rawEnd) : undefined;
+
+  return {
+    id: String(row.segment_id || row.id),
+    feedItemId: String(row.feed_item_id),
+    episodeTitle: String(row.episode_title || 'Untitled episode'),
+    enclosureUrl: String(row.enclosure_url),
+    ...(row.enclosure_type ? { enclosureType: String(row.enclosure_type) } : {}),
+    episodeLink: String(row.episode_link || ''),
+    ...(row.feed_title ? { feedTitle: String(row.feed_title) } : {}),
+    ...(row.feed_category ? { feedCategory: String(row.feed_category) } : {}),
+    startTime: Number.isFinite(startTime) && startTime >= 0 ? startTime : 0,
+    ...(endTime !== undefined ? { endTime } : {}),
+    text: String(row.segment_text || ''),
+    ...(row.speaker ? { speaker: String(row.speaker) } : {}),
+    ...(row.pub_date ? { pubDate: String(row.pub_date) } : {}),
+    ...(typeof score === 'number' ? { score } : {}),
+  };
+}
+
 export function mapHybridPostRowToMockPost(row: any): MockPost {
   const authorDid = String(row?.author_did || row?.authorDid || 'did:plc:local');
   const createdAt = (() => {
@@ -619,22 +700,33 @@ export function resolveExploreSearchResults(
     ? input.feedRes.rows.map(input.mapFeedRow)
     : [];
 
+  const bskyFeedResults = Array.isArray(input.bskyFeedSearchRes?.data?.feeds)
+    ? input.bskyFeedSearchRes.data.feeds.map(input.mapBskyFeed)
+    : [];
+
   const podcastResults = Array.isArray(input.podcastIndexFeeds)
     ? input.podcastIndexFeeds.map(input.mapPodcastFeed)
     : [];
 
-  const seenLinks = new Set<string>();
-  const merged = [...localResults, ...podcastResults].filter((item) => {
-    const key = item.link.trim().toLowerCase();
+  const seenKeys = new Set<string>();
+  const merged = [...bskyFeedResults, ...localResults, ...podcastResults].filter((item) => {
+    const linkKey = item.link.trim().toLowerCase();
+    const idKey = item.id.trim().toLowerCase();
+    const key = linkKey || idKey;
     if (!key) return false;
-    if (seenLinks.has(key)) return false;
-    seenLinks.add(key);
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
     return true;
   });
+
+  const podcastClips: PodcastClipResult[] = input.podcastClipsRes?.rows
+    ? input.podcastClipsRes.rows.map(input.mapClipRow)
+    : [];
 
   return {
     posts: mappedPosts,
     actors,
     feedItems: merged,
+    podcastClips,
   };
 }

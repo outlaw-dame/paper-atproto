@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getLocalHybridPostUri,
+  mapBskyFeedToExploreFeedResult,
   mapFeedRowToExploreFeedResult,
   mapHybridPostRowToMockPost,
   resolveExploreSearchResults,
@@ -206,6 +207,17 @@ describe('resolveExploreSearchResults', () => {
         { id: 'local-2', title: 'Dup', link: 'https://example.com/dup' },
       ],
     };
+    const bskyFeedSearchRes = {
+      data: {
+        feeds: [
+          {
+            uri: 'at://did:plc:feedmaker/app.bsky.feed.generator/top',
+            displayName: 'Top Feed',
+            creator: { did: 'did:plc:feedmaker', handle: 'feedmaker.bsky.social' },
+          },
+        ],
+      },
+    };
     const podcast = [
       { id: 'pod-1', title: 'Pod', url: 'https://example.com/dup' },
       { id: 'pod-2', title: 'Pod2', url: 'https://example.com/two' },
@@ -215,6 +227,7 @@ describe('resolveExploreSearchResults', () => {
       postsRes,
       actorsRes,
       feedRes,
+      bskyFeedSearchRes,
       podcastIndexFeeds: podcast,
       hasDisplayableRecordContent: (record) => Boolean((record as any)?.text),
       mapPost: (postView) => makeMockPost(postView.uri),
@@ -224,17 +237,28 @@ describe('resolveExploreSearchResults', () => {
         link: row.link,
         source: 'local',
       }),
+      mapBskyFeed: mapBskyFeedToExploreFeedResult,
       mapPodcastFeed: (feed): ExploreFeedResult => ({
         id: feed.id,
         title: feed.title,
         link: feed.url,
         source: 'podcast-index',
       }),
+      mapClipRow: () => ({
+        id: 'clip-1',
+        feedItemId: 'item-1',
+        episodeTitle: 'clip',
+        enclosureUrl: 'https://example.com/clip.mp3',
+        episodeLink: 'https://example.com/episode',
+        startTime: 0,
+        text: 'clip text',
+      }),
     });
 
     expect(result.posts.map((p) => p.id)).toEqual(['at://post/1']);
     expect(result.actors).toHaveLength(1);
     expect(result.feedItems.map((i) => i.link)).toEqual([
+      'https://bsky.app/profile/did%3Aplc%3Afeedmaker/feed/top',
       'https://example.com/one',
       'https://example.com/dup',
       'https://example.com/two',
@@ -250,7 +274,17 @@ describe('resolveExploreSearchResults', () => {
       hasDisplayableRecordContent: () => true,
       mapPost: () => makeMockPost('unused'),
       mapFeedRow: () => ({ id: 'unused', title: 'unused', link: 'https://unused' }),
+      mapBskyFeed: () => ({ id: 'unused-feed', title: 'unused', link: 'https://unused' }),
       mapPodcastFeed: () => ({ id: 'unused', title: 'unused', link: 'https://unused' }),
+      mapClipRow: () => ({
+        id: 'clip-1',
+        feedItemId: 'item-1',
+        episodeTitle: 'clip',
+        enclosureUrl: 'https://example.com/clip.mp3',
+        episodeLink: 'https://example.com/episode',
+        startTime: 0,
+        text: 'clip text',
+      }),
     });
 
     expect(result.posts).toEqual([]);
@@ -287,7 +321,17 @@ describe('resolveExploreSearchResults', () => {
       mapPost: (postView) => makeMockPost(postView.uri),
       mapLocalHybridPost: (row) => makeMockPost(row.uri ?? row.id),
       mapFeedRow: () => ({ id: 'unused', title: 'unused', link: 'https://unused' }),
+      mapBskyFeed: () => ({ id: 'unused-feed', title: 'unused', link: 'https://unused' }),
       mapPodcastFeed: () => ({ id: 'unused', title: 'unused', link: 'https://unused' }),
+      mapClipRow: () => ({
+        id: 'clip-1',
+        feedItemId: 'item-1',
+        episodeTitle: 'clip',
+        enclosureUrl: 'https://example.com/clip.mp3',
+        episodeLink: 'https://example.com/episode',
+        startTime: 0,
+        text: 'clip text',
+      }),
     });
 
     expect(result.posts.map((p) => p.id)).toEqual([
@@ -325,7 +369,17 @@ describe('resolveExploreSearchResults', () => {
       mapPost: (postView) => makeMockPost(postView.uri),
       mapLocalHybridPost: mapHybridPostRowToMockPost,
       mapFeedRow: () => ({ id: 'unused', title: 'unused', link: 'https://unused' }),
+      mapBskyFeed: () => ({ id: 'unused-feed', title: 'unused', link: 'https://unused' }),
       mapPodcastFeed: () => ({ id: 'unused', title: 'unused', link: 'https://unused' }),
+      mapClipRow: () => ({
+        id: 'clip-1',
+        feedItemId: 'item-1',
+        episodeTitle: 'clip',
+        enclosureUrl: 'https://example.com/clip.mp3',
+        episodeLink: 'https://example.com/episode',
+        startTime: 0,
+        text: 'clip text',
+      }),
     });
 
     expect(result.posts.map((post) => post.id)).toEqual([
@@ -333,5 +387,21 @@ describe('resolveExploreSearchResults', () => {
       'at://did:plc:local/app.bsky.feed.post/hero',
       'at://did:plc:remote/app.bsky.feed.post/lower',
     ]);
+  });
+
+  it('maps Bluesky feed generators to feed search cards', () => {
+    const mapped = mapBskyFeedToExploreFeedResult({
+      uri: 'at://did:plc:feedmaker/app.bsky.feed.generator/foryou',
+      displayName: 'For You + AI',
+      description: 'Semantic ranking tuned to your graph',
+      creator: {
+        did: 'did:plc:feedmaker',
+        handle: 'feedmaker.bsky.social',
+      },
+    });
+
+    expect(mapped.source).toBe('bsky-feed');
+    expect(mapped.link).toBe('https://bsky.app/profile/did%3Aplc%3Afeedmaker/feed/foryou');
+    expect(mapped.feedCategory).toBe('Bluesky Feed');
   });
 });

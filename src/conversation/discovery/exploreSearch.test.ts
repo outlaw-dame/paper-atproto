@@ -238,6 +238,7 @@ describe('exploreSearch helpers', () => {
       posts: [],
       actors: [],
       feedItems: [],
+      podcastClips: [],
       intent: expect.objectContaining({ kind: 'general' }),
       postCursor: null,
       tagPostCursor: null,

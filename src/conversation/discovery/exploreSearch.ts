@@ -9,11 +9,14 @@ import { searchPodcastIndex } from '../../lib/podcastIndexClient';
 import { classifyDiscoveryIntent, type DiscoveryIntentKind } from './discoveryIntent';
 import {
   dedupeExploreSearchPosts,
+  mapBskyFeedToExploreFeedResult,
+  mapClipRowToPodcastClipResult,
   mapFeedRowToExploreFeedResult,
   mapHybridPostRowToMockPost,
   mapPodcastFeedToExploreFeedResult,
   resolveExploreSearchResults,
   type ExploreFeedResult,
+  type PodcastClipResult,
 } from '../../lib/exploreSearchResults';
 import { mergePeopleCandidates, searchSemanticPeople } from '../../lib/semanticPeople';
 import { recordDiscoveryIntentTelemetry, recordDiscoveryRetryTelemetry } from '../../perf/searchTelemetry';
@@ -41,6 +44,7 @@ interface ExploreSearchPlan {
   semanticMaxProfiles: number;
   feedLimit: number;
   podcastLimit: number;
+  clipLimit: number;
   intent: ExploreSearchIntentSummary;
 }
 
@@ -48,6 +52,7 @@ export interface ExploreSearchPage {
   posts: MockPost[];
   actors: AppBskyActorDefs.ProfileView[];
   feedItems: ExploreFeedResult[];
+  podcastClips: PodcastClipResult[];
   intent: ExploreSearchIntentSummary;
   postCursor: string | null;
   tagPostCursor: string | null;
@@ -220,6 +225,7 @@ export function buildExploreSearchPlan(rawQuery: string, _searchSort: 'top' | 'l
     semanticMaxProfiles: 8,
     feedLimit: 12,
     podcastLimit: 8,
+    clipLimit: 6,
     intent,
   };
 
@@ -231,6 +237,7 @@ export function buildExploreSearchPlan(rawQuery: string, _searchSort: 'top' | 'l
         actorLimit: 20,
         semanticRowLimit: 48,
         semanticMaxProfiles: 12,
+        clipLimit: 3,
       };
     case 'feed':
       return {
@@ -239,17 +246,20 @@ export function buildExploreSearchPlan(rawQuery: string, _searchSort: 'top' | 'l
         actorLimit: 8,
         feedLimit: 18,
         podcastLimit: 12,
+        clipLimit: 8,
       };
     case 'source':
       return {
         ...basePlan,
         postLimit: 36,
         feedLimit: 14,
+        clipLimit: 6,
       };
     case 'visual':
       return {
         ...basePlan,
         postLimit: 44,
+        clipLimit: 3,
       };
     default:
       return basePlan;
@@ -265,6 +275,7 @@ function emptyExploreSearchPage(): ExploreSearchPage {
     posts: [],
     actors: [],
     feedItems: [],
+    podcastClips: [],
     intent: defaultIntentSummary(),
     postCursor: null,
     tagPostCursor: null,
@@ -312,9 +323,11 @@ export function resolveExploreSearchPage(params: {
   tagPostsRes?: any;
   localHybridPostRows?: unknown;
   actorsRes?: any;
+  bskyFeedSearchRes?: any;
   semanticActors?: unknown;
   feedRes?: any;
   podcastIndexFeeds?: unknown;
+  podcastClipsRes?: any;
   searchSort: 'top' | 'latest';
   isHashtagQuery: boolean;
   intentSummary?: ExploreSearchIntentSummary;
@@ -324,13 +337,17 @@ export function resolveExploreSearchPage(params: {
     tagPostsRes: params.tagPostsRes,
     localHybridPostRows: params.localHybridPostRows,
     actorsRes: params.actorsRes,
+    bskyFeedSearchRes: params.bskyFeedSearchRes,
     feedRes: params.feedRes,
     podcastIndexFeeds: params.podcastIndexFeeds,
+    podcastClipsRes: params.podcastClipsRes,
     hasDisplayableRecordContent,
     mapPost: mapStandalonePostView,
     mapLocalHybridPost: mapHybridPostRowToMockPost,
     mapFeedRow: mapFeedRowToExploreFeedResult,
+    mapBskyFeed: mapBskyFeedToExploreFeedResult,
     mapPodcastFeed: mapPodcastFeedToExploreFeedResult,
+    mapClipRow: mapClipRowToPodcastClipResult,
   });
 
   const semanticActors = actorArrayFromUnknown(params.semanticActors);
@@ -348,6 +365,7 @@ export function resolveExploreSearchPage(params: {
     posts: dedupeExploreSearchPosts(resolved.posts),
     actors: blendedActors,
     feedItems: resolved.feedItems,
+    podcastClips: resolved.podcastClips,
     intent: params.intentSummary ?? defaultIntentSummary(),
     postCursor,
     tagPostCursor,
@@ -372,11 +390,14 @@ export function mergeExploreSearchPostPage(params: {
     actorsRes: null,
     feedRes: null,
     podcastIndexFeeds: null,
+    podcastClipsRes: null,
     hasDisplayableRecordContent,
     mapPost: mapStandalonePostView,
     mapLocalHybridPost: mapHybridPostRowToMockPost,
     mapFeedRow: mapFeedRowToExploreFeedResult,
+    mapBskyFeed: mapBskyFeedToExploreFeedResult,
     mapPodcastFeed: mapPodcastFeedToExploreFeedResult,
+    mapClipRow: mapClipRowToPodcastClipResult,
   });
 
   const postCursor = params.postsRes?.data?.cursor ?? null;
@@ -493,6 +514,10 @@ export function useExploreSearchResults(params: {
         q: normalizedQuery,
         limit: plan.actorLimit,
       })), { operationName: 'searchActors' }).catch(() => null),
+      retryWithBackoff(() => atpCall(() => (agent.app.bsky.feed as any).searchFeeds({
+        q: normalizedQuery,
+        limit: plan.feedLimit,
+      })), { operationName: 'searchFeeds' }).catch(() => null),
       retryWithBackoff(() => searchSemanticPeople(agent, normalizedQuery, {
         rowLimit: plan.semanticRowLimit,
         maxProfiles: plan.semanticMaxProfiles,
@@ -504,15 +529,21 @@ export function useExploreSearchResults(params: {
       retryWithBackoff(() => searchPodcastIndex(normalizedQuery, plan.podcastLimit), {
         operationName: 'searchPodcastIndex',
       }).catch(() => []),
+      hybridSearch.searchTranscriptSegments(normalizedQuery, plan.clipLimit, {
+        queryHasVisualIntent: plan.intent.queryHasVisualIntent,
+        ...intentToSearchWeights(plan.intent.kind),
+      }).catch(() => null),
     ])
       .then(([
         postsRes,
         tagPostsRes,
         localHybridPostsRes,
         actorsRes,
+        bskyFeedSearchRes,
         semanticActors,
         feedRes,
         podcastIndexFeeds,
+        podcastClipsRes,
       ]) => {
         if (disposed || requestVersion !== requestVersionRef.current) return;
         setPage(resolveExploreSearchPage({
@@ -520,9 +551,11 @@ export function useExploreSearchResults(params: {
           tagPostsRes,
           localHybridPostRows: localHybridPostsRes?.rows,
           actorsRes,
+          bskyFeedSearchRes,
           semanticActors,
           feedRes,
           podcastIndexFeeds,
+          podcastClipsRes,
           searchSort,
           isHashtagQuery,
           intentSummary: plan.intent,

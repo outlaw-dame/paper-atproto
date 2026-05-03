@@ -14,6 +14,7 @@ const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.g
 const QUIET_FEED_URI = 'at://did:plc:vpkhqolt662uhesyj6nxm7ys/app.bsky.feed.generator/infreq';
 const DEFAULT_TOPIC_LABEL_LIMIT = 80;
 const DEFAULT_ACTOR_RECOMMENDATION_LIMIT = 18;
+const DEFAULT_FEED_RECOMMENDATION_LIMIT = 12;
 
 type SourceKind = 'server' | 'graph' | 'semantic';
 
@@ -344,6 +345,101 @@ function accumulateActorSource(
   }
 }
 
+function tokenizeSemanticTerms(raw: string): string[] {
+  return raw
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s#._-]+/gu, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3)
+    .slice(0, 40);
+}
+
+function collectFeedRecommendationSignals(params: {
+  interestTags: string[];
+  trendingTopicQueries: string[];
+  whatsHotPosts: MockPost[];
+}): Set<string> {
+  const out = new Set<string>();
+  for (const tag of params.interestTags) {
+    tokenizeSemanticTerms(tag).forEach((token) => out.add(token));
+  }
+  for (const topic of params.trendingTopicQueries) {
+    tokenizeSemanticTerms(topic).forEach((token) => out.add(token));
+  }
+  for (const post of params.whatsHotPosts.slice(0, 8)) {
+    tokenizeSemanticTerms(getPrimaryPostText(post)).forEach((token) => out.add(token));
+  }
+  return out;
+}
+
+function scoreSuggestedFeed(
+  feed: AppBskyFeedDefs.GeneratorView,
+  semanticSignals: Set<string>,
+): number {
+  const corpus = `${feed.displayName ?? ''} ${feed.description ?? ''} ${feed.creator?.handle ?? ''}`;
+  const tokens = tokenizeSemanticTerms(corpus);
+  let overlap = 0;
+  for (const token of tokens) {
+    if (semanticSignals.has(token)) overlap += 1;
+  }
+
+  const popularity = Number((feed as any)?.likeCount ?? 0);
+  const popularityBoost = Number.isFinite(popularity)
+    ? Math.min(0.7, Math.log10(Math.max(1, popularity)) / 6)
+    : 0;
+  const overlapBoost = overlap > 0
+    ? Math.min(2.2, overlap * 0.45)
+    : 0;
+  const followingPenalty = feed.viewer?.like ? -0.6 : 0;
+
+  return overlapBoost + popularityBoost + followingPenalty;
+}
+
+export function rankSuggestedFeeds(params: {
+  feeds: AppBskyFeedDefs.GeneratorView[];
+  interestTags: string[];
+  trendingTopicQueries: string[];
+  whatsHotPosts: MockPost[];
+  maxResults?: number;
+}): AppBskyFeedDefs.GeneratorView[] {
+  const maxResults = Math.max(1, params.maxResults ?? DEFAULT_FEED_RECOMMENDATION_LIMIT);
+  const semanticSignals = collectFeedRecommendationSignals({
+    interestTags: params.interestTags,
+    trendingTopicQueries: params.trendingTopicQueries,
+    whatsHotPosts: params.whatsHotPosts,
+  });
+
+  const ranked = [...params.feeds]
+    .map((feed, index) => ({
+      feed,
+      index,
+      score: scoreSuggestedFeed(feed, semanticSignals),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      const leftLikes = Number((left.feed as any)?.likeCount ?? 0);
+      const rightLikes = Number((right.feed as any)?.likeCount ?? 0);
+      if (rightLikes !== leftLikes) return rightLikes - leftLikes;
+      return left.index - right.index;
+    });
+
+  const selected: AppBskyFeedDefs.GeneratorView[] = [];
+  const perCreatorCount = new Map<string, number>();
+  for (const entry of ranked) {
+    const creatorDid = normalizeDid(entry.feed.creator?.did);
+    const currentCount = perCreatorCount.get(creatorDid) ?? 0;
+    if (creatorDid && currentCount >= 2) continue;
+    selected.push(entry.feed);
+    if (creatorDid) {
+      perCreatorCount.set(creatorDid, currentCount + 1);
+    }
+    if (selected.length >= maxResults) break;
+  }
+
+  return selected;
+}
+
 async function loadSemanticSuggestedActors(params: {
   agent: ExploreDiscoveryAgent;
   semanticQueries: string[];
@@ -586,6 +682,24 @@ export function useExploreDiscoverContent(params: {
         const quietData = (quietRes as any)?.data;
 
         const whatsHotPosts = mapFeedViewItems(whatsHotData?.feed);
+        const trendingTopicQueries = collectTrendingTopicQueries(trendingTopicsData?.topics, 5);
+
+        const rawInterestTags = Array.isArray((preferencesRes as any)?.interests?.tags)
+          ? (preferencesRes as any).interests.tags
+          : Array.isArray(preferencesData?.interests?.tags)
+            ? preferencesData.interests.tags
+            : [];
+        const interestTags = rawInterestTags
+          .map((tag: unknown) => String(tag ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 24);
+
+        const rankedSuggestedFeeds = rankSuggestedFeeds({
+          feeds: Array.isArray(feedsData?.feeds) ? feedsData.feeds : [],
+          interestTags,
+          trendingTopicQueries,
+          whatsHotPosts,
+        });
 
         const trendingTopicPosts = await loadTrendingTopicPosts(
           agent,
@@ -626,7 +740,7 @@ export function useExploreDiscoverContent(params: {
 
         setState({
           ...buildExploreDiscoverState({
-            suggestedFeeds: feedsData?.feeds ?? [],
+            suggestedFeeds: rankedSuggestedFeeds,
             suggestedActors: serverSuggestedActors,
             suggestedActorRecommendations: recommendedActors,
             whatsHotPosts,

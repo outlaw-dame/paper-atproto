@@ -3,13 +3,41 @@ import * as jsonld from 'jsonld';
 import { paperDB } from './db';
 import { embeddingPipeline } from './intelligence/embeddingPipeline';
 import { recordEmbeddingVector } from './perf/embeddingTelemetry';
+import { BackoffTimer, type BackoffConfig } from './lib/backoffStrategy';
+import { detectTranscriptFormat, parseTranscript } from './lib/transcriptParser';
+import { parsePodcastChapters } from './lib/chaptersParser';
+import { sanitizeUrlForProcessing } from './lib/safety/externalUrl';
 
 /**
  * Feed Service for consuming and generating ATOM, RSS, JSON, RDF/XML, and JSON-LD feeds.
  * Supports news, podcasts, and video content.
  */
 
+const TRANSCRIPT_FETCH_TIMEOUT_MS = 15_000;
+const CHAPTERS_FETCH_TIMEOUT_MS = 8_000;
+const MAX_TRANSCRIPT_BYTES = 2_097_152; // 2 MB
+const MAX_CHAPTERS_BYTES = 524_288;    // 512 KB
+
+const TRANSCRIPT_BACKOFF_CONFIG: BackoffConfig = {
+  baseDelayMs: 200,
+  maxDelayMs: 5_000,
+  multiplier: 2.0,
+  useJitter: true,
+  maxRetries: 2,
+};
+
+const CHAPTERS_BACKOFF_CONFIG: BackoffConfig = {
+  baseDelayMs: 200,
+  maxDelayMs: 3_000,
+  multiplier: 2.0,
+  useJitter: true,
+  maxRetries: 2,
+};
+
 export class FeedService {
+  private readonly transcriptBackoff = new BackoffTimer(TRANSCRIPT_BACKOFF_CONFIG);
+  private readonly chaptersBackoff = new BackoffTimer(CHAPTERS_BACKOFF_CONFIG);
+
   private getFirstChildByLocalName(parent: Element, localName: string): Element | null {
     const all = parent.getElementsByTagName('*');
     for (let i = 0; i < all.length; i += 1) {
@@ -171,6 +199,162 @@ export class FeedService {
   }
 
   /**
+   * Fetch a URL via the CORS proxy and return its content and detected content-type.
+   * Enforces a size cap and abort timeout. Returns null on any failure.
+   */
+  private async fetchViaProxy(
+    url: string,
+    timeoutMs: number,
+    maxBytes: number,
+  ): Promise<{ content: string; contentType: string } | null> {
+    const safeUrl = sanitizeUrlForProcessing(url);
+    if (!safeUrl) return null;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(safeUrl)}`;
+      const response = await fetch(proxyUrl, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Proxy returned HTTP ${response.status}`);
+
+      const data = await response.json();
+      const content = String(data?.contents ?? '');
+      if (content.length > maxBytes) {
+        throw new Error(`Response too large: ${content.length} bytes (max ${maxBytes})`);
+      }
+
+      const contentType = String(data?.status?.content_type ?? '');
+      return { content, contentType };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Fetch, parse, and store transcript segments for a feed item.
+   * Best-effort: errors are logged and never propagated.
+   */
+  private async indexTranscript(pg: any, feedItemId: string, transcriptUrl: string): Promise<void> {
+    const fetched = await this.transcriptBackoff.execute(
+      () => this.fetchViaProxy(transcriptUrl, TRANSCRIPT_FETCH_TIMEOUT_MS, MAX_TRANSCRIPT_BYTES),
+      'fetchTranscript',
+    );
+    if (!fetched || !fetched.content.trim()) return;
+
+    const format = detectTranscriptFormat(fetched.contentType, transcriptUrl, fetched.content);
+    const segments = parseTranscript(fetched.content, format);
+    if (segments.length === 0) return;
+
+    for (const seg of segments) {
+      const segId = `${feedItemId}:seg:${seg.startTime.toFixed(3)}`;
+      const embeddingArr = await embeddingPipeline.embed(seg.text, { mode: 'ingest' });
+      if (embeddingArr.length > 0) recordEmbeddingVector('ingest', embeddingArr);
+      const embedding = embeddingArr.length > 0 ? `[${embeddingArr.join(',')}]` : null;
+
+      await pg.query(
+        `INSERT INTO transcript_segments (id, feed_item_id, start_time, end_time, text, speaker, embedding)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (id) DO UPDATE SET
+           text = EXCLUDED.text,
+           speaker = EXCLUDED.speaker,
+           embedding = EXCLUDED.embedding`,
+        [
+          segId,
+          feedItemId,
+          seg.startTime,
+          seg.endTime ?? null,
+          seg.text,
+          seg.speaker ?? null,
+          embedding,
+        ],
+      );
+    }
+  }
+
+  /**
+   * Fetch, parse, and store chapter markers for a feed item.
+   * Best-effort: errors are logged and never propagated.
+   */
+  private async indexChapters(pg: any, feedItemId: string, chaptersUrl: string): Promise<void> {
+    const fetched = await this.chaptersBackoff.execute(
+      () => this.fetchViaProxy(chaptersUrl, CHAPTERS_FETCH_TIMEOUT_MS, MAX_CHAPTERS_BYTES),
+      'fetchChapters',
+    );
+    if (!fetched || !fetched.content.trim()) return;
+
+    const chapters = parsePodcastChapters(fetched.content);
+    if (chapters.length === 0) return;
+
+    for (const ch of chapters) {
+      const chId = `${feedItemId}:ch:${ch.startTime.toFixed(3)}`;
+      await pg.query(
+        `INSERT INTO podcast_chapters (id, feed_item_id, start_time, end_time, title, img, url, is_hidden)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title,
+           end_time = EXCLUDED.end_time,
+           img = EXCLUDED.img,
+           url = EXCLUDED.url,
+           is_hidden = EXCLUDED.is_hidden`,
+        [
+          chId,
+          feedItemId,
+          ch.startTime,
+          ch.endTime ?? null,
+          ch.title ?? null,
+          ch.img ?? null,
+          ch.url ?? null,
+          ch.isHidden ? 1 : 0,
+        ],
+      );
+    }
+  }
+
+  /**
+   * Fetch and index transcript segments + chapter markers for a batch of items.
+   * Skips items already indexed (transcript_indexed_at IS NOT NULL).
+   * Runs sequentially to limit network concurrency and avoid browser throttling.
+   * Best-effort: individual failures are logged and never propagate.
+   */
+  private async indexTranscriptBatch(
+    pg: any,
+    items: Array<{ itemId: string; transcriptUrl?: string; chaptersUrl?: string }>,
+  ): Promise<void> {
+    for (const item of items) {
+      try {
+        // Idempotency check: skip if already successfully indexed
+        const check = await pg.query(
+          'SELECT transcript_indexed_at FROM feed_items WHERE id = $1',
+          [item.itemId],
+        );
+        const row = check.rows[0] as { transcript_indexed_at: string | null } | undefined;
+        if (!row || row.transcript_indexed_at) continue;
+
+        await Promise.all([
+          item.transcriptUrl
+            ? this.indexTranscript(pg, item.itemId, item.transcriptUrl)
+            : Promise.resolve(),
+          item.chaptersUrl
+            ? this.indexChapters(pg, item.itemId, item.chaptersUrl)
+            : Promise.resolve(),
+        ]);
+
+        // Mark indexed so subsequent re-syncs skip this item
+        await pg.query(
+          'UPDATE feed_items SET transcript_indexed_at = NOW() WHERE id = $1',
+          [item.itemId],
+        );
+      } catch (err) {
+        console.warn(
+          `[FeedService] Transcript/chapter indexing failed for item ${item.itemId}:`,
+          err instanceof Error ? err.message : 'unknown error',
+        );
+      }
+    }
+  }
+
+  /**
    * Fetch and parse an external feed (RSS, ATOM, JSON, RDF/XML, JSON-LD).
    * Uses a CORS proxy for browser compatibility.
    */
@@ -264,6 +448,26 @@ export class FeedService {
             embedding,
           ]
         );
+      }
+
+      // Collect podcast items with transcript/chapter URLs for async enrichment
+      const podcastItemsToIndex: Array<{ itemId: string; transcriptUrl?: string; chaptersUrl?: string }> = [];
+      for (const item of parsed.items) {
+        const itemId = item.id || item.link;
+        const podcast20 = this.getPodcast20ForItem(item, podcast20ByKey);
+        if (podcast20.transcriptUrl || podcast20.chaptersUrl) {
+          podcastItemsToIndex.push({
+            itemId,
+            ...(podcast20.transcriptUrl ? { transcriptUrl: podcast20.transcriptUrl } : {}),
+            ...(podcast20.chaptersUrl ? { chaptersUrl: podcast20.chaptersUrl } : {}),
+          });
+        }
+      }
+
+      // Fire-and-forget: transcript/chapter indexing enriches search in the background
+      // and never blocks or fails addFeed
+      if (podcastItemsToIndex.length > 0) {
+        void this.indexTranscriptBatch(pg, podcastItemsToIndex);
       }
 
       return { feedId, title: parsed.title, itemCount: parsed.items.length };

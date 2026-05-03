@@ -1,5 +1,5 @@
 export type HybridSearchTimeoutFallbackEvent = {
-  scope: 'search' | 'searchAll' | 'searchFeedItems';
+  scope: 'search' | 'searchAll' | 'searchFeedItems' | 'searchTranscriptSegments';
   retryDelayMs: number;
   timeoutMs: number;
   triggeredAt: string;

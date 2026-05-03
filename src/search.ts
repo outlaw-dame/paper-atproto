@@ -490,7 +490,7 @@ export class HybridSearch {
     sql: string,
     params: unknown[],
     semanticCandidateCount: number,
-    scope: 'search' | 'searchAll' | 'searchFeedItems',
+    scope: 'search' | 'searchAll' | 'searchFeedItems' | 'searchTranscriptSegments',
   ) {
     const pg = paperDB.getPG();
     const efSearch = clampHnswEfSearch(semanticCandidateCount);
@@ -809,14 +809,118 @@ export class HybridSearch {
     });
   }
 
+  /**
+   * Search transcript segments (podcast clips) using hybrid RRF.
+   * Returns one best-matching clip per episode, de-duplicated by feed_item_id.
+   * Only episodes with a playable enclosure_url are returned.
+   */
+  async searchTranscriptSegments(query: string, limit = 10, options: SearchOptions = {}) {
+    const resolvedLimit = normalizeSearchLimit(limit);
+    const resolvedOptions: SearchOptions = {
+      ...options,
+      semanticDistanceCutoff: options.semanticDistanceCutoff ?? this.semanticDistanceCutoff,
+      rrfWeight: this.resolvedRuntimeConfig.rrfWeight,
+      lexicalWeight: this.resolvedRuntimeConfig.lexicalWeight,
+      semanticWeight: this.resolvedRuntimeConfig.semanticWeight,
+      confidenceWeight: this.resolvedRuntimeConfig.confidenceWeight,
+    };
+    const queryEmbedding = await this.getQueryEmbedding(query, resolvedOptions);
+    const vectorStr = `[${queryEmbedding.join(',')}]`;
+    const k = 60;
+    const semanticCandidateLimit = resolvedLimit * this.feedSemanticCandidateMultiplier;
+
+    const sql = `
+      WITH query_terms AS (
+        SELECT websearch_to_tsquery('english', $1) AS q
+      ),
+      fts_results AS (
+        SELECT ts.id, ts.feed_item_id,
+               ts_rank_cd(ts.search_vector, q, 32) AS fts_rank_raw,
+               ROW_NUMBER() OVER (ORDER BY ts_rank_cd(ts.search_vector, q, 32) DESC) AS rank
+        FROM transcript_segments ts
+        CROSS JOIN query_terms
+        WHERE ts.search_vector @@ q
+        LIMIT $2 * 3
+      ),
+      semantic_results AS (
+        SELECT ts.id, ts.feed_item_id,
+               (ts.embedding <=> $3::vector) AS semantic_distance,
+               ROW_NUMBER() OVER (ORDER BY ts.embedding <=> $3::vector ASC) AS rank
+        FROM transcript_segments ts
+        WHERE ts.embedding IS NOT NULL
+        ORDER BY ts.embedding <=> $3::vector ASC
+        LIMIT $2 * 3
+      ),
+      merged AS (
+        SELECT
+          COALESCE(f.id, s.id) AS id,
+          COALESCE(f.feed_item_id, s.feed_item_id) AS feed_item_id,
+          COALESCE(f.fts_rank_raw, 0.0) AS fts_rank_raw,
+          COALESCE(s.semantic_distance, 1.2) AS semantic_distance,
+          CASE WHEN s.id IS NOT NULL THEN 1 ELSE 0 END AS semantic_matched,
+          COALESCE(1.0 / ($4 + f.rank), 0.0) + COALESCE(1.0 / ($4 + s.rank), 0.0) AS rrf_score
+        FROM fts_results f
+        FULL OUTER JOIN semantic_results s ON f.id = s.id
+      ),
+      best_per_episode AS (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY feed_item_id ORDER BY rrf_score DESC) AS ep_rank
+        FROM merged
+      )
+      SELECT
+        b.id AS segment_id,
+        b.feed_item_id,
+        b.rrf_score,
+        b.fts_rank_raw,
+        b.semantic_distance,
+        b.semantic_matched,
+        ts.start_time,
+        ts.end_time,
+        ts.text AS segment_text,
+        ts.speaker,
+        fi.title AS episode_title,
+        fi.enclosure_url,
+        fi.enclosure_type,
+        fi.link AS episode_link,
+        fi.pub_date,
+        f.title AS feed_title,
+        f.category AS feed_category
+      FROM best_per_episode b
+      JOIN transcript_segments ts ON b.id = ts.id
+      JOIN feed_items fi ON b.feed_item_id = fi.id
+      LEFT JOIN feeds f ON fi.feed_id = f.id
+      WHERE b.ep_rank = 1
+        AND fi.enclosure_url IS NOT NULL
+      ORDER BY b.rrf_score DESC
+      LIMIT $2
+    `;
+
+    const result = await this.executeSemanticQuery(
+      sql,
+      [query, resolvedLimit, vectorStr, k],
+      semanticCandidateLimit,
+      'searchTranscriptSegments',
+    );
+    const rows = postProcessRows(result.rows ?? [], resolvedOptions);
+    return finalizeSearchResult(result, rows, {
+      limit: resolvedLimit,
+      task: 'local_search',
+      fallbackDataScope: 'local_cache',
+      options: resolvedOptions,
+    });
+  }
+
   async getIndexHealthSnapshot() {
     const pg = paperDB.getPG();
-    const [posts, feedItems] = await Promise.all([
+    const [posts, feedItems, transcriptSegments] = await Promise.all([
       pg.query(
         `SELECT COUNT(*)::int AS total, COUNT(embedding)::int AS with_embedding FROM posts`,
       ),
       pg.query(
         `SELECT COUNT(*)::int AS total, COUNT(embedding)::int AS with_embedding FROM feed_items`,
+      ),
+      pg.query(
+        `SELECT COUNT(*)::int AS total, COUNT(embedding)::int AS with_embedding FROM transcript_segments`,
       ),
     ]);
 
@@ -828,10 +932,16 @@ export class HybridSearch {
       total?: number | string;
       with_embedding?: number | string;
     };
+    const segRow = (transcriptSegments.rows?.[0] ?? { total: 0, with_embedding: 0 }) as {
+      total?: number | string;
+      with_embedding?: number | string;
+    };
     const postTotal = Number(postRow.total ?? 0);
     const postWithEmbedding = Number(postRow.with_embedding ?? 0);
     const feedTotal = Number(feedRow.total ?? 0);
     const feedWithEmbedding = Number(feedRow.with_embedding ?? 0);
+    const segTotal = Number(segRow.total ?? 0);
+    const segWithEmbedding = Number(segRow.with_embedding ?? 0);
 
     return {
       posts: {
@@ -843,6 +953,11 @@ export class HybridSearch {
         total: feedTotal,
         withEmbedding: feedWithEmbedding,
         coverage: feedTotal > 0 ? feedWithEmbedding / feedTotal : 0,
+      },
+      transcriptSegments: {
+        total: segTotal,
+        withEmbedding: segWithEmbedding,
+        coverage: segTotal > 0 ? segWithEmbedding / segTotal : 0,
       },
     };
   }

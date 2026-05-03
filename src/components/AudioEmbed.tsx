@@ -6,6 +6,8 @@ interface AudioEmbedProps {
   description?: string; // "Artist\nAlbum" format
   thumbnail?: string;   // cover art URL
   className?: string;
+  clipStart?: number;   // seconds — auto-seek on load and restrict playback start
+  clipEnd?: number;     // seconds — pause when reached
 }
 
 function formatTime(seconds: number): string {
@@ -17,7 +19,7 @@ function formatTime(seconds: number): string {
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
 
-export default function AudioEmbed({ url, title, description, thumbnail, className }: AudioEmbedProps) {
+export default function AudioEmbed({ url, title, description, thumbnail, className, clipStart, clipEnd }: AudioEmbedProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -141,12 +143,25 @@ export default function AudioEmbed({ url, title, description, thumbnail, classNa
   const handleEnded = useCallback(() => setPlaying(false), []);
   const handleTimeUpdate = useCallback(() => {
     const audio = audioRef.current;
-    if (audio) setCurrentTime(audio.currentTime);
-  }, []);
+    if (!audio) return;
+    setCurrentTime(audio.currentTime);
+    // Enforce clip end boundary
+    if (clipEnd !== undefined && Number.isFinite(clipEnd) && audio.currentTime >= clipEnd) {
+      audio.pause();
+      audio.currentTime = clipEnd;
+    }
+  }, [clipEnd]);
+
   const handleLoadedMetadata = useCallback(() => {
     const audio = audioRef.current;
-    if (audio && Number.isFinite(audio.duration)) setDuration(audio.duration);
-  }, []);
+    if (!audio || !Number.isFinite(audio.duration)) return;
+    setDuration(audio.duration);
+    // Auto-seek to clip start when metadata is available
+    if (clipStart !== undefined && Number.isFinite(clipStart) && clipStart > 0) {
+      audio.currentTime = clipStart;
+      setCurrentTime(clipStart);
+    }
+  }, [clipStart]);
 
   // ── Controls ─────────────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -195,7 +210,11 @@ export default function AudioEmbed({ url, title, description, thumbnail, classNa
     };
   }, []);
 
-  const progress = duration > 0 ? currentTime / duration : 0;
+  // Clip-aware bounds for the scrubber
+  const scrubMin = (clipStart !== undefined && Number.isFinite(clipStart)) ? clipStart : 0;
+  const scrubMax = (clipEnd !== undefined && Number.isFinite(clipEnd)) ? clipEnd : (duration || 1);
+  const scrubRange = Math.max(1, scrubMax - scrubMin);
+  const progress = scrubRange > 0 ? Math.max(0, Math.min(1, (currentTime - scrubMin) / scrubRange)) : 0;
 
   return (
     <div
@@ -334,8 +353,8 @@ export default function AudioEmbed({ url, title, description, thumbnail, classNa
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <input
           type="range"
-          min={0}
-          max={duration || 1}
+          min={scrubMin}
+          max={scrubMax}
           step={0.1}
           value={currentTime}
           onChange={handleSeek}
@@ -349,10 +368,10 @@ export default function AudioEmbed({ url, title, description, thumbnail, classNa
         />
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 11, color: 'var(--label-4)', fontVariantNumeric: 'tabular-nums' }}>
-            {formatTime(currentTime)}
+            {formatTime(Math.max(0, currentTime - scrubMin))}
           </span>
           <span style={{ fontSize: 11, color: 'var(--label-4)', fontVariantNumeric: 'tabular-nums' }}>
-            {duration > 0 ? formatTime(duration) : '--:--'}
+            {scrubRange > 1 ? formatTime(scrubRange) : '--:--'}
           </span>
         </div>
       </div>
