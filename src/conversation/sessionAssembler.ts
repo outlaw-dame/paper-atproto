@@ -761,6 +761,120 @@ async function hydrateConversationBaseline(
   };
 }
 
+interface ConversationWriterPreflightParams {
+  sessionId: string;
+  session: ConversationSession;
+  pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+  replyCount: number;
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+}
+
+type ConversationStageOutcome =
+  | { kind: 'continue' }
+  | { kind: 'short_circuit' };
+
+/**
+ * Item 7b (coordinator runtime extraction): isolates the writer-preflight
+ * gating cascade — the interpolator-disabled fast path plus the
+ * `planConversationCoordinatorModelStages` writer-skip fan-out that marks
+ * writer + multimodal + premium as skipped before any provider call.
+ *
+ * Pure cut from `hydrateConversationSession`. Records the same
+ * `recordInterpolatorModeDecision` / `recordInterpolatorGateDecision`
+ * telemetry, applies the same `markConversationModelSkipped` write order,
+ * and returns a `short_circuit` outcome that maps to the original early
+ * `return` in the caller.
+ */
+function runConversationWriterPreflight(
+  params: ConversationWriterPreflightParams,
+): ConversationStageOutcome {
+  const { sessionId, session, pipeline, replyCount, modelSourceToken } = params;
+  const store = useConversationSessionStore.getState();
+
+  const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
+  if (!interpolatorEnabled) {
+    store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'writer', {
+      reason: 'interpolator_disabled',
+      sourceToken: modelSourceToken,
+    }));
+    store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'multimodal', {
+      reason: 'interpolator_disabled',
+      sourceToken: modelSourceToken,
+    }));
+    store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'premium', {
+      reason: 'premium_ineligible',
+      sourceToken: modelSourceToken,
+    }));
+    return { kind: 'short_circuit' };
+  }
+
+  recordInterpolatorModeDecision(
+    session.interpretation.deltaDecision?.summaryMode ?? pipeline.deltaDecision.summaryMode,
+    session.interpretation.deltaDecision?.confidence ?? pipeline.deltaDecision.confidence,
+  );
+
+  const preflightStagePlan = planConversationCoordinatorModelStages({
+    session,
+    replyCount,
+    interpolatorEnabled,
+    didMeaningfullyChange: pipeline.didMeaningfullyChange,
+    multimodalPlan: {
+      shouldRun: false,
+      reason: 'multimodal_not_needed',
+    },
+    premiumEntitlements: resolveCoordinatorPlannerEntitlements(session),
+  });
+
+  const writerPreflightPlan = preflightStagePlan.plans.writer;
+  recordInterpolatorGateDecision(writerPreflightPlan.action === 'run');
+  if (writerPreflightPlan.action !== 'skip') {
+    return { kind: 'continue' };
+  }
+
+  const writerSkipReason = coerceSkipReason(writerPreflightPlan.reason, 'insufficient_signal');
+  if (writerSkipReason === 'no_meaningful_change') {
+    store.updateSession(sessionId, (current) => (
+      markConversationModelSkipped(current, 'writer', {
+        reason: writerSkipReason,
+        sourceToken: modelSourceToken,
+      })
+    ));
+    store.updateSession(sessionId, (current) => (
+      markConversationModelSkipped(current, 'multimodal', {
+        reason: writerSkipReason,
+        sourceToken: modelSourceToken,
+      })
+    ));
+    store.updateSession(sessionId, (current) => (
+      markConversationModelSkipped(current, 'premium', {
+        reason: 'no_meaningful_change',
+        sourceToken: modelSourceToken,
+      })
+    ));
+    return { kind: 'short_circuit' };
+  }
+
+  store.updateSession(sessionId, (current) => (
+    markConversationModelSkipped(current, 'writer', {
+      reason: writerSkipReason,
+      sourceToken: modelSourceToken,
+    })
+  ));
+  store.updateSession(sessionId, (current) => (
+    markConversationModelSkipped(current, 'multimodal', {
+      reason: writerSkipReason,
+      sourceToken: modelSourceToken,
+    })
+  ));
+  store.updateSession(sessionId, (current) => (
+    markConversationModelSkipped(current, 'premium', {
+      reason: 'premium_ineligible',
+      sourceToken: modelSourceToken,
+    })
+  ));
+  return { kind: 'short_circuit' };
+}
+
 export async function hydrateConversationSession(
   params: HydrateConversationSessionParams,
 ): Promise<void> {
@@ -812,84 +926,14 @@ export async function hydrateConversationSession(
     }
     const { nextSession, rootNode, allReplies, pipeline, modelSourceToken } = baseline;
 
-    const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
-    if (!interpolatorEnabled) {
-      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'writer', {
-        reason: 'interpolator_disabled',
-        sourceToken: modelSourceToken,
-      }));
-      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'multimodal', {
-        reason: 'interpolator_disabled',
-        sourceToken: modelSourceToken,
-      }));
-      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'premium', {
-        reason: 'premium_ineligible',
-        sourceToken: modelSourceToken,
-      }));
-      return;
-    }
-
-    recordInterpolatorModeDecision(
-      nextSession.interpretation.deltaDecision?.summaryMode ?? pipeline.deltaDecision.summaryMode,
-      nextSession.interpretation.deltaDecision?.confidence ?? pipeline.deltaDecision.confidence,
-    );
-
-    const preflightStagePlan = planConversationCoordinatorModelStages({
+    const preflightOutcome = runConversationWriterPreflight({
+      sessionId,
       session: nextSession,
+      pipeline,
       replyCount: allReplies.length,
-      interpolatorEnabled,
-      didMeaningfullyChange: pipeline.didMeaningfullyChange,
-      multimodalPlan: {
-        shouldRun: false,
-        reason: 'multimodal_not_needed',
-      },
-      premiumEntitlements: resolveCoordinatorPlannerEntitlements(nextSession),
+      modelSourceToken,
     });
-
-    const writerPreflightPlan = preflightStagePlan.plans.writer;
-    recordInterpolatorGateDecision(writerPreflightPlan.action === 'run');
-    if (writerPreflightPlan.action === 'skip') {
-      const writerSkipReason = coerceSkipReason(writerPreflightPlan.reason, 'insufficient_signal');
-      if (writerSkipReason === 'no_meaningful_change') {
-        store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'writer', {
-            reason: writerSkipReason,
-            sourceToken: modelSourceToken,
-          })
-        ));
-        store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'multimodal', {
-            reason: writerSkipReason,
-            sourceToken: modelSourceToken,
-          })
-        ));
-        store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'premium', {
-            reason: 'no_meaningful_change',
-            sourceToken: modelSourceToken,
-          })
-        ));
-        return;
-      }
-
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'writer', {
-          reason: writerSkipReason,
-          sourceToken: modelSourceToken,
-        })
-      ));
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'multimodal', {
-          reason: writerSkipReason,
-          sourceToken: modelSourceToken,
-        })
-      ));
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'premium', {
-          reason: 'premium_ineligible',
-          sourceToken: modelSourceToken,
-        })
-      ));
+    if (preflightOutcome.kind === 'short_circuit') {
       return;
     }
 
