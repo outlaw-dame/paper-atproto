@@ -542,6 +542,867 @@ export interface HydrateConversationSessionParams {
   signal?: AbortSignal;
 }
 
+interface ConversationHydrationBaselineParams {
+  sessionId: string;
+  rootUri: string;
+  agent: ThreadAgent;
+  providers: VerificationProviders;
+  cache: VerificationCache;
+  signal?: AbortSignal;
+}
+
+type ConversationHydrationBaselineOutcome =
+  | {
+      kind: 'ready';
+      nextSession: ConversationSession;
+      rootNode: ThreadNode;
+      allReplies: ThreadNode[];
+      pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+      modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+    }
+  | { kind: 'thread_not_found' }
+  | { kind: 'session_dropped' };
+
+/**
+ * Item 7a (coordinator runtime extraction): isolates the baseline hydration
+ * phase — thread fetch, verified pipeline run, store annotations, mental-health
+ * scan, quality/policy/continuity transforms, shadow supervisor invocation,
+ * coordinator runtime advisory log, and source-token build.
+ *
+ * Pure cut from `hydrateConversationSession`; callers are still responsible
+ * for `ensureSession`, the initial `status: 'loading'` write, the AT URI
+ * pre-check, and the `hydrate.total` timing wrapper. Throws on AbortError or
+ * unexpected errors so the caller's outer catch handles them as before.
+ */
+async function hydrateConversationBaseline(
+  params: ConversationHydrationBaselineParams,
+): Promise<ConversationHydrationBaselineOutcome> {
+  const { sessionId, rootUri, agent, providers, cache, signal } = params;
+  const store = useConversationSessionStore.getState();
+
+  const threadFetchStartedAt = nowMs();
+  const response = await atpCall(
+    () => agent.getPostThread({ uri: rootUri, depth: 6 }),
+    {
+      ...THREAD_RETRY_DEFAULTS,
+      ...(signal ? { signal } : {}),
+    },
+  );
+  recordInterpolatorStageTiming('hydrate.fetch_thread', nowMs() - threadFetchStartedAt);
+
+  const envelope = asThreadPostEnvelope(response);
+  const threadData = envelope.data?.thread;
+  if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') {
+    return { kind: 'thread_not_found' };
+  }
+
+  const rootNode = resolveThread(threadData as never);
+  const allReplies = flattenThreadReplies(rootNode.replies ?? []);
+  const graph = buildSessionGraph(rootNode);
+
+  const pipelineStartedAt = nowMs();
+  const pipeline = await runVerifiedThreadPipeline({
+    input: {
+      rootUri,
+      rootText: rootNode.text,
+      rootPost: nodeToThreadPost(rootNode),
+      replies: allReplies,
+    },
+    previous: store.getSession(sessionId)?.interpretation.interpolator ?? null,
+    providers,
+    cache,
+    ...(signal ? { signal } : {}),
+  });
+  recordInterpolatorStageTiming('hydrate.verified_pipeline', nowMs() - pipelineStartedAt);
+
+  store.updateSession(sessionId, (current) => {
+    const preserveExistingOutputs = !pipeline.didMeaningfullyChange;
+
+    return {
+      ...current,
+      graph,
+      interpretation: {
+        ...current.interpretation,
+        interpolator: pipeline.interpolator,
+        scoresByUri: pipeline.scores,
+        confidence: pipeline.confidence,
+        summaryMode: pipeline.summaryMode,
+        deltaDecision: pipeline.deltaDecision,
+        writerResult: preserveExistingOutputs
+          ? current.interpretation.writerResult
+          : null,
+        mediaFindings: preserveExistingOutputs
+          ? (current.interpretation.mediaFindings ?? [])
+          : [],
+        threadState: null,
+        interpretiveExplanation: null,
+        ...(
+          preserveExistingOutputs
+            ? (
+                current.interpretation.lastComputedAt
+                  ? { lastComputedAt: current.interpretation.lastComputedAt }
+                  : {}
+              )
+            : { lastComputedAt: new Date().toISOString() }
+        ),
+        premium: preserveExistingOutputs
+          ? current.interpretation.premium
+          : {
+              status: 'idle',
+              ...(current.interpretation.premium.entitlements
+                ? { entitlements: current.interpretation.premium.entitlements }
+                : {}),
+            },
+      },
+      evidence: {
+        verificationByUri: pipeline.verificationByPost,
+        rootVerification: pipeline.rootVerification,
+      },
+      entities: {
+        ...current.entities,
+        entityLandscape: pipeline.interpolator.entityLandscape ?? [],
+      },
+      contributors: {
+        contributors: pipeline.interpolator.topContributors ?? [],
+        topContributorDids: (pipeline.interpolator.topContributors ?? []).map((c) => c.did),
+      },
+      trajectory: {
+        ...current.trajectory,
+        heatLevel: pipeline.interpolator.heatLevel ?? 0,
+        repetitionLevel: pipeline.interpolator.repetitionLevel ?? 0,
+      },
+      meta: {
+        status: 'ready',
+        error: null,
+        lastHydratedAt: new Date().toISOString(),
+      },
+    };
+  });
+
+  let nextSession = store.getSession(sessionId);
+  if (!nextSession) return { kind: 'session_dropped' };
+
+  nextSession = await applyModerationFlagsFromUserFilters(nextSession);
+
+  // ─── Mental health crisis scan ─────────────────────────────────────
+  // Check root post + top replies for crisis signals. Runs regardless of
+  // whether the Interpolator is enabled — safety is not opt-out.
+  const mhTexts = [
+    rootNode.text,
+    ...allReplies.slice(0, 10).map((r) => r.text),
+  ];
+  let mentalHealthSignal: { detected: boolean; category?: MentalHealthCrisisCategory } = {
+    detected: false,
+  };
+  for (const text of mhTexts) {
+    const mhResult = detectMentalHealthCrisis(text);
+    if (mhResult.hasCrisis) {
+      mentalHealthSignal = mhResult.category
+        ? { detected: true, category: mhResult.category }
+        : { detected: true };
+      break;
+    }
+  }
+  nextSession = {
+    ...nextSession,
+    interpretation: {
+      ...nextSession.interpretation,
+      mentalHealthSignal,
+    },
+  };
+  // ──────────────────────────────────────────────────────────────────
+
+  nextSession = annotateConversationQuality(nextSession);
+  nextSession = applyInterpretiveConfidence(nextSession);
+  nextSession = {
+    ...nextSession,
+    interpretation: {
+      ...nextSession.interpretation,
+      threadState: deriveThreadStateSignal(nextSession),
+    },
+  };
+  nextSession = finalizeConversationDeltaDecision(nextSession, pipeline.deltaDecision);
+  nextSession = assignDeferredReasons(nextSession, defaultAnchorLinearPolicy);
+  nextSession = {
+    ...nextSession,
+    trajectory: {
+      ...nextSession.trajectory,
+      direction: deriveConversationDirection(nextSession),
+    },
+  };
+  nextSession = updateConversationContinuitySnapshots(nextSession);
+  nextSession = applyShadowConversationSupervisor(nextSession, 'session_hydrated');
+
+  store.updateSession(sessionId, () => nextSession!);
+
+  const coordinatorSnapshotStartedAt = nowMs();
+  const coordinatorRuntimeAdvisory = summarizeConversationCoordinatorRuntimeAdvisory(nextSession);
+  recordInterpolatorStageTiming('hydrate.coordinator_snapshot', nowMs() - coordinatorSnapshotStartedAt);
+  if (coordinatorRuntimeAdvisory.action !== 'continue') {
+    console.warn('[conversation] coordinator runtime advisory', {
+      sessionId,
+      action: coordinatorRuntimeAdvisory.action,
+      reasonCodes: coordinatorRuntimeAdvisory.reasonCodes,
+      activeStageCount: coordinatorRuntimeAdvisory.activeStageCount,
+      errorStageCount: coordinatorRuntimeAdvisory.errorStageCount,
+      staleStageCount: coordinatorRuntimeAdvisory.staleStageCount,
+    });
+  }
+
+  const modelSourceToken = buildConversationModelSourceToken(nextSession);
+
+  return {
+    kind: 'ready',
+    nextSession,
+    rootNode,
+    allReplies,
+    pipeline,
+    modelSourceToken,
+  };
+}
+
+interface ConversationWriterPreflightParams {
+  sessionId: string;
+  session: ConversationSession;
+  pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+  replyCount: number;
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+}
+
+type ConversationStageOutcome =
+  | { kind: 'continue' }
+  | { kind: 'short_circuit' };
+
+/**
+ * Item 7b (coordinator runtime extraction): isolates the writer-preflight
+ * gating cascade — the interpolator-disabled fast path plus the
+ * `planConversationCoordinatorModelStages` writer-skip fan-out that marks
+ * writer + multimodal + premium as skipped before any provider call.
+ *
+ * Pure cut from `hydrateConversationSession`. Records the same
+ * `recordInterpolatorModeDecision` / `recordInterpolatorGateDecision`
+ * telemetry, applies the same `markConversationModelSkipped` write order,
+ * and returns a `short_circuit` outcome that maps to the original early
+ * `return` in the caller.
+ */
+function runConversationWriterPreflight(
+  params: ConversationWriterPreflightParams,
+): ConversationStageOutcome {
+  const { sessionId, session, pipeline, replyCount, modelSourceToken } = params;
+  const store = useConversationSessionStore.getState();
+
+  const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
+  if (!interpolatorEnabled) {
+    // Address Gemini PR #76 review: consolidate three sequential
+    // updateSession calls into one atomic update so subscribers see a single
+    // consistent transition instead of three intermediate states.
+    store.updateSession(sessionId, (current) => {
+      let next = markConversationModelSkipped(current, 'writer', {
+        reason: 'interpolator_disabled',
+        sourceToken: modelSourceToken,
+      });
+      next = markConversationModelSkipped(next, 'multimodal', {
+        reason: 'interpolator_disabled',
+        sourceToken: modelSourceToken,
+      });
+      return markConversationModelSkipped(next, 'premium', {
+        reason: 'premium_ineligible',
+        sourceToken: modelSourceToken,
+      });
+    });
+    return { kind: 'short_circuit' };
+  }
+
+  recordInterpolatorModeDecision(
+    session.interpretation.deltaDecision?.summaryMode ?? pipeline.deltaDecision.summaryMode,
+    session.interpretation.deltaDecision?.confidence ?? pipeline.deltaDecision.confidence,
+  );
+
+  const preflightStagePlan = planConversationCoordinatorModelStages({
+    session,
+    replyCount,
+    interpolatorEnabled,
+    didMeaningfullyChange: pipeline.didMeaningfullyChange,
+    multimodalPlan: {
+      shouldRun: false,
+      reason: 'multimodal_not_needed',
+    },
+    premiumEntitlements: resolveCoordinatorPlannerEntitlements(session),
+  });
+
+  const writerPreflightPlan = preflightStagePlan.plans.writer;
+  recordInterpolatorGateDecision(writerPreflightPlan.action === 'run');
+  if (writerPreflightPlan.action !== 'skip') {
+    return { kind: 'continue' };
+  }
+
+  const writerSkipReason = coerceSkipReason(writerPreflightPlan.reason, 'insufficient_signal');
+  if (writerSkipReason === 'no_meaningful_change') {
+    // Address Gemini PR #76 review: single atomic write across writer +
+    // multimodal + premium so the UI never observes a partial-skip state.
+    store.updateSession(sessionId, (current) => {
+      let next = markConversationModelSkipped(current, 'writer', {
+        reason: writerSkipReason,
+        sourceToken: modelSourceToken,
+      });
+      next = markConversationModelSkipped(next, 'multimodal', {
+        reason: writerSkipReason,
+        sourceToken: modelSourceToken,
+      });
+      return markConversationModelSkipped(next, 'premium', {
+        reason: 'no_meaningful_change',
+        sourceToken: modelSourceToken,
+      });
+    });
+    return { kind: 'short_circuit' };
+  }
+
+  // Address Gemini PR #76 review: collapse the generic insufficient-signal
+  // fan-out into a single atomic updateSession call.
+  store.updateSession(sessionId, (current) => {
+    let next = markConversationModelSkipped(current, 'writer', {
+      reason: writerSkipReason,
+      sourceToken: modelSourceToken,
+    });
+    next = markConversationModelSkipped(next, 'multimodal', {
+      reason: writerSkipReason,
+      sourceToken: modelSourceToken,
+    });
+    return markConversationModelSkipped(next, 'premium', {
+      reason: 'premium_ineligible',
+      sourceToken: modelSourceToken,
+    });
+  });
+  return { kind: 'short_circuit' };
+}
+
+interface ConversationMediaStageParams {
+  sessionId: string;
+  rootUri: string;
+  rootNode: ThreadNode;
+  sessionAfterTranslation: ConversationSession;
+  allReplies: ThreadNode[];
+  pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+  nearbyTextByUri: Record<string, string | undefined>;
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  signal?: AbortSignal;
+}
+
+type ConversationMediaStageOutcome =
+  | { kind: 'continue'; mediaFindings: WriterMediaFinding[] }
+  | { kind: 'short_circuit' };
+
+/**
+ * Item 7c (coordinator runtime extraction): isolates the multimodal stage.
+ *
+ * Plans the media stage via `planConversationCoordinatorMediaStage`, runs the
+ * coordinator model-stage planner with that plan, and either marks multimodal
+ * skipped (planner skip / no media to analyze) or executes
+ * `executeConversationCoordinatorMediaStage` and applies the resulting
+ * loading/ready/error/discard store transitions exactly as the inline body
+ * did, including the shadow supervisor `'multimodal_completed'` event.
+ *
+ * Pure cut from `hydrateConversationSession`; preserves the `hydrate.multimodal`
+ * timing label, the discard-stale source-token behavior, and the early
+ * `return` (now a `short_circuit` outcome) when the planner says run but the
+ * media plan itself reports `shouldRun: false`.
+ */
+async function runConversationMediaStage(
+  params: ConversationMediaStageParams,
+): Promise<ConversationMediaStageOutcome> {
+  const {
+    sessionId,
+    rootUri,
+    rootNode,
+    sessionAfterTranslation,
+    allReplies,
+    pipeline,
+    nearbyTextByUri,
+    modelSourceToken,
+    signal,
+  } = params;
+  const store = useConversationSessionStore.getState();
+
+  const mediaPlan = planConversationCoordinatorMediaStage({
+    threadId: rootUri,
+    root: rootNode,
+    replies: allReplies,
+    scores: pipeline.scores,
+    nearbyTextByUri,
+  });
+
+  // Address Gemini PR #73 review: thread the real planner inputs instead of
+  // hardcoding `true`/`true`. Although `runConversationWriterPreflight` would
+  // have already short-circuited if `interpolatorEnabled` were false or
+  // `didMeaningfullyChange` were false (skip path), reading the live values
+  // keeps the coordinator planner honest and avoids future drift.
+  const multimodalStagePlan = planConversationCoordinatorModelStages({
+    session: sessionAfterTranslation,
+    replyCount: allReplies.length,
+    interpolatorEnabled: useInterpolatorSettingsStore.getState().enabled,
+    didMeaningfullyChange: pipeline.didMeaningfullyChange,
+    multimodalPlan: toCoordinatorMultimodalPlanningInput(mediaPlan),
+    premiumEntitlements: resolveCoordinatorPlannerEntitlements(sessionAfterTranslation),
+  }).plans.multimodal;
+
+  if (multimodalStagePlan.action === 'skip') {
+    const multimodalSkipReason = coerceSkipReason(multimodalStagePlan.reason, 'multimodal_not_needed');
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+        ? markConversationModelSkipped(current, 'multimodal', {
+            reason: multimodalSkipReason,
+            sourceToken: modelSourceToken,
+          })
+        : markConversationModelDiscarded(current, 'multimodal')
+    ));
+    return { kind: 'continue', mediaFindings: [] };
+  }
+
+  // Address Gemini PR #73 review: the previous `if (!mediaPlan.shouldRun)`
+  // guard was dead — when `multimodalStagePlan.action === 'run'` the
+  // coordinator planner has already required `mediaPlan.shouldRun` via
+  // `toCoordinatorMultimodalPlanningInput`. Worse, that branch returned
+  // `short_circuit` which would have wrongly skipped the writer stage. The
+  // only reachable path here is `action === 'run'` with non-empty requests.
+
+  const multimodalRequestedAt = new Date().toISOString();
+  store.updateSession(sessionId, (current) => (
+    selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+      ? markConversationModelLoading(current, 'multimodal', {
+          sourceToken: modelSourceToken,
+          requestedAt: multimodalRequestedAt,
+        })
+      : markConversationModelDiscarded(current, 'multimodal')
+  ));
+
+  const multimodalStartedAt = nowMs();
+  const mediaOutcome = await executeConversationCoordinatorMediaStage({
+    threadId: rootUri,
+    requests: mediaPlan.requests,
+    analyzeMedia: callMediaAnalyzer,
+    logFailure: (ev) => console.warn('[conversation] multimodal analysis degraded', ev),
+    ...(signal ? { signal } : {}),
+  });
+  recordInterpolatorStageTiming('hydrate.multimodal', nowMs() - multimodalStartedAt);
+
+  const mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
+  store.updateSession(sessionId, (current) => {
+    if (selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'discard_stale') {
+      return markConversationModelDiscarded(current, 'multimodal');
+    }
+
+    if (mediaOutcome.status === 'error') {
+      return applyShadowConversationSupervisor(markConversationModelError(current, 'multimodal', {
+        sourceToken: modelSourceToken,
+        requestedAt: multimodalRequestedAt,
+        error: mediaOutcome.error,
+      }), 'multimodal_completed');
+    }
+
+    const nextCurrent = mediaFindings.length > 0
+      ? {
+          ...current,
+          interpretation: {
+            ...current.interpretation,
+            mediaFindings,
+          },
+        }
+      : current;
+
+    return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'multimodal', {
+      sourceToken: modelSourceToken,
+      requestedAt: multimodalRequestedAt,
+    }), 'multimodal_completed');
+  });
+
+  return { kind: 'continue', mediaFindings };
+}
+
+interface ConversationWriterStageParams {
+  sessionId: string;
+  rootUri: AtUri;
+  rootNode: ThreadNode;
+  allReplies: ThreadNode[];
+  pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+  nextSession: ConversationSession;
+  translationById: SessionTranslationState['byUri'];
+  mediaFindings: WriterMediaFinding[];
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  writerRequestedAt: string;
+  signal?: AbortSignal;
+}
+
+type ConversationWriterStageOutcome =
+  | { kind: 'continue'; writerInput: ThreadStateForWriter; filteredWriterResult: InterpolatorWriteResult | null }
+  | { kind: 'short_circuit' };
+
+/**
+ * Item 7d (coordinator runtime extraction): isolates the writer stage.
+ *
+ * Owns the post-media writer source-token guard, `buildThreadStateForWriter`,
+ * the `writerEntities` store update, the `executeConversationCoordinatorWriterStage`
+ * invocation with `redactWriterResultByUserRules`, the `hydrate.writer` timing
+ * label, and the writer ready/error/discard store transitions plus the
+ * `applyShadowConversationSupervisor('writer_completed')` event.
+ *
+ * Errors thrown out of the writer execution propagate to the caller's outer
+ * try/catch (which handles the AbortError/sanitize-and-mark-error path shared
+ * with the translation phase).
+ */
+async function runConversationWriterStage(
+  params: ConversationWriterStageParams,
+): Promise<ConversationWriterStageOutcome> {
+  const {
+    sessionId,
+    rootUri,
+    rootNode,
+    allReplies,
+    pipeline,
+    nextSession,
+    translationById,
+    mediaFindings,
+    modelSourceToken,
+    writerRequestedAt,
+    signal,
+  } = params;
+  const store = useConversationSessionStore.getState();
+
+  const sessionAfterMedia = store.getSession(sessionId);
+  if (!sessionAfterMedia) return { kind: 'short_circuit' };
+  if (selectCoordinatorSourceApplication(sessionAfterMedia, modelSourceToken, 'writer').action === 'discard_stale') {
+    store.updateSession(sessionId, (current) => markConversationModelDiscarded(
+      markConversationModelDiscarded(current, 'multimodal'),
+      'writer',
+    ));
+    return { kind: 'short_circuit' };
+  }
+
+  const writerInput = buildThreadStateForWriter(
+    rootUri,
+    rootNode.text,
+    pipeline.interpolator,
+    pipeline.scores,
+    allReplies,
+    nextSession.interpretation.confidence ?? pipeline.confidence,
+    Object.fromEntries(
+      Object.entries(translationById).map(([uri, value]) => [
+        uri,
+        {
+          ...(value.translatedText ? { translatedText: value.translatedText } : {}),
+          ...(value.sourceLang ? { sourceLang: value.sourceLang } : {}),
+        },
+      ]),
+    ),
+    rootNode.authorHandle ?? undefined,
+    {
+      summaryMode: nextSession.interpretation.deltaDecision?.summaryMode ?? nextSession.interpretation.summaryMode ?? pipeline.deltaDecision.summaryMode,
+      ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
+      deltaDecision: nextSession.interpretation.deltaDecision ?? pipeline.deltaDecision,
+    },
+  );
+  const preparedWriterInput = writerInput;
+
+  store.updateSession(sessionId, (current) => (
+    selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
+      ? {
+          ...current,
+          entities: {
+            ...current.entities,
+            writerEntities: preparedWriterInput.safeEntities,
+          },
+        }
+      : markConversationModelDiscarded(current, 'writer')
+  ));
+
+  const writerStartedAt = nowMs();
+  const writerOutcome = await executeConversationCoordinatorWriterStage({
+    writerInput: preparedWriterInput,
+    write: (input, sig) => callInterpolatorWriter(input, sig),
+    redactResult: redactWriterResultByUserRules,
+    ...(signal ? { signal } : {}),
+  });
+  recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
+
+  if (writerOutcome.status === 'error') {
+    const errorMessage = writerOutcome.error;
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
+        ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
+            sourceToken: modelSourceToken,
+            requestedAt: writerRequestedAt,
+            error: errorMessage,
+          }), 'writer_completed')
+        : markConversationModelDiscarded(current, 'writer')
+    ));
+    console.warn('[conversation] writer step failed', errorMessage);
+    return { kind: 'short_circuit' };
+  }
+
+  const filteredWriterResult = writerOutcome.result;
+  store.updateSession(sessionId, (current) => {
+    if (selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'discard_stale') {
+      return markConversationModelDiscarded(current, 'writer');
+    }
+
+    const nextCurrent = !filteredWriterResult?.abstained
+      ? updateConversationContinuitySnapshots({
+          ...current,
+          interpretation: {
+            ...current.interpretation,
+            writerResult: filteredWriterResult,
+          },
+        })
+      : current;
+
+    return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'writer', {
+      sourceToken: modelSourceToken,
+      requestedAt: writerRequestedAt,
+    }), 'writer_completed');
+  });
+
+  return { kind: 'continue', writerInput, filteredWriterResult };
+}
+
+interface ConversationPremiumStageParams {
+  sessionId: string;
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  replyCount: number;
+  writerInput: ThreadStateForWriter | null;
+  filteredWriterResult: InterpolatorWriteResult | null;
+  signal?: AbortSignal;
+}
+
+/**
+ * Item 7e (coordinator runtime extraction): isolates the premium deep
+ * interpolator stage.
+ *
+ * Owns:
+ * - actorDid resolution from the session store; not_entitled skip when missing
+ * - markConversationModelLoading('premium') + interpretation.premium.status='loading'
+ * - hydrate.premium_entitlements timing (getPremiumAiEntitlements)
+ * - shouldRunPremiumDeepInterpolator gate -> premium_ineligible/not_entitled skip
+ * - redactPremiumInterpolatorInputByUserRules + buildPremiumInterpolatorRequest
+ * - executeConversationCoordinatorPremiumStage (with retryPolicy maxAttempts:1
+ *   to avoid stacking with callPremiumDeepInterpolator's internal retries)
+ * - hydrate.premium_deep timing
+ * - ready/error/discard store transitions plus
+ *   applyShadowConversationSupervisor('premium_completed') for each terminal arm
+ * - inner try/catch with AbortError silent-return + sanitizeErrorMessage path
+ *
+ * The helper is self-contained: errors from the executor are caught locally,
+ * so this is the final stage and returning here ends hydration normally.
+ */
+async function runConversationPremiumStage(
+  params: ConversationPremiumStageParams,
+): Promise<void> {
+  const {
+    sessionId,
+    modelSourceToken,
+    replyCount,
+    writerInput,
+    filteredWriterResult,
+    signal,
+  } = params;
+  const store = useConversationSessionStore.getState();
+
+  const actorDid = useSessionStore.getState().session?.did?.trim();
+  if (!actorDid) {
+    store.updateSession(sessionId, (current) => (
+      applyShadowConversationSupervisor(markConversationModelSkipped({
+        ...current,
+        interpretation: {
+          ...current.interpretation,
+          premium: {
+            status: 'not_entitled',
+          },
+        },
+      }, 'premium', {
+        reason: 'not_entitled',
+        sourceToken: modelSourceToken,
+      }), 'premium_completed')
+    ));
+    return;
+  }
+
+  const premiumRequestedAt = new Date().toISOString();
+  store.updateSession(sessionId, (current) => ({
+    ...markConversationModelLoading(current, 'premium', {
+      sourceToken: modelSourceToken,
+      requestedAt: premiumRequestedAt,
+    }),
+    interpretation: {
+      ...current.interpretation,
+      premium: {
+        ...(current.interpretation.premium.entitlements
+          ? { entitlements: current.interpretation.premium.entitlements }
+          : {}),
+        status: 'loading',
+      },
+    },
+  }));
+
+  try {
+    const premiumEntitlementsStartedAt = nowMs();
+    const entitlements = await getPremiumAiEntitlements(actorDid, signal);
+    recordInterpolatorStageTiming('hydrate.premium_entitlements', nowMs() - premiumEntitlementsStartedAt);
+    store.updateSession(sessionId, (current) => ({
+      ...current,
+      interpretation: {
+        ...current.interpretation,
+        premium: {
+          entitlements,
+          status: entitlements.capabilities.includes('deep_interpolator')
+            ? 'idle'
+            : 'not_entitled',
+        },
+      },
+    }));
+
+    const currentSession = store.getSession(sessionId);
+    if (!currentSession) return;
+    if (selectCoordinatorSourceApplication(currentSession, modelSourceToken, 'premium').action === 'discard_stale') {
+      store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
+      return;
+    }
+
+    if (!shouldRunPremiumDeepInterpolator(currentSession, replyCount, entitlements)) {
+      store.updateSession(sessionId, (current) => (
+        applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
+          reason: entitlements.capabilities.includes('deep_interpolator')
+            ? 'premium_ineligible'
+            : 'not_entitled',
+          sourceToken: modelSourceToken,
+        }), 'premium_completed')
+      ));
+      return;
+    }
+
+    store.updateSession(sessionId, (current) => ({
+      ...current,
+      interpretation: {
+        ...current.interpretation,
+        premium: {
+          entitlements,
+          status: 'loading',
+        },
+      },
+    }));
+
+    const baseSummary = filteredWriterResult && !filteredWriterResult.abstained
+      ? filteredWriterResult.collapsedSummary
+      : currentSession.interpretation.interpolator?.summaryText;
+
+    const premiumInput = redactPremiumInterpolatorInputByUserRules(
+      buildPremiumInterpolatorRequest({
+        actorDid,
+        writerInput: writerInput!,
+        threadState: currentSession.interpretation.threadState,
+        interpretiveExplanation: currentSession.interpretation.interpretiveExplanation,
+        ...(baseSummary ? { baseSummary } : {}),
+      }),
+    );
+
+    const deepInterpolatorStartedAt = nowMs();
+    const premiumOutcome = await executeConversationCoordinatorPremiumStage({
+      request: premiumInput,
+      entitlements,
+      executePremium: (request, ctx) => callPremiumDeepInterpolator(request, ctx.signal),
+      redactionVerified: true,
+      retryPolicy: { maxAttempts: 1 },
+      ...(signal ? { signal } : {}),
+    });
+    recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
+
+    if (premiumOutcome.status !== 'ready') {
+      const errorMessage = premiumOutcome.error;
+      // Address Gemini PR #75 review: guarantee a terminal premium.status so
+      // the UI never hangs in 'loading' when the executor reports
+      // 'not_entitled'/'skipped'/'error'. Map 'error' -> 'error' and treat
+      // 'not_entitled' / 'skipped' as 'not_entitled' (the only non-error
+      // terminal state on SessionAiInterpretation['premium']['status']).
+      store.updateSession(sessionId, (current) => {
+        if (selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action !== 'apply') {
+          return markConversationModelDiscarded(current, 'premium');
+        }
+        return applyShadowConversationSupervisor(markConversationModelError({
+          ...current,
+          interpretation: {
+            ...current.interpretation,
+            premium: {
+              ...current.interpretation.premium,
+              status: premiumOutcome.status === 'error' ? 'error' : 'not_entitled',
+              ...(errorMessage ? { lastError: errorMessage } : {}),
+            },
+          },
+        }, 'premium', {
+          sourceToken: modelSourceToken,
+          requestedAt: premiumRequestedAt,
+          error: errorMessage,
+        }), 'premium_completed');
+      });
+      console.warn('[conversation] premium interpolation failed', errorMessage);
+      return;
+    }
+
+    const deepInterpolator = premiumOutcome.result;
+    const sourceComputedAt = currentSession.interpretation.lastComputedAt;
+
+    // Address Gemini PR #76 review: drop the unnecessary `{ ...(...) }`
+    // wrapper around the ternary; return the session object directly.
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
+        ? applyShadowConversationSupervisor(markConversationModelReady({
+            ...current,
+            interpretation: {
+              ...current.interpretation,
+              premium: {
+                entitlements,
+                status: 'ready',
+                deepInterpolator: {
+                  ...deepInterpolator,
+                  ...(sourceComputedAt ? { sourceComputedAt } : {}),
+                },
+              },
+            },
+          }, 'premium', {
+            sourceToken: modelSourceToken,
+            requestedAt: premiumRequestedAt,
+          }), 'premium_completed')
+        : markConversationModelDiscarded(current, 'premium')
+    ));
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      return;
+    }
+
+    const errorMessage = sanitizeErrorMessage(err);
+    // Address Gemini PR #75 review: thrown exceptions always indicate an
+    // error condition; force premium.status to 'error' so we never leave it
+    // stuck on 'loading' when entitlements happen to be missing.
+    store.updateSession(sessionId, (current) => {
+      if (selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action !== 'apply') {
+        return markConversationModelDiscarded(current, 'premium');
+      }
+      return applyShadowConversationSupervisor(markConversationModelError({
+        ...current,
+        interpretation: {
+          ...current.interpretation,
+          premium: {
+            ...current.interpretation.premium,
+            status: 'error',
+            ...(errorMessage ? { lastError: errorMessage } : {}),
+          },
+        },
+      }, 'premium', {
+        sourceToken: modelSourceToken,
+        requestedAt: premiumRequestedAt,
+        error: errorMessage,
+      }), 'premium_completed');
+    });
+    console.warn('[conversation] premium interpolation failed', errorMessage);
+  }
+}
+
 export async function hydrateConversationSession(
   params: HydrateConversationSessionParams,
 ): Promise<void> {
@@ -576,256 +1437,31 @@ export async function hydrateConversationSession(
 
   const hydrateStartedAt = nowMs();
   try {
-    const threadFetchStartedAt = nowMs();
-    const response = await atpCall(
-      () => agent.getPostThread({ uri: rootUri, depth: 6 }),
-      {
-        ...THREAD_RETRY_DEFAULTS,
-        ...(signal ? { signal } : {}),
-      },
-    );
-    recordInterpolatorStageTiming('hydrate.fetch_thread', nowMs() - threadFetchStartedAt);
-
-    const envelope = asThreadPostEnvelope(response);
-    const threadData = envelope.data?.thread;
-    if (!threadData || threadData.$type !== 'app.bsky.feed.defs#threadViewPost') {
-      setSessionError(sessionId, 'Thread not found.');
-      return;
-    }
-
-    const rootNode = resolveThread(threadData as never);
-    const allReplies = flattenThreadReplies(rootNode.replies ?? []);
-    const graph = buildSessionGraph(rootNode);
-
-    const pipelineStartedAt = nowMs();
-    const pipeline = await runVerifiedThreadPipeline({
-      input: {
-        rootUri,
-        rootText: rootNode.text,
-        rootPost: nodeToThreadPost(rootNode),
-        replies: allReplies,
-      },
-      previous: store.getSession(sessionId)?.interpretation.interpolator ?? null,
+    const baseline = await hydrateConversationBaseline({
+      sessionId,
+      rootUri,
+      agent,
       providers,
       cache,
       ...(signal ? { signal } : {}),
     });
-    recordInterpolatorStageTiming('hydrate.verified_pipeline', nowMs() - pipelineStartedAt);
-
-    store.updateSession(sessionId, (current) => {
-      const preserveExistingOutputs = !pipeline.didMeaningfullyChange;
-
-      return {
-        ...current,
-        graph,
-        interpretation: {
-          ...current.interpretation,
-          interpolator: pipeline.interpolator,
-          scoresByUri: pipeline.scores,
-          confidence: pipeline.confidence,
-          summaryMode: pipeline.summaryMode,
-          deltaDecision: pipeline.deltaDecision,
-          writerResult: preserveExistingOutputs
-            ? current.interpretation.writerResult
-            : null,
-          mediaFindings: preserveExistingOutputs
-            ? (current.interpretation.mediaFindings ?? [])
-            : [],
-          threadState: null,
-          interpretiveExplanation: null,
-          ...(
-            preserveExistingOutputs
-              ? (
-                  current.interpretation.lastComputedAt
-                    ? { lastComputedAt: current.interpretation.lastComputedAt }
-                    : {}
-                )
-              : { lastComputedAt: new Date().toISOString() }
-          ),
-          premium: preserveExistingOutputs
-            ? current.interpretation.premium
-            : {
-                status: 'idle',
-                ...(current.interpretation.premium.entitlements
-                  ? { entitlements: current.interpretation.premium.entitlements }
-                  : {}),
-              },
-        },
-        evidence: {
-          verificationByUri: pipeline.verificationByPost,
-          rootVerification: pipeline.rootVerification,
-        },
-        entities: {
-          ...current.entities,
-          entityLandscape: pipeline.interpolator.entityLandscape ?? [],
-        },
-        contributors: {
-          contributors: pipeline.interpolator.topContributors ?? [],
-          topContributorDids: (pipeline.interpolator.topContributors ?? []).map((c) => c.did),
-        },
-        trajectory: {
-          ...current.trajectory,
-          heatLevel: pipeline.interpolator.heatLevel ?? 0,
-          repetitionLevel: pipeline.interpolator.repetitionLevel ?? 0,
-        },
-        meta: {
-          status: 'ready',
-          error: null,
-          lastHydratedAt: new Date().toISOString(),
-        },
-      };
-    });
-
-    let nextSession = store.getSession(sessionId);
-    if (!nextSession) return;
-
-    nextSession = await applyModerationFlagsFromUserFilters(nextSession);
-
-    // ─── Mental health crisis scan ─────────────────────────────────────
-    // Check root post + top replies for crisis signals. Runs regardless of
-    // whether the Interpolator is enabled — safety is not opt-out.
-    const mhTexts = [
-      rootNode.text,
-      ...allReplies.slice(0, 10).map((r) => r.text),
-    ];
-    let mentalHealthSignal: { detected: boolean; category?: MentalHealthCrisisCategory } = {
-      detected: false,
-    };
-    for (const text of mhTexts) {
-      const mhResult = detectMentalHealthCrisis(text);
-      if (mhResult.hasCrisis) {
-        mentalHealthSignal = mhResult.category
-          ? { detected: true, category: mhResult.category }
-          : { detected: true };
-        break;
-      }
-    }
-    nextSession = {
-      ...nextSession,
-      interpretation: {
-        ...nextSession.interpretation,
-        mentalHealthSignal,
-      },
-    };
-    // ──────────────────────────────────────────────────────────────────
-
-    nextSession = annotateConversationQuality(nextSession);
-    nextSession = applyInterpretiveConfidence(nextSession);
-    nextSession = {
-      ...nextSession,
-      interpretation: {
-        ...nextSession.interpretation,
-        threadState: deriveThreadStateSignal(nextSession),
-      },
-    };
-    nextSession = finalizeConversationDeltaDecision(nextSession, pipeline.deltaDecision);
-    nextSession = assignDeferredReasons(nextSession, defaultAnchorLinearPolicy);
-    nextSession = {
-      ...nextSession,
-      trajectory: {
-        ...nextSession.trajectory,
-        direction: deriveConversationDirection(nextSession),
-      },
-    };
-    nextSession = updateConversationContinuitySnapshots(nextSession);
-    nextSession = applyShadowConversationSupervisor(nextSession, 'session_hydrated');
-
-    store.updateSession(sessionId, () => nextSession!);
-
-    const coordinatorSnapshotStartedAt = nowMs();
-    const coordinatorRuntimeAdvisory = summarizeConversationCoordinatorRuntimeAdvisory(nextSession);
-    recordInterpolatorStageTiming('hydrate.coordinator_snapshot', nowMs() - coordinatorSnapshotStartedAt);
-    if (coordinatorRuntimeAdvisory.action !== 'continue') {
-      console.warn('[conversation] coordinator runtime advisory', {
-        sessionId,
-        action: coordinatorRuntimeAdvisory.action,
-        reasonCodes: coordinatorRuntimeAdvisory.reasonCodes,
-        activeStageCount: coordinatorRuntimeAdvisory.activeStageCount,
-        errorStageCount: coordinatorRuntimeAdvisory.errorStageCount,
-        staleStageCount: coordinatorRuntimeAdvisory.staleStageCount,
-      });
-    }
-
-    const modelSourceToken = buildConversationModelSourceToken(nextSession);
-
-    const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
-    if (!interpolatorEnabled) {
-      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'writer', {
-        reason: 'interpolator_disabled',
-        sourceToken: modelSourceToken,
-      }));
-      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'multimodal', {
-        reason: 'interpolator_disabled',
-        sourceToken: modelSourceToken,
-      }));
-      store.updateSession(sessionId, (current) => markConversationModelSkipped(current, 'premium', {
-        reason: 'premium_ineligible',
-        sourceToken: modelSourceToken,
-      }));
+    if (baseline.kind === 'thread_not_found') {
+      setSessionError(sessionId, 'Thread not found.');
       return;
     }
+    if (baseline.kind === 'session_dropped') {
+      return;
+    }
+    const { nextSession, rootNode, allReplies, pipeline, modelSourceToken } = baseline;
 
-    recordInterpolatorModeDecision(
-      nextSession.interpretation.deltaDecision?.summaryMode ?? pipeline.deltaDecision.summaryMode,
-      nextSession.interpretation.deltaDecision?.confidence ?? pipeline.deltaDecision.confidence,
-    );
-
-    const preflightStagePlan = planConversationCoordinatorModelStages({
+    const preflightOutcome = runConversationWriterPreflight({
+      sessionId,
       session: nextSession,
+      pipeline,
       replyCount: allReplies.length,
-      interpolatorEnabled,
-      didMeaningfullyChange: pipeline.didMeaningfullyChange,
-      multimodalPlan: {
-        shouldRun: false,
-        reason: 'multimodal_not_needed',
-      },
-      premiumEntitlements: resolveCoordinatorPlannerEntitlements(nextSession),
+      modelSourceToken,
     });
-
-    const writerPreflightPlan = preflightStagePlan.plans.writer;
-    recordInterpolatorGateDecision(writerPreflightPlan.action === 'run');
-    if (writerPreflightPlan.action === 'skip') {
-      const writerSkipReason = coerceSkipReason(writerPreflightPlan.reason, 'insufficient_signal');
-      if (writerSkipReason === 'no_meaningful_change') {
-        store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'writer', {
-            reason: writerSkipReason,
-            sourceToken: modelSourceToken,
-          })
-        ));
-        store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'multimodal', {
-            reason: writerSkipReason,
-            sourceToken: modelSourceToken,
-          })
-        ));
-        store.updateSession(sessionId, (current) => (
-          markConversationModelSkipped(current, 'premium', {
-            reason: 'no_meaningful_change',
-            sourceToken: modelSourceToken,
-          })
-        ));
-        return;
-      }
-
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'writer', {
-          reason: writerSkipReason,
-          sourceToken: modelSourceToken,
-        })
-      ));
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'multimodal', {
-          reason: writerSkipReason,
-          sourceToken: modelSourceToken,
-        })
-      ));
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'premium', {
-          reason: 'premium_ineligible',
-          sourceToken: modelSourceToken,
-        })
-      ));
+    if (preflightOutcome.kind === 'short_circuit') {
       return;
     }
 
@@ -901,189 +1537,40 @@ export async function hydrateConversationSession(
         translationById,
       });
 
-      const mediaPlan = planConversationCoordinatorMediaStage({
-        threadId: rootUri,
-        root: rootNode,
-        replies: allReplies,
-        scores: pipeline.scores,
-        nearbyTextByUri,
-      });
-
-      const multimodalStagePlan = planConversationCoordinatorModelStages({
-        session: sessionAfterTranslation,
-        replyCount: allReplies.length,
-        interpolatorEnabled: true,
-        didMeaningfullyChange: true,
-        multimodalPlan: toCoordinatorMultimodalPlanningInput(mediaPlan),
-        premiumEntitlements: resolveCoordinatorPlannerEntitlements(sessionAfterTranslation),
-      }).plans.multimodal;
-
-      if (multimodalStagePlan.action === 'skip') {
-        const multimodalSkipReason = coerceSkipReason(multimodalStagePlan.reason, 'multimodal_not_needed');
-        store.updateSession(sessionId, (current) => (
-          selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-            ? markConversationModelSkipped(current, 'multimodal', {
-                reason: multimodalSkipReason,
-                sourceToken: modelSourceToken,
-              })
-            : markConversationModelDiscarded(current, 'multimodal')
-        ));
-      } else {
-        if (!mediaPlan.shouldRun) {
-          store.updateSession(sessionId, (current) => (
-            selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-              ? markConversationModelSkipped(current, 'multimodal', {
-                  reason: 'multimodal_not_needed',
-                  sourceToken: modelSourceToken,
-                })
-              : markConversationModelDiscarded(current, 'multimodal')
-          ));
-          return;
-        }
-
-        const multimodalRequestedAt = new Date().toISOString();
-        store.updateSession(sessionId, (current) => (
-          selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-            ? markConversationModelLoading(current, 'multimodal', {
-                sourceToken: modelSourceToken,
-                requestedAt: multimodalRequestedAt,
-              })
-            : markConversationModelDiscarded(current, 'multimodal')
-        ));
-
-        const multimodalStartedAt = nowMs();
-        const mediaOutcome = await executeConversationCoordinatorMediaStage({
-          threadId: rootUri,
-          requests: mediaPlan.requests,
-          analyzeMedia: callMediaAnalyzer,
-          logFailure: (ev) => console.warn('[conversation] multimodal analysis degraded', ev),
-          ...(signal ? { signal } : {}),
-        });
-        recordInterpolatorStageTiming('hydrate.multimodal', nowMs() - multimodalStartedAt);
-
-        mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
-        store.updateSession(sessionId, (current) => {
-          if (selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'discard_stale') {
-            return markConversationModelDiscarded(current, 'multimodal');
-          }
-
-          if (mediaOutcome.status === 'error') {
-            return applyShadowConversationSupervisor(markConversationModelError(current, 'multimodal', {
-              sourceToken: modelSourceToken,
-              requestedAt: multimodalRequestedAt,
-              error: mediaOutcome.error,
-            }), 'multimodal_completed');
-          }
-
-          const nextCurrent = mediaFindings.length > 0
-            ? {
-                ...current,
-                interpretation: {
-                  ...current.interpretation,
-                  mediaFindings,
-                },
-              }
-            : current;
-
-          return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'multimodal', {
-            sourceToken: modelSourceToken,
-            requestedAt: multimodalRequestedAt,
-          }), 'multimodal_completed');
-        });
-      }
-
-      const sessionAfterMedia = store.getSession(sessionId);
-      if (!sessionAfterMedia) return;
-      if (selectCoordinatorSourceApplication(sessionAfterMedia, modelSourceToken, 'writer').action === 'discard_stale') {
-        store.updateSession(sessionId, (current) => markConversationModelDiscarded(
-          markConversationModelDiscarded(current, 'multimodal'),
-          'writer',
-        ));
-        return;
-      }
-
-      writerInput = buildThreadStateForWriter(
+      const mediaOutcome = await runConversationMediaStage({
+        sessionId,
         rootUri,
-        rootNode.text,
-        pipeline.interpolator,
-        pipeline.scores,
+        rootNode,
+        sessionAfterTranslation,
         allReplies,
-        nextSession.interpretation.confidence ?? pipeline.confidence,
-        Object.fromEntries(
-          Object.entries(translationById).map(([uri, value]) => [
-            uri,
-            {
-              ...(value.translatedText ? { translatedText: value.translatedText } : {}),
-              ...(value.sourceLang ? { sourceLang: value.sourceLang } : {}),
-            },
-          ]),
-        ),
-        rootNode.authorHandle ?? undefined,
-        {
-          summaryMode: nextSession.interpretation.deltaDecision?.summaryMode ?? nextSession.interpretation.summaryMode ?? pipeline.deltaDecision.summaryMode,
-          ...(mediaFindings.length > 0 ? { mediaFindings } : {}),
-          deltaDecision: nextSession.interpretation.deltaDecision ?? pipeline.deltaDecision,
-        },
-      );
-      const preparedWriterInput = writerInput;
-
-      store.updateSession(sessionId, (current) => (
-        selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
-          ? {
-              ...current,
-              entities: {
-                ...current.entities,
-                writerEntities: preparedWriterInput.safeEntities,
-              },
-            }
-          : markConversationModelDiscarded(current, 'writer')
-      ));
-
-      const writerStartedAt = nowMs();
-      const writerOutcome = await executeConversationCoordinatorWriterStage({
-        writerInput: preparedWriterInput,
-        write: (input, sig) => callInterpolatorWriter(input, sig),
-        redactResult: redactWriterResultByUserRules,
+        pipeline,
+        nearbyTextByUri,
+        modelSourceToken,
         ...(signal ? { signal } : {}),
       });
-      recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
-
-      if (writerOutcome.status === 'error') {
-        const errorMessage = writerOutcome.error;
-        store.updateSession(sessionId, (current) => (
-          selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
-            ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
-                sourceToken: modelSourceToken,
-                requestedAt: writerRequestedAt,
-                error: errorMessage,
-              }), 'writer_completed')
-            : markConversationModelDiscarded(current, 'writer')
-        ));
-        console.warn('[conversation] writer step failed', errorMessage);
+      if (mediaOutcome.kind === 'short_circuit') {
         return;
       }
+      mediaFindings = mediaOutcome.mediaFindings;
 
-      filteredWriterResult = writerOutcome.result;
-      store.updateSession(sessionId, (current) => {
-        if (selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'discard_stale') {
-          return markConversationModelDiscarded(current, 'writer');
-        }
-
-        const nextCurrent = !filteredWriterResult?.abstained
-          ? updateConversationContinuitySnapshots({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                writerResult: filteredWriterResult,
-              },
-            })
-          : current;
-
-        return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'writer', {
-          sourceToken: modelSourceToken,
-          requestedAt: writerRequestedAt,
-        }), 'writer_completed');
+      const writerStageOutcome = await runConversationWriterStage({
+        sessionId,
+        rootUri,
+        rootNode,
+        allReplies,
+        pipeline,
+        nextSession,
+        translationById,
+        mediaFindings,
+        modelSourceToken,
+        writerRequestedAt,
+        ...(signal ? { signal } : {}),
       });
+      if (writerStageOutcome.kind === 'short_circuit') {
+        return;
+      }
+      writerInput = writerStageOutcome.writerInput;
+      filteredWriterResult = writerStageOutcome.filteredWriterResult;
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         return;
@@ -1103,202 +1590,14 @@ export async function hydrateConversationSession(
       return;
     }
 
-    const actorDid = useSessionStore.getState().session?.did?.trim();
-    if (!actorDid) {
-      store.updateSession(sessionId, (current) => (
-        applyShadowConversationSupervisor(markConversationModelSkipped({
-          ...current,
-          interpretation: {
-            ...current.interpretation,
-            premium: {
-              status: 'not_entitled',
-            },
-          },
-        }, 'premium', {
-          reason: 'not_entitled',
-          sourceToken: modelSourceToken,
-        }), 'premium_completed')
-      ));
-      return;
-    }
-
-    const premiumRequestedAt = new Date().toISOString();
-    store.updateSession(sessionId, (current) => ({
-      ...markConversationModelLoading(current, 'premium', {
-        sourceToken: modelSourceToken,
-        requestedAt: premiumRequestedAt,
-      }),
-      interpretation: {
-        ...current.interpretation,
-        premium: {
-          ...(current.interpretation.premium.entitlements
-            ? { entitlements: current.interpretation.premium.entitlements }
-            : {}),
-          status: 'loading',
-        },
-      },
-    }));
-
-    try {
-      const premiumEntitlementsStartedAt = nowMs();
-      const entitlements = await getPremiumAiEntitlements(actorDid, signal);
-      recordInterpolatorStageTiming('hydrate.premium_entitlements', nowMs() - premiumEntitlementsStartedAt);
-      store.updateSession(sessionId, (current) => ({
-        ...current,
-        interpretation: {
-          ...current.interpretation,
-          premium: {
-            entitlements,
-            status: entitlements.capabilities.includes('deep_interpolator')
-              ? 'idle'
-              : 'not_entitled',
-          },
-        },
-      }));
-
-      const currentSession = store.getSession(sessionId);
-      if (!currentSession) return;
-      if (selectCoordinatorSourceApplication(currentSession, modelSourceToken, 'premium').action === 'discard_stale') {
-        store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
-        return;
-      }
-
-      if (!shouldRunPremiumDeepInterpolator(currentSession, allReplies.length, entitlements)) {
-        store.updateSession(sessionId, (current) => (
-          applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
-            reason: entitlements.capabilities.includes('deep_interpolator')
-              ? 'premium_ineligible'
-              : 'not_entitled',
-            sourceToken: modelSourceToken,
-          }), 'premium_completed')
-        ));
-        return;
-      }
-
-      store.updateSession(sessionId, (current) => ({
-        ...current,
-        interpretation: {
-          ...current.interpretation,
-          premium: {
-            entitlements,
-            status: 'loading',
-          },
-        },
-      }));
-
-      const baseSummary = filteredWriterResult && !filteredWriterResult.abstained
-        ? filteredWriterResult.collapsedSummary
-        : currentSession.interpretation.interpolator?.summaryText;
-
-      const premiumInput = redactPremiumInterpolatorInputByUserRules(
-        buildPremiumInterpolatorRequest({
-          actorDid,
-          writerInput: writerInput!,
-          threadState: currentSession.interpretation.threadState,
-          interpretiveExplanation: currentSession.interpretation.interpretiveExplanation,
-          ...(baseSummary ? { baseSummary } : {}),
-        }),
-      );
-
-      const deepInterpolatorStartedAt = nowMs();
-      const premiumOutcome = await executeConversationCoordinatorPremiumStage({
-        request: premiumInput,
-        entitlements,
-        executePremium: (request, ctx) => callPremiumDeepInterpolator(request, ctx.signal),
-        redactionVerified: true,
-        retryPolicy: { maxAttempts: 1 },
-        ...(signal ? { signal } : {}),
-      });
-      recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
-
-      if (premiumOutcome.status !== 'ready') {
-        const errorMessage = premiumOutcome.error;
-        store.updateSession(sessionId, (current) => ({
-          ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-            ? applyShadowConversationSupervisor(markConversationModelError({
-                ...current,
-                interpretation: {
-                  ...current.interpretation,
-                  premium: {
-                    ...(current.interpretation.premium.entitlements
-                      ? { entitlements: current.interpretation.premium.entitlements }
-                      : {}),
-                    status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-                      ? 'error'
-                      : current.interpretation.premium.status,
-                    ...(errorMessage
-                      ? { lastError: errorMessage }
-                      : {}),
-                  },
-                },
-              }, 'premium', {
-                sourceToken: modelSourceToken,
-                requestedAt: premiumRequestedAt,
-                error: errorMessage,
-              }), 'premium_completed')
-            : markConversationModelDiscarded(current, 'premium')),
-        }));
-        console.warn('[conversation] premium interpolation failed', errorMessage);
-        return;
-      }
-
-      const deepInterpolator = premiumOutcome.result;
-      const sourceComputedAt = currentSession.interpretation.lastComputedAt;
-
-      store.updateSession(sessionId, (current) => ({
-        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-          ? applyShadowConversationSupervisor(markConversationModelReady({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                premium: {
-                  entitlements,
-                  status: 'ready',
-                  deepInterpolator: {
-                    ...deepInterpolator,
-                    ...(sourceComputedAt ? { sourceComputedAt } : {}),
-                  },
-                },
-              },
-            }, 'premium', {
-              sourceToken: modelSourceToken,
-              requestedAt: premiumRequestedAt,
-            }), 'premium_completed')
-          : markConversationModelDiscarded(current, 'premium')),
-      }));
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        return;
-      }
-
-      const errorMessage = sanitizeErrorMessage(err);
-      store.updateSession(sessionId, (current) => ({
-        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
-          ? applyShadowConversationSupervisor(markConversationModelError({
-              ...current,
-              interpretation: {
-                ...current.interpretation,
-                premium: {
-                  ...(current.interpretation.premium.entitlements
-                    ? { entitlements: current.interpretation.premium.entitlements }
-                    : {}),
-                  status: current.interpretation.premium.entitlements?.capabilities.includes('deep_interpolator')
-                    ? 'error'
-                    : current.interpretation.premium.status,
-                  ...(errorMessage
-                    ? { lastError: errorMessage }
-                    : {}),
-                },
-              },
-            }, 'premium', {
-              sourceToken: modelSourceToken,
-              requestedAt: premiumRequestedAt,
-              error: errorMessage,
-            }), 'premium_completed')
-          : markConversationModelDiscarded(current, 'premium')),
-      }));
-      console.warn('[conversation] premium interpolation failed', errorMessage);
-    }
+    await runConversationPremiumStage({
+      sessionId,
+      modelSourceToken,
+      replyCount: allReplies.length,
+      writerInput,
+      filteredWriterResult,
+      ...(signal ? { signal } : {}),
+    });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       return;
