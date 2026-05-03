@@ -14,12 +14,13 @@ import {
   getPremiumAiEntitlements,
 } from '../intelligence/modelClient';
 import {
-  detectMediaSignals,
-  deriveMediaFactualHints,
-  mergeMediaResults,
-  selectMediaForAnalysis,
-  shouldRunMultimodal,
-} from '../intelligence/mediaInput';
+  planConversationCoordinatorMediaStage,
+  executeConversationCoordinatorMediaStage,
+  type ConversationCoordinatorMediaPlan,
+} from './coordinatorMediaStageExecutor';
+import {
+  executeConversationCoordinatorWriterStage,
+} from './coordinatorWriterStageExecutor';
 import { translateWriterInput } from '../lib/i18n/threadTranslation';
 import type { VerificationProviders } from '../intelligence/verification/types';
 import type { VerificationCache } from '../intelligence/verification/cache';
@@ -46,10 +47,12 @@ import { humanizeInterpretiveReason } from './interpretive/interpretiveExplanati
 import { updateConversationContinuitySnapshots } from './continuitySnapshots';
 import { finalizeConversationDeltaDecision } from './deltaDecision';
 import { applyShadowConversationSupervisor } from './shadowSupervisor';
+import { buildConversationModelSourceToken } from './modelSourceToken';
+import { selectCoordinatorSourceApplication } from './coordinatorSourceGuards';
 import {
-  buildConversationModelSourceToken,
-  matchesConversationModelSourceToken,
-} from './modelSourceToken';
+  createConversationCoordinatorContextSnapshot,
+  selectConversationCoordinatorDecision,
+} from './coordinatorRuntime';
 import {
   markConversationModelDiscarded,
   markConversationModelError,
@@ -57,9 +60,11 @@ import {
   markConversationModelReady,
   markConversationModelSkipped,
   shouldRunPremiumDeepInterpolator,
-  shouldReuseExistingModelOutputs,
-  shouldRunInterpolatorWriter,
 } from './modelExecution';
+import {
+  planConversationCoordinatorModelStages,
+  type ConversationCoordinatorMultimodalPlanningInput,
+} from './coordinatorModelStagePlanner';
 import {
   recordInterpolatorGateDecision,
   recordInterpolatorModeDecision,
@@ -77,6 +82,7 @@ import type {
   WriterMediaFinding,
 } from '../intelligence/llmContracts';
 import type {
+  PremiumAiEntitlements,
   PremiumInterpolatorRequest,
 } from '../intelligence/premiumContracts';
 import type { MockPost } from '../data/mockData';
@@ -88,6 +94,7 @@ import type {
   MentalHealthCrisisCategory,
   ThreadStateSignal,
   InterpretiveConfidenceExplanation,
+  ConversationModelRunSkipReason,
 } from './sessionTypes';
 import type { KeywordFilterRule } from '../lib/contentFilters/types';
 
@@ -115,6 +122,40 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
+}
+
+const MAX_COORDINATOR_REASON_CODES = 8;
+const MAX_COORDINATOR_REASON_CODE_LENGTH = 56;
+
+function sanitizeCoordinatorReasonCodes(reasonCodes: readonly string[]): string[] {
+  const sanitized = reasonCodes
+    .map((code) => code.replace(/[\u0000-\u001F\u007F]+/g, ' ').trim())
+    .filter((code) => code.length > 0)
+    .map((code) => code.slice(0, MAX_COORDINATOR_REASON_CODE_LENGTH));
+  return Array.from(new Set(sanitized)).slice(0, MAX_COORDINATOR_REASON_CODES);
+}
+
+export interface ConversationCoordinatorRuntimeAdvisory {
+  action: ReturnType<typeof selectConversationCoordinatorDecision>['action'];
+  reasonCodes: string[];
+  activeStageCount: number;
+  errorStageCount: number;
+  staleStageCount: number;
+}
+
+export function summarizeConversationCoordinatorRuntimeAdvisory(
+  session: ConversationSession,
+): ConversationCoordinatorRuntimeAdvisory {
+  const snapshot = createConversationCoordinatorContextSnapshot(session);
+  const decision = selectConversationCoordinatorDecision(snapshot);
+
+  return {
+    action: decision.action,
+    reasonCodes: sanitizeCoordinatorReasonCodes(decision.reasonCodes),
+    activeStageCount: snapshot.activeStages.length,
+    errorStageCount: snapshot.errorStages.length,
+    staleStageCount: snapshot.staleStages.length,
+  };
 }
 
 function flattenThreadReplies(replies: ThreadNode[]): ThreadNode[] {
@@ -189,120 +230,37 @@ function buildNearbyTextByUri(params: {
   return byUri;
 }
 
-type ThreadMediaAnalysisPlan =
-  | {
-      shouldRun: false;
-      reason: 'multimodal_not_needed' | 'no_media_candidates';
-    }
-  | {
-      shouldRun: true;
-      requests: ReturnType<typeof selectMediaForAnalysis>;
-    };
+const DEFAULT_COORDINATOR_PLANNER_ENTITLEMENTS: PremiumAiEntitlements = {
+  tier: 'free',
+  capabilities: [],
+  providerAvailable: false,
+};
 
-type ThreadMediaAnalysisOutcome =
-  | {
-      status: 'ready';
-      findings: WriterMediaFinding[];
-      attempted: number;
-      failures: number;
-    }
-  | {
-      status: 'error';
-      error: string;
-      attempted: number;
-      failures: number;
-    };
-
-function planThreadMediaAnalysis(params: {
-  threadId: string;
-  root: ThreadNode;
-  replies: ThreadNode[];
-  scores: Record<string, ContributionScores>;
-  nearbyTextByUri: Record<string, string | undefined>;
-}): ThreadMediaAnalysisPlan {
-  const {
-    threadId,
-    root,
-    replies,
-    scores,
-    nearbyTextByUri,
-  } = params;
-
-  const mediaSignals = detectMediaSignals(root, replies, scores);
-  if (!shouldRunMultimodal(mediaSignals)) {
+function toCoordinatorMultimodalPlanningInput(
+  mediaPlan: ConversationCoordinatorMediaPlan,
+): ConversationCoordinatorMultimodalPlanningInput {
+  if (!mediaPlan.shouldRun) {
     return {
       shouldRun: false,
-      reason: 'multimodal_not_needed',
-    };
-  }
-
-  const requests = selectMediaForAnalysis(
-    threadId,
-    root,
-    replies,
-    scores,
-    {
-      nearbyTextByUri,
-      factualHints: deriveMediaFactualHints(replies, scores),
-    },
-  );
-
-  if (requests.length === 0) {
-    return {
-      shouldRun: false,
-      reason: 'no_media_candidates',
+      reason: mediaPlan.reason,
     };
   }
 
   return {
     shouldRun: true,
-    requests,
+    requests: mediaPlan.requests,
   };
 }
 
-async function executeThreadMediaAnalysis(params: {
-  threadId: string;
-  requests: ReturnType<typeof selectMediaForAnalysis>;
-  signal?: AbortSignal;
-}): Promise<ThreadMediaAnalysisOutcome> {
-  const { threadId, requests, signal } = params;
-  const results = [];
-  let failures = 0;
+function resolveCoordinatorPlannerEntitlements(session: ConversationSession): PremiumAiEntitlements {
+  return session.interpretation.premium.entitlements ?? DEFAULT_COORDINATOR_PLANNER_ENTITLEMENTS;
+}
 
-  for (const request of requests) {
-    try {
-      results.push(await callMediaAnalyzer(request, signal));
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw error;
-      }
-      failures += 1;
-    }
-  }
-
-  if (failures > 0) {
-    console.warn('[conversation] multimodal analysis degraded', {
-      threadId,
-      attempted: requests.length,
-      failures,
-    });
-  }
-
-  if (results.length === 0) {
-    return {
-      status: 'error',
-      error: 'Multimodal analysis failed for all selected media.',
-      attempted: requests.length,
-      failures,
-    };
-  }
-
-  return {
-    status: 'ready',
-    findings: mergeMediaResults(results),
-    attempted: requests.length,
-    failures,
-  };
+function coerceSkipReason(
+  reason: ConversationModelRunSkipReason | 'run_ready',
+  fallback: ConversationModelRunSkipReason,
+): ConversationModelRunSkipReason {
+  return reason === 'run_ready' ? fallback : reason;
 }
 
 function asThreadPostEnvelope(value: unknown): ThreadViewPostEnvelope {
@@ -770,6 +728,21 @@ export async function hydrateConversationSession(
     nextSession = applyShadowConversationSupervisor(nextSession, 'session_hydrated');
 
     store.updateSession(sessionId, () => nextSession!);
+
+    const coordinatorSnapshotStartedAt = nowMs();
+    const coordinatorRuntimeAdvisory = summarizeConversationCoordinatorRuntimeAdvisory(nextSession);
+    recordInterpolatorStageTiming('hydrate.coordinator_snapshot', nowMs() - coordinatorSnapshotStartedAt);
+    if (coordinatorRuntimeAdvisory.action !== 'continue') {
+      console.warn('[conversation] coordinator runtime advisory', {
+        sessionId,
+        action: coordinatorRuntimeAdvisory.action,
+        reasonCodes: coordinatorRuntimeAdvisory.reasonCodes,
+        activeStageCount: coordinatorRuntimeAdvisory.activeStageCount,
+        errorStageCount: coordinatorRuntimeAdvisory.errorStageCount,
+        staleStageCount: coordinatorRuntimeAdvisory.staleStageCount,
+      });
+    }
+
     const modelSourceToken = buildConversationModelSourceToken(nextSession);
 
     const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
@@ -794,40 +767,53 @@ export async function hydrateConversationSession(
       nextSession.interpretation.deltaDecision?.confidence ?? pipeline.deltaDecision.confidence,
     );
 
-    if (shouldReuseExistingModelOutputs(nextSession, pipeline.didMeaningfullyChange)) {
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'writer', {
-          reason: 'no_meaningful_change',
-          sourceToken: modelSourceToken,
-        })
-      ));
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'multimodal', {
-          reason: 'no_meaningful_change',
-          sourceToken: modelSourceToken,
-        })
-      ));
-      store.updateSession(sessionId, (current) => (
-        markConversationModelSkipped(current, 'premium', {
-          reason: 'no_meaningful_change',
-          sourceToken: modelSourceToken,
-        })
-      ));
-      return;
-    }
+    const preflightStagePlan = planConversationCoordinatorModelStages({
+      session: nextSession,
+      replyCount: allReplies.length,
+      interpolatorEnabled,
+      didMeaningfullyChange: pipeline.didMeaningfullyChange,
+      multimodalPlan: {
+        shouldRun: false,
+        reason: 'multimodal_not_needed',
+      },
+      premiumEntitlements: resolveCoordinatorPlannerEntitlements(nextSession),
+    });
 
-    const writerGate = shouldRunInterpolatorWriter(nextSession, allReplies.length);
-    recordInterpolatorGateDecision(writerGate.shouldRun);
-    if (!writerGate.shouldRun) {
+    const writerPreflightPlan = preflightStagePlan.plans.writer;
+    recordInterpolatorGateDecision(writerPreflightPlan.action === 'run');
+    if (writerPreflightPlan.action === 'skip') {
+      const writerSkipReason = coerceSkipReason(writerPreflightPlan.reason, 'insufficient_signal');
+      if (writerSkipReason === 'no_meaningful_change') {
+        store.updateSession(sessionId, (current) => (
+          markConversationModelSkipped(current, 'writer', {
+            reason: writerSkipReason,
+            sourceToken: modelSourceToken,
+          })
+        ));
+        store.updateSession(sessionId, (current) => (
+          markConversationModelSkipped(current, 'multimodal', {
+            reason: writerSkipReason,
+            sourceToken: modelSourceToken,
+          })
+        ));
+        store.updateSession(sessionId, (current) => (
+          markConversationModelSkipped(current, 'premium', {
+            reason: 'no_meaningful_change',
+            sourceToken: modelSourceToken,
+          })
+        ));
+        return;
+      }
+
       store.updateSession(sessionId, (current) => (
         markConversationModelSkipped(current, 'writer', {
-          reason: writerGate.reason,
+          reason: writerSkipReason,
           sourceToken: modelSourceToken,
         })
       ));
       store.updateSession(sessionId, (current) => (
         markConversationModelSkipped(current, 'multimodal', {
-          reason: writerGate.reason,
+          reason: writerSkipReason,
           sourceToken: modelSourceToken,
         })
       ));
@@ -885,7 +871,7 @@ export async function hydrateConversationSession(
       });
 
       store.updateSession(sessionId, (current) => (
-        matchesConversationModelSourceToken(current, modelSourceToken)
+        selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
           ? {
               ...current,
               translations: {
@@ -900,7 +886,7 @@ export async function hydrateConversationSession(
 
       const sessionAfterTranslation = store.getSession(sessionId);
       if (!sessionAfterTranslation) return;
-      if (!matchesConversationModelSourceToken(sessionAfterTranslation, modelSourceToken)) {
+      if (selectCoordinatorSourceApplication(sessionAfterTranslation, modelSourceToken, 'writer').action === 'discard_stale') {
         store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'writer'));
         return;
       }
@@ -912,7 +898,7 @@ export async function hydrateConversationSession(
         translationById,
       });
 
-      const mediaPlan = planThreadMediaAnalysis({
+      const mediaPlan = planConversationCoordinatorMediaStage({
         threadId: rootUri,
         root: rootNode,
         replies: allReplies,
@@ -920,19 +906,41 @@ export async function hydrateConversationSession(
         nearbyTextByUri,
       });
 
-      if (!mediaPlan.shouldRun) {
+      const multimodalStagePlan = planConversationCoordinatorModelStages({
+        session: sessionAfterTranslation,
+        replyCount: allReplies.length,
+        interpolatorEnabled: true,
+        didMeaningfullyChange: true,
+        multimodalPlan: toCoordinatorMultimodalPlanningInput(mediaPlan),
+        premiumEntitlements: resolveCoordinatorPlannerEntitlements(sessionAfterTranslation),
+      }).plans.multimodal;
+
+      if (multimodalStagePlan.action === 'skip') {
+        const multimodalSkipReason = coerceSkipReason(multimodalStagePlan.reason, 'multimodal_not_needed');
         store.updateSession(sessionId, (current) => (
-          matchesConversationModelSourceToken(current, modelSourceToken)
+          selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
             ? markConversationModelSkipped(current, 'multimodal', {
-                reason: mediaPlan.reason,
+                reason: multimodalSkipReason,
                 sourceToken: modelSourceToken,
               })
             : markConversationModelDiscarded(current, 'multimodal')
         ));
       } else {
+        if (!mediaPlan.shouldRun) {
+          store.updateSession(sessionId, (current) => (
+            selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+              ? markConversationModelSkipped(current, 'multimodal', {
+                  reason: 'multimodal_not_needed',
+                  sourceToken: modelSourceToken,
+                })
+              : markConversationModelDiscarded(current, 'multimodal')
+          ));
+          return;
+        }
+
         const multimodalRequestedAt = new Date().toISOString();
         store.updateSession(sessionId, (current) => (
-          matchesConversationModelSourceToken(current, modelSourceToken)
+          selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
             ? markConversationModelLoading(current, 'multimodal', {
                 sourceToken: modelSourceToken,
                 requestedAt: multimodalRequestedAt,
@@ -941,16 +949,18 @@ export async function hydrateConversationSession(
         ));
 
         const multimodalStartedAt = nowMs();
-        const mediaOutcome = await executeThreadMediaAnalysis({
+        const mediaOutcome = await executeConversationCoordinatorMediaStage({
           threadId: rootUri,
           requests: mediaPlan.requests,
+          analyzeMedia: callMediaAnalyzer,
+          logFailure: (ev) => console.warn('[conversation] multimodal analysis degraded', ev),
           ...(signal ? { signal } : {}),
         });
         recordInterpolatorStageTiming('hydrate.multimodal', nowMs() - multimodalStartedAt);
 
         mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
         store.updateSession(sessionId, (current) => {
-          if (!matchesConversationModelSourceToken(current, modelSourceToken)) {
+          if (selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'discard_stale') {
             return markConversationModelDiscarded(current, 'multimodal');
           }
 
@@ -981,7 +991,7 @@ export async function hydrateConversationSession(
 
       const sessionAfterMedia = store.getSession(sessionId);
       if (!sessionAfterMedia) return;
-      if (!matchesConversationModelSourceToken(sessionAfterMedia, modelSourceToken)) {
+      if (selectCoordinatorSourceApplication(sessionAfterMedia, modelSourceToken, 'writer').action === 'discard_stale') {
         store.updateSession(sessionId, (current) => markConversationModelDiscarded(
           markConversationModelDiscarded(current, 'multimodal'),
           'writer',
@@ -1015,7 +1025,7 @@ export async function hydrateConversationSession(
       const preparedWriterInput = writerInput;
 
       store.updateSession(sessionId, (current) => (
-        matchesConversationModelSourceToken(current, modelSourceToken)
+        selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
           ? {
               ...current,
               entities: {
@@ -1027,11 +1037,32 @@ export async function hydrateConversationSession(
       ));
 
       const writerStartedAt = nowMs();
-      const writerResult = await callInterpolatorWriter(preparedWriterInput, signal);
+      const writerOutcome = await executeConversationCoordinatorWriterStage({
+        writerInput: preparedWriterInput,
+        write: (input, sig) => callInterpolatorWriter(input, sig),
+        redactResult: redactWriterResultByUserRules,
+        ...(signal ? { signal } : {}),
+      });
       recordInterpolatorStageTiming('hydrate.writer', nowMs() - writerStartedAt);
-      filteredWriterResult = redactWriterResultByUserRules(writerResult);
+
+      if (writerOutcome.status === 'error') {
+        const errorMessage = writerOutcome.error;
+        store.updateSession(sessionId, (current) => (
+          selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
+            ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
+                sourceToken: modelSourceToken,
+                requestedAt: writerRequestedAt,
+                error: errorMessage,
+              }), 'writer_completed')
+            : markConversationModelDiscarded(current, 'writer')
+        ));
+        console.warn('[conversation] writer step failed', errorMessage);
+        return;
+      }
+
+      filteredWriterResult = writerOutcome.result;
       store.updateSession(sessionId, (current) => {
-        if (!matchesConversationModelSourceToken(current, modelSourceToken)) {
+        if (selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'discard_stale') {
           return markConversationModelDiscarded(current, 'writer');
         }
 
@@ -1057,7 +1088,7 @@ export async function hydrateConversationSession(
 
       const errorMessage = sanitizeErrorMessage(err);
       store.updateSession(sessionId, (current) => (
-        matchesConversationModelSourceToken(current, modelSourceToken)
+        selectCoordinatorSourceApplication(current, modelSourceToken, 'writer').action === 'apply'
           ? applyShadowConversationSupervisor(markConversationModelError(current, 'writer', {
               sourceToken: modelSourceToken,
               requestedAt: writerRequestedAt,
@@ -1124,7 +1155,7 @@ export async function hydrateConversationSession(
 
       const currentSession = store.getSession(sessionId);
       if (!currentSession) return;
-      if (!matchesConversationModelSourceToken(currentSession, modelSourceToken)) {
+      if (selectCoordinatorSourceApplication(currentSession, modelSourceToken, 'premium').action === 'discard_stale') {
         store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
         return;
       }
@@ -1172,7 +1203,7 @@ export async function hydrateConversationSession(
       const sourceComputedAt = currentSession.interpretation.lastComputedAt;
 
       store.updateSession(sessionId, (current) => ({
-        ...(matchesConversationModelSourceToken(current, modelSourceToken)
+        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
           ? applyShadowConversationSupervisor(markConversationModelReady({
               ...current,
               interpretation: {
@@ -1198,8 +1229,8 @@ export async function hydrateConversationSession(
       }
 
       const errorMessage = sanitizeErrorMessage(err);
-      store.updateSession(sessionId, (current) => (
-        matchesConversationModelSourceToken(current, modelSourceToken)
+      store.updateSession(sessionId, (current) => ({
+        ...(selectCoordinatorSourceApplication(current, modelSourceToken, 'premium').action === 'apply'
           ? applyShadowConversationSupervisor(markConversationModelError({
               ...current,
               interpretation: {
@@ -1221,8 +1252,8 @@ export async function hydrateConversationSession(
               requestedAt: premiumRequestedAt,
               error: errorMessage,
             }), 'premium_completed')
-          : markConversationModelDiscarded(current, 'premium')
-      ));
+          : markConversationModelDiscarded(current, 'premium')),
+      }));
       console.warn('[conversation] premium interpolation failed', errorMessage);
     }
   } catch (err) {
