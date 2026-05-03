@@ -875,6 +875,148 @@ function runConversationWriterPreflight(
   return { kind: 'short_circuit' };
 }
 
+interface ConversationMediaStageParams {
+  sessionId: string;
+  rootUri: string;
+  rootNode: ThreadNode;
+  sessionAfterTranslation: ConversationSession;
+  allReplies: ThreadNode[];
+  pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
+  nearbyTextByUri: Record<string, string | undefined>;
+  modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  signal?: AbortSignal;
+}
+
+type ConversationMediaStageOutcome =
+  | { kind: 'continue'; mediaFindings: WriterMediaFinding[] }
+  | { kind: 'short_circuit' };
+
+/**
+ * Item 7c (coordinator runtime extraction): isolates the multimodal stage.
+ *
+ * Plans the media stage via `planConversationCoordinatorMediaStage`, runs the
+ * coordinator model-stage planner with that plan, and either marks multimodal
+ * skipped (planner skip / no media to analyze) or executes
+ * `executeConversationCoordinatorMediaStage` and applies the resulting
+ * loading/ready/error/discard store transitions exactly as the inline body
+ * did, including the shadow supervisor `'multimodal_completed'` event.
+ *
+ * Pure cut from `hydrateConversationSession`; preserves the `hydrate.multimodal`
+ * timing label, the discard-stale source-token behavior, and the early
+ * `return` (now a `short_circuit` outcome) when the planner says run but the
+ * media plan itself reports `shouldRun: false`.
+ */
+async function runConversationMediaStage(
+  params: ConversationMediaStageParams,
+): Promise<ConversationMediaStageOutcome> {
+  const {
+    sessionId,
+    rootUri,
+    rootNode,
+    sessionAfterTranslation,
+    allReplies,
+    pipeline,
+    nearbyTextByUri,
+    modelSourceToken,
+    signal,
+  } = params;
+  const store = useConversationSessionStore.getState();
+
+  const mediaPlan = planConversationCoordinatorMediaStage({
+    threadId: rootUri,
+    root: rootNode,
+    replies: allReplies,
+    scores: pipeline.scores,
+    nearbyTextByUri,
+  });
+
+  const multimodalStagePlan = planConversationCoordinatorModelStages({
+    session: sessionAfterTranslation,
+    replyCount: allReplies.length,
+    interpolatorEnabled: true,
+    didMeaningfullyChange: true,
+    multimodalPlan: toCoordinatorMultimodalPlanningInput(mediaPlan),
+    premiumEntitlements: resolveCoordinatorPlannerEntitlements(sessionAfterTranslation),
+  }).plans.multimodal;
+
+  if (multimodalStagePlan.action === 'skip') {
+    const multimodalSkipReason = coerceSkipReason(multimodalStagePlan.reason, 'multimodal_not_needed');
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+        ? markConversationModelSkipped(current, 'multimodal', {
+            reason: multimodalSkipReason,
+            sourceToken: modelSourceToken,
+          })
+        : markConversationModelDiscarded(current, 'multimodal')
+    ));
+    return { kind: 'continue', mediaFindings: [] };
+  }
+
+  if (!mediaPlan.shouldRun) {
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+        ? markConversationModelSkipped(current, 'multimodal', {
+            reason: 'multimodal_not_needed',
+            sourceToken: modelSourceToken,
+          })
+        : markConversationModelDiscarded(current, 'multimodal')
+    ));
+    return { kind: 'short_circuit' };
+  }
+
+  const multimodalRequestedAt = new Date().toISOString();
+  store.updateSession(sessionId, (current) => (
+    selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+      ? markConversationModelLoading(current, 'multimodal', {
+          sourceToken: modelSourceToken,
+          requestedAt: multimodalRequestedAt,
+        })
+      : markConversationModelDiscarded(current, 'multimodal')
+  ));
+
+  const multimodalStartedAt = nowMs();
+  const mediaOutcome = await executeConversationCoordinatorMediaStage({
+    threadId: rootUri,
+    requests: mediaPlan.requests,
+    analyzeMedia: callMediaAnalyzer,
+    logFailure: (ev) => console.warn('[conversation] multimodal analysis degraded', ev),
+    ...(signal ? { signal } : {}),
+  });
+  recordInterpolatorStageTiming('hydrate.multimodal', nowMs() - multimodalStartedAt);
+
+  const mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
+  store.updateSession(sessionId, (current) => {
+    if (selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'discard_stale') {
+      return markConversationModelDiscarded(current, 'multimodal');
+    }
+
+    if (mediaOutcome.status === 'error') {
+      return applyShadowConversationSupervisor(markConversationModelError(current, 'multimodal', {
+        sourceToken: modelSourceToken,
+        requestedAt: multimodalRequestedAt,
+        error: mediaOutcome.error,
+      }), 'multimodal_completed');
+    }
+
+    const nextCurrent = mediaFindings.length > 0
+      ? {
+          ...current,
+          interpretation: {
+            ...current.interpretation,
+            mediaFindings,
+          },
+        }
+      : current;
+
+    return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'multimodal', {
+      sourceToken: modelSourceToken,
+      requestedAt: multimodalRequestedAt,
+    }), 'multimodal_completed');
+  });
+
+  return { kind: 'continue', mediaFindings };
+}
+
 export async function hydrateConversationSession(
   params: HydrateConversationSessionParams,
 ): Promise<void> {
@@ -1009,96 +1151,21 @@ export async function hydrateConversationSession(
         translationById,
       });
 
-      const mediaPlan = planConversationCoordinatorMediaStage({
-        threadId: rootUri,
-        root: rootNode,
-        replies: allReplies,
-        scores: pipeline.scores,
+      const mediaOutcome = await runConversationMediaStage({
+        sessionId,
+        rootUri,
+        rootNode,
+        sessionAfterTranslation,
+        allReplies,
+        pipeline,
         nearbyTextByUri,
+        modelSourceToken,
+        ...(signal ? { signal } : {}),
       });
-
-      const multimodalStagePlan = planConversationCoordinatorModelStages({
-        session: sessionAfterTranslation,
-        replyCount: allReplies.length,
-        interpolatorEnabled: true,
-        didMeaningfullyChange: true,
-        multimodalPlan: toCoordinatorMultimodalPlanningInput(mediaPlan),
-        premiumEntitlements: resolveCoordinatorPlannerEntitlements(sessionAfterTranslation),
-      }).plans.multimodal;
-
-      if (multimodalStagePlan.action === 'skip') {
-        const multimodalSkipReason = coerceSkipReason(multimodalStagePlan.reason, 'multimodal_not_needed');
-        store.updateSession(sessionId, (current) => (
-          selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-            ? markConversationModelSkipped(current, 'multimodal', {
-                reason: multimodalSkipReason,
-                sourceToken: modelSourceToken,
-              })
-            : markConversationModelDiscarded(current, 'multimodal')
-        ));
-      } else {
-        if (!mediaPlan.shouldRun) {
-          store.updateSession(sessionId, (current) => (
-            selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-              ? markConversationModelSkipped(current, 'multimodal', {
-                  reason: 'multimodal_not_needed',
-                  sourceToken: modelSourceToken,
-                })
-              : markConversationModelDiscarded(current, 'multimodal')
-          ));
-          return;
-        }
-
-        const multimodalRequestedAt = new Date().toISOString();
-        store.updateSession(sessionId, (current) => (
-          selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
-            ? markConversationModelLoading(current, 'multimodal', {
-                sourceToken: modelSourceToken,
-                requestedAt: multimodalRequestedAt,
-              })
-            : markConversationModelDiscarded(current, 'multimodal')
-        ));
-
-        const multimodalStartedAt = nowMs();
-        const mediaOutcome = await executeConversationCoordinatorMediaStage({
-          threadId: rootUri,
-          requests: mediaPlan.requests,
-          analyzeMedia: callMediaAnalyzer,
-          logFailure: (ev) => console.warn('[conversation] multimodal analysis degraded', ev),
-          ...(signal ? { signal } : {}),
-        });
-        recordInterpolatorStageTiming('hydrate.multimodal', nowMs() - multimodalStartedAt);
-
-        mediaFindings = mediaOutcome.status === 'ready' ? mediaOutcome.findings : [];
-        store.updateSession(sessionId, (current) => {
-          if (selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'discard_stale') {
-            return markConversationModelDiscarded(current, 'multimodal');
-          }
-
-          if (mediaOutcome.status === 'error') {
-            return applyShadowConversationSupervisor(markConversationModelError(current, 'multimodal', {
-              sourceToken: modelSourceToken,
-              requestedAt: multimodalRequestedAt,
-              error: mediaOutcome.error,
-            }), 'multimodal_completed');
-          }
-
-          const nextCurrent = mediaFindings.length > 0
-            ? {
-                ...current,
-                interpretation: {
-                  ...current.interpretation,
-                  mediaFindings,
-                },
-              }
-            : current;
-
-          return applyShadowConversationSupervisor(markConversationModelReady(nextCurrent, 'multimodal', {
-            sourceToken: modelSourceToken,
-            requestedAt: multimodalRequestedAt,
-          }), 'multimodal_completed');
-        });
+      if (mediaOutcome.kind === 'short_circuit') {
+        return;
       }
+      mediaFindings = mediaOutcome.mediaFindings;
 
       const sessionAfterMedia = store.getSession(sessionId);
       if (!sessionAfterMedia) return;
