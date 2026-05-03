@@ -90,16 +90,8 @@ describe('runEdgeExecution', () => {
     })).rejects.toBeInstanceOf(EdgeProviderMismatchError);
   });
 
-  it('dispatches search rerank via planned edge endpoint', async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
-      results: [{ id: 'p:1', score: 0.92 }],
-      model: 'cloudflare-reranker-v1',
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }));
-
-    const result = await runEdgeExecution({
+  it('keeps search rerank explicitly unsupported until endpoint routing lands', async () => {
+    await expect(runEdgeExecution({
       ...plan('search_rerank'),
       endpoint: '/api/llm/rerank/search',
       lane: 'edge_reranker',
@@ -110,11 +102,7 @@ describe('runEdgeExecution', () => {
         query: 'best postgame analysis',
         candidates: [{ id: 'p:1', text: 'candidate text' }],
       },
-    });
-
-    expect(result.capability).toBe('search_rerank');
-    expect(result.provider).toBe('cloudflare-workers-ai');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    })).rejects.toBeInstanceOf(UnsupportedEdgeCapabilityError);
   });
 
   it('dispatches media classification via planned edge endpoint', async () => {
@@ -152,7 +140,29 @@ describe('runEdgeExecution', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('fails fast when search/media are planned with unsupported providers', async () => {
+  it('rejects non-JSON media responses with explicit error', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('<html>not json</html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }));
+
+    await expect(runEdgeExecution({
+      ...plan('media_classify'),
+      endpoint: '/api/llm/analyze/media',
+      task: 'media_analysis',
+    }, {
+      capability: 'media_classify',
+      input: {
+        threadId: 'at://example/thread',
+        mediaUrl: 'https://example.com/image.jpg',
+        nearbyText: 'celebration image',
+        candidateEntities: ['player'],
+        factualHints: [],
+      },
+    })).rejects.toThrow('Expected JSON response');
+  });
+
+  it('keeps search unsupported even when provider is non-cloudflare', async () => {
     await expect(runEdgeExecution({
       ...plan('search_rerank'),
       provider: 'node-heuristic',
@@ -164,8 +174,10 @@ describe('runEdgeExecution', () => {
         query: 'demo',
         candidates: [{ id: '1', text: 'x' }],
       },
-    })).rejects.toBeInstanceOf(UnsupportedEdgeProviderError);
+    })).rejects.toBeInstanceOf(UnsupportedEdgeCapabilityError);
+  });
 
+  it('fails fast for media when planned provider is unsupported', async () => {
     await expect(runEdgeExecution({
       ...plan('media_classify'),
       provider: 'node-heuristic',

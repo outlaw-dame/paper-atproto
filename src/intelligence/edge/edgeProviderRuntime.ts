@@ -82,12 +82,17 @@ async function postEdgeJson<TResponse>(
     headers: {
       'Content-Type': 'application/json',
     },
-    ...(signal ? { signal } : {}),
+    signal: signal ?? null,
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     throw new Error(`Edge endpoint request failed (${response.status}) for ${endpoint}`);
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.toLowerCase().includes('application/json')) {
+    throw new Error(`Expected JSON response from ${endpoint} but got ${contentType ?? 'none'}`);
   }
 
   return response.json() as Promise<TResponse>;
@@ -128,13 +133,10 @@ export async function runEdgeExecution(
   }
 
   if (request.capability === 'search_rerank') {
-    assertCloudflareProvider(plan);
-    const output = await postEdgeJson<SearchRerankResponsePayload>(plan.endpoint, request.input, signal);
-    return {
-      capability: 'search_rerank',
-      provider: plan.provider,
-      output,
-    };
+    // Route guard: this capability is planned, but the canonical server
+    // endpoint (`/api/llm/rerank/search`) is not mounted yet. Keep this
+    // explicit until that route lands to avoid runtime 404 regressions.
+    throw new UnsupportedEdgeCapabilityError(request.capability);
   }
 
   if (request.capability === 'media_classify') {
