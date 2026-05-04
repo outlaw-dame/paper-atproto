@@ -76,7 +76,7 @@ import {
   recordInterpolatorStageTiming,
 } from '../perf/interpolatorTelemetry';
 import { detectMentalHealthCrisis } from '../lib/sentiment';
-import { buildSessionBrief, intelligenceCoordinator } from '../intelligence/coordinator';
+import { buildSessionBrief, intelligenceCoordinator, type IntelligenceAdvice } from '../intelligence/coordinator';
 import { useRuntimeStore } from '../runtime/runtimeStore';
 import type {
   AtUri,
@@ -151,9 +151,14 @@ function sanitizeCoordinatorReasonCodes(reasonCodes: readonly string[]): string[
 function buildConversationSessionCoordinatorBrief(
   session: ConversationSession,
   sourceToken: ReturnType<typeof buildConversationModelSourceToken>,
+  options?: {
+    entitlements?: PremiumAiEntitlements | null;
+    explicitUserAction?: boolean;
+    summaryText?: string | null;
+  },
 ) {
   const runtime = useRuntimeStore.getState();
-  const summaryText = session.interpretation.interpolator?.summaryText ?? null;
+  const summaryText = options?.summaryText ?? session.interpretation.interpolator?.summaryText ?? null;
   return buildSessionBrief({
     surface: 'session',
     intent: 'story_summary',
@@ -164,7 +169,7 @@ function buildConversationSessionCoordinatorBrief(
       lastMutationAt: session.mutations.lastMutationAt ?? session.meta.lastHydratedAt ?? null,
       sourceToken,
     },
-    entitlements: session.interpretation.premium.entitlements ?? null,
+    entitlements: options?.entitlements ?? session.interpretation.premium.entitlements ?? null,
     attachments: {
       count: session.interpretation.mediaFindings.length,
       hasImages: session.interpretation.mediaFindings.length > 0,
@@ -173,6 +178,7 @@ function buildConversationSessionCoordinatorBrief(
     },
     textLength: summaryText?.length ?? 0,
     estimatedPromptTokens: estimatePromptTokens(summaryText),
+    explicitUserAction: options?.explicitUserAction ?? false,
     hasSensitiveLocalData: true,
   });
 }
@@ -207,14 +213,44 @@ function buildConversationMediaCoordinatorBrief(params: {
   });
 }
 
-async function emitConversationSessionCoordinatorAdvice(params: {
+function isCoordinatorAdviceStale(
+  advice: Pick<IntelligenceAdvice, 'reasonCodes' | 'event'>,
+): boolean {
+  return advice.event.status === 'stale_discarded'
+    || advice.reasonCodes.includes('stale_source_token');
+}
+
+export function isConversationCoordinatorMediaAuthoritySatisfied(
+  advice: Pick<IntelligenceAdvice, 'lane' | 'reasonCodes' | 'event'> | null | undefined,
+): boolean {
+  if (!advice) return true;
+  if (isCoordinatorAdviceStale(advice)) return false;
+  return advice.lane === 'edge_classifier';
+}
+
+export function isConversationCoordinatorPremiumAuthoritySatisfied(
+  advice: Pick<IntelligenceAdvice, 'lane' | 'reasonCodes' | 'event'> | null | undefined,
+): boolean {
+  if (!advice) return true;
+  if (isCoordinatorAdviceStale(advice)) return false;
+  return advice.lane === 'premium_provider';
+}
+
+async function adviseConversationSessionCoordinator(params: {
   session: ConversationSession;
   sourceToken: ReturnType<typeof buildConversationModelSourceToken>;
   signal?: AbortSignal;
-}): Promise<void> {
+  entitlements?: PremiumAiEntitlements | null;
+  explicitUserAction?: boolean;
+  summaryText?: string | null;
+}): Promise<IntelligenceAdvice | null> {
   try {
-    await intelligenceCoordinator.adviseOnSession(
-      buildConversationSessionCoordinatorBrief(params.session, params.sourceToken),
+    return await intelligenceCoordinator.adviseOnSession(
+      buildConversationSessionCoordinatorBrief(params.session, params.sourceToken, {
+        ...(params.entitlements !== undefined ? { entitlements: params.entitlements } : {}),
+        ...(params.explicitUserAction !== undefined ? { explicitUserAction: params.explicitUserAction } : {}),
+        ...(params.summaryText !== undefined ? { summaryText: params.summaryText } : {}),
+      }),
       {
         ...(params.signal ? { signal: params.signal } : {}),
         silentRouterAudit: true,
@@ -222,19 +258,19 @@ async function emitConversationSessionCoordinatorAdvice(params: {
       },
     );
   } catch {
-    // Coordinator advice is advisory/diagnostic; hydration must not fail because of it.
+    return null;
   }
 }
 
-async function emitConversationMediaCoordinatorAdvice(params: {
+async function adviseConversationMediaCoordinator(params: {
   session: ConversationSession;
   sourceToken: ReturnType<typeof buildConversationModelSourceToken>;
   rootText: string;
   requestCount: number;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<IntelligenceAdvice | null> {
   try {
-    await intelligenceCoordinator.adviseOnMedia(
+    return await intelligenceCoordinator.adviseOnMedia(
       buildConversationMediaCoordinatorBrief(params),
       {
         ...(params.signal ? { signal: params.signal } : {}),
@@ -243,7 +279,7 @@ async function emitConversationMediaCoordinatorAdvice(params: {
       },
     );
   } catch {
-    // Media advice is advisory/diagnostic; media execution keeps its current behavior.
+    return null;
   }
 }
 
@@ -901,7 +937,7 @@ async function hydrateConversationBaseline(
 
   const modelSourceToken = buildConversationModelSourceToken(nextSession);
 
-  void emitConversationSessionCoordinatorAdvice({
+  void adviseConversationSessionCoordinator({
     session: nextSession,
     sourceToken: modelSourceToken,
     ...(signal ? { signal } : {}),
@@ -1095,15 +1131,15 @@ async function runConversationMediaStage(
     nearbyTextByUri,
   });
 
-  if (mediaPlan.shouldRun) {
-    void emitConversationMediaCoordinatorAdvice({
-      session: sessionAfterTranslation,
-      sourceToken: modelSourceToken,
-      rootText: rootNode.text,
-      requestCount: mediaPlan.requestCount,
-      ...(signal ? { signal } : {}),
-    });
-  }
+  const mediaCoordinatorAdvice = mediaPlan.shouldRun
+    ? await adviseConversationMediaCoordinator({
+        session: sessionAfterTranslation,
+        sourceToken: modelSourceToken,
+        rootText: rootNode.text,
+        requestCount: mediaPlan.requestCount,
+        ...(signal ? { signal } : {}),
+      })
+    : null;
 
   // Address Gemini PR #73 review: thread the real planner inputs instead of
   // hardcoding `true`/`true`. Although `runConversationWriterPreflight` would
@@ -1125,6 +1161,18 @@ async function runConversationMediaStage(
       selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
         ? markConversationModelSkipped(current, 'multimodal', {
             reason: multimodalSkipReason,
+            sourceToken: modelSourceToken,
+          })
+        : markConversationModelDiscarded(current, 'multimodal')
+    ));
+    return { kind: 'continue', mediaFindings: [] };
+  }
+
+  if (!isConversationCoordinatorMediaAuthoritySatisfied(mediaCoordinatorAdvice)) {
+    store.updateSession(sessionId, (current) => (
+      selectCoordinatorSourceApplication(current, modelSourceToken, 'multimodal').action === 'apply'
+        ? markConversationModelSkipped(current, 'multimodal', {
+            reason: 'privacy_restricted',
             sourceToken: modelSourceToken,
           })
         : markConversationModelDiscarded(current, 'multimodal')
@@ -1477,6 +1525,27 @@ async function runConversationPremiumStage(
     const baseSummary = filteredWriterResult && !filteredWriterResult.abstained
       ? filteredWriterResult.collapsedSummary
       : currentSession.interpretation.interpolator?.summaryText;
+
+    // Premium deep is the explicit quality-escalation path for a user-visible
+    // session summary, so coordinator authority is evaluated with
+    // explicitUserAction=true before the remote premium call is allowed.
+    const premiumCoordinatorAdvice = await adviseConversationSessionCoordinator({
+      session: currentSession,
+      sourceToken: modelSourceToken,
+      entitlements,
+      explicitUserAction: true,
+      summaryText: baseSummary ?? null,
+      ...(signal ? { signal } : {}),
+    });
+    if (!isConversationCoordinatorPremiumAuthoritySatisfied(premiumCoordinatorAdvice)) {
+      store.updateSession(sessionId, (current) => (
+        applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
+          reason: 'premium_ineligible',
+          sourceToken: modelSourceToken,
+        }), 'premium_completed')
+      ));
+      return;
+    }
 
     const premiumInput = redactPremiumInterpolatorInputByUserRules(
       buildPremiumInterpolatorRequest({

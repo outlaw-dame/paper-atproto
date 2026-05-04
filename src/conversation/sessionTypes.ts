@@ -263,6 +263,7 @@ export type ConversationModelRunSkipReason =
   | 'no_meaningful_change'
   | 'multimodal_not_needed'
   | 'no_media_candidates'
+  | 'privacy_restricted'
   | 'not_entitled'
   | 'premium_ineligible';
 

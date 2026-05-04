@@ -11,6 +11,7 @@ import {
   getComposerWriterDebounceMs,
   hasComposerModelCoverage,
   hasComposerWriterCoverage,
+  isComposerWriterCoordinatorAuthorized,
   shouldReuseCachedComposerGuidance,
   shouldRunComposerEdgeClassifierStageForDraft,
   shouldRunComposerModelStageForDraft,
@@ -164,7 +165,7 @@ export function useComposerGuidance({
         if (hasComposerWriterCoverage(baseGuidance)) return;
         if (!shouldRunComposerWriterStage(deferredContext.mode, deferredContext.draftText, baseGuidance, dismissedAt)) return;
 
-        void intelligenceCoordinator.adviseOnComposer(
+        const coordinatorAdvice = await intelligenceCoordinator.adviseOnComposer(
           buildSessionBrief({
             surface: 'composer',
             intent: 'composer_writer',
@@ -184,9 +185,9 @@ export function useComposerGuidance({
             silentRouterAudit: true,
             expectedSourceToken: contextFingerprint,
           },
-        ).catch(() => {
-          // Coordinator advice is advisory only; composer guidance must not fail because of it.
-        });
+        ).catch(() => null);
+        if (requestIdRef.current !== requestId) return;
+        if (!isComposerWriterCoordinatorAuthorized(coordinatorAdvice)) return;
 
         const written = await maybeWriteComposerGuidance(
           deferredContext,

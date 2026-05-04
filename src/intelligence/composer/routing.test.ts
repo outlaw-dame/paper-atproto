@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isAutomaticComposerBrowserMlAllowed,
+  isComposerWriterCoordinatorAuthorized,
   shouldRunComposerEdgeClassifierStageForDraft,
   shouldRunComposerModelStageForDraft,
 } from './routing';
@@ -115,6 +116,32 @@ describe('composer browser ML routing', () => {
       }),
       { automaticBrowserMlEnabled: true, deviceMemoryGiB: 16, isMobile: false },
     )).toBe(false);
+  });
+});
+
+describe('composer writer coordinator authority', () => {
+  it('allows writer execution when coordinator selects the server writer lane', () => {
+    expect(isComposerWriterCoordinatorAuthorized({
+      lane: 'server_writer',
+      reasonCodes: ['server_writer_selective'],
+      event: { status: 'planned' } as any,
+    })).toBe(true);
+  });
+
+  it('blocks writer execution when coordinator discards stale advice', () => {
+    expect(isComposerWriterCoordinatorAuthorized({
+      lane: 'server_writer',
+      reasonCodes: ['stale_source_token'],
+      event: { status: 'stale_discarded' } as any,
+    })).toBe(false);
+  });
+
+  it('blocks writer execution when coordinator routes away from the server writer lane', () => {
+    expect(isComposerWriterCoordinatorAuthorized({
+      lane: 'browser_heuristic',
+      reasonCodes: ['local_only_privacy'],
+      event: { status: 'planned' } as any,
+    })).toBe(false);
   });
 });
 

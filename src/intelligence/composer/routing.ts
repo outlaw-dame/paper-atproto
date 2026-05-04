@@ -5,6 +5,7 @@ import {
   type PrivacyMode,
 } from '../intelligenceRoutingPolicy';
 import { planEdgeExecution } from '../edge/edgeProviderPlanner';
+import type { IntelligenceAdvice } from '../coordinator';
 import type { ComposerGuidanceResult, ComposerMode } from './types';
 
 const MODEL_TOOLS = new Set([
@@ -151,6 +152,16 @@ export function shouldRunComposerWriterStage(
     return false;
   }
   return true;
+}
+
+export function isComposerWriterCoordinatorAuthorized(
+  advice: Pick<IntelligenceAdvice, 'lane' | 'reasonCodes' | 'event'> | null | undefined,
+): boolean {
+  if (!advice) return true;
+  if (advice.event.status === 'stale_discarded' || advice.reasonCodes.includes('stale_source_token')) {
+    return false;
+  }
+  return advice.lane === 'server_writer';
 }
 
 export function shouldReuseCachedComposerGuidance(

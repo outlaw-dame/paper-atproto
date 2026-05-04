@@ -338,4 +338,15 @@ describe('model execution diagnostics', () => {
     expect(skipped.interpretation.aiDiagnostics?.multimodal.lastSkipReason).toBe('multimodal_not_needed');
     expect(skipped.interpretation.aiDiagnostics?.writer.status).toBe('idle');
   });
+
+  it('preserves the explicit privacy_restricted skip reason for coordinator blocks', () => {
+    const skipped = markConversationModelSkipped(createSession(), 'multimodal', {
+      reason: 'privacy_restricted',
+      sourceToken: 'source-token',
+      completedAt: '2026-03-31T00:00:01.000Z',
+    });
+
+    expect(skipped.interpretation.aiDiagnostics?.multimodal.status).toBe('skipped');
+    expect(skipped.interpretation.aiDiagnostics?.multimodal.lastSkipReason).toBe('privacy_restricted');
+  });
 });

@@ -5,6 +5,8 @@ import {
   markConversationModelLoading,
 } from './modelExecution';
 import {
+  isConversationCoordinatorMediaAuthoritySatisfied,
+  isConversationCoordinatorPremiumAuthoritySatisfied,
   summarizeConversationCoordinatorRuntimeAdvisory,
 } from './sessionAssembler';
 import {
@@ -117,6 +119,40 @@ describe('session assembler coordinator runtime advisory', () => {
     });
     expect(advisory.reasonCodes).toEqual(expect.arrayContaining(['writer_loading']));
     expect(loading.interpretation.aiDiagnostics?.writer.status).toBe('loading');
+  });
+
+  it('authorizes remote media only when coordinator keeps the edge lane', () => {
+    expect(isConversationCoordinatorMediaAuthoritySatisfied({
+      lane: 'edge_classifier',
+      reasonCodes: ['edge_classifier_balanced_refine'],
+      event: { status: 'planned' } as any,
+    })).toBe(true);
+
+    expect(isConversationCoordinatorMediaAuthoritySatisfied({
+      lane: 'browser_heuristic',
+      reasonCodes: ['local_only_privacy'],
+      event: { status: 'planned' } as any,
+    })).toBe(false);
+  });
+
+  it('authorizes premium only when coordinator selects premium and the advice is fresh', () => {
+    expect(isConversationCoordinatorPremiumAuthoritySatisfied({
+      lane: 'premium_provider',
+      reasonCodes: ['premium_provider_explicit_best_quality'],
+      event: { status: 'planned' } as any,
+    })).toBe(true);
+
+    expect(isConversationCoordinatorPremiumAuthoritySatisfied({
+      lane: 'premium_provider',
+      reasonCodes: ['stale_source_token'],
+      event: { status: 'stale_discarded' } as any,
+    })).toBe(false);
+
+    expect(isConversationCoordinatorPremiumAuthoritySatisfied({
+      lane: 'server_writer',
+      reasonCodes: ['server_writer_selective'],
+      event: { status: 'planned' } as any,
+    })).toBe(false);
   });
 });
 
