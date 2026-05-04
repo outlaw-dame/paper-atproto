@@ -500,6 +500,77 @@ describe('coordinator premium stage executor', () => {
       },
     })).rejects.toMatchObject({ name: 'AbortError' });
   });
+
+  it('attaches the verification verdict when a verify hook is supplied', async () => {
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: REQUEST,
+      entitlements: BASE_ENTITLEMENTS,
+      redactionVerified: true,
+      nowMs: createClock([0, 7]),
+      executePremium: async () => createResult(),
+      verify: async (result, request) => {
+        expect(result.summary).toContain('Premium synthesis');
+        expect(request).toBe(REQUEST);
+        return {
+          verdict: Object.freeze({
+            trust: 'verified' as const,
+            suggestedConfidenceCap: 0.76,
+            holdPremiumUntilFresh: false,
+            reasonCodes: Object.freeze(['premium_verification_clean']),
+          }),
+          // Minimal ThinkingResult-shaped stub; executor only reads `verdict`.
+          thinking: {} as never,
+        };
+      },
+    });
+
+    expect(outcome.status).toBe('ready');
+    if (outcome.status !== 'ready') throw new Error('expected ready');
+    expect(outcome.verification).toEqual({
+      trust: 'verified',
+      suggestedConfidenceCap: 0.76,
+      holdPremiumUntilFresh: false,
+      reasonCodes: ['premium_verification_clean'],
+    });
+    expect(outcome.reasonCodes).toEqual([
+      'premium_entitlement_allowed',
+      'premium_result_ready',
+    ]);
+  });
+
+  it('records premium_verification_failed and omits verdict when verify throws', async () => {
+    const outcome = await executeConversationCoordinatorPremiumStage({
+      request: REQUEST,
+      entitlements: BASE_ENTITLEMENTS,
+      redactionVerified: true,
+      nowMs: createClock([0, 4]),
+      executePremium: async () => createResult(),
+      verify: async () => {
+        throw new Error('verifier blew up');
+      },
+    });
+
+    expect(outcome.status).toBe('ready');
+    if (outcome.status !== 'ready') throw new Error('expected ready');
+    expect(outcome.verification).toBeUndefined();
+    expect(outcome.reasonCodes).toContain('premium_verification_failed');
+  });
+
+  it('still propagates AbortError raised inside the verify hook', async () => {
+    const abortError = new Error('aborted');
+    abortError.name = 'AbortError';
+    await expect(
+      executeConversationCoordinatorPremiumStage({
+        request: REQUEST,
+        entitlements: BASE_ENTITLEMENTS,
+        redactionVerified: true,
+        executePremium: async () => createResult(),
+        verify: async () => {
+          throw abortError;
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });
 
 function createClock(values: number[]): () => number {

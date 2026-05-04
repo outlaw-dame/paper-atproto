@@ -5,6 +5,10 @@ import type {
   PremiumAiSafetyMetadata,
   PremiumInterpolatorRequest,
 } from '../intelligence/premiumContracts';
+import type {
+  PremiumVerificationResult,
+  PremiumVerificationVerdict,
+} from '../intelligence/verification/premiumVerificationLane';
 
 export const CONVERSATION_COORDINATOR_PREMIUM_STAGE_VERSION = 1 as const;
 
@@ -20,7 +24,8 @@ export type ConversationCoordinatorPremiumReasonCode =
   | 'premium_result_missing_summary'
   | 'premium_result_normalized'
   | 'premium_execution_failed'
-  | 'premium_retry_attempted';
+  | 'premium_retry_attempted'
+  | 'premium_verification_failed';
 
 export interface ConversationCoordinatorPremiumRetryPolicy {
   maxAttempts: number;
@@ -45,6 +50,12 @@ export type ConversationCoordinatorPremiumSleep = (
   signal?: AbortSignal,
 ) => Promise<void>;
 
+export type ConversationCoordinatorPremiumVerifyFn = (
+  result: DeepInterpolatorResult,
+  request: PremiumInterpolatorRequest,
+  options: { signal?: AbortSignal | undefined },
+) => Promise<PremiumVerificationResult>;
+
 export type ConversationCoordinatorNowIso = () => string;
 
 export type ConversationCoordinatorPremiumOutcome =
@@ -56,6 +67,8 @@ export type ConversationCoordinatorPremiumOutcome =
       durationMs: number;
       attempts: number;
       reasonCodes: ConversationCoordinatorPremiumReasonCode[];
+      /** Optional structural verification verdict. Present iff caller supplied `verify`. */
+      verification?: PremiumVerificationVerdict;
       diagnostics: {
         redactionVerified: true;
         normalized: boolean;
@@ -88,6 +101,13 @@ export interface ConversationCoordinatorPremiumExecutionInput {
   nowMs?: () => number;
   nowIso?: ConversationCoordinatorNowIso;
   random?: () => number;
+  /**
+   * Optional structural verification pass run after a normalized result is produced.
+   * Pure-analysis lane; never throws (caller's helper resolves with `unverified` on failure).
+   * When provided, the verdict is attached to the ready outcome and verdict reason codes
+   * are merged into `reasonCodes`.
+   */
+  verify?: ConversationCoordinatorPremiumVerifyFn;
 }
 
 interface NormalizedPremiumResult {
@@ -190,6 +210,20 @@ export async function executeConversationCoordinatorPremiumStage(
         });
       }
 
+      let verification: PremiumVerificationVerdict | undefined;
+      let verificationFailed = false;
+      if (input.verify) {
+        try {
+          const verifyResult = await input.verify(normalized.result, input.request, {
+            ...(input.signal ? { signal: input.signal } : {}),
+          });
+          assertNotAborted(input.signal);
+          verification = verifyResult.verdict;
+        } catch (verifyError) {
+          if (isAbortError(verifyError)) throw verifyError;
+          verificationFailed = true;
+        }
+      }
       return {
         schemaVersion: CONVERSATION_COORDINATOR_PREMIUM_STAGE_VERSION,
         status: 'ready',
@@ -202,7 +236,9 @@ export async function executeConversationCoordinatorPremiumStage(
           'premium_result_ready',
           ...(attempts > 1 ? ['premium_retry_attempted' as const] : []),
           ...(normalized.normalized ? ['premium_result_normalized' as const] : []),
+          ...(verificationFailed ? ['premium_verification_failed' as const] : []),
         ]),
+        ...(verification ? { verification } : {}),
         diagnostics: {
           redactionVerified: true,
           normalized: normalized.normalized,
