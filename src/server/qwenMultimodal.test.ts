@@ -41,10 +41,10 @@ vi.mock('../../server/src/services/safeBrowsing.js', () => ({
   }) => verdict.blocked || (envMock.AI_SAFE_BROWSING_FAIL_CLOSED && verdict.status === 'unknown'),
 }));
 
-import {
+const {
   runMediaAnalyzer,
   runMediaAnalyzerFromImageBase64,
-} from '../../server/src/services/qwenMultimodal.js';
+} = await import(`../../server/src/services/qwenMultimodal.js?test=${Date.now()}`);
 
 const baseRequest = {
   threadId: 'thread-1',

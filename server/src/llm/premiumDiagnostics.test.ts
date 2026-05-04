@@ -1,27 +1,28 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  getPremiumDiagnostics,
-  recordPremiumProviderModelAttempt,
-  recordPremiumProviderModelFailure,
-  recordPremiumProviderModelSuccess,
-  recordPremiumProviderAttempt,
-  recordPremiumProviderFailover,
-  recordPremiumProviderFailure,
-  recordPremiumProviderSuccess,
-  recordPremiumRouteFailure,
-  recordPremiumRouteInvocation,
-  recordPremiumRouteSafetyFilter,
-  recordPremiumRouteSuccess,
-  resetPremiumDiagnostics,
-} from './premiumDiagnostics.js';
+let diagnosticsModule: typeof import('./premiumDiagnostics.js');
 
 describe('premiumDiagnostics', () => {
-  beforeEach(() => {
-    resetPremiumDiagnostics();
+  beforeEach(async () => {
+    diagnosticsModule = await import(`./premiumDiagnostics.js?test=${Date.now()}`);
+    diagnosticsModule.resetPremiumDiagnostics();
   });
 
   it('records premium quality rejects, failovers, and route safety telemetry', () => {
+    const {
+      getPremiumDiagnostics,
+      recordPremiumProviderAttempt,
+      recordPremiumProviderFailover,
+      recordPremiumProviderFailure,
+      recordPremiumProviderModelAttempt,
+      recordPremiumProviderModelFailure,
+      recordPremiumProviderModelSuccess,
+      recordPremiumProviderSuccess,
+      recordPremiumRouteInvocation,
+      recordPremiumRouteSafetyFilter,
+      recordPremiumRouteSuccess,
+    } = diagnosticsModule;
+
     recordPremiumRouteInvocation();
 
     recordPremiumProviderAttempt({
@@ -143,6 +144,12 @@ describe('premiumDiagnostics', () => {
   });
 
   it('captures sanitized route failures for premium safety blocks', () => {
+    const {
+      getPremiumDiagnostics,
+      recordPremiumRouteFailure,
+      recordPremiumRouteInvocation,
+    } = diagnosticsModule;
+
     recordPremiumRouteInvocation();
     recordPremiumRouteFailure({
       requestId: 'req-premium-2',

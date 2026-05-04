@@ -33,7 +33,6 @@ import {
 } from '../perf/sensitiveMediaTelemetry';
 import { openExternalUrl } from '../lib/safety/externalUrl';
 import { Gif } from './Gif';
-import type { TimelineConversationHint } from '../conversation/projections/timelineProjection';
 import ProfileCardTrigger from './ProfileCardTrigger';
 import { buildStandardProfileCardData } from '../lib/profileCardData';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
@@ -50,7 +49,6 @@ interface PostCardProps {
   onBookmark?: (post: MockPost) => void;
   onMore?: (post: MockPost) => void;
   index: number;
-  timelineHint?: TimelineConversationHint;
   /** Handle of the post being replied to — shown as "↳ Replying to @handle" when no ContextPost is visible */
   replyingTo?: string | undefined;
   /** When true, draws a connector line entering from the top of the card to the avatar, bridging a ContextPost above */
@@ -81,6 +79,13 @@ type MediaCarouselItem =
     };
 
 const multimodalSensitiveCache = new Map<string, SensitiveMediaAssessment>();
+// Dedup in-flight analyzer calls so multiple PostCards mounting at once for
+// the same media don't all hit /api/llm/analyze/media simultaneously.
+const multimodalInFlight = new Map<string, Promise<unknown>>();
+// Per-media cooldown after a 429 (or other hard failure) so we don't hammer
+// the server while the rate-limit window resets.
+const multimodalCooldownUntil = new Map<string, number>();
+const MULTIMODAL_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const MULTIMODAL_RETRY_BASE_MS = 5_000;
 const MULTIMODAL_RETRY_MAX_MS = 60_000;
 
@@ -88,7 +93,7 @@ function multimodalRetryDelayMs(attempt: number): number {
   return Math.min(MULTIMODAL_RETRY_MAX_MS, MULTIMODAL_RETRY_BASE_MS * (2 ** attempt));
 }
 
-export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, timelineHint, replyingTo, hasContextAbove }: PostCardProps) {
+export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
@@ -358,6 +363,14 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
       return;
     }
 
+    const cooldownUntil = multimodalCooldownUntil.get(primaryVisualTarget.cacheKey) ?? 0;
+    if (cooldownUntil > Date.now()) {
+      // Honor server-imposed cooldown — don't refire while the rate limit window
+      // is still active. A future remount after the cooldown expires will retry.
+      setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
+      return;
+    }
+
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRetry = () => {
@@ -371,14 +384,27 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
     (async () => {
       try {
-        const result = await callMediaAnalyzer({
-          threadId: post.id,
-          mediaUrl: primaryVisualTarget.url,
-          ...(primaryVisualTarget.alt ? { mediaAlt: primaryVisualTarget.alt } : {}),
-          nearbyText: post.content,
-          candidateEntities: [],
-          factualHints: [],
-        });
+        const cacheKey = primaryVisualTarget.cacheKey;
+        let pending = multimodalInFlight.get(cacheKey) as
+          | Promise<Awaited<ReturnType<typeof callMediaAnalyzer>>>
+          | undefined;
+        if (!pending) {
+          pending = callMediaAnalyzer({
+            threadId: post.id,
+            mediaUrl: primaryVisualTarget.url,
+            ...(primaryVisualTarget.alt ? { mediaAlt: primaryVisualTarget.alt } : {}),
+            nearbyText: post.content,
+            candidateEntities: [],
+            factualHints: [],
+          });
+          multimodalInFlight.set(cacheKey, pending);
+          pending.finally(() => {
+            if (multimodalInFlight.get(cacheKey) === pending) {
+              multimodalInFlight.delete(cacheKey);
+            }
+          });
+        }
+        const result = await pending;
 
         const assessment = assessmentFromMediaAnalysis(result);
         const authoritative = result.analysisStatus !== 'degraded'
@@ -389,7 +415,21 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           scheduleRetry();
         }
         if (!cancelled) setMultimodalSensitiveAssessment(assessment);
-      } catch {
+      } catch (err) {
+        // Detect 429 and other rate-limit-like failures and apply a long
+        // cooldown so this card (and siblings sharing the same media URL) stop
+        // re-hitting the analyzer endpoint.
+        const status = (err as { status?: number } | undefined)?.status;
+        if (status === 429 || status === 503) {
+          multimodalCooldownUntil.set(
+            primaryVisualTarget.cacheKey,
+            Date.now() + MULTIMODAL_RATE_LIMIT_COOLDOWN_MS,
+          );
+          if (!cancelled) {
+            setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
+          }
+          return;
+        }
         if (!cancelled) {
           setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
         }
@@ -584,9 +624,9 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                     Article
                   </span>
                 )}
+                <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
                 <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>· {formatTime(post.createdAt)}</span>
               </div>
-              <span style={{ fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-3)' }}>@{post.author.handle}</span>
               {moderationLabelChips.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
                   {moderationLabelChips.map((chip) => (
@@ -615,47 +655,6 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <p style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', margin: '0 0 8px', fontWeight: 500 }}>
           ↳ Replying to <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); handleMentionClick(replyingTo); }} style={{ color: 'var(--blue)', font: 'inherit', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>@{replyingTo}</button>
         </p>
-      )}
-
-      {timelineHint && (
-        <div style={{ margin: replyingTo ? '0 0 10px' : '0 0 8px' }}>
-          {(timelineHint.isReply || timelineHint.continuityLabel) && timelineHint.compactSummary && (
-            <p style={{
-              margin: '0 0 6px',
-              fontSize: 'var(--type-meta-sm-size)',
-              lineHeight: 'var(--type-meta-sm-line)',
-              letterSpacing: 'var(--type-meta-sm-track)',
-              color: 'var(--label-3)',
-              fontWeight: 500,
-            }}>
-              Conversation: {timelineHint.compactSummary}
-            </p>
-          )}
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 6,
-            padding: '4px 9px',
-            borderRadius: 999,
-            border: '1px solid var(--stroke-dim)',
-            background: 'var(--surface-2)',
-            color: 'var(--label-3)',
-            fontSize: 'var(--type-meta-sm-size)',
-            lineHeight: 'var(--type-meta-sm-line)',
-            letterSpacing: 'var(--type-meta-sm-track)',
-            fontWeight: 600,
-          }}>
-            <span>{timelineHint.direction}</span>
-            {timelineHint.dominantTone && timelineHint.dominantTone !== 'forming' && (
-              <span>{timelineHint.dominantTone}</span>
-            )}
-            {timelineHint.branchDepth > 0 && <span>depth {timelineHint.branchDepth}</span>}
-            {timelineHint.continuityLabel && <span>{timelineHint.continuityLabel}</span>}
-            {timelineHint.factualSignalPresent && <span>factual</span>}
-            {timelineHint.sourceSupportPresent && <span>source-backed</span>}
-          </div>
-        </div>
       )}
 
       {/* Article content preview */}
@@ -1432,10 +1431,10 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
               <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontWeight: 600, fontSize: 'var(--type-label-md-size)', lineHeight: 'var(--type-label-md-line)', letterSpacing: 'var(--type-label-md-track)', color: 'var(--label-1)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>{quotedPost.author.displayName || quotedPost.author.handle}</button>
             </ProfileCardTrigger>
             <ProfileCardTrigger data={quotedStandardProfileCardData} did={quotedPost.author.did} disabled={!quotedStandardProfileCardData}>
-              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
+              <button className="interactive-link-button" onClick={(e) => { e.stopPropagation(); void navigateToProfile(quotedActor); }} style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>@{quotedPost.author.handle}</button>
             </ProfileCardTrigger>
           </div>
-          <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)' }}>
+          <p style={{ fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             <TwemojiText text={quotedPost.content} onMention={handleMentionClick} onHashtag={handleHashtagClick} />
           </p>
           {quotedPost.media && quotedPost.media.length > 0 && (

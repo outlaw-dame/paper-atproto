@@ -28,7 +28,7 @@ describe('durable proxy', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const { proxyDurableRead } = await import('./durableProxy.js');
+    const { proxyDurableRead } = await import(`./durableProxy.js?test=${Date.now()}`);
     await proxyDurableRead('events', 'as_1234567890ab', 'offset=0&limit=10&live=true');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);

@@ -47,7 +47,7 @@ describe('urlSafety cache behavior', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({
         ok: true,
         result: {
-          url: 'https://example.com/',
+          url: 'https://unknown-cache.example/',
           checked: true,
           status: 'safe',
           safe: true,
@@ -63,14 +63,14 @@ describe('urlSafety cache behavior', () => {
 
     const { checkUrlSafety } = await import('./urlSafety');
 
-    const first = await checkUrlSafety('https://example.com');
+    const first = await checkUrlSafety('https://unknown-cache.example');
     expect(first.status).toBe('unknown');
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // Past UNKNOWN_CACHE_TTL_MS (30s), cache should refresh.
     vi.advanceTimersByTime(30_001);
 
-    const second = await checkUrlSafety('https://example.com');
+    const second = await checkUrlSafety('https://unknown-cache.example');
     expect(second.status).toBe('safe');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

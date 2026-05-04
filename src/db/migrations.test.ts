@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { paperDB } from '../db';
 import { migrateLocalDatabase } from './migrations';
 
@@ -6,6 +6,10 @@ describe('migrateLocalDatabase', () => {
   beforeAll(async () => {
     await paperDB.init();
     await migrateLocalDatabase();
+  });
+
+  afterAll(async () => {
+    await paperDB.close();
   });
 
   it('ensures thread context columns exist on posts', async () => {

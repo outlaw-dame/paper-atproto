@@ -40,8 +40,8 @@ describe('safeBrowsing service retry behavior', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
-    const result = await checkUrlAgainstSafeBrowsing('https://example.com/path');
+    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const result = await checkUrlAgainstSafeBrowsing('https://safe-retry.example/path');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.status).toBe('safe');
@@ -60,8 +60,8 @@ describe('safeBrowsing service retry behavior', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(badRequest);
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
-    const result = await checkUrlAgainstSafeBrowsing('https://example.com/path');
+    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const result = await checkUrlAgainstSafeBrowsing('https://safe-400.example/path');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('unknown');
@@ -75,8 +75,8 @@ describe('safeBrowsing service retry behavior', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
-    const result = await checkUrlAgainstSafeBrowsing('https://example.com/path');
+    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const result = await checkUrlAgainstSafeBrowsing('https://safe-missing-key.example/path');
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.status).toBe('unknown');
@@ -102,9 +102,9 @@ describe('safeBrowsing service retry behavior', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
-    const first = checkUrlAgainstSafeBrowsing('https://example.com/path');
-    const second = checkUrlAgainstSafeBrowsing('https://example.com/path');
+    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const first = checkUrlAgainstSafeBrowsing('https://safe-coalesce.example/path');
+    const second = checkUrlAgainstSafeBrowsing('https://safe-coalesce.example/path');
 
     release();
     const [one, two] = await Promise.all([first, second]);
@@ -124,10 +124,10 @@ describe('safeBrowsing service retry behavior', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
+    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
 
-    const first = await checkUrlAgainstSafeBrowsing('https://example.com/path');
-    const second = await checkUrlAgainstSafeBrowsing('https://example.com/path');
+    const first = await checkUrlAgainstSafeBrowsing('https://safe-cache.example/path');
+    const second = await checkUrlAgainstSafeBrowsing('https://safe-cache.example/path');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(first.status).toBe('safe');

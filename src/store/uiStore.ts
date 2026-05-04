@@ -8,7 +8,7 @@ import type { MockPost } from '../data/mockData';
 import { isAtUri } from '../lib/resolver/atproto';
 
 export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
-export type HomeFeedMode = 'Following' | 'Discover' | 'Feeds';
+export type HomeFeedMode = 'Following' | 'Feeds';
 
 export interface StoryEntry {
   type: 'post' | 'topic';
@@ -17,7 +17,7 @@ export interface StoryEntry {
 }
 
 const TAB_IDS: readonly TabId[] = ['home', 'explore', 'compose', 'activity', 'profile'] as const;
-const HOME_FEED_MODES: readonly HomeFeedMode[] = ['Following', 'Discover', 'Feeds'] as const;
+const HOME_FEED_MODES: readonly HomeFeedMode[] = ['Following', 'Feeds'] as const;
 const MAX_QUERY_LENGTH = 200;
 const MAX_STORY_ID_LENGTH = 512;
 const MAX_STORY_TITLE_LENGTH = 160;

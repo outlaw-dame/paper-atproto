@@ -33,7 +33,6 @@ import {
   useRemoveLabeler,
 } from '../lib/atproto/queries';
 import { useConversationBatchHydration } from '../conversation/sessionHydration';
-import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
 import { embeddingPipeline } from '../intelligence/embeddingPipeline';
 import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
@@ -1642,8 +1641,6 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
     maxTargets: 8,
   });
 
-  const profileTimelineHints = useTimelineConversationHintsProjection(profileSlicePosts);
-
   function renderContent() {
     if (loading) return <Spinner />;
 
@@ -1718,7 +1715,6 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                       onMore={handleMore}
                       onReply={openComposeReply}
                       index={0}
-                      {...(profileTimelineHints[pinnedPost.id] ? { timelineHint: profileTimelineHints[pinnedPost.id] } : {})}
                     />
                   )}
                 </div>
@@ -1764,7 +1760,6 @@ export default function ProfileTab({ onOpenStory, actorDid }: Props) {
                   onMore={handleMore}
                   onReply={openComposeReply}
                   index={i + (showPinned ? 1 : 0)}
-                  {...(profileTimelineHints[p.id] ? { timelineHint: profileTimelineHints[p.id] } : {})}
                 />
               );
             })}

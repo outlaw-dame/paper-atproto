@@ -10,6 +10,17 @@ function mockJsonResponse(payload: unknown, status = 200, headers?: Record<strin
   });
 }
 
+async function loadEntityLinkingProvider() {
+  const config = await import('../../server/src/config/env.js');
+  Object.assign(config.env, {
+    VERIFY_ENTITY_LINKING_PROVIDER: process.env.VERIFY_ENTITY_LINKING_PROVIDER,
+    VERIFY_ENTITY_LINKING_ENDPOINT: process.env.VERIFY_ENTITY_LINKING_ENDPOINT,
+    VERIFY_WIKIDATA_ENDPOINT: process.env.VERIFY_WIKIDATA_ENDPOINT,
+    VERIFY_ENTITY_LINKING_TIMEOUT_MS: Number(process.env.VERIFY_ENTITY_LINKING_TIMEOUT_MS ?? 5000),
+  });
+  return import('../../server/src/verification/entity-linking.provider');
+}
+
 describe('hybrid entity-linking provider hardening', () => {
   const originalProvider = process.env.VERIFY_ENTITY_LINKING_PROVIDER;
   const originalDbpediaEndpoint = process.env.VERIFY_ENTITY_LINKING_ENDPOINT;
@@ -70,7 +81,7 @@ describe('hybrid entity-linking provider hardening', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { createEntityLinkingProvider } = await import('../../server/src/verification/entity-linking.provider');
+    const { createEntityLinkingProvider } = await loadEntityLinkingProvider();
     const provider = createEntityLinkingProvider();
     const linked = await provider.linkEntities('Douglas Adams wrote Hitchhiker\'s Guide.', ['Douglas Adams']);
 
@@ -104,7 +115,7 @@ describe('hybrid entity-linking provider hardening', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { createEntityLinkingProvider } = await import('../../server/src/verification/entity-linking.provider');
+    const { createEntityLinkingProvider } = await loadEntityLinkingProvider();
     const provider = createEntityLinkingProvider();
 
     await provider.linkEntities('Contact alice@example.com or +1 (425) 555-1234 about Douglas Adams.', ['Douglas Adams']);
@@ -132,7 +143,7 @@ describe('hybrid entity-linking provider hardening', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { createEntityLinkingProvider } = await import('../../server/src/verification/entity-linking.provider');
+    const { createEntityLinkingProvider } = await loadEntityLinkingProvider();
     const provider = createEntityLinkingProvider();
     const linked = await provider.linkEntities('Douglas Adams', ['Douglas Adams']);
 

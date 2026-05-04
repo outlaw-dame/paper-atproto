@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { feedService } from '../feeds';
 import { useActivityStore } from '../store/activityStore';
+import { useUiStore } from '../store/uiStore';
 import { searchPodcastIndex, type PodcastIndexSearchFeed } from '../lib/podcastIndexClient';
 import type { Feed, FeedItem } from '../schema';
 import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
@@ -54,6 +55,8 @@ function SectionCard({
 
 export default function FeedsSettingsPage() {
   const addAppNotification = useActivityStore((state) => state.addAppNotification);
+  const feedsAdaptiveRanking = useUiStore((state) => state.feedsAdaptiveRanking);
+  const toggleFeedsAdaptiveRanking = useUiStore((state) => state.toggleFeedsAdaptiveRanking);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [podcastEpisodes, setPodcastEpisodes] = useState<PodcastEpisodeEntry[]>([]);
   const [savedEpisodes, setSavedEpisodes] = useState<PodcastEpisodeEntry[]>([]);
@@ -233,6 +236,33 @@ export default function FeedsSettingsPage() {
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
+      <div style={{
+        border: '1px solid var(--sep)',
+        borderRadius: 12,
+        background: 'var(--fill-1)',
+        padding: 12,
+        display: 'grid',
+        gap: 10,
+      }}>
+        <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--label-1)' }}>Algorithm</h4>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={feedsAdaptiveRanking}
+            onChange={() => toggleFeedsAdaptiveRanking()}
+            style={{ marginTop: 2, width: 14, height: 14, flexShrink: 0 }}
+          />
+          <div>
+            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--label-1)', lineHeight: '18px' }}>
+              Adaptive ranking
+            </span>
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--label-3)', lineHeight: 1.4, marginTop: 2 }}>
+              Re-scores Feeds posts by engagement and recency. The raw chronological feed is preserved as a fallback.
+            </span>
+          </div>
+        </label>
+      </div>
+
       <div style={{
         border: '1px solid var(--sep)',
         borderRadius: 12,

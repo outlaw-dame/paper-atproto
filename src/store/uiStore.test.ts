@@ -49,8 +49,8 @@ describe('uiStore resume state', () => {
   });
 
   it('tracks and updates persisted home feed mode', () => {
-    useUiStore.getState().setHomeFeedMode('Discover');
-    expect(useUiStore.getState().homeFeedMode).toBe('Discover');
+    useUiStore.getState().setHomeFeedMode('Following');
+    expect(useUiStore.getState().homeFeedMode).toBe('Following');
 
     useUiStore.getState().setHomeFeedMode('Feeds');
     expect(useUiStore.getState().homeFeedMode).toBe('Feeds');
@@ -106,6 +106,7 @@ describe('uiStore resume state', () => {
       activeTab: 'home',
       prevTab: 'home',
       homeFeedMode: 'Following',
+      feedsAdaptiveRanking: false,
       profileDid: null,
       story: null,
       exploreSearchQuery: '#mlb',

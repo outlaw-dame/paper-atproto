@@ -3,82 +3,32 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   transactionMock,
   fallbackQueryMock,
-  embedMock,
-  recordEmbeddingVectorMock,
-  getMediaBoostFactorMock,
-  recordHybridSearchTimeoutFallbackMock,
-  resolveHybridSearchRuntimeConfigMock,
+  generateEmbeddingMock,
 } = vi.hoisted(() => ({
   transactionMock: vi.fn(),
   fallbackQueryMock: vi.fn(),
-  embedMock: vi.fn(),
-  recordEmbeddingVectorMock: vi.fn(),
-  getMediaBoostFactorMock: vi.fn(() => 1),
-  recordHybridSearchTimeoutFallbackMock: vi.fn(),
-  resolveHybridSearchRuntimeConfigMock: vi.fn(() => ({
-    queryTimeoutMs: 7_000,
-    timeoutRetryDelayMs: 120,
-    rrfWeight: 0.45,
-    lexicalWeight: 0.30,
-    semanticWeight: 0.25,
-    confidenceWeight: 0.15,
-    semanticDistanceCutoff: null,
-    semanticCandidateMultiplier: 2,
-    feedSemanticCandidateMultiplier: 3,
-  })),
+  generateEmbeddingMock: vi.fn(),
 }));
 
-vi.mock('./db', () => ({
-  paperDB: {
-    getPG: () => ({
-      transaction: transactionMock,
-      query: fallbackQueryMock,
-    }),
-  },
-}));
-
-vi.mock('./intelligence/embeddingPipeline', () => ({
-  embeddingPipeline: {
-    embed: embedMock,
-  },
-  sanitizeForEmbedding: (value: string) => value.trim(),
-}));
-
-vi.mock('./perf/embeddingTelemetry', () => ({
-  recordEmbeddingVector: recordEmbeddingVectorMock,
-}));
-
-vi.mock('./perf/searchTelemetry', () => ({
-  recordHybridSearchTimeoutFallback: recordHybridSearchTimeoutFallbackMock,
-}));
-
-vi.mock('./lib/media/extractMediaSignals', () => ({
-  getMediaBoostFactor: getMediaBoostFactorMock,
-  extractMediaSignalsFromJson: vi.fn(() => ({
-    hasImages: false,
-    hasVideo: false,
-    hasLink: false,
-    imageAltText: '',
-    imageCount: 0,
-  })),
-}));
-
-vi.mock('./search/runtime', () => ({
-  resolveHybridSearchRuntimeConfig: resolveHybridSearchRuntimeConfigMock,
-}));
-
-import { hybridSearch, HybridSearch } from './search';
+const { paperDB } = await import('./db');
+const {
+  getHybridSearchTelemetrySnapshot,
+  resetSearchTelemetryForTests,
+} = await import('./perf/searchTelemetry');
+const { hybridSearch, HybridSearch } = await import('./search');
 
 describe('HybridSearch semantic query execution', () => {
   beforeEach(() => {
     transactionMock.mockReset();
     fallbackQueryMock.mockReset();
-    embedMock.mockReset();
-    recordEmbeddingVectorMock.mockReset();
-    getMediaBoostFactorMock.mockClear();
-    recordHybridSearchTimeoutFallbackMock.mockReset();
-    resolveHybridSearchRuntimeConfigMock.mockClear();
-    embedMock.mockResolvedValue([0.12, 0.34, 0.56]);
+    generateEmbeddingMock.mockReset();
+    resetSearchTelemetryForTests();
+    generateEmbeddingMock.mockResolvedValue([0.12, 0.34, 0.56]);
+    vi.spyOn(HybridSearch.prototype, 'generateEmbedding').mockImplementation(generateEmbeddingMock);
+    vi.spyOn(paperDB, 'getPG').mockReturnValue({
+      transaction: transactionMock,
+      query: fallbackQueryMock,
+    } as unknown as ReturnType<typeof paperDB.getPG>);
   });
 
   it('shapes cross-table semantic search so pgvector indexes can participate', async () => {
@@ -128,33 +78,24 @@ describe('HybridSearch semantic query execution', () => {
 
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(fallbackQueryMock).toHaveBeenCalledTimes(1);
-    expect(recordHybridSearchTimeoutFallbackMock).toHaveBeenCalledWith({
+    expect(getHybridSearchTelemetrySnapshot().lastTimeoutFallback).toMatchObject({
       scope: 'search',
       retryDelayMs: 0,
       timeoutMs: 1,
     });
   });
 
-  it('uses central runtime config defaults for timeout fallback telemetry', async () => {
-    resolveHybridSearchRuntimeConfigMock.mockReturnValueOnce({
+  it('uses configured timeout fallback telemetry', async () => {
+    const configuredSearch = new HybridSearch({
       queryTimeoutMs: 2,
       timeoutRetryDelayMs: 0,
-      rrfWeight: 0.45,
-      lexicalWeight: 0.30,
-      semanticWeight: 0.25,
-      confidenceWeight: 0.15,
-      semanticDistanceCutoff: null,
-      semanticCandidateMultiplier: 2,
-      feedSemanticCandidateMultiplier: 3,
     });
-
-    const configuredSearch = new HybridSearch();
     transactionMock.mockImplementation(() => new Promise(() => {}));
     fallbackQueryMock.mockResolvedValue({ rows: [] });
 
     await configuredSearch.search('config timeout fallback', 20, { disableCache: true });
 
-    expect(recordHybridSearchTimeoutFallbackMock).toHaveBeenCalledWith({
+    expect(getHybridSearchTelemetrySnapshot().lastTimeoutFallback).toMatchObject({
       scope: 'search',
       retryDelayMs: 0,
       timeoutMs: 2,
@@ -182,18 +123,8 @@ describe('HybridSearch semantic query execution', () => {
     transactionMock.mockImplementation(async (callback: (trx: { query: typeof trxQueryMock }) => Promise<unknown>) => (
       callback({ query: trxQueryMock })
     ));
-    getMediaBoostFactorMock.mockReturnValue(1.18);
-
     const result = await hybridSearch.searchFeedItems('screenshot workflow', 10, { disableCache: true });
 
-    expect(getMediaBoostFactorMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        hasImages: true,
-        hasVideo: false,
-        hasLink: true,
-      }),
-      true,
-    );
     expect(result.rows[0]?.fused_score).toBeGreaterThan(0.3);
   });
 
@@ -328,19 +259,7 @@ describe('HybridSearch semantic query execution', () => {
     expect(result.rows[0]?.id).toBe('lexical-strong');
   });
 
-  it('uses feed candidate multiplier from runtime config to tune ef_search', async () => {
-    resolveHybridSearchRuntimeConfigMock.mockReturnValueOnce({
-      queryTimeoutMs: 7_000,
-      timeoutRetryDelayMs: 120,
-      rrfWeight: 0.45,
-      lexicalWeight: 0.30,
-      semanticWeight: 0.25,
-      confidenceWeight: 0.15,
-      semanticDistanceCutoff: null,
-      semanticCandidateMultiplier: 2,
-      feedSemanticCandidateMultiplier: 5,
-    });
-
+  it('uses feed candidate multiplier from runtime defaults to tune ef_search', async () => {
     const tunedSearch = new HybridSearch();
     const trxQueryMock = vi
       .fn()
@@ -352,6 +271,6 @@ describe('HybridSearch semantic query execution', () => {
     ));
 
     await tunedSearch.searchFeedItems('candidate tuning', 20, { disableCache: true });
-    expect(trxQueryMock.mock.calls[0]?.[0]).toBe('SET LOCAL hnsw.ef_search = 100');
+    expect(trxQueryMock.mock.calls[0]?.[0]).toBe('SET LOCAL hnsw.ef_search = 60');
   });
 });

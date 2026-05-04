@@ -8,10 +8,22 @@ const { mockCaptionImage } = vi.hoisted(() => ({
   mockCaptionImage: vi.fn(),
 }));
 
-vi.mock('../lib/abortSignals', async () => {
-  const actual = await vi.importActual('../lib/abortSignals');
+vi.mock('../lib/abortSignals', () => {
+  const composeAbortSignals = (signals: AbortSignal[]): AbortSignal => {
+    if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+    const controller = new AbortController();
+    for (const signal of signals) {
+      if (signal.aborted) {
+        controller.abort(signal.reason);
+        return controller.signal;
+      }
+      signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    }
+    return controller.signal;
+  };
+
   return {
-    ...actual,
+    composeAbortSignals,
     sleepWithAbort: sleepWithAbortMock,
   };
 });
@@ -22,14 +34,15 @@ vi.mock('../workers/InferenceClient', () => ({
   },
 }));
 
-import {
+import type { ThreadStateForWriter } from './llmContracts';
+
+const {
   callInterpolatorWriter,
   callComposerGuidanceWriter,
   callMediaAnalyzer,
   callPremiumDeepInterpolator,
-} from './modelClient';
-import type { ThreadStateForWriter } from './llmContracts';
-import { useInterpolatorSettingsStore } from '../store/interpolatorSettingsStore';
+} = await import('./modelClient');
+const { useInterpolatorSettingsStore } = await import('../store/interpolatorSettingsStore');
 
 describe('modelClient retry policy', () => {
   beforeEach(() => {

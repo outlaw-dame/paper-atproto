@@ -44,9 +44,9 @@ export const LiveSportsMoments: React.FC<LiveSportsMomentsProps> = ({
       exit={{ opacity: 0, y: -20 }}
       transition={{ duration: 0.3 }}
       style={{
-        borderBottom: '1px solid var(--border)',
+        borderBottom: '0.5px solid var(--sep)',
         padding: '12px 16px',
-        background: 'linear-gradient(135deg, rgba(255,59,48,0.08) 0%, rgba(255,152,0,0.04) 100%)',
+        background: 'color-mix(in srgb, var(--red) 6%, transparent)',
       }}
     >
       {/* Header */}
@@ -57,6 +57,7 @@ export const LiveSportsMoments: React.FC<LiveSportsMomentsProps> = ({
           justifyContent: 'space-between',
           marginBottom: 12,
           cursor: 'pointer',
+          minHeight: 44,
         }}
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
@@ -67,40 +68,57 @@ export const LiveSportsMoments: React.FC<LiveSportsMomentsProps> = ({
             gap: 8,
           }}
         >
-          <span style={{ fontSize: 18 }}>🔴</span>
+          {/* SF-style live dot — pulsing red 8px circle, no emoji */}
+          <motion.span
+            animate={{ opacity: [1, 0.45, 1] }}
+            transition={{ repeat: Infinity, duration: 1.6, ease: 'easeInOut' }}
+            style={{
+              display: 'inline-block',
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: 'var(--red)',
+              flexShrink: 0,
+            }}
+            aria-hidden="true"
+          />
           <span
             style={{
-              fontSize: 14,
+              fontSize: 'var(--type-label-md-size, 13px)',
+              lineHeight: 'var(--type-label-md-line, 16px)',
               fontWeight: 600,
               color: 'var(--label-1)',
-              letterSpacing: 0.3,
+              letterSpacing: '0.02em',
             }}
           >
-            LIVE NOW
+            Live now
           </span>
           <span
             style={{
-              fontSize: 12,
-              fontWeight: 500,
-              color: 'var(--red)',
-              background: 'rgba(255,59,48,0.2)',
-              padding: '2px 8px',
-              borderRadius: 4,
+              fontSize: 'var(--type-meta-sm-size, 11px)',
+              lineHeight: 'var(--type-meta-sm-line, 14px)',
+              fontWeight: 600,
+              color: 'var(--label-2)',
             }}
           >
             {liveGames.length} game{liveGames.length > 1 ? 's' : ''}
           </span>
         </div>
-        <div
-          style={{
-            transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
-            transition: 'transform 0.2s',
-            color: 'var(--label-3)',
-            fontSize: 16,
-          }}
+        <motion.svg
+          animate={{ rotate: isCollapsed ? -90 : 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--label-3)"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
         >
-          ▼
-        </div>
+          <polyline points="6 9 12 15 18 9" />
+        </motion.svg>
       </div>
 
       {/* Games Container */}

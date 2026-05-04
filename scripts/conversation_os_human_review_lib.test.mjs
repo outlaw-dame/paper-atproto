@@ -10,7 +10,7 @@ describe('conversation_os_human_review_lib', () => {
     const pack = createHumanReviewPack({
       fixtures: [
         {
-          id: 'sparse-claim-skepticism',
+          id: 'sparse-skeptical-claim',
           description: 'Sparse skeptical thread',
           summaryMode: 'descriptive_fallback',
           changeReasons: ['clarification'],
@@ -43,7 +43,7 @@ describe('conversation_os_human_review_lib', () => {
     const pack = createHumanReviewPack({
       fixtures: [
         {
-          id: 'sparse-claim-skepticism',
+          id: 'sparse-skeptical-claim',
           description: 'Sparse skeptical thread',
           summaryMode: 'descriptive_fallback',
           changeReasons: ['clarification'],

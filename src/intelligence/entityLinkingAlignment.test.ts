@@ -17,6 +17,14 @@ function asServerLinkedEntitiesFromClient(text: string): LinkedEntity[] {
   }));
 }
 
+async function loadEntityLinkingProvider() {
+  const config = await import('../../server/src/config/env.js');
+  Object.assign(config.env, {
+    VERIFY_ENTITY_LINKING_PROVIDER: process.env.VERIFY_ENTITY_LINKING_PROVIDER,
+  });
+  return import('../../server/src/verification/entity-linking.provider');
+}
+
 describe('entity matching parity between client and server', () => {
   const originalProvider = process.env.VERIFY_ENTITY_LINKING_PROVIDER;
 
@@ -44,7 +52,7 @@ describe('entity matching parity between client and server', () => {
         .map((impact) => normalizeLabel(impact.canonicalLabel ?? impact.entityText)),
     );
 
-    const { createEntityLinkingProvider } = await import('../../server/src/verification/entity-linking.provider');
+    const { createEntityLinkingProvider } = await loadEntityLinkingProvider();
     const provider = createEntityLinkingProvider();
     const serverLinked = await provider.linkEntities(text, topicHints);
     const serverConcepts = new Set(serverLinked.map((entity) => normalizeLabel(entity.canonicalLabel)));
@@ -65,7 +73,7 @@ describe('entity matching parity between client and server', () => {
     const topicHints = ['decentralization', 'fediverse'];
 
     const linkedFromClient = asServerLinkedEntitiesFromClient(text);
-    const { computeEntityGrounding } = await import('../../server/src/verification/entity-linking.provider');
+    const { computeEntityGrounding } = await loadEntityLinkingProvider();
     const score = computeEntityGrounding(topicHints, linkedFromClient);
 
     expect(score).toBeGreaterThan(0.65);
@@ -90,7 +98,7 @@ describe('entity matching parity between client and server', () => {
       },
     ];
 
-    const { computeEntityGrounding } = await import('../../server/src/verification/entity-linking.provider');
+    const { computeEntityGrounding } = await loadEntityLinkingProvider();
     const score = computeEntityGrounding(topicHints, unrelatedEntities);
 
     expect(score).toBeLessThan(0.5);
@@ -115,7 +123,7 @@ describe('entity matching parity between client and server', () => {
       },
     ];
 
-    const { computeEntityGrounding } = await import('../../server/src/verification/entity-linking.provider');
+    const { computeEntityGrounding } = await loadEntityLinkingProvider();
     const score = computeEntityGrounding(topicHints, nearMatchEntities);
 
     expect(score).toBeGreaterThanOrEqual(0.5);
@@ -140,7 +148,7 @@ describe('entity matching parity between client and server', () => {
       },
     ];
 
-    const { computeEntityGrounding } = await import('../../server/src/verification/entity-linking.provider');
+    const { computeEntityGrounding } = await loadEntityLinkingProvider();
     const score = computeEntityGrounding(topicHints, weakOverlapEntities);
 
     expect(score).toBeGreaterThan(0.32);

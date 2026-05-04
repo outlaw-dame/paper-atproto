@@ -105,7 +105,10 @@ function buildStoryExplanationChips(params: {
   const { post, rank, featured, searching, intentLabel } = params;
 
   if (featured) chips.push('Top story selection');
-  if (post.embed?.type === 'external' || post.article) chips.push('Has source link');
+  // NOTE: do NOT push a "Has source link" chip here when the post has an
+  // external embed or article — `resolvePostSurfaceKind()` already surfaces
+  // that as the primary "Linked article" / "Feature story" pill on the same
+  // card, so adding it again produces a redundant duplicate badge.
   if (post.article?.body) chips.push('Long-form context');
   if (post.replyCount >= 5) chips.push('Active discussion');
   if (post.repostCount >= 3) chips.push('Shared widely');
@@ -2582,10 +2585,19 @@ export default function ExploreTab({ onOpenStory }: Props) {
                       maxGames={3}
                       onGameClick={(gameId) => {
                         const game = sportsStore.getGame(gameId);
-                        const query = game
-                          ? (game.hashtags[0] ? `#${game.hashtags[0]}` : `${game.awayTeam.name} ${game.homeTeam.name}`)
-                          : gameId;
-                        openSearchStory(query);
+                        if (!game) {
+                          openSearchStory(gameId);
+                          return;
+                        }
+                        // Match Bluesky's live-event handling: prefer the
+                        // event hashtag feed (focused stream of posts about
+                        // this game), fall back to a teams search.
+                        const tag = game.hashtags?.[0];
+                        if (tag) {
+                          openHashtagFeed(tag);
+                          return;
+                        }
+                        openSearchStory(`${game.awayTeam.name} ${game.homeTeam.name}`);
                       }}
                     />
                   </div>

@@ -1,13 +1,18 @@
 import { probeRuntimeCapability, type RuntimeCapability } from './capabilityProbe';
 import {
-  chooseModelForTask,
   type ModelChoice,
   type ModelPolicyDecision,
+  type TaskKind,
 } from './modelPolicy';
 import { LocalGenerationSession, type GenerateTextRequest } from './generationSession';
 import { LocalMultimodalSession, type AnalyzeMediaRequest } from './multimodalSession';
 import { runRuntimeSmokeCheck, type RuntimeSmokeReport } from './runtimeSmoke';
 import { useRuntimeStore } from './runtimeStore';
+import {
+  routeTaskWithRouter,
+  type RouteTaskInputStats,
+  type RouteTaskWithRouterResult,
+} from './routerOrchestrator';
 
 type SessionKind = 'text' | 'multimodal';
 
@@ -167,18 +172,16 @@ class BrowserModelManager {
 
   private async runTextGeneration(request: GenerateTextRequest): Promise<ModelManagerTextResult> {
     const capability = await this.ensureCapability();
-    const decision = chooseModelForTask({
-      capability,
-      settingsMode: useRuntimeStore.getState().settingsMode,
-      task: 'text_generation',
-      explicitUserAction: true,
+    const routing = await this.routeTask('text_generation', capability, {
+      textLength: request.prompt?.length ?? 0,
     });
+    const decision = routing.policyDecision;
 
     if (!decision.localAllowed || decision.choice === 'worker_local_only') {
       return unavailable(decision.reason);
     }
 
-    const candidates = this.getLoadableCandidates(decision);
+    const candidates = this.getLoadableCandidates(routing);
     if (candidates.length === 0) {
       return unavailable(this.getUnavailableReason(decision));
     }
@@ -212,18 +215,16 @@ class BrowserModelManager {
 
   private async runMultimodalAnalysis(request: AnalyzeMediaRequest): Promise<ModelManagerMultimodalResult> {
     const capability = await this.ensureCapability();
-    const decision = chooseModelForTask({
-      capability,
-      settingsMode: useRuntimeStore.getState().settingsMode,
-      task: 'multimodal_analysis',
-      explicitUserAction: true,
+    const routing = await this.routeTask('multimodal_analysis', capability, {
+      hasImages: true,
     });
+    const decision = routing.policyDecision;
 
     if (!decision.localAllowed || decision.choice === 'worker_local_only') {
       return unavailable(decision.reason);
     }
 
-    const candidates = this.getLoadableCandidates(decision);
+    const candidates = this.getLoadableCandidates(routing);
     if (candidates.length === 0) {
       return unavailable(this.getUnavailableReason(decision));
     }
@@ -262,9 +263,9 @@ class BrowserModelManager {
   }
 
   private getLoadableCandidates(
-    decision: ModelPolicyDecision,
+    routing: RouteTaskWithRouterResult,
   ): Array<Exclude<ModelChoice, 'worker_local_only'>> {
-    const candidates = [decision.choice, ...decision.fallbackChoices].filter(
+    const candidates = routing.modelCandidates.filter(
       (choice): choice is Exclude<ModelChoice, 'worker_local_only'> => choice !== 'worker_local_only',
     );
     const store = useRuntimeStore.getState();
@@ -291,6 +292,26 @@ class BrowserModelManager {
     }
 
     return viable;
+  }
+
+  private async routeTask(
+    task: TaskKind,
+    capability: RuntimeCapability,
+    inputStats: RouteTaskInputStats = {},
+  ): Promise<RouteTaskWithRouterResult> {
+    const store = useRuntimeStore.getState();
+    return routeTaskWithRouter({
+      task,
+      capability,
+      settingsMode: store.settingsMode,
+      explicitUserAction: true,
+      inputStats,
+      stackProfileOptions: {
+        allowLiteRt: store.allowLiteRt,
+        preferLiteRt: store.preferLiteRt,
+        userConsentedToLargeModels: store.userConsentedToLargeModels,
+      },
+    });
   }
 
   private getUnavailableReason(decision: ModelPolicyDecision): string {

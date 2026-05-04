@@ -701,21 +701,6 @@ export function useExploreDiscoverContent(params: {
           whatsHotPosts,
         });
 
-        const trendingTopicPosts = await loadTrendingTopicPosts(
-          agent,
-          trendingTopicsData?.topics,
-        );
-
-        const semanticSeedQueries = createSemanticSeedQueries({
-          whatsHotPosts,
-          trendingTopicQueries: collectTrendingTopicQueries(trendingTopicsData?.topics, 3),
-          maxQueries: 3,
-        });
-        const semanticActors = await loadSemanticSuggestedActors({
-          agent,
-          semanticQueries: semanticSeedQueries,
-        });
-
         const serverSuggestedActors = Array.isArray(actorsData?.actors)
           ? actorsData.actors as AppBskyActorDefs.ProfileView[]
           : [];
@@ -723,20 +708,67 @@ export function useExploreDiscoverContent(params: {
           ? graphSuggestedData.suggestions as AppBskyActorDefs.ProfileView[]
           : [];
 
+        const moderationPrefs = (preferencesRes as any)?.moderationPrefs ?? preferencesData?.moderationPrefs;
+        const quietPosts = mapFeedViewItems(quietData?.feed);
+        const recentFeedItems = Array.isArray(recentFeedRows)
+          ? recentFeedRows.map(mapFeedRowToExploreFeedResult)
+          : [];
+
+        // First commit: render Explore as soon as the parallel fan-out
+        // completes. Trending-topic posts and semantic actor suggestions
+        // are best-effort enrichments and must not block the initial paint.
+        if (disposed || requestVersion !== requestVersionRef.current) return;
+
+        const initialAccumulators = new Map<string, ActorRecommendationAccumulator>();
+        accumulateActorSource(initialAccumulators, serverSuggestedActors, 'server', 1.0);
+        accumulateActorSource(initialAccumulators, graphSuggestedActors, 'graph', 0.9);
+        const initialRecommendations = finalizeRecommendations({
+          accumulators: initialAccumulators,
+          moderationPrefs,
+          selfDid: sessionDid ? normalizeDid(sessionDid) : null,
+          maxResults: DEFAULT_ACTOR_RECOMMENDATION_LIMIT,
+        });
+
+        setState({
+          ...buildExploreDiscoverState({
+            suggestedFeeds: rankedSuggestedFeeds,
+            suggestedActors: serverSuggestedActors,
+            suggestedActorRecommendations: initialRecommendations,
+            whatsHotPosts,
+            trendingTopicPosts: [],
+            quietPosts,
+            recentFeedItems,
+          }),
+          loading: false,
+        });
+
+        // Second commit (best-effort): enrich with trending topic posts and
+        // semantic actor suggestions once the additional fetches finish.
+        const [trendingTopicPosts, semanticActors] = await Promise.all([
+          loadTrendingTopicPosts(agent, trendingTopicsData?.topics).catch(() => [] as MockPost[]),
+          loadSemanticSuggestedActors({
+            agent,
+            semanticQueries: createSemanticSeedQueries({
+              whatsHotPosts,
+              trendingTopicQueries: collectTrendingTopicQueries(trendingTopicsData?.topics, 3),
+              maxQueries: 3,
+            }),
+          }).catch(() => [] as AppBskyActorDefs.ProfileView[]),
+        ]);
+
+        if (disposed || requestVersion !== requestVersionRef.current) return;
+
         const accumulators = new Map<string, ActorRecommendationAccumulator>();
         accumulateActorSource(accumulators, serverSuggestedActors, 'server', 1.0);
         accumulateActorSource(accumulators, graphSuggestedActors, 'graph', 0.9);
         accumulateActorSource(accumulators, semanticActors, 'semantic', 1.2);
 
-        const moderationPrefs = (preferencesRes as any)?.moderationPrefs ?? preferencesData?.moderationPrefs;
         const recommendedActors = finalizeRecommendations({
           accumulators,
           moderationPrefs,
           selfDid: sessionDid ? normalizeDid(sessionDid) : null,
           maxResults: DEFAULT_ACTOR_RECOMMENDATION_LIMIT,
         });
-
-        if (disposed || requestVersion !== requestVersionRef.current) return;
 
         setState({
           ...buildExploreDiscoverState({
@@ -745,10 +777,8 @@ export function useExploreDiscoverContent(params: {
             suggestedActorRecommendations: recommendedActors,
             whatsHotPosts,
             trendingTopicPosts,
-            quietPosts: mapFeedViewItems(quietData?.feed),
-            recentFeedItems: Array.isArray(recentFeedRows)
-              ? recentFeedRows.map(mapFeedRowToExploreFeedResult)
-              : [],
+            quietPosts,
+            recentFeedItems,
           }),
           loading: false,
         });

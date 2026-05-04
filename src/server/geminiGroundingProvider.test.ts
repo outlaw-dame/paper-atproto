@@ -16,17 +16,31 @@ vi.mock('../../server/src/config/env.js', () => ({
   env: envMock,
 }));
 
-import { GeminiGroundingProvider } from '../../server/src/verification/gemini-grounding.provider.js';
+vi.mock('../../server/src/lib/googleGenAi.js', () => ({
+  createGoogleGenAIClient: () => ({
+    models: {
+      generateContent: mockGenerateContent,
+    },
+  }),
+  geminiThinkingConfig: () => ({
+    thinkingConfig: { thinkingLevel: 'LOW' },
+  }),
+  isGemini3Model: () => true,
+  resolveGeminiModel: (_task: string, model: string) => model,
+}));
+
+let groundingModule: typeof import('../../server/src/verification/gemini-grounding.provider.js');
 
 describe('GeminiGroundingProvider', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    groundingModule = await import(`../../server/src/verification/gemini-grounding.provider.js?test=${Date.now()}`);
     envMock.VERIFY_GEMINI_GROUNDING_ENABLED = true;
     mockGenerateContent.mockReset();
   });
 
   it('fails closed when remote grounding is not explicitly enabled', async () => {
     envMock.VERIFY_GEMINI_GROUNDING_ENABLED = false;
-    const provider = new GeminiGroundingProvider();
+    const provider = new groundingModule.GeminiGroundingProvider();
     (provider as unknown as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
       models: {
         generateContent: mockGenerateContent,
@@ -62,7 +76,7 @@ describe('GeminiGroundingProvider', () => {
       }],
     });
 
-    const provider = new GeminiGroundingProvider();
+    const provider = new groundingModule.GeminiGroundingProvider();
     (provider as unknown as { client: { models: { generateContent: typeof mockGenerateContent } } | null }).client = {
       models: {
         generateContent: mockGenerateContent,

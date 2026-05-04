@@ -70,6 +70,9 @@ vi.mock('../../server/src/ai/premiumProviderHealth.js', () => ({
   classifyPremiumAiProviderOutage: (error: unknown) => {
     const code = (error as { code?: string })?.code;
     const status = (error as { status?: number })?.status;
+    if (code === 'deep_interpolator_non_additive_output' || code === 'deep_interpolator_low_signal_output') {
+      return 'quality_unavailable';
+    }
     if (code === 'insufficient_quota') return 'insufficient_quota';
     if (code === 'model_not_found' || status === 404) return 'model_unavailable';
     if (status === 429) return 'rate_limited';
@@ -78,6 +81,15 @@ vi.mock('../../server/src/ai/premiumProviderHealth.js', () => ({
     return null;
   },
   isPremiumAiProviderOperational: mockIsPremiumAiProviderOperational,
+  isPremiumAiProviderUnavailableError: (error: unknown) => {
+    const code = (error as { code?: string })?.code;
+    const status = (error as { status?: number })?.status;
+    return (
+      code === 'insufficient_quota'
+      || code === 'deep_interpolator_non_additive_output'
+      || typeof status === 'number' && [408, 429, 500, 502, 503, 504].includes(status)
+    );
+  },
   isPersistentPremiumAiProviderOutageReason: (reason: string | null | undefined) => (
     reason === 'insufficient_quota' || reason === 'auth_unavailable' || reason === 'model_unavailable'
   ),
@@ -85,14 +97,12 @@ vi.mock('../../server/src/ai/premiumProviderHealth.js', () => ({
   recordPremiumAiProviderSuccess: mockRecordPremiumAiProviderSuccess,
 }));
 
-import {
-  ensurePremiumAiProviderReady,
-  resetPremiumAiProviderReadinessForTests,
-} from '../../server/src/ai/premiumProviderReadiness.js';
+let readinessModule: typeof import('../../server/src/ai/premiumProviderReadiness.js');
 
 describe('ensurePremiumAiProviderReady', () => {
-  beforeEach(() => {
-    resetPremiumAiProviderReadinessForTests();
+  beforeEach(async () => {
+    readinessModule = await import(`../../server/src/ai/premiumProviderReadiness.js?test=${Date.now()}`);
+    readinessModule.resetPremiumAiProviderReadinessForTests();
     mockCreate.mockReset();
     mockGeminiGenerate.mockReset();
     mockCreateOpenAIClient.mockReset();
@@ -121,8 +131,8 @@ describe('ensurePremiumAiProviderReady', () => {
   it('probes OpenAI generation once and caches a successful readiness result', async () => {
     mockCreate.mockResolvedValue({ id: 'resp_123', output_text: 'ok' });
 
-    await ensurePremiumAiProviderReady('openai');
-    await ensurePremiumAiProviderReady('openai');
+    await readinessModule.ensurePremiumAiProviderReady('openai');
+    await readinessModule.ensurePremiumAiProviderReady('openai');
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockResolveOpenAiModel).toHaveBeenCalledTimes(1);
@@ -136,7 +146,7 @@ describe('ensurePremiumAiProviderReady', () => {
     });
     mockCreate.mockRejectedValue(quotaError);
 
-    await expect(ensurePremiumAiProviderReady('openai')).resolves.toBeUndefined();
+    await expect(readinessModule.ensurePremiumAiProviderReady('openai')).resolves.toBeUndefined();
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockRecordPremiumAiProviderFailure).toHaveBeenCalledWith('openai', quotaError);
@@ -149,7 +159,7 @@ describe('ensurePremiumAiProviderReady', () => {
     });
     mockGeminiGenerate.mockRejectedValue(timeoutError);
 
-    await expect(ensurePremiumAiProviderReady('gemini')).resolves.toBeUndefined();
+    await expect(readinessModule.ensurePremiumAiProviderReady('gemini')).resolves.toBeUndefined();
 
     expect(mockGeminiGenerate).toHaveBeenCalledTimes(4);
     expect(mockGeminiGenerate.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });
@@ -161,8 +171,8 @@ describe('ensurePremiumAiProviderReady', () => {
   it('probes Gemini generation once and caches a successful readiness result', async () => {
     mockGeminiGenerate.mockResolvedValue({ text: 'ok' });
 
-    await ensurePremiumAiProviderReady('gemini');
-    await ensurePremiumAiProviderReady('gemini');
+    await readinessModule.ensurePremiumAiProviderReady('gemini');
+    await readinessModule.ensurePremiumAiProviderReady('gemini');
 
     expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
     expect(mockResolveGeminiModelFallbackChain).toHaveBeenCalledTimes(1);
@@ -181,7 +191,7 @@ describe('ensurePremiumAiProviderReady', () => {
       .mockRejectedValueOnce(Object.assign(new Error('model unavailable'), { status: 404, code: 'model_not_found' }))
       .mockResolvedValueOnce({ text: 'ok' });
 
-    await ensurePremiumAiProviderReady('gemini');
+    await readinessModule.ensurePremiumAiProviderReady('gemini');
 
     expect(mockGeminiGenerate).toHaveBeenCalledTimes(2);
     expect(mockGeminiGenerate.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3-flash-preview' });

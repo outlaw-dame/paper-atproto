@@ -1,4 +1,5 @@
 import type { EdgeCapability } from './edgeProviderContracts';
+import { emitIntelligenceEvent } from '../coordinator/intelligenceEvents';
 
 export type EdgeRuntimeFailureReason =
   | 'capability_mismatch'
@@ -48,10 +49,22 @@ const telemetry: EdgeRuntimeTelemetrySnapshot = {
 
 export function recordEdgeRuntimeAttempt(capability: EdgeCapability): void {
   telemetry.attemptedByCapability[capability] += 1;
+  emitIntelligenceEvent({
+    surface: 'edge',
+    status: 'started',
+    reasonCodes: [`edge_attempt_${capability}`],
+    details: { capability },
+  });
 }
 
 export function recordEdgeRuntimeSuccess(capability: EdgeCapability): void {
   telemetry.succeededByCapability[capability] += 1;
+  emitIntelligenceEvent({
+    surface: 'edge',
+    status: 'succeeded',
+    reasonCodes: [`edge_success_${capability}`],
+    details: { capability },
+  });
 }
 
 export function recordEdgeRuntimeFailure(
@@ -60,6 +73,12 @@ export function recordEdgeRuntimeFailure(
 ): void {
   telemetry.failedByCapability[capability] += 1;
   telemetry.failureReasons[reason] += 1;
+  emitIntelligenceEvent({
+    surface: 'edge',
+    status: 'errored',
+    reasonCodes: [`edge_failure_${capability}`, `edge_reason_${reason}`],
+    details: { capability, reason },
+  });
 }
 
 export function getEdgeRuntimeTelemetrySnapshot(): EdgeRuntimeTelemetrySnapshot {

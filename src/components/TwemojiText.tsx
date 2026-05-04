@@ -95,6 +95,19 @@ interface Props {
   onCashtag?: OnCashtag;
 }
 
+function formatLinkLabel(raw: string, uri?: string): string {
+  const candidate = uri ?? raw;
+  try {
+    const parsed = new URL(candidate);
+    const host = parsed.hostname.replace(/^www\./, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname;
+    const composed = `${host}${path}`;
+    return composed.length > 42 ? `${composed.slice(0, 39)}...` : composed;
+  } catch {
+    return raw.length > 42 ? `${raw.slice(0, 39)}...` : raw;
+  }
+}
+
 export default function TwemojiText({ text, facets, className, style, onMention, onHashtag, onCashtag }: Props) {
   const renderText = useCallback((raw: string) => <Emoji>{raw}</Emoji>, []);
 
@@ -168,13 +181,14 @@ export default function TwemojiText({ text, facets, className, style, onMention,
 
         if (token.type === 'link') {
           const href = token.uri ?? token.text;
+          const label = formatLinkLabel(token.text, token.uri);
           return (
             <LinkPreviewTooltip
               key={index}
               url={href}
               linkStyle={{ color: 'var(--blue)', textDecoration: 'underline' }}
             >
-              {renderText(token.text)}
+              {renderText(label)}
             </LinkPreviewTooltip>
           );
         }

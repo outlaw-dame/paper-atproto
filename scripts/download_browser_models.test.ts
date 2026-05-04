@@ -28,25 +28,25 @@ async function loadDownloadBrowserModels(): Promise<DownloadBrowserModelsModule>
 }
 
 describe('download_browser_models', () => {
-  it('resolves the premium profile without duplicates', async () => {
+  it('resolves balanced plus explicit premium models without duplicates', async () => {
     const { parseArgs, resolveModels } = await loadDownloadBrowserModels();
     const args = parseArgs(['--profile', 'balanced', '--include', 'qwen35_2b_mm,smollm3_3b']);
     const models = resolveModels(args);
 
     expect(models.map((model) => model.key)).toEqual([
       'embeddings',
-      'image_captioning',
       'tone',
       'toxicity',
       'sentiment',
-      'smollm3_3b',
       'qwen35_2b_mm',
+      'smollm3_3b',
     ]);
   });
 
   it('selects q4f16 assets for SmolLM3 browser generation', async () => {
     const { parseArgs, resolveModels, selectModelFiles } = await loadDownloadBrowserModels();
-    const model = resolveModels(parseArgs(['--include', 'smollm3_3b']))[0]!;
+    const model = resolveModels(parseArgs(['--include', 'smollm3_3b']))
+      .find((candidate) => candidate.key === 'smollm3_3b')!;
     expect(model).toBeTruthy();
     const selected = selectModelFiles(model, [
       'config.json',
@@ -68,14 +68,15 @@ describe('download_browser_models', () => {
       'generation_config.json',
       'onnx/model_q4f16.onnx',
       'onnx/model_q4f16.onnx_data',
-      'tokenizer.json',
       'tokenizer_config.json',
+      'tokenizer.json',
     ]);
   });
 
   it('selects multimodal q4f16 decoder, embed, and vision assets for Qwen3.5-2B', async () => {
     const { parseArgs, resolveModels, selectModelFiles } = await loadDownloadBrowserModels();
-    const model = resolveModels(parseArgs(['--include', 'qwen35_2b_mm']))[0]!;
+    const model = resolveModels(parseArgs(['--include', 'qwen35_2b_mm']))
+      .find((candidate) => candidate.key === 'qwen35_2b_mm')!;
     expect(model).toBeTruthy();
     const selected = selectModelFiles(model, [
       'config.json',
@@ -110,8 +111,8 @@ describe('download_browser_models', () => {
       'onnx/vision_encoder_q4f16.onnx_data',
       'preprocessor_config.json',
       'processor_config.json',
-      'tokenizer.json',
       'tokenizer_config.json',
+      'tokenizer.json',
     ]);
   });
 });

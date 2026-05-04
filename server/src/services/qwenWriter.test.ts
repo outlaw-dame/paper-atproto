@@ -45,7 +45,7 @@ describe('qwenWriter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { runInterpolatorWriter } = await import('./qwenWriter.js');
+    const { runInterpolatorWriter } = await import(`./qwenWriter.js?test=${Date.now()}`);
 
     const result = await runInterpolatorWriter({
       threadId: 'thread-1',
@@ -168,7 +168,7 @@ describe('qwenWriter', () => {
       },
     });
 
-    const { runInterpolatorWriter } = await import('./qwenWriter.js');
+    const { runInterpolatorWriter } = await import(`./qwenWriter.js?test=${Date.now()}`);
 
     const result = await runInterpolatorWriter({
       threadId: 'thread-2',
@@ -258,7 +258,7 @@ describe('qwenWriter', () => {
       },
     });
 
-    const { runInterpolatorWriter } = await import('./qwenWriter.js');
+    const { runInterpolatorWriter } = await import(`./qwenWriter.js?test=${Date.now()}`);
 
     const result = await runInterpolatorWriter({
       threadId: 'thread-3',
@@ -325,7 +325,7 @@ describe('qwenWriter', () => {
     vi.stubGlobal('fetch', fetchMock);
     reviewInterpolatorWriterMock.mockResolvedValueOnce(null);
 
-    const { runInterpolatorWriter } = await import('./qwenWriter.js');
+    const { runInterpolatorWriter } = await import(`./qwenWriter.js?test=${Date.now()}`);
 
     const result = await runInterpolatorWriter({
       threadId: 'thread-4',
@@ -375,7 +375,7 @@ describe('qwenWriter', () => {
       status: 504,
     }));
 
-    const { runInterpolatorWriter } = await import('./qwenWriter.js');
+    const { runInterpolatorWriter } = await import(`./qwenWriter.js?test=${Date.now()}`);
 
     const result = await runInterpolatorWriter({
       threadId: 'thread-4',

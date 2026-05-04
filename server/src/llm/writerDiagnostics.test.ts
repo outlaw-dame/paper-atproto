@@ -1,23 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  getWriterDiagnostics,
-  recordWriterClientOutcome,
-  recordWriterEnhancerFailure,
-  recordWriterEnhancerInvocation,
-  recordWriterEnhancerRejectedReplacement,
-  recordWriterEnhancerReview,
-  recordWriterEnhancerSkip,
-  recordWriterEnhancerTakeoverApplied,
-  resetWriterDiagnostics,
-} from './writerDiagnostics.js';
+let diagnosticsModule: typeof import('./writerDiagnostics.js');
 
 describe('writerDiagnostics', () => {
-  beforeEach(() => {
-    resetWriterDiagnostics();
+  beforeEach(async () => {
+    diagnosticsModule = await import(`./writerDiagnostics.js?test=${Date.now()}`);
+    diagnosticsModule.resetWriterDiagnostics();
   });
 
   it('derives enhancer rates and bounded issue labels without storing raw content', () => {
+    const {
+      getWriterDiagnostics,
+      recordWriterClientOutcome,
+      recordWriterEnhancerFailure,
+      recordWriterEnhancerInvocation,
+      recordWriterEnhancerRejectedReplacement,
+      recordWriterEnhancerReview,
+      recordWriterEnhancerSkip,
+      recordWriterEnhancerTakeoverApplied,
+    } = diagnosticsModule;
+
     recordWriterClientOutcome({ outcome: 'model', reason: 'success' });
 
     recordWriterEnhancerInvocation();
@@ -143,6 +145,12 @@ describe('writerDiagnostics', () => {
   });
 
   it('caps enhancer issue cardinality and aggregates overflow into other', () => {
+    const {
+      getWriterDiagnostics,
+      recordWriterEnhancerInvocation,
+      recordWriterEnhancerReview,
+    } = diagnosticsModule;
+
     for (let index = 0; index < 35; index += 1) {
       recordWriterEnhancerInvocation();
       recordWriterEnhancerReview({

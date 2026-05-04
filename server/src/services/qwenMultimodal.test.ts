@@ -65,7 +65,7 @@ describe('qwenMultimodal', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { runMediaAnalyzer } = await import('./qwenMultimodal.js');
+    const { runMediaAnalyzer } = await import(`./qwenMultimodal.js?test=${Date.now()}`);
 
     const result = await runMediaAnalyzer({
       threadId: 'thread-1',
@@ -133,7 +133,7 @@ describe('qwenMultimodal', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { runMediaAnalyzer } = await import('./qwenMultimodal.js');
+    const { runMediaAnalyzer } = await import(`./qwenMultimodal.js?test=${Date.now()}`);
 
     const result = await runMediaAnalyzer({
       threadId: 'thread-1',

@@ -42,7 +42,7 @@ export const OfficialSportsBadge: React.FC<OfficialSportsBadgeProps> = ({
         height: s.height,
         borderRadius: '50%',
         background: isLeague ? 'rgba(0,122,255,0.15)' : 'rgba(52,199,89,0.15)',
-        border: `1.5px solid ${isLeague ? 'var(--blue)' : 'var(--green)'}`,
+        border: `1px solid ${isLeague ? 'var(--blue)' : 'var(--green)'}`,
         fontSize: s.fontSize,
         fontWeight: 700,
         color: isLeague ? 'var(--blue)' : 'var(--green)',

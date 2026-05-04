@@ -35,7 +35,7 @@ describe('durable transport', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { appendDurableMessage } = await import('./durableTransport.js');
+    const { appendDurableMessage } = await import(`./durableTransport.js?test=${Date.now()}`);
     const payload = {
       v: 1 as const,
       kind: 'generation.status' as const,
@@ -67,7 +67,7 @@ describe('durable transport', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { readDurableLane } = await import('./durableTransport.js');
+    const { readDurableLane } = await import(`./durableTransport.js?test=${Date.now()}`);
     const result = await readDurableLane('events', 'as_1234567890ab', 0, 200);
 
     expect(result?.nextOffset).toBe(42);

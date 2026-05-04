@@ -7,6 +7,16 @@ function mockJsonResponse(payload: unknown): Response {
   });
 }
 
+async function loadEntityLinkingProvider() {
+  const config = await import('../../server/src/config/env.js');
+  Object.assign(config.env, {
+    VERIFY_ENTITY_LINKING_PROVIDER: process.env.VERIFY_ENTITY_LINKING_PROVIDER,
+    VERIFY_WIKIDATA_ENDPOINT: process.env.VERIFY_WIKIDATA_ENDPOINT,
+    VERIFY_ENTITY_LINKING_TIMEOUT_MS: Number(process.env.VERIFY_ENTITY_LINKING_TIMEOUT_MS ?? 5000),
+  });
+  return import('../../server/src/verification/entity-linking.provider');
+}
+
 describe('wikidata entity-linking provider', () => {
   const originalProvider = process.env.VERIFY_ENTITY_LINKING_PROVIDER;
   const originalEndpoint = process.env.VERIFY_WIKIDATA_ENDPOINT;
@@ -57,7 +67,7 @@ describe('wikidata entity-linking provider', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { createEntityLinkingProvider } = await import('../../server/src/verification/entity-linking.provider');
+    const { createEntityLinkingProvider } = await loadEntityLinkingProvider();
     const provider = createEntityLinkingProvider();
     const linked = await provider.linkEntities('', ['Q42']);
 
@@ -90,7 +100,7 @@ describe('wikidata entity-linking provider', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { createEntityLinkingProvider } = await import('../../server/src/verification/entity-linking.provider');
+    const { createEntityLinkingProvider } = await loadEntityLinkingProvider();
     const provider = createEntityLinkingProvider();
     const linked = await provider.linkEntities('', ['Douglas Adams']);
 

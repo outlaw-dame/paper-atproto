@@ -4,20 +4,32 @@ const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock('../lib/abortSignals', async () => {
-  const actual = await vi.importActual('../lib/abortSignals');
+vi.mock('../lib/abortSignals', () => {
+  const composeAbortSignals = (signals: AbortSignal[]): AbortSignal => {
+    if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+    const controller = new AbortController();
+    for (const signal of signals) {
+      if (signal.aborted) {
+        controller.abort(signal.reason);
+        return controller.signal;
+      }
+      signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    }
+    return controller.signal;
+  };
+
   return {
-    ...actual,
+    composeAbortSignals,
     sleepWithAbort: sleepWithAbortMock,
   };
 });
 
-import {
+const {
   bootstrapAiSession,
   resolveThreadSummarySession,
   sendSessionMessage,
   sendTypingPresence,
-} from './sessionClient';
+} = await import('./sessionClient');
 
 const VALID_SESSION_ID = 'as_1234567890ab' as const;
 const VALID_DID = 'did:plc:abcdefghijklmnop';
@@ -277,9 +289,9 @@ describe('sessionClient retry policy', () => {
     const body = JSON.parse((requestInit?.body as string) ?? '{}') as Record<string, unknown>;
     const metadata = body.metadata as Record<string, unknown>;
     expect(metadata.clean).toBe('ok');
-    expect(metadata).not.toHaveProperty('__proto__');
+    expect(Object.prototype.hasOwnProperty.call(metadata, '__proto__')).toBe(false);
     const nested = metadata.nested as Record<string, unknown>;
-    expect(nested).not.toHaveProperty('constructor');
+    expect(Object.prototype.hasOwnProperty.call(nested, 'constructor')).toBe(false);
     expect(nested.key).toBe('value with-control');
   });
 });

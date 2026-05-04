@@ -1,4 +1,5 @@
 import { getLeagueByDid, getTeamByDid } from '../sports/leagueRegistry';
+import { sportsStore } from '../sports/sportsStore';
 import type { LiveGame, SportsFeedFilter } from '../sports/types';
 
 /**
@@ -253,16 +254,24 @@ export class SportsFeedService {
   }
 
   /**
-   * Extract sports metadata from a post for display
+   * Extract sports metadata from a post for display.
+   *
+   * `isLive` requires (a) the post text to mention live coverage AND (b) an
+   * actual live game in `sportsStore` for the league the post mentions. The
+   * previous behaviour treated any post containing the word "live" as a live
+   * sports moment, which produced false positives on unrelated posts ("I live
+   * in Seattle", "live wallpaper", etc.) and during off-hours when no game
+   * was actually on air.
    */
   extractSportsMetadata(post: any) {
     const text = this.getPostText(post);
     const authorDid = post.author?.did;
+    const league = this.detectLeague(text);
 
     return {
-      league: this.detectLeague(text),
+      league,
       postType: this.detectPostType(text),
-      isLive: /\blive\b/i.test(text),
+      isLive: this.computeIsLive(text, league),
       hasHighlight: /highlight|clip|goal|score|highlight-reel/i.test(text),
       cashtags: this.extractCashtags(text),
       isOfficial: !!(authorDid && (getLeagueByDid(authorDid) || getTeamByDid(authorDid))),
@@ -281,6 +290,37 @@ export class SportsFeedService {
       }
     }
     return null;
+  }
+
+  /**
+   * Determine whether a post is genuinely about a currently-live game.
+   *
+   * Returns true only when both signals agree:
+   *   1. The post text contains a live-coverage keyword (live, halftime,
+   *      "Q1/Q2/...", "1st quarter", final-minute callouts), AND
+   *   2. There is actually a live game in `sportsStore` for the league the
+   *      post mentions (or, when the post does not name a league, any live
+   *      game at all).
+   *
+   * This prevents the LIVE badge from rendering on incidental posts that
+   * mention the word "live" while no game is actually on air.
+   */
+  private computeIsLive(text: string, league: string | null): boolean {
+    const liveKeyword = /\b(live(?:\s+(?:now|coverage|stream))?|halftime|q[1-4]\b|first\s+quarter|second\s+quarter|third\s+quarter|fourth\s+quarter|final\s+minute)\b/i;
+    if (!liveKeyword.test(text)) return false;
+
+    let liveGames: LiveGame[] = [];
+    try {
+      liveGames = sportsStore.getLiveGames();
+    } catch {
+      return false;
+    }
+    if (liveGames.length === 0) return false;
+
+    if (!league) return true;
+
+    const leagueLower = league.toLowerCase();
+    return liveGames.some((g) => g.league.toLowerCase() === leagueLower);
   }
 
   /**

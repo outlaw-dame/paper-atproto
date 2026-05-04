@@ -1,9 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  recordPremiumAiProviderFailure,
-  resetPremiumAiProviderHealthForTests,
-} from '../ai/premiumProviderHealth.js';
-
 const envMock = vi.hoisted(() => ({
   PREMIUM_AI_ENABLED: true,
   PREMIUM_AI_PROVIDER: 'gemini' as const,
@@ -13,19 +8,28 @@ const envMock = vi.hoisted(() => ({
   OPENAI_API_KEY: 'openai-test-key',
 }));
 
+const healthMock = vi.hoisted(() => ({
+  operationalProviders: new Set(['gemini', 'openai'] as const),
+}));
+
 vi.mock('../config/env.js', () => ({
   env: envMock,
 }));
 
-import {
-  getAvailablePremiumAiProviders,
-  resolveEffectivePremiumAiProvider,
-  resolvePremiumAiEntitlements,
-} from './resolveAiEntitlements.js';
+vi.mock('../ai/premiumProviderHealth.js', () => ({
+  isPremiumAiProviderOperational: (provider: 'gemini' | 'openai') => (
+    healthMock.operationalProviders.has(provider)
+  ),
+}));
+
+let entitlementsModule: typeof import('./resolveAiEntitlements.js');
 
 describe('resolvePremiumAiEntitlements', () => {
-  beforeEach(() => {
-    resetPremiumAiProviderHealthForTests();
+  beforeEach(async () => {
+    entitlementsModule = await import(`./resolveAiEntitlements.js?test=${Date.now()}`);
+    healthMock.operationalProviders.clear();
+    healthMock.operationalProviders.add('gemini');
+    healthMock.operationalProviders.add('openai');
     envMock.PREMIUM_AI_ENABLED = true;
     envMock.PREMIUM_AI_PROVIDER = 'gemini';
     envMock.PREMIUM_AI_DEFAULT_TIER = 'pro';
@@ -35,6 +39,12 @@ describe('resolvePremiumAiEntitlements', () => {
   });
 
   it('exposes both configured providers and honors an explicit openai preference', () => {
+    const {
+      getAvailablePremiumAiProviders,
+      resolveEffectivePremiumAiProvider,
+      resolvePremiumAiEntitlements,
+    } = entitlementsModule;
+
     expect(getAvailablePremiumAiProviders()).toEqual(['gemini', 'openai']);
     expect(resolveEffectivePremiumAiProvider('openai')).toBe('openai');
 
@@ -48,6 +58,12 @@ describe('resolvePremiumAiEntitlements', () => {
   });
 
   it('falls back to the available default provider when the requested provider is unavailable', () => {
+    const {
+      getAvailablePremiumAiProviders,
+      resolveEffectivePremiumAiProvider,
+      resolvePremiumAiEntitlements,
+    } = entitlementsModule;
+
     envMock.OPENAI_API_KEY = undefined;
 
     expect(getAvailablePremiumAiProviders()).toEqual(['gemini']);
@@ -61,10 +77,13 @@ describe('resolvePremiumAiEntitlements', () => {
   });
 
   it('suppresses providers that are temporarily unhealthy at runtime', () => {
-    recordPremiumAiProviderFailure(
-      'openai',
-      Object.assign(new Error('quota exceeded'), { status: 429, code: 'insufficient_quota' }),
-    );
+    const {
+      getAvailablePremiumAiProviders,
+      resolveEffectivePremiumAiProvider,
+      resolvePremiumAiEntitlements,
+    } = entitlementsModule;
+
+    healthMock.operationalProviders.delete('openai');
 
     expect(getAvailablePremiumAiProviders()).toEqual(['gemini']);
     expect(resolveEffectivePremiumAiProvider('openai')).toBe('gemini');
@@ -77,6 +96,8 @@ describe('resolvePremiumAiEntitlements', () => {
   });
 
   it('reports no provider availability when premium AI is disabled', () => {
+    const { resolvePremiumAiEntitlements } = entitlementsModule;
+
     envMock.PREMIUM_AI_ENABLED = false;
 
     const entitlements = resolvePremiumAiEntitlements('did:plc:test-user', 'gemini');

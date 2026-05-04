@@ -22,6 +22,15 @@ html {
   overscroll-behavior: none;
 }
 
+/* Twemoji inline emoji sizing */
+img.twemoji {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.1em;
+  margin: 0 0.05em;
+}
+
 body {
   overflow: hidden;
   position: fixed;
@@ -258,8 +267,8 @@ a { text-decoration: none; color: inherit; }
   /* ─── Glympse type system ─── */
 
   /* Font families */
-  --font-ui:       "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text",
-                   "Helvetica Neue", Arial, sans-serif;
+  --font-ui:       -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+                   "Plus Jakarta Sans", "Helvetica Neue", Arial, sans-serif;
   --font-body:     var(--font-ui);
   --font-editorial: "Newsreader", "Iowan Old Style", "Palatino Linotype",
                    "Book Antiqua", Georgia, serif;

@@ -20,7 +20,6 @@ import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
 import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
 import { useConversationBatchHydration } from '../conversation/sessionHydration';
-import { useTimelineConversationHintsProjection } from '../conversation/sessionSelectors';
 import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
 import { countNewPostsAboveAnchor } from '../lib/feedResume';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
@@ -32,12 +31,11 @@ interface Props {
   onOpenStory: (e: StoryEntry) => void;
 }
 
-const MODES = ['Following', 'Discover', 'Feeds'] as const;
 type Mode = HomeFeedMode;
 
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 const PUBLIC_APPVIEW_SERVICE = 'https://public.api.bsky.app';
-const LIMITED_SCOPE_BANNER_COPY = 'This session does not include Following feed access yet. Discover and public author feeds still work here, but Following needs the Bluesky timeline permission from the HTTPS sign-in.';
+const LIMITED_SCOPE_BANNER_COPY = 'This session does not include Following feed access yet. Saved feeds and public author feeds still work here, but Following needs the Bluesky timeline permission from the HTTPS sign-in.';
 const TranslationSettingsSheet = lazyWithRetry(
   () => import('../components/TranslationSettingsSheet'),
   'TranslationSettingsSheet',
@@ -106,14 +104,12 @@ export default function HomeTab({ onOpenStory }: Props) {
     homeFeedMode,
     setHomeFeedMode,
     feedsAdaptiveRanking,
-    toggleFeedsAdaptiveRanking,
   } = useUiStore();
   const translationPolicy = useTranslationStore((state) => state.policy);
   const platform = usePlatform();
   const iconTokens = getIconBtnTokens(platform);
-  const topModePillHeight = platform.prefersCoarsePointer ? 34 : 30;
-  const topModePillPaddingX = platform.prefersCoarsePointer ? 14 : 12;
-  const topModePillBadgeSize = platform.prefersCoarsePointer ? 18 : 16;
+  const navIconButtonSize = Math.max(28, iconTokens.size - 2);
+  const navIconGlyphSize = platform.prefersCoarsePointer ? 16 : 15;
   const qc = useQueryClient();
   const mode = homeFeedMode as Mode;
   const [posts, setPosts] = useState<MockPost[]>([]);
@@ -123,24 +119,18 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const [feedUnreadByFeedId, setFeedUnreadByFeedId] = useState<Record<string, number>>({});
   const publicReadAgent = useMemo(() => new Agent({ service: PUBLIC_APPVIEW_SERVICE }), []);
   const hasLimitedScopeSession = !hasFollowingFeedScope(session?.scope);
-  const visibleModes = useMemo(
-    () => MODES.filter((item) => !hasLimitedScopeSession || item !== 'Following') as Mode[],
-    [hasLimitedScopeSession],
-  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollCleanupRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingRestoreRef = useRef<{ mode: Mode; scrollPosition: number; topVisiblePostId?: string } | null>(null);
-  const autoRedirectedLimitedScopeRef = useRef(false);
   const filterResults = usePostFilterResults(posts, 'home');
   const hydrationAgent = hasLimitedScopeSession ? publicReadAgent : agent;
   const conversationHydrationRoots = useMemo(
     () => posts.map((post) => post.threadRoot?.id ?? post.id),
     [posts],
   );
-
-  const timelineHintByPostId = useTimelineConversationHintsProjection(posts);
 
   useConversationBatchHydration({
     enabled: Boolean(hydrationAgent && session && posts.length > 0),
@@ -151,20 +141,6 @@ export default function HomeTab({ onOpenStory }: Props) {
     maxTargets: 8,
   });
 
-  useEffect(() => {
-    if (!hasLimitedScopeSession) {
-      autoRedirectedLimitedScopeRef.current = false;
-      return;
-    }
-
-    if (autoRedirectedLimitedScopeRef.current || mode !== 'Following') {
-      return;
-    }
-
-    autoRedirectedLimitedScopeRef.current = true;
-    setHomeFeedMode('Discover');
-  }, [hasLimitedScopeSession, mode, setHomeFeedMode]);
-  
   // Feed cache integration
   const getFeedCache = useFeedCacheStore((state) => state.getCache);
   const saveFeedCache = useFeedCacheStore((state) => state.saveCache);
@@ -176,17 +152,25 @@ export default function HomeTab({ onOpenStory }: Props) {
   const setSelectedAccountFeedId = useAccountFeedsStore((state) => state.setSelectedFeedId);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
 
+  const tabFeedSources = useMemo(
+    () => accountFeedSources.filter((feedSource) => {
+      if (feedSource.kind !== 'timeline') return true;
+      return feedSource.value !== 'following' && feedSource.value !== 'discover';
+    }),
+    [accountFeedSources],
+  );
+
   const activeAccountFeed = useMemo<AccountFeedSource | null>(() => {
-    if (accountFeedSources.length === 0) return null;
+    if (tabFeedSources.length === 0) return null;
     const explicit = selectedAccountFeedId
-      ? accountFeedSources.find((feedSource) => feedSource.id === selectedAccountFeedId)
+      ? tabFeedSources.find((feedSource) => feedSource.id === selectedAccountFeedId)
       : null;
     if (explicit) return explicit;
-    return accountFeedSources.find((feedSource) => feedSource.pinned) ?? accountFeedSources[0] ?? null;
-  }, [accountFeedSources, selectedAccountFeedId]);
+    return tabFeedSources.find((feedSource) => feedSource.pinned) ?? tabFeedSources[0] ?? null;
+  }, [selectedAccountFeedId, tabFeedSources]);
 
   useEffect(() => {
-    if (!session || mode !== 'Feeds' || accountFeedSources.length === 0) return;
+    if (!session || mode !== 'Feeds' || tabFeedSources.length === 0) return;
     if (activeAccountFeed) {
       if (!selectedAccountFeedId || selectedAccountFeedId !== activeAccountFeed.id) {
         setSelectedAccountFeedId(session.did, activeAccountFeed.id);
@@ -194,8 +178,8 @@ export default function HomeTab({ onOpenStory }: Props) {
       return;
     }
 
-    setSelectedAccountFeedId(session.did, accountFeedSources[0]!.id);
-  }, [activeAccountFeed, accountFeedSources, mode, selectedAccountFeedId, session, setSelectedAccountFeedId]);
+    setSelectedAccountFeedId(session.did, tabFeedSources[0]!.id);
+  }, [activeAccountFeed, mode, selectedAccountFeedId, session, setSelectedAccountFeedId, tabFeedSources]);
 
   /**
    * Calculate top visible post index based on scroll position
@@ -402,11 +386,6 @@ export default function HomeTab({ onOpenStory }: Props) {
       if (m === 'Following') {
         const params: any = { limit: 30, ...(cur ? { cursor: cur } : {}) };
         const res = await atpCall(s => agent.getTimeline(params));
-        feed = res.data.feed;
-        nextCursor = res.data.cursor;
-      } else if (m === 'Discover') {
-        const params: any = { feed: DISCOVER_FEED_URI, limit: 30, ...(cur ? { cursor: cur } : {}) };
-        const res = await atpCall(s => readAgent.app.bsky.feed.getFeed(params));
         feed = res.data.feed;
         nextCursor = res.data.cursor;
       } else {
@@ -706,14 +685,14 @@ export default function HomeTab({ onOpenStory }: Props) {
   }, []);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)', color: 'var(--label-1)' }}>
       {/* Nav bar */}
       <div style={{
         flexShrink: 0,
         paddingTop: 'calc(var(--safe-top) + 12px)',
         background: 'transparent',
       }}>
-        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 10 }}>
           <div style={{
             width: 32, height: 32, borderRadius: '50%', overflow: 'hidden',
             background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -727,41 +706,20 @@ export default function HomeTab({ onOpenStory }: Props) {
           <div style={{ flex: 1, display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
             <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-md-size)', lineHeight: 'var(--type-ui-title-md-line)', fontWeight: 700, color: 'var(--label-1)', letterSpacing: 'var(--type-ui-title-md-track)' }}>Glimpse</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button
-              aria-label="Settings"
-              onClick={() => setShowTranslationSettings(true)}
-              style={{
-                width: iconTokens.size,
-                height: iconTokens.size,
-                borderRadius: '50%',
-                background: 'var(--fill-2)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'var(--label-2)', border: 'none', cursor: 'pointer',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 8l6 6" />
-                <path d="M4 14l6-6 2-3" />
-                <path d="M2 5h12" />
-                <path d="M7 2h1" />
-                <path d="M22 22l-5-10-5 10" />
-                <path d="M14 18h6" />
-              </svg>
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               aria-label="Refresh"
               onClick={() => fetchFeed(mode)}
               style={{
-                width: iconTokens.size,
-                height: iconTokens.size,
+                width: navIconButtonSize,
+                height: navIconButtonSize,
                 borderRadius: '50%',
                 background: 'var(--fill-2)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'var(--label-2)', border: 'none', cursor: 'pointer',
+                color: 'var(--label-1)', border: 'none', cursor: 'pointer',
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <svg width={navIconGlyphSize} height={navIconGlyphSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
                 <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
               </svg>
@@ -787,116 +745,131 @@ export default function HomeTab({ onOpenStory }: Props) {
           </div>
         )}
 
-        {/* Mode pills */}
-        <div style={{ display: 'flex', flexDirection: 'row', padding: '0 16px 10px', gap: 6 }}>
-          {visibleModes.map(m => {
-            const unreadCount = unreadCounts[m] ?? 0;
-            return (
+        {/* Feed tab row — single flat row: Following + all saved feeds */}
+        {(!hasLimitedScopeSession || tabFeedSources.length > 0) && (
+          <div style={{
+            display: 'flex',
+            overflowX: 'auto',
+            gap: 6,
+            padding: '0 16px 10px',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+          } as React.CSSProperties}>
+            {!hasLimitedScopeSession && (
               <button
-                key={m}
-                  onClick={() => setHomeFeedMode(m)}
+                onClick={() => {
+                  setHomeFeedMode('Following');
+                  setPosts([]);
+                  setCursor(undefined);
+                }}
                 style={{
-                  minHeight: topModePillHeight,
-                  padding: `0 ${topModePillPaddingX}px`,
+                  flexShrink: 0,
+                  minHeight: 30,
+                  padding: '0 14px',
                   borderRadius: 100,
-                  fontFamily: 'var(--font-ui)', fontSize: '14px', lineHeight: '18px', fontWeight: mode === m ? 600 : 500, letterSpacing: '0',
-                  color: mode === m ? '#fff' : 'var(--label-2)',
-                  background: mode === m ? 'var(--blue)' : 'var(--fill-2)',
-                  border: 'none', cursor: 'pointer',
+                  fontFamily: 'var(--font-ui)', fontSize: '14px', lineHeight: '18px',
+                  fontWeight: mode === 'Following' ? 700 : 500,
+                  color: mode === 'Following' ? '#fff' : 'var(--label-1)',
+                  background: mode === 'Following' ? 'var(--blue)' : 'var(--fill-2)',
+                  border: 'none',
+                  cursor: 'pointer',
                   transition: 'all 0.15s',
                   position: 'relative',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
                 }}
               >
-                {m}
-                {unreadCount > 0 && (
+                Following
+                {(unreadCounts['Following'] ?? 0) > 0 && (
                   <span style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    minWidth: topModePillBadgeSize, height: topModePillBadgeSize, borderRadius: '50%',
-                    background: mode === m ? 'rgba(255,255,255,0.3)' : 'var(--red)',
-                    color: mode === m ? '#fff' : '#fff',
+                    minWidth: 16, height: 16, borderRadius: '50%',
+                    background: mode === 'Following' ? 'rgba(255,255,255,0.3)' : 'var(--red)',
+                    color: '#fff',
                     fontFamily: 'var(--font-ui)', fontSize: '10px', fontWeight: 700,
                     padding: '0 4px',
                   }}>
-                    {unreadCount > 99 ? '99+' : unreadCount}
+                    {(unreadCounts['Following'] ?? 0) > 99 ? '99+' : unreadCounts['Following']}
                   </span>
                 )}
               </button>
-            );
-          })}
-        </div>
-
-        {mode === 'Feeds' && accountFeedSources.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 16px 10px' }}>
-            {accountFeedSources.map((feedSource) => {
-              const isSelected = activeAccountFeed?.id === feedSource.id;
+            )}
+            {tabFeedSources.map((feedSource) => {
+              const isSelected = mode === 'Feeds' && activeAccountFeed?.id === feedSource.id;
+              const feedUnread = feedUnreadByFeedId[feedSource.id] ?? 0;
               return (
                 <button
                   key={feedSource.id}
                   onClick={() => {
                     if (!session) return;
+                    // Transfer current Feeds unread to the feed we're leaving
+                    if (mode === 'Feeds' && activeAccountFeed && activeAccountFeed.id !== feedSource.id) {
+                      const currentUnread = unreadCounts['Feeds'] ?? 0;
+                      if (currentUnread > 0) {
+                        setFeedUnreadByFeedId((prev) => ({
+                          ...prev,
+                          [activeAccountFeed.id]: (prev[activeAccountFeed.id] ?? 0) + currentUnread,
+                        }));
+                        setUnreadCounts((prev) => ({ ...prev, Feeds: 0 }));
+                      }
+                    }
+                    // Clear unread for the feed we're switching to
+                    setFeedUnreadByFeedId((prev) => {
+                      if (!prev[feedSource.id]) return prev;
+                      const next = { ...prev };
+                      delete next[feedSource.id];
+                      return next;
+                    });
                     setSelectedAccountFeedId(session.did, feedSource.id);
+                    setHomeFeedMode('Feeds');
                     setPosts([]);
                     setCursor(undefined);
                     void fetchFeed('Feeds', undefined, { selectedFeedOverride: feedSource });
                   }}
                   style={{
+                    flexShrink: 0,
                     minHeight: 30,
                     padding: '0 10px',
                     borderRadius: 999,
                     border: 'none',
                     cursor: 'pointer',
                     background: isSelected ? 'var(--blue)' : 'var(--fill-2)',
-                    color: isSelected ? '#fff' : 'var(--label-2)',
+                    color: isSelected ? '#fff' : 'var(--label-1)',
                     fontFamily: 'var(--font-ui)',
                     fontSize: 12,
                     fontWeight: isSelected ? 700 : 600,
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
+                    transition: 'all 0.15s',
+                    position: 'relative',
                   }}
                 >
-                  {feedSource.pinned && <span aria-hidden="true">★</span>}
                   <span>{feedSource.title}</span>
+                  {feedUnread > 0 && (
+                    <span style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minWidth: 16,
+                      height: 16,
+                      borderRadius: '50%',
+                      background: 'var(--red)',
+                      color: '#fff',
+                      fontFamily: 'var(--font-ui)',
+                      fontSize: 9,
+                      fontWeight: 700,
+                      padding: '0 3px',
+                      marginLeft: 2,
+                    }}>
+                      {feedUnread > 99 ? '99+' : feedUnread}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
         )}
 
-        {mode === 'Feeds' && accountFeedsStale && (
-          <div style={{ padding: '0 16px 10px' }}>
-            <div
-              role="status"
-              style={{
-                borderRadius: 12,
-                border: '1px solid color-mix(in srgb, var(--yellow) 36%, var(--sep))',
-                background: 'color-mix(in srgb, var(--surface) 90%, var(--yellow) 10%)',
-                padding: '8px 10px',
-              }}
-            >
-              <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12, lineHeight: '16px', fontWeight: 600, color: 'var(--label-2)' }}>
-                Saved feed metadata is refreshing in the background. If labels look stale, pull to refresh.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {mode === 'Feeds' && (
-          <div style={{ padding: '0 16px 10px' }}>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={feedsAdaptiveRanking}
-                onChange={() => toggleFeedsAdaptiveRanking()}
-                style={{ width: 14, height: 14 }}
-              />
-              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, lineHeight: '16px', fontWeight: 600, color: 'var(--label-2)' }}>
-                Adaptive ranking (improve feed relevance while preserving raw fallback)
-              </span>
-            </label>
-          </div>
-        )}
       </div>
 
       {/* Feed scroll */}
@@ -906,6 +879,66 @@ export default function HomeTab({ onOpenStory }: Props) {
         style={{ flex: 1, padding: '12px 12px 0' }}
         onScroll={handleScroll}
       >
+        {/* Feed header strip — shown when a specific feed is selected in Feeds mode */}
+        {activeAccountFeed && mode === 'Feeds' && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '0 4px 12px',
+          }}>
+            {/* Feed avatar */}
+            <div style={{
+              width: 44,
+              height: 44,
+              borderRadius: '50%',
+              flexShrink: 0,
+              overflow: 'hidden',
+              background: activeAccountFeed.avatar ? 'transparent' : 'var(--fill-3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              {activeAccountFeed.avatar ? (
+                <img src={activeAccountFeed.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--label-3)' }}>
+                  {(activeAccountFeed.title[0] ?? '?').toUpperCase()}
+                </span>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-title-sm-size)', fontWeight: 700, color: 'var(--label-1)' }}>
+                  {activeAccountFeed.title}
+                </span>
+                <span style={{
+                  fontSize: 10, fontWeight: 700,
+                  padding: '2px 6px', borderRadius: 4,
+                  background: 'var(--fill-3)',
+                  color: 'var(--label-2)',
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                }}>
+                  {activeAccountFeed.kind}
+                </span>
+                {activeAccountFeed.pinned && (
+                  <span aria-label="Pinned" style={{ color: 'var(--yellow)', fontSize: 13 }}>★</span>
+                )}
+              </div>
+              {activeAccountFeed.description && (
+                <p style={{
+                  fontFamily: 'var(--font-ui)', fontSize: 12,
+                  color: 'var(--label-1)', margin: '2px 0 0',
+                  overflow: 'hidden', display: '-webkit-box',
+                  WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                }}>
+                  {activeAccountFeed.description}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
         <AnimatePresence mode="wait">
           {loading ? (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -999,7 +1032,6 @@ export default function HomeTab({ onOpenStory }: Props) {
                 // A reply-in-thread gets a subtle tinted background so it reads as
                 // a distinct unit from adjacent standalone posts.
                 const isReply = hasDistinctThreadRoot || hasDistinctReplyParent;
-                const timelineHint = timelineHintByPostId[post.id];
                 const replyingToHandle = isReply
                   ? (post.replyTo?.author.handle ?? post.threadRoot?.author.handle)
                   : undefined;
@@ -1018,7 +1050,6 @@ export default function HomeTab({ onOpenStory }: Props) {
                     onMore={handleMore}
                     onReply={openComposeReply}
                     index={i}
-                    {...(timelineHint ? { timelineHint } : {})}
                     hasContextAbove={isReply}
                     {...(replyingToHandle ? { replyingTo: replyingToHandle } : {})}
                   />

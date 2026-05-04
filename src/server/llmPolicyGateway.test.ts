@@ -1,24 +1,26 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { filterWriterResponse } from '../../server/src/services/safetyFilters.js';
-import {
-  enforceNoToolsAuthorized,
-  finalizeLlmOutput,
-  prepareLlmInput,
-} from '../../server/src/llm/policyGateway.js';
-import {
-  MediaRequestSchema,
-  ThreadStateSchema,
-  WriterResponseSchema,
-} from '../../server/src/llm/schemas.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+let policyGateway: typeof import('../../server/src/llm/policyGateway.js');
+let safetyFilters: typeof import('../../server/src/services/safetyFilters.js');
+let schemas: typeof import('../../server/src/llm/schemas.js');
 
 describe('server LLM policy gateway', () => {
+  beforeEach(async () => {
+    const cacheKey = Date.now();
+    [policyGateway, safetyFilters, schemas] = await Promise.all([
+      import(`../../server/src/llm/policyGateway.js?test=${cacheKey}`),
+      import(`../../server/src/services/safetyFilters.js?test=${cacheKey}`),
+      import(`../../server/src/llm/schemas.js?test=${cacheKey}`),
+    ]);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it('redacts secrets and records prompt-attack signals in writer inputs', () => {
-    const prepared = prepareLlmInput(
-      ThreadStateSchema,
+    const prepared = policyGateway.prepareLlmInput(
+      schemas.ThreadStateSchema,
       {
         threadId: 'thread-1',
         summaryMode: 'normal',
@@ -55,8 +57,8 @@ describe('server LLM policy gateway', () => {
   it('does not log raw prompt excerpts in audit events', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    prepareLlmInput(
-      ThreadStateSchema,
+    policyGateway.prepareLlmInput(
+      schemas.ThreadStateSchema,
       {
         threadId: 'thread-1',
         summaryMode: 'normal',
@@ -92,8 +94,8 @@ describe('server LLM policy gateway', () => {
   });
 
   it('does not rewrite the media URL field before the route-level URL policy runs', () => {
-    const prepared = prepareLlmInput(
-      MediaRequestSchema,
+    const prepared = policyGateway.prepareLlmInput(
+      schemas.MediaRequestSchema,
       {
         threadId: 'thread-2',
         mediaUrl: 'https://example.com/image.png?token=should-stay-for-route-validation',
@@ -111,15 +113,15 @@ describe('server LLM policy gateway', () => {
   });
 
   it('rejects unauthorized tools for gateway-managed tasks', () => {
-    expect(() => enforceNoToolsAuthorized(
+    expect(() => policyGateway.enforceNoToolsAuthorized(
       { task: 'interpolator', requestId: 'req-3' },
       ['web-search'],
     )).toThrowError(/Tool authorization denied/i);
   });
 
   it('validates and filters writer output through the gateway', () => {
-    const finalized = finalizeLlmOutput(
-      WriterResponseSchema,
+    const finalized = policyGateway.finalizeLlmOutput(
+      schemas.WriterResponseSchema,
       {
         collapsedSummary: 'A thread cites Reuters reporting and calls the post [redacted].',
         whatChanged: ['source cited: Reuters reporting'],
@@ -132,7 +134,7 @@ describe('server LLM policy gateway', () => {
         requestId: 'req-4',
       },
       {
-        filter: (value) => filterWriterResponse({ ...value }) as any,
+        filter: (value) => safetyFilters.filterWriterResponse({ ...value }) as any,
       },
     );
 

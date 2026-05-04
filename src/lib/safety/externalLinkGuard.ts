@@ -1,7 +1,7 @@
 import { openExternalUrl, sanitizeExternalUrl } from './externalUrl';
 import { recordExternalUrlGuardDroppedInvalid } from './externalUrlTelemetry';
 
-let installed = false;
+let installedDocument: Document | null = null;
 
 function resolveAnchorFromEventTarget(target: EventTarget | null): HTMLAnchorElement | null {
   if (!(target instanceof Element)) return null;
@@ -19,8 +19,8 @@ function resolveCandidateUrl(anchor: HTMLAnchorElement): string | null {
 }
 
 export function installExternalLinkGuard(): void {
-  if (installed || typeof document === 'undefined') return;
-  installed = true;
+  if (typeof document === 'undefined' || installedDocument === document) return;
+  installedDocument = document;
 
   const guardAndOpen = (event: Event): void => {
     if (event.defaultPrevented) return;

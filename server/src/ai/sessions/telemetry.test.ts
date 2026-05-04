@@ -1,40 +1,35 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-  getAiSessionTelemetry,
-  recordDurableHydrationAttempt,
-  recordDurableHydrationFailure,
-  recordDurableHydrationMiss,
-  recordDurableHydrationSuccess,
-  resetAiSessionTelemetry,
-} from './telemetry.js';
+
+let telemetryModule: typeof import('./telemetry.js');
 
 describe('ai session telemetry derived hydration metrics', () => {
-  beforeEach(() => {
-    resetAiSessionTelemetry();
+  beforeEach(async () => {
+    telemetryModule = await import(`./telemetry.js?test=${Date.now()}`);
+    telemetryModule.resetAiSessionTelemetry();
   });
 
   it('computes rates and replay throughput metrics from hydration events', () => {
-    recordDurableHydrationAttempt();
-    recordDurableHydrationSuccess({
+    telemetryModule.recordDurableHydrationAttempt();
+    telemetryModule.recordDurableHydrationSuccess({
       durationMs: 120,
       replayedItems: { events: 10, state: 6, presence: 2 },
       replayedPages: { events: 2, state: 1, presence: 1 },
     });
 
-    recordDurableHydrationAttempt();
-    recordDurableHydrationSuccess({
+    telemetryModule.recordDurableHydrationAttempt();
+    telemetryModule.recordDurableHydrationSuccess({
       durationMs: 80,
       replayedItems: { events: 4, state: 2, presence: 0 },
       replayedPages: { events: 1, state: 1, presence: 0 },
     });
 
-    recordDurableHydrationAttempt();
-    recordDurableHydrationMiss(15);
+    telemetryModule.recordDurableHydrationAttempt();
+    telemetryModule.recordDurableHydrationMiss(15);
 
-    recordDurableHydrationAttempt();
-    recordDurableHydrationFailure(30);
+    telemetryModule.recordDurableHydrationAttempt();
+    telemetryModule.recordDurableHydrationFailure(30);
 
-    const telemetry = getAiSessionTelemetry();
+    const telemetry = telemetryModule.getAiSessionTelemetry();
 
     expect(telemetry.durableHydration.attempts).toBe(4);
     expect(telemetry.durableHydration.successes).toBe(2);
@@ -65,7 +60,7 @@ describe('ai session telemetry derived hydration metrics', () => {
   });
 
   it('returns zeroed derived metrics without hydration attempts', () => {
-    const telemetry = getAiSessionTelemetry();
+    const telemetry = telemetryModule.getAiSessionTelemetry();
 
     expect(telemetry.durableHydrationDerived).toEqual({
       successRate: 0,

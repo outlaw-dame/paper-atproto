@@ -105,9 +105,50 @@ async function loadFeedGeneratorMetadata(
   return metadata;
 }
 
+interface ListMetadata {
+  title: string;
+  avatar?: string;
+  description?: string;
+}
+
+async function loadListMetadata(
+  agent: Agent,
+  uris: string[],
+): Promise<Map<string, ListMetadata>> {
+  const dedupedUris = [...new Set(uris)];
+  if (dedupedUris.length === 0) {
+    return new Map();
+  }
+
+  const metadata = new Map<string, ListMetadata>();
+  await Promise.all(
+    dedupedUris.map(async (uri) => {
+      try {
+        const response = await atpCall(
+          () => agent.app.bsky.graph.getList({ list: uri, limit: 1 }),
+          { maxAttempts: 3, baseDelayMs: 200, capDelayMs: 4_000 },
+        );
+        const list = response.data.list;
+        if (list?.name) {
+          metadata.set(uri, {
+            title: list.name,
+            ...(list.avatar ? { avatar: list.avatar } : {}),
+            ...(list.description ? { description: list.description } : {}),
+          });
+        }
+      } catch {
+        // Silently fall back to default title for lists that can't be resolved.
+      }
+    }),
+  );
+
+  return metadata;
+}
+
 function mapSavedFeedToSource(
   savedFeed: AppBskyActorDefs.SavedFeed,
   generatorMetadata: Map<string, AppBskyFeedDefs.GeneratorView>,
+  listMetadata: Map<string, ListMetadata>,
 ): AccountFeedSource {
   if (savedFeed.type === 'timeline') {
     const timelineTitle = titleFromTimelineValue(savedFeed.value);
@@ -124,12 +165,23 @@ function mapSavedFeedToSource(
   const matchedGenerator = kind === 'feed'
     ? generatorMetadata.get(savedFeed.value)
     : undefined;
+  const matchedList = kind === 'list'
+    ? listMetadata.get(savedFeed.value)
+    : undefined;
 
   const defaultTitle = kind === 'feed' ? 'Custom Feed' : 'Saved List';
-  const title = sanitizeBoundedString(matchedGenerator?.displayName ?? matchedGenerator?.did ?? defaultTitle, MAX_FEED_TITLE_LENGTH)
-    ?? defaultTitle;
-  const description = sanitizeBoundedString(matchedGenerator?.description, MAX_FEED_DESCRIPTION_LENGTH) ?? undefined;
-  const avatar = sanitizeBoundedString(matchedGenerator?.avatar, MAX_FEED_VALUE_LENGTH) ?? undefined;
+  const title = sanitizeBoundedString(
+    matchedGenerator?.displayName ?? matchedGenerator?.did ?? matchedList?.title ?? defaultTitle,
+    MAX_FEED_TITLE_LENGTH,
+  ) ?? defaultTitle;
+  const description = sanitizeBoundedString(
+    matchedGenerator?.description ?? matchedList?.description,
+    MAX_FEED_DESCRIPTION_LENGTH,
+  ) ?? undefined;
+  const avatar = sanitizeBoundedString(
+    matchedGenerator?.avatar ?? matchedList?.avatar,
+    MAX_FEED_VALUE_LENGTH,
+  ) ?? undefined;
 
   return {
     id: savedFeed.id,
@@ -149,11 +201,19 @@ export async function loadAccountFeedSources(agent: Agent): Promise<AccountFeedS
   );
 
   const normalizedSavedFeeds = normalizeSavedFeeds(preferences.savedFeeds ?? []);
+
   const feedUris = normalizedSavedFeeds
     .filter((entry) => entry.type === 'feed')
     .map((entry) => entry.value);
 
-  const generatorMetadata = await loadFeedGeneratorMetadata(agent, feedUris);
+  const listUris = normalizedSavedFeeds
+    .filter((entry) => entry.type === 'list')
+    .map((entry) => entry.value);
 
-  return normalizedSavedFeeds.map((entry) => mapSavedFeedToSource(entry, generatorMetadata));
+  const [generatorMetadata, listMetadata] = await Promise.all([
+    loadFeedGeneratorMetadata(agent, feedUris),
+    loadListMetadata(agent, listUris),
+  ]);
+
+  return normalizedSavedFeeds.map((entry) => mapSavedFeedToSource(entry, generatorMetadata, listMetadata));
 }

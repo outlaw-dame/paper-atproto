@@ -258,18 +258,18 @@ export default function InlineTranslation({
                 background: 'transparent',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
-                color: translating ? 'var(--label-3)' : 'var(--blue)',
-                fontSize: 'var(--type-meta-md-size)',
-                lineHeight: 'var(--type-meta-md-line)',
-                fontWeight: 600,
+                gap: 4,
+                color: 'var(--label-3)',
+                fontSize: 'var(--type-meta-sm-size)',
+                lineHeight: 'var(--type-meta-sm-line)',
+                fontWeight: 500,
                 padding: 0,
                 cursor: translating ? 'default' : 'pointer',
                 opacity: translating ? 0.7 : 1,
               }}
             >
-              <TranslateIcon size={13} color={translating ? 'var(--label-3)' : 'var(--blue)'} />
-              {translating ? 'Translating…' : 'Translate'}
+              <TranslateIcon size={11} color="var(--label-3)" />
+              {translating ? 'Translating...' : 'Translate post'}
             </button>
 
             {translationError && (

@@ -13,12 +13,16 @@ async function closeClientSafely(client: PaperDbClient | null | undefined): Prom
   if (!client) return;
 
   const closePromise = client.close().catch(() => {});
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     closePromise,
     new Promise<void>((resolve) => {
-      setTimeout(resolve, PAPER_DB_CLOSE_TIMEOUT_MS);
+      timeoutId = setTimeout(resolve, PAPER_DB_CLOSE_TIMEOUT_MS);
     }),
   ]);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
 }
 
 /**

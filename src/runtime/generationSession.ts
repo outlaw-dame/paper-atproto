@@ -67,6 +67,17 @@ export class LocalGenerationSession {
   async load(signal?: AbortSignal): Promise<void> {
     if (this.pipelineInstance) return;
 
+    // ort-web 1.14.0 fails its registerBackend init when the page is not
+    // cross-origin isolated (no SharedArrayBuffer). Importing transformers in
+    // that environment from the main thread surfaces unhandled pageErrors that
+    // can OOM the tab over time. Fail fast so the model is marked unavailable
+    // and callers fall back to remote inference instead.
+    if (typeof window !== 'undefined' && (window as any).crossOriginIsolated === false) {
+      throw new Error(
+        `${this.config.label} unavailable: page is not cross-origin isolated (SharedArrayBuffer required for on-device ONNX runtime).`,
+      );
+    }
+
     const transformers = await import('@xenova/transformers') as TransformersModule;
     configureTransformersRuntime(transformers.env, this.config.localOnly === true);
 
