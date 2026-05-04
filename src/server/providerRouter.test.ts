@@ -21,6 +21,20 @@ vi.mock('../../server/src/ai/providers/geminiConversation.provider.js', () => ({
 }));
 
 vi.mock('../../server/src/ai/premiumProviderHealth.js', () => ({
+  classifyPremiumAiProviderOutage: (error: unknown) => {
+    const status = (error as { status?: number })?.status;
+    const code = (error as { code?: string })?.code;
+    if (code === 'insufficient_quota') return 'insufficient_quota';
+    if (code === 'deep_interpolator_non_additive_output') return 'quality_unavailable';
+    if (status === 429) return 'rate_limited';
+    if (status === 404) return 'model_unavailable';
+    if (status === 503) return 'provider_unavailable';
+    if (status === 504) return 'timeout';
+    return null;
+  },
+  isPersistentPremiumAiProviderOutageReason: (reason: string | null | undefined) => (
+    reason === 'insufficient_quota' || reason === 'auth_unavailable' || reason === 'model_unavailable'
+  ),
   isPremiumAiProviderUnavailableError: (error: unknown) => {
     const status = (error as { status?: number })?.status;
     const code = (error as { code?: string })?.code;
@@ -70,10 +84,11 @@ const request = {
 
 describe('writePremiumDeepInterpolator', () => {
   beforeEach(async () => {
+    vi.resetModules();
     mockResolveEffectivePremiumAiProvider.mockReset();
     mockOpenAIWrite.mockReset();
     mockGeminiWrite.mockReset();
-    ({ writePremiumDeepInterpolator } = await import(`../../server/src/ai/providerRouter.js?test=${Date.now()}`));
+    ({ writePremiumDeepInterpolator } = await import('../../server/src/ai/providerRouter.js'));
   });
 
   it('falls back to a healthy provider when the preferred provider has an outage-level failure', async () => {

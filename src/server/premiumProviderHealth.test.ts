@@ -9,7 +9,8 @@ describe('premiumProviderHealth', () => {
   });
 
   beforeEach(async () => {
-    healthModule = await import(`../../server/src/ai/premiumProviderHealth.js?test=${Date.now()}`);
+    vi.resetModules();
+    healthModule = await import('../../server/src/ai/premiumProviderHealth.js');
     healthModule.resetPremiumAiProviderHealthForTests();
   });
 

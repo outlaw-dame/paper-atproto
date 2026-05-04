@@ -6,11 +6,11 @@ let schemas: typeof import('../../server/src/llm/schemas.js');
 
 describe('server LLM policy gateway', () => {
   beforeEach(async () => {
-    const cacheKey = Date.now();
+    vi.resetModules();
     [policyGateway, safetyFilters, schemas] = await Promise.all([
-      import(`../../server/src/llm/policyGateway.js?test=${cacheKey}`),
-      import(`../../server/src/services/safetyFilters.js?test=${cacheKey}`),
-      import(`../../server/src/llm/schemas.js?test=${cacheKey}`),
+      import('../../server/src/llm/policyGateway.js'),
+      import('../../server/src/services/safetyFilters.js'),
+      import('../../server/src/llm/schemas.js'),
     ]);
   });
 

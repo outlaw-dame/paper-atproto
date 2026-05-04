@@ -40,7 +40,7 @@ describe('safeBrowsing service retry behavior', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
     const result = await checkUrlAgainstSafeBrowsing('https://safe-retry.example/path');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -60,7 +60,7 @@ describe('safeBrowsing service retry behavior', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(badRequest);
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
     const result = await checkUrlAgainstSafeBrowsing('https://safe-400.example/path');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -75,7 +75,7 @@ describe('safeBrowsing service retry behavior', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
     const result = await checkUrlAgainstSafeBrowsing('https://safe-missing-key.example/path');
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -102,7 +102,7 @@ describe('safeBrowsing service retry behavior', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
     const first = checkUrlAgainstSafeBrowsing('https://safe-coalesce.example/path');
     const second = checkUrlAgainstSafeBrowsing('https://safe-coalesce.example/path');
 
@@ -124,7 +124,7 @@ describe('safeBrowsing service retry behavior', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { checkUrlAgainstSafeBrowsing } = await import(`./safeBrowsing.js?test=${Date.now()}`);
+    const { checkUrlAgainstSafeBrowsing } = await import('./safeBrowsing.js');
 
     const first = await checkUrlAgainstSafeBrowsing('https://safe-cache.example/path');
     const second = await checkUrlAgainstSafeBrowsing('https://safe-cache.example/path');

@@ -44,7 +44,7 @@ vi.mock('../../server/src/services/safeBrowsing.js', () => ({
 const {
   runMediaAnalyzer,
   runMediaAnalyzerFromImageBase64,
-} = await import(`../../server/src/services/qwenMultimodal.js?test=${Date.now()}`);
+} = await import('../../server/src/services/qwenMultimodal.js');
 
 const baseRequest = {
   threadId: 'thread-1',

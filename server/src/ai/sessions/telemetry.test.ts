@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let telemetryModule: typeof import('./telemetry.js');
 
 describe('ai session telemetry derived hydration metrics', () => {
   beforeEach(async () => {
-    telemetryModule = await import(`./telemetry.js?test=${Date.now()}`);
+    vi.resetModules();
+    telemetryModule = await import('./telemetry.js');
     telemetryModule.resetAiSessionTelemetry();
   });
 

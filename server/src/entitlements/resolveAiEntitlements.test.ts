@@ -26,7 +26,8 @@ let entitlementsModule: typeof import('./resolveAiEntitlements.js');
 
 describe('resolvePremiumAiEntitlements', () => {
   beforeEach(async () => {
-    entitlementsModule = await import(`./resolveAiEntitlements.js?test=${Date.now()}`);
+    vi.resetModules();
+    entitlementsModule = await import('./resolveAiEntitlements.js');
     healthMock.operationalProviders.clear();
     healthMock.operationalProviders.add('gemini');
     healthMock.operationalProviders.add('openai');

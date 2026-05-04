@@ -101,7 +101,8 @@ let readinessModule: typeof import('../../server/src/ai/premiumProviderReadiness
 
 describe('ensurePremiumAiProviderReady', () => {
   beforeEach(async () => {
-    readinessModule = await import(`../../server/src/ai/premiumProviderReadiness.js?test=${Date.now()}`);
+    vi.resetModules();
+    readinessModule = await import('../../server/src/ai/premiumProviderReadiness.js');
     readinessModule.resetPremiumAiProviderReadinessForTests();
     mockCreate.mockReset();
     mockGeminiGenerate.mockReset();

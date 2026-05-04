@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let diagnosticsModule: typeof import('./writerDiagnostics.js');
 
 describe('writerDiagnostics', () => {
   beforeEach(async () => {
-    diagnosticsModule = await import(`./writerDiagnostics.js?test=${Date.now()}`);
+    vi.resetModules();
+    diagnosticsModule = await import('./writerDiagnostics.js');
     diagnosticsModule.resetWriterDiagnostics();
   });
 

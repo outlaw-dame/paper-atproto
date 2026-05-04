@@ -33,7 +33,8 @@ let groundingModule: typeof import('../../server/src/verification/gemini-groundi
 
 describe('GeminiGroundingProvider', () => {
   beforeEach(async () => {
-    groundingModule = await import(`../../server/src/verification/gemini-grounding.provider.js?test=${Date.now()}`);
+    vi.resetModules();
+    groundingModule = await import('../../server/src/verification/gemini-grounding.provider.js');
     envMock.VERIFY_GEMINI_GROUNDING_ENABLED = true;
     mockGenerateContent.mockReset();
   });
