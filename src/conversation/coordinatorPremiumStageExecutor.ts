@@ -9,6 +9,7 @@ import type {
   PremiumVerificationResult,
   PremiumVerificationVerdict,
 } from '../intelligence/verification/premiumVerificationLane';
+import { publishPremiumVerificationDecision } from '../intelligence/coordinator/decisionFeed';
 
 export const CONVERSATION_COORDINATOR_PREMIUM_STAGE_VERSION = 1 as const;
 
@@ -108,6 +109,11 @@ export interface ConversationCoordinatorPremiumExecutionInput {
    * are merged into `reasonCodes`.
    */
   verify?: ConversationCoordinatorPremiumVerifyFn;
+  decisionFeed?: {
+    enabled?: boolean;
+    sessionId?: string;
+    sourceToken?: string;
+  };
 }
 
 interface NormalizedPremiumResult {
@@ -219,6 +225,18 @@ export async function executeConversationCoordinatorPremiumStage(
           });
           assertNotAborted(input.signal);
           verification = verifyResult.verdict;
+
+          if (input.decisionFeed?.enabled) {
+            try {
+              publishPremiumVerificationDecision({
+                result: verifyResult,
+                ...(input.decisionFeed.sessionId !== undefined ? { sessionId: input.decisionFeed.sessionId } : {}),
+                ...(input.decisionFeed.sourceToken !== undefined ? { sourceToken: input.decisionFeed.sourceToken } : {}),
+              });
+            } catch {
+              // Decision feed publishing is diagnostics-only and must not alter executor outcomes.
+            }
+          }
         } catch (verifyError) {
           if (isAbortError(verifyError)) throw verifyError;
           verificationFailed = true;

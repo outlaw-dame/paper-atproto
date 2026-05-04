@@ -8,6 +8,10 @@ import {
   executeConversationCoordinatorPremiumStage,
   type ConversationCoordinatorPremiumExecutionContext,
 } from './coordinatorPremiumStageExecutor';
+import {
+  __resetDecisionFeedForTesting,
+  getDecisionFeedSnapshot,
+} from '../intelligence/coordinator/decisionFeed';
 
 const BASE_ENTITLEMENTS: PremiumAiEntitlements = {
   tier: 'pro',
@@ -66,6 +70,48 @@ function createResult(overrides: Partial<DeepInterpolatorResult> = {}): DeepInte
 }
 
 describe('coordinator premium stage executor', () => {
+  it('publishes premium verification decisions when decision-feed instrumentation is enabled', async () => {
+    __resetDecisionFeedForTesting();
+    await executeConversationCoordinatorPremiumStage({
+      request: REQUEST,
+      entitlements: BASE_ENTITLEMENTS,
+      redactionVerified: true,
+      executePremium: async () => createResult(),
+      verify: async () => ({
+        verdict: Object.freeze({
+          trust: 'verified' as const,
+          suggestedConfidenceCap: 0.76,
+          holdPremiumUntilFresh: false,
+          reasonCodes: Object.freeze(['premium_verification_clean']),
+        }),
+        thinking: {
+          ok: true,
+          degraded: false,
+          budgetExceeded: false,
+          aborted: false,
+          reasonCodes: ['premium_verification_clean'],
+          steps: [],
+          totalDurationMs: 4,
+        },
+      }),
+      decisionFeed: {
+        enabled: true,
+        sessionId: 'session-premium-1',
+        sourceToken: 'src-premium-1',
+      },
+    });
+
+    const snapshot = getDecisionFeedSnapshot();
+    expect(snapshot.records.length).toBe(1);
+    expect(snapshot.records[0]?.surface).toBe('premium_verification');
+    expect(snapshot.records[0]?.sessionId).toBe('session-premium-1');
+    expect(snapshot.records[0]?.sourceToken).toBe('src-premium-1');
+    if (snapshot.records[0]?.summary.kind !== 'premium_verification') {
+      throw new Error('wrong summary kind');
+    }
+    expect(snapshot.records[0].summary.trust).toBe('verified');
+  });
+
   it('skips provider execution when redaction has not been verified', async () => {
     let called = false;
     const outcome = await executeConversationCoordinatorPremiumStage({

@@ -1,4 +1,5 @@
 import React from 'react';
+import DecisionFeedDiagnosticsCard from './DecisionFeedDiagnosticsCard';
 import { browserModelManager } from '../runtime/modelManager';
 import type { RuntimeMode } from '../runtime/modelPolicy';
 import { useRuntimeStore } from '../runtime/runtimeStore';
@@ -1203,6 +1204,8 @@ export default function LocalAiRuntimeSection() {
                 </p>
               ))}
             </div>
+
+            <DecisionFeedDiagnosticsCard supportsClientTelemetry={supportsClientTelemetry} />
 
             <div
               style={{

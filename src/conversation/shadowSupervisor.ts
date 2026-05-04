@@ -1,5 +1,6 @@
 import type { WriterMediaFinding } from '../intelligence/llmContracts';
 import { recordConversationSupervisorDecision } from '../perf/conversationSupervisorTelemetry';
+import { publishSupervisorNextStepDecision } from '../intelligence/coordinator/decisionFeed';
 import type { ConversationSession } from './sessionTypes';
 import type {
   ConversationSupervisorAction,
@@ -326,6 +327,11 @@ export async function evaluateConversationSupervisorWithPlanner(
     cooldownMs?: number;
     maxRecommendations?: number;
     signal?: AbortSignal;
+    decisionFeed?: {
+      enabled?: boolean;
+      sessionId?: string;
+      sourceToken?: string;
+    };
   },
 ): Promise<{
   session: ConversationSession;
@@ -355,6 +361,17 @@ export async function evaluateConversationSupervisorWithPlanner(
       },
       options?.signal ? { signal: options.signal } : {},
     );
+    if (options?.decisionFeed?.enabled) {
+      try {
+        publishSupervisorNextStepDecision({
+          result: planResult,
+          ...(options.decisionFeed.sessionId !== undefined ? { sessionId: options.decisionFeed.sessionId } : {}),
+          ...(options.decisionFeed.sourceToken !== undefined ? { sourceToken: options.decisionFeed.sourceToken } : {}),
+        });
+      } catch {
+        // Diagnostics feed publishing is best-effort and must not alter supervisor behaviour.
+      }
+    }
     return { session: nextSession, plan: planResult.plan };
   }
 
@@ -366,5 +383,16 @@ export async function evaluateConversationSupervisorWithPlanner(
     },
     options?.signal ? { signal: options.signal } : {},
   );
+  if (options?.decisionFeed?.enabled) {
+    try {
+      publishSupervisorNextStepDecision({
+        result: planResult,
+        ...(options.decisionFeed.sessionId !== undefined ? { sessionId: options.decisionFeed.sessionId } : {}),
+        ...(options.decisionFeed.sourceToken !== undefined ? { sourceToken: options.decisionFeed.sourceToken } : {}),
+      });
+    } catch {
+      // Diagnostics feed publishing is best-effort and must not alter supervisor behaviour.
+    }
+  }
   return { session: nextSession, plan: planResult.plan };
 }

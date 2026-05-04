@@ -10,11 +10,16 @@ vi.mock('../modelClient', () => ({
 
 import { createEmptyComposerGuidanceResult } from './guidanceScoring';
 import { maybeWriteComposerGuidance } from './guidanceWriter';
+import {
+  __resetDecisionFeedForTesting,
+  getDecisionFeedSnapshot,
+} from '../coordinator/decisionFeed';
 import type { ComposerContext } from './types';
 
 describe('composer guidance writer', () => {
   beforeEach(() => {
     mockCallComposerGuidanceWriter.mockReset();
+    __resetDecisionFeedForTesting();
   });
 
   it('passes premium Gemini context into composer writer signals', async () => {
@@ -184,5 +189,34 @@ describe('composer guidance writer', () => {
 
     const request = mockCallComposerGuidanceWriter.mock.calls[0]?.[0] as { parentSignals: string[] };
     expect(request.parentSignals.join(' || ')).toContain('Deep summary: Replies are debating whether the leaked memo is authentic.');
+  });
+
+  it('publishes a composer preflight decision when decision-feed instrumentation is enabled', async () => {
+    const context: ComposerContext = {
+      mode: 'reply',
+      draftText: 'ok',
+    };
+    const guidance = createEmptyComposerGuidanceResult('reply');
+    guidance.ui.state = 'caution';
+
+    const output = await maybeWriteComposerGuidance(context, guidance, undefined, {
+      decisionFeed: {
+        enabled: true,
+        sessionId: 'draft-1',
+        sourceToken: 'ctx-1',
+      },
+    });
+
+    expect(output).toBe(guidance);
+    expect(mockCallComposerGuidanceWriter).not.toHaveBeenCalled();
+    const snapshot = getDecisionFeedSnapshot();
+    expect(snapshot.records.length).toBe(1);
+    expect(snapshot.records[0]?.surface).toBe('composer_writer_preflight');
+    expect(snapshot.records[0]?.sessionId).toBe('draft-1');
+    expect(snapshot.records[0]?.sourceToken).toBe('ctx-1');
+    if (snapshot.records[0]?.summary.kind !== 'composer_writer_preflight') {
+      throw new Error('wrong summary kind');
+    }
+    expect(snapshot.records[0].summary.safeToWrite).toBe(false);
   });
 });

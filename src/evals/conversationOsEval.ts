@@ -30,6 +30,14 @@ function lowerText(value: unknown): string {
   return sanitizeText(value).toLowerCase();
 }
 
+function clampRate(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  if (numeric < 0) return 0;
+  if (numeric > 1) return 1;
+  return numeric;
+}
+
 function makeDid(handle: string): string {
   return `did:plc:${sanitizeText(handle).toLowerCase().replace(/[^a-z0-9._-]+/g, '-') || 'actor'}`;
 }
@@ -93,6 +101,16 @@ function countRequiredHandleMentions(values: string[], handles: readonly string[
   return handles.filter((handle) => normalizedValues.some((value) => value.includes(`@${handle.toLowerCase()}`)));
 }
 
+function isConfidenceModeCoherent(summaryMode: string, interpretiveConfidence: number): boolean {
+  if (interpretiveConfidence < 0.4) {
+    return summaryMode === 'minimal_fallback' || summaryMode === 'descriptive_fallback';
+  }
+  if (interpretiveConfidence >= 0.65) {
+    return summaryMode === 'normal';
+  }
+  return summaryMode !== 'minimal_fallback';
+}
+
 export function normalizeFixtureIds(raw: string): string[] {
   const normalized = String(raw)
     .split(',')
@@ -148,6 +166,15 @@ export function evaluateConversationOsProjection(
   const matchedPrefixes = expectedPrefixes.filter((prefix) => whatChangedPrefixes.includes(prefix));
   const perspectiveGapText = perspectiveGaps.map((value) => lowerText(value)).join(' ');
   const matchedGapTerms = expectations.perspectiveGapTerms.filter((term) => perspectiveGapText.includes(term.toLowerCase()));
+  const contributorRoles = (projection.writerInput.topContributors ?? [])
+    .map((contributor) => lowerText((contributor as { role?: string }).role ?? ''))
+    .filter(Boolean);
+  const uniqueContributorRoles = new Set(contributorRoles);
+  const interpretiveConfidence = clampRate(fixture.request.confidence.interpretiveConfidence);
+  const factualHighlights = projection.writerInput.factualHighlights ?? [];
+  const hasSpecificWhatChanged = whatChanged.some((value) => lowerText(value).includes(':'));
+  const evidenceSignalCount = projection.writerInput.threadSignalSummary?.sourceBackedCount ?? 0;
+  const clarificationSignalCount = projection.writerInput.threadSignalSummary?.clarificationsCount ?? 0;
 
   const checks = [
     {
@@ -196,6 +223,29 @@ export function evaluateConversationOsProjection(
           || matchedGapTerms.length > 0
         ),
       detail: perspectiveGaps.join(' • ') || 'no context-to-watch gaps',
+    },
+    {
+      id: 'confidence_mode_coherence',
+      pass: isConfidenceModeCoherent(projection.pipeline.summaryMode, interpretiveConfidence),
+      detail: `summary_mode=${projection.pipeline.summaryMode} interpretive_confidence=${interpretiveConfidence.toFixed(2)}`,
+    },
+    {
+      id: 'contributor_signal_diversity',
+      pass:
+        expectations.requiredContributorHandles.length <= 1
+        ? requiredContributorMentions.length === expectations.requiredContributorHandles.length
+        : (requiredContributorMentions.length === expectations.requiredContributorHandles.length
+          && uniqueContributorRoles.size >= Math.min(2, projection.writerInput.topContributors.length)),
+      detail: `required=${requiredContributorMentions.length}/${expectations.requiredContributorHandles.length} role_diversity=${uniqueContributorRoles.size}`,
+    },
+    {
+      id: 'evidence_to_signal_alignment',
+      pass:
+        evidenceSignalCount >= expectations.minSourceBackedCount
+        && clarificationSignalCount >= expectations.minClarificationsCount
+        && factualHighlights.length > 0
+        && hasSpecificWhatChanged,
+      detail: `evidence=${evidenceSignalCount} clarifications=${clarificationSignalCount} highlights=${factualHighlights.length} specific_signals=${hasSpecificWhatChanged ? 'yes' : 'no'}`,
     },
   ];
 

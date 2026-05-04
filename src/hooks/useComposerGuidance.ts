@@ -160,7 +160,18 @@ export function useComposerGuidance({
         if (hasComposerWriterCoverage(baseGuidance)) return;
         if (!shouldRunComposerWriterStage(deferredContext.mode, deferredContext.draftText, baseGuidance, dismissedAt)) return;
 
-        const written = await maybeWriteComposerGuidance(deferredContext, baseGuidance, writerAbort.signal);
+        const written = await maybeWriteComposerGuidance(
+          deferredContext,
+          baseGuidance,
+          writerAbort.signal,
+          {
+            decisionFeed: {
+              enabled: true,
+              sessionId: draftId,
+              sourceToken: contextFingerprint,
+            },
+          },
+        );
         if (requestIdRef.current !== requestId) return;
         latestGuidance = written;
         setGuidance(draftId, written, contextFingerprint);

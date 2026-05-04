@@ -1,6 +1,16 @@
 import { callComposerGuidanceWriter } from '../modelClient';
+import { publishComposerWriterPreflightDecision } from '../coordinator/decisionFeed';
 import type { ComposerGuidanceWriteRequest } from './llmWriterContracts';
+import { evaluateComposerWriterPreflight } from './composerWriterPreflight';
 import type { ComposerContext, ComposerGuidanceResult, ComposerGuidanceTool } from './types';
+
+interface ComposerGuidanceWriterOptions {
+  decisionFeed?: {
+    enabled?: boolean;
+    sessionId?: string;
+    sourceToken?: string;
+  };
+}
 
 function uniqTools(values: ComposerGuidanceTool[]): ComposerGuidanceTool[] {
   return Array.from(new Set(values.filter(Boolean)));
@@ -152,9 +162,40 @@ export async function maybeWriteComposerGuidance(
   context: ComposerContext,
   guidance: ComposerGuidanceResult,
   signal?: AbortSignal,
+  options?: ComposerGuidanceWriterOptions,
 ): Promise<ComposerGuidanceResult> {
   const request = buildRequest(context, guidance);
   if (!request) return guidance;
+
+  // Bounded thinking pre-flight: deterministic decision over guidance shape.
+  // If the writer call is unlikely to add value (caution-state, no aux signals,
+  // very short draft), skip the server round-trip. Any internal failure inside
+  // the lane resolves to `proceed: true`, preserving the original behavior.
+  try {
+    const preflight = await evaluateComposerWriterPreflight(context, guidance, {
+      ...(signal ? { signal } : {}),
+    });
+
+    if (options?.decisionFeed?.enabled) {
+      try {
+        publishComposerWriterPreflightDecision({
+          thinking: preflight.thinking,
+          safeToWrite: preflight.decision.proceed,
+          ...(options.decisionFeed.sessionId !== undefined ? { sessionId: options.decisionFeed.sessionId } : {}),
+          ...(options.decisionFeed.sourceToken !== undefined ? { sourceToken: options.decisionFeed.sourceToken } : {}),
+        });
+      } catch {
+        // Diagnostics feed publishing is best-effort and must never alter guidance behaviour.
+      }
+    }
+
+    if (!preflight.decision.proceed) {
+      return guidance;
+    }
+  } catch {
+    // Defensive: preflight should never throw, but if it does, fall through
+    // to the writer call exactly as before.
+  }
 
   try {
     const writer = await callComposerGuidanceWriter(request, signal);

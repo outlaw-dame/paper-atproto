@@ -16,7 +16,7 @@ function requirePremiumFixture(id: string) {
 }
 
 export const CONVERSATION_OS_EVAL_SET_META = {
-  version: 'editorial-rubric-v3',
+  version: 'editorial-rubric-v4',
   provenance: 'editorial-fixture-set',
   note: 'This is a manually curated judged fixture set. It is not yet a crowd-scored or production-user-labeled benchmark.',
 } as const;
@@ -61,6 +61,21 @@ export const CONVERSATION_OS_SCORECARD = [
     id: 'context_to_watch',
     weight: 2,
     description: 'Context to watch is grounded in the dominant claim or entity, not filler.',
+  },
+  {
+    id: 'confidence_mode_coherence',
+    weight: 1,
+    description: 'Summary mode is coherent with interpretive confidence (fallback modes under low confidence, normal mode when confidence is strong).',
+  },
+  {
+    id: 'contributor_signal_diversity',
+    weight: 1,
+    description: 'Surfaced contributors reflect more than one conversational role when the thread has multi-role shaping voices.',
+  },
+  {
+    id: 'evidence_to_signal_alignment',
+    weight: 2,
+    description: 'Source-backed and clarification counts are reflected in factual highlights and what-changed signals rather than generic copy.',
   },
 ] as const;
 

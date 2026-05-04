@@ -5,6 +5,10 @@ import {
   applyShadowConversationSupervisor,
   evaluateConversationSupervisorWithPlanner,
 } from './shadowSupervisor';
+import {
+  __resetDecisionFeedForTesting,
+  getDecisionFeedSnapshot,
+} from '../intelligence/coordinator/decisionFeed';
 import type { ConversationSession } from './sessionTypes';
 
 const ROOT_URI = 'at://did:plc:root/app.bsky.feed.post/root';
@@ -199,6 +203,29 @@ describe('shadowConversationSupervisor', () => {
 });
 
 describe('evaluateConversationSupervisorWithPlanner', () => {
+  it('publishes planner decisions when decision-feed instrumentation is enabled', async () => {
+    __resetDecisionFeedForTesting();
+    const session = createSession();
+    await evaluateConversationSupervisorWithPlanner(
+      session,
+      'session_hydrated',
+      {
+        evaluatedAt: '2026-04-09T12:00:00.000Z',
+        decisionFeed: {
+          enabled: true,
+          sessionId: 'session-supervisor-1',
+          sourceToken: 'src-supervisor-1',
+        },
+      },
+    );
+
+    const snapshot = getDecisionFeedSnapshot();
+    expect(snapshot.records.length).toBe(1);
+    expect(snapshot.records[0]?.surface).toBe('supervisor_next_step');
+    expect(snapshot.records[0]?.sessionId).toBe('session-supervisor-1');
+    expect(snapshot.records[0]?.sourceToken).toBe('src-supervisor-1');
+  });
+
   it('produces the same session shape as the synchronous supervisor', async () => {
     const session = createSession();
     session.interpretation.aiDiagnostics!.writer.status = 'error';
