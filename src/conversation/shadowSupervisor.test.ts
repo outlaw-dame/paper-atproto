@@ -4,6 +4,7 @@ import { createSessionAiDiagnostics } from './modelExecution';
 import {
   applyShadowConversationSupervisor,
   evaluateConversationSupervisorWithPlanner,
+  planConversationSupervisorState,
 } from './shadowSupervisor';
 import {
   __resetDecisionFeedForTesting,
@@ -203,6 +204,33 @@ describe('shadowConversationSupervisor', () => {
 });
 
 describe('evaluateConversationSupervisorWithPlanner', () => {
+  it('plans existing supervisor state without mutating the session again', async () => {
+    const session = createSession();
+    session.interpretation.aiDiagnostics!.writer.status = 'error';
+    session.interpretation.aiDiagnostics!.writer.lastError = 'writer unavailable';
+
+    const supervised = applyShadowConversationSupervisor(
+      session,
+      'writer_completed',
+      { evaluatedAt: '2026-04-09T12:10:00.000Z' },
+    );
+    const beforeEvaluations = supervised.interpretation.supervisor?.decisionsEvaluated;
+
+    const { plan } = await planConversationSupervisorState(supervised, {
+      decisionFeed: {
+        enabled: true,
+        sessionId: 'session-supervisor-existing',
+        sourceToken: 'src-supervisor-existing',
+      },
+    });
+
+    expect(supervised.interpretation.supervisor?.decisionsEvaluated).toBe(beforeEvaluations);
+    expect(plan.nextStep?.type).toBe('rerun_writer_with_safe_fallback');
+    const snapshot = getDecisionFeedSnapshot();
+    expect(snapshot.records.length).toBe(1);
+    expect(snapshot.records[0]?.surface).toBe('supervisor_next_step');
+  });
+
   it('publishes planner decisions when decision-feed instrumentation is enabled', async () => {
     __resetDecisionFeedForTesting();
     const session = createSession();

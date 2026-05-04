@@ -24,6 +24,7 @@ import {
 import {
   executeConversationCoordinatorPremiumStage,
 } from './coordinatorPremiumStageExecutor';
+import { verifyPremiumDeepInterpolatorResult } from '../intelligence/verification/premiumVerificationLane';
 import { translateWriterInput } from '../lib/i18n/threadTranslation';
 import type { VerificationProviders } from '../intelligence/verification/types';
 import type { VerificationCache } from '../intelligence/verification/cache';
@@ -50,6 +51,7 @@ import { humanizeInterpretiveReason } from './interpretive/interpretiveExplanati
 import { updateConversationContinuitySnapshots } from './continuitySnapshots';
 import { finalizeConversationDeltaDecision } from './deltaDecision';
 import { applyShadowConversationSupervisor } from './shadowSupervisor';
+import { planConversationSupervisorState } from './shadowSupervisor';
 import { buildConversationModelSourceToken } from './modelSourceToken';
 import { selectCoordinatorSourceApplication } from './coordinatorSourceGuards';
 import {
@@ -74,6 +76,8 @@ import {
   recordInterpolatorStageTiming,
 } from '../perf/interpolatorTelemetry';
 import { detectMentalHealthCrisis } from '../lib/sentiment';
+import { buildSessionBrief, intelligenceCoordinator } from '../intelligence/coordinator';
+import { useRuntimeStore } from '../runtime/runtimeStore';
 import type {
   AtUri,
   ContributionScores,
@@ -127,6 +131,12 @@ function nowMs(): number {
     : Date.now();
 }
 
+function estimatePromptTokens(text: string | null | undefined): number {
+  const normalizedLength = typeof text === 'string' ? text.trim().length : 0;
+  if (normalizedLength <= 0) return 0;
+  return Math.ceil(normalizedLength / 4);
+}
+
 const MAX_COORDINATOR_REASON_CODES = 8;
 const MAX_COORDINATOR_REASON_CODE_LENGTH = 56;
 
@@ -136,6 +146,146 @@ function sanitizeCoordinatorReasonCodes(reasonCodes: readonly string[]): string[
     .filter((code) => code.length > 0)
     .map((code) => code.slice(0, MAX_COORDINATOR_REASON_CODE_LENGTH));
   return Array.from(new Set(sanitized)).slice(0, MAX_COORDINATOR_REASON_CODES);
+}
+
+function buildConversationSessionCoordinatorBrief(
+  session: ConversationSession,
+  sourceToken: ReturnType<typeof buildConversationModelSourceToken>,
+) {
+  const runtime = useRuntimeStore.getState();
+  const summaryText = session.interpretation.interpolator?.summaryText ?? null;
+  return buildSessionBrief({
+    surface: 'session',
+    intent: 'story_summary',
+    capability: runtime.capability ?? undefined,
+    settingsMode: runtime.settingsMode,
+    sessionId: session.id,
+    freshness: {
+      lastMutationAt: session.mutations.lastMutationAt ?? session.meta.lastHydratedAt ?? null,
+      sourceToken,
+    },
+    entitlements: session.interpretation.premium.entitlements ?? null,
+    attachments: {
+      count: session.interpretation.mediaFindings.length,
+      hasImages: session.interpretation.mediaFindings.length > 0,
+      hasLinks: false,
+      hasCode: false,
+    },
+    textLength: summaryText?.length ?? 0,
+    estimatedPromptTokens: estimatePromptTokens(summaryText),
+    hasSensitiveLocalData: true,
+  });
+}
+
+function buildConversationMediaCoordinatorBrief(params: {
+  session: ConversationSession;
+  sourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  rootText: string;
+  requestCount: number;
+}) {
+  const runtime = useRuntimeStore.getState();
+  return buildSessionBrief({
+    surface: 'media',
+    intent: 'media_analysis',
+    capability: runtime.capability ?? undefined,
+    settingsMode: runtime.settingsMode,
+    sessionId: params.session.id,
+    freshness: {
+      lastMutationAt: params.session.mutations.lastMutationAt ?? params.session.meta.lastHydratedAt ?? null,
+      sourceToken: params.sourceToken,
+    },
+    entitlements: params.session.interpretation.premium.entitlements ?? null,
+    attachments: {
+      count: params.requestCount,
+      hasImages: params.requestCount > 0,
+      hasLinks: false,
+      hasCode: false,
+    },
+    textLength: params.rootText.length,
+    estimatedPromptTokens: estimatePromptTokens(params.rootText),
+    hasSensitiveLocalData: true,
+  });
+}
+
+async function emitConversationSessionCoordinatorAdvice(params: {
+  session: ConversationSession;
+  sourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  signal?: AbortSignal;
+}): Promise<void> {
+  try {
+    await intelligenceCoordinator.adviseOnSession(
+      buildConversationSessionCoordinatorBrief(params.session, params.sourceToken),
+      {
+        ...(params.signal ? { signal: params.signal } : {}),
+        silentRouterAudit: true,
+        expectedSourceToken: params.sourceToken,
+      },
+    );
+  } catch {
+    // Coordinator advice is advisory/diagnostic; hydration must not fail because of it.
+  }
+}
+
+async function emitConversationMediaCoordinatorAdvice(params: {
+  session: ConversationSession;
+  sourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  rootText: string;
+  requestCount: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  try {
+    await intelligenceCoordinator.adviseOnMedia(
+      buildConversationMediaCoordinatorBrief(params),
+      {
+        ...(params.signal ? { signal: params.signal } : {}),
+        silentRouterAudit: true,
+        expectedSourceToken: params.sourceToken,
+      },
+    );
+  } catch {
+    // Media advice is advisory/diagnostic; media execution keeps its current behavior.
+  }
+}
+
+function scheduleConversationSupervisorPlanning(params: {
+  sessionId: string;
+  sourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  trigger: 'session_hydrated' | 'writer_completed' | 'multimodal_completed' | 'premium_completed';
+  signal?: AbortSignal;
+}): void {
+  const run = async () => {
+    try {
+      const store = useConversationSessionStore.getState();
+      const current = store.getSession(params.sessionId);
+      if (!current) return;
+      if (buildConversationModelSourceToken(current) !== params.sourceToken) return;
+
+      const { plan } = await planConversationSupervisorState(current, {
+        ...(params.signal ? { signal: params.signal } : {}),
+        decisionFeed: {
+          enabled: true,
+          sessionId: params.sessionId,
+          sourceToken: params.sourceToken,
+        },
+      });
+
+      if (plan.holdAll) {
+        console.warn('[conversation] supervisor planner hold_all', {
+          sessionId: params.sessionId,
+          trigger: params.trigger,
+          reasonCodes: plan.reasonCodes,
+        });
+      }
+    } catch {
+      // Planner diagnostics are best-effort; never disturb committed session state.
+    }
+  };
+
+  if (typeof queueMicrotask === 'function') {
+    queueMicrotask(() => { void run(); });
+    return;
+  }
+  void Promise.resolve().then(run);
 }
 
 export interface ConversationCoordinatorRuntimeAdvisory {
@@ -751,6 +901,20 @@ async function hydrateConversationBaseline(
 
   const modelSourceToken = buildConversationModelSourceToken(nextSession);
 
+  void emitConversationSessionCoordinatorAdvice({
+    session: nextSession,
+    sourceToken: modelSourceToken,
+    ...(signal ? { signal } : {}),
+  });
+  void planConversationSupervisorState(nextSession, {
+    ...(signal ? { signal } : {}),
+    decisionFeed: {
+      enabled: true,
+      sessionId,
+      sourceToken: modelSourceToken,
+    },
+  });
+
   return {
     kind: 'ready',
     nextSession,
@@ -931,6 +1095,16 @@ async function runConversationMediaStage(
     nearbyTextByUri,
   });
 
+  if (mediaPlan.shouldRun) {
+    void emitConversationMediaCoordinatorAdvice({
+      session: sessionAfterTranslation,
+      sourceToken: modelSourceToken,
+      rootText: rootNode.text,
+      requestCount: mediaPlan.requestCount,
+      ...(signal ? { signal } : {}),
+    });
+  }
+
   // Address Gemini PR #73 review: thread the real planner inputs instead of
   // hardcoding `true`/`true`. Although `runConversationWriterPreflight` would
   // have already short-circuited if `interpolatorEnabled` were false or
@@ -1013,6 +1187,12 @@ async function runConversationMediaStage(
       sourceToken: modelSourceToken,
       requestedAt: multimodalRequestedAt,
     }), 'multimodal_completed');
+  });
+  scheduleConversationSupervisorPlanning({
+    sessionId,
+    sourceToken: modelSourceToken,
+    trigger: 'multimodal_completed',
+    ...(signal ? { signal } : {}),
   });
 
   return { kind: 'continue', mediaFindings };
@@ -1158,6 +1338,12 @@ async function runConversationWriterStage(
       sourceToken: modelSourceToken,
       requestedAt: writerRequestedAt,
     }), 'writer_completed');
+  });
+  scheduleConversationSupervisorPlanning({
+    sessionId,
+    sourceToken: modelSourceToken,
+    trigger: 'writer_completed',
+    ...(signal ? { signal } : {}),
   });
 
   return { kind: 'continue', writerInput, filteredWriterResult };
@@ -1309,6 +1495,16 @@ async function runConversationPremiumStage(
       executePremium: (request, ctx) => callPremiumDeepInterpolator(request, ctx.signal),
       redactionVerified: true,
       retryPolicy: { maxAttempts: 1 },
+      verify: (result, request, options) => verifyPremiumDeepInterpolatorResult(result, request, {
+        ...(options.signal ? { signal: options.signal } : {}),
+        sessionId,
+        sourceToken: modelSourceToken,
+      }),
+      decisionFeed: {
+        enabled: true,
+        sessionId,
+        sourceToken: modelSourceToken,
+      },
       ...(signal ? { signal } : {}),
     });
     recordInterpolatorStageTiming('hydrate.premium_deep', nowMs() - deepInterpolatorStartedAt);
@@ -1340,6 +1536,12 @@ async function runConversationPremiumStage(
           error: errorMessage,
         }), 'premium_completed');
       });
+      scheduleConversationSupervisorPlanning({
+        sessionId,
+        sourceToken: modelSourceToken,
+        trigger: 'premium_completed',
+        ...(signal ? { signal } : {}),
+      });
       console.warn('[conversation] premium interpolation failed', errorMessage);
       return;
     }
@@ -1370,6 +1572,12 @@ async function runConversationPremiumStage(
           }), 'premium_completed')
         : markConversationModelDiscarded(current, 'premium')
     ));
+    scheduleConversationSupervisorPlanning({
+      sessionId,
+      sourceToken: modelSourceToken,
+      trigger: 'premium_completed',
+      ...(signal ? { signal } : {}),
+    });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       return;
@@ -1398,6 +1606,12 @@ async function runConversationPremiumStage(
         requestedAt: premiumRequestedAt,
         error: errorMessage,
       }), 'premium_completed');
+    });
+    scheduleConversationSupervisorPlanning({
+      sessionId,
+      sourceToken: modelSourceToken,
+      trigger: 'premium_completed',
+      ...(signal ? { signal } : {}),
     });
     console.warn('[conversation] premium interpolation failed', errorMessage);
   }

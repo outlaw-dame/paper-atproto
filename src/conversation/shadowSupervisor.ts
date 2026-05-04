@@ -308,6 +308,54 @@ export function createConversationSupervisorState(): ConversationSupervisorState
   return createEmptySupervisorState();
 }
 
+export async function planConversationSupervisorState(
+  session: ConversationSession,
+  options?: {
+    signal?: AbortSignal;
+    decisionFeed?: {
+      enabled?: boolean;
+      sessionId?: string;
+      sourceToken?: string;
+    };
+  },
+): Promise<{
+  plan: import('./supervisorNextStepPlanner').SupervisorNextStepPlan;
+}> {
+  const decision = session.interpretation.supervisor?.lastDecision ?? null;
+
+  // Lazy import keeps the synchronous code path free of the planner module.
+  const { planSupervisorNextStep } = await import('./supervisorNextStepPlanner');
+
+  const planResult = await planSupervisorNextStep(
+    decision
+      ? {
+          summary: decision.stateSummary,
+          baseActions: decision.actions,
+          traceCodes: decision.traceCodes,
+        }
+      : {
+          summary: buildStateSummary(session),
+          baseActions: [],
+          traceCodes: [],
+        },
+    options?.signal ? { signal: options.signal } : {},
+  );
+
+  if (options?.decisionFeed?.enabled) {
+    try {
+      publishSupervisorNextStepDecision({
+        result: planResult,
+        ...(options.decisionFeed.sessionId !== undefined ? { sessionId: options.decisionFeed.sessionId } : {}),
+        ...(options.decisionFeed.sourceToken !== undefined ? { sourceToken: options.decisionFeed.sourceToken } : {}),
+      });
+    } catch {
+      // Diagnostics feed publishing is best-effort and must not alter supervisor behaviour.
+    }
+  }
+
+  return { plan: planResult.plan };
+}
+
 /**
  * Async wrapper that runs the synchronous shadow supervisor and then the
  * bounded next-step planner thinking lane. The session shape is unchanged;
@@ -347,52 +395,9 @@ export async function evaluateConversationSupervisorWithPlanner(
   if (options?.maxRecommendations !== undefined) applyOptions.maxRecommendations = options.maxRecommendations;
 
   const nextSession = applyShadowConversationSupervisor(session, trigger, applyOptions);
-  const decision = nextSession.interpretation.supervisor?.lastDecision ?? null;
-
-  // Lazy import keeps the synchronous code path free of the planner module.
-  const { planSupervisorNextStep } = await import('./supervisorNextStepPlanner');
-
-  if (!decision) {
-    const planResult = await planSupervisorNextStep(
-      {
-        summary: buildStateSummary(nextSession),
-        baseActions: [],
-        traceCodes: [],
-      },
-      options?.signal ? { signal: options.signal } : {},
-    );
-    if (options?.decisionFeed?.enabled) {
-      try {
-        publishSupervisorNextStepDecision({
-          result: planResult,
-          ...(options.decisionFeed.sessionId !== undefined ? { sessionId: options.decisionFeed.sessionId } : {}),
-          ...(options.decisionFeed.sourceToken !== undefined ? { sourceToken: options.decisionFeed.sourceToken } : {}),
-        });
-      } catch {
-        // Diagnostics feed publishing is best-effort and must not alter supervisor behaviour.
-      }
-    }
-    return { session: nextSession, plan: planResult.plan };
-  }
-
-  const planResult = await planSupervisorNextStep(
-    {
-      summary: decision.stateSummary,
-      baseActions: decision.actions,
-      traceCodes: decision.traceCodes,
-    },
-    options?.signal ? { signal: options.signal } : {},
-  );
-  if (options?.decisionFeed?.enabled) {
-    try {
-      publishSupervisorNextStepDecision({
-        result: planResult,
-        ...(options.decisionFeed.sessionId !== undefined ? { sessionId: options.decisionFeed.sessionId } : {}),
-        ...(options.decisionFeed.sourceToken !== undefined ? { sourceToken: options.decisionFeed.sourceToken } : {}),
-      });
-    } catch {
-      // Diagnostics feed publishing is best-effort and must not alter supervisor behaviour.
-    }
-  }
-  return { session: nextSession, plan: planResult.plan };
+  const { plan } = await planConversationSupervisorState(nextSession, {
+    ...(options?.signal ? { signal: options.signal } : {}),
+    ...(options?.decisionFeed ? { decisionFeed: options.decisionFeed } : {}),
+  });
+  return { session: nextSession, plan };
 }

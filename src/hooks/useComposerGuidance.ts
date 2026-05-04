@@ -20,7 +20,9 @@ import {
   createComposerContextFingerprint,
   createComposerDraftId,
 } from '../intelligence/composer/guidanceIdentity';
+import { buildSessionBrief, intelligenceCoordinator } from '../intelligence/coordinator';
 import type { ComposerContext, ComposerGuidanceResult } from '../intelligence/composer/types';
+import { useRuntimeStore } from '../runtime/runtimeStore';
 import { useComposerGuidanceStore } from '../store/composerGuidanceStore';
 
 interface UseComposerGuidanceOptions {
@@ -38,6 +40,8 @@ export function useComposerGuidance({
   const dismissGuidance = useComposerGuidanceStore((state) => state.dismissGuidance);
   const clearGuidance = useComposerGuidanceStore((state) => state.clearGuidance);
   const requestIdRef = useRef(0);
+  const runtimeCapability = useRuntimeStore((state) => state.capability);
+  const runtimeSettingsMode = useRuntimeStore((state) => state.settingsMode);
   const deferredContext = useDeferredValue(context);
   const draftId = useMemo(
     () => createComposerDraftId(surfaceId, deferredContext),
@@ -160,6 +164,30 @@ export function useComposerGuidance({
         if (hasComposerWriterCoverage(baseGuidance)) return;
         if (!shouldRunComposerWriterStage(deferredContext.mode, deferredContext.draftText, baseGuidance, dismissedAt)) return;
 
+        void intelligenceCoordinator.adviseOnComposer(
+          buildSessionBrief({
+            surface: 'composer',
+            intent: 'composer_writer',
+            capability: runtimeCapability ?? undefined,
+            settingsMode: runtimeSettingsMode,
+            sessionId: draftId,
+            freshness: {
+              sourceToken: contextFingerprint,
+            },
+            textLength: deferredContext.draftText.length,
+            estimatedPromptTokens: Math.ceil(deferredContext.draftText.length / 4),
+            explicitUserAction: true,
+            hasSensitiveLocalData: true,
+          }),
+          {
+            signal: writerAbort.signal,
+            silentRouterAudit: true,
+            expectedSourceToken: contextFingerprint,
+          },
+        ).catch(() => {
+          // Coordinator advice is advisory only; composer guidance must not fail because of it.
+        });
+
         const written = await maybeWriteComposerGuidance(
           deferredContext,
           baseGuidance,
@@ -199,6 +227,8 @@ export function useComposerGuidance({
     cachedGuidance,
     isCachedContextFresh,
     immediateGuidance,
+    runtimeCapability,
+    runtimeSettingsMode,
     setGuidance,
   ]);
 
