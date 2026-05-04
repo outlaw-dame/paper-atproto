@@ -306,3 +306,65 @@ export function applyShadowConversationSupervisor(
 export function createConversationSupervisorState(): ConversationSupervisorState {
   return createEmptySupervisorState();
 }
+
+/**
+ * Async wrapper that runs the synchronous shadow supervisor and then the
+ * bounded next-step planner thinking lane. The session shape is unchanged;
+ * the planner output is returned alongside so live router/coordinator surfaces
+ * can act on a single deterministic next-step decision.
+ *
+ * - Existing callers that import {@link applyShadowConversationSupervisor}
+ *   keep byte-identical behaviour and decision shape.
+ * - Planner failures fall back to a defensible plan (preserves caller behaviour);
+ *   never throws.
+ */
+export async function evaluateConversationSupervisorWithPlanner(
+  session: ConversationSession,
+  trigger: ConversationSupervisorTrigger,
+  options?: {
+    evaluatedAt?: string;
+    cooldownMs?: number;
+    maxRecommendations?: number;
+    signal?: AbortSignal;
+  },
+): Promise<{
+  session: ConversationSession;
+  plan: import('./supervisorNextStepPlanner').SupervisorNextStepPlan;
+}> {
+  const applyOptions: {
+    evaluatedAt?: string;
+    cooldownMs?: number;
+    maxRecommendations?: number;
+  } = {};
+  if (options?.evaluatedAt !== undefined) applyOptions.evaluatedAt = options.evaluatedAt;
+  if (options?.cooldownMs !== undefined) applyOptions.cooldownMs = options.cooldownMs;
+  if (options?.maxRecommendations !== undefined) applyOptions.maxRecommendations = options.maxRecommendations;
+
+  const nextSession = applyShadowConversationSupervisor(session, trigger, applyOptions);
+  const decision = nextSession.interpretation.supervisor?.lastDecision ?? null;
+
+  // Lazy import keeps the synchronous code path free of the planner module.
+  const { planSupervisorNextStep } = await import('./supervisorNextStepPlanner');
+
+  if (!decision) {
+    const planResult = await planSupervisorNextStep(
+      {
+        summary: buildStateSummary(nextSession),
+        baseActions: [],
+        traceCodes: [],
+      },
+      options?.signal ? { signal: options.signal } : {},
+    );
+    return { session: nextSession, plan: planResult.plan };
+  }
+
+  const planResult = await planSupervisorNextStep(
+    {
+      summary: decision.stateSummary,
+      baseActions: decision.actions,
+      traceCodes: decision.traceCodes,
+    },
+    options?.signal ? { signal: options.signal } : {},
+  );
+  return { session: nextSession, plan: planResult.plan };
+}

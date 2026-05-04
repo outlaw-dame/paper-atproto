@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { createSessionAiDiagnostics } from './modelExecution';
-import { applyShadowConversationSupervisor } from './shadowSupervisor';
+import {
+  applyShadowConversationSupervisor,
+  evaluateConversationSupervisorWithPlanner,
+} from './shadowSupervisor';
 import type { ConversationSession } from './sessionTypes';
 
 const ROOT_URI = 'at://did:plc:root/app.bsky.feed.post/root';
@@ -192,5 +195,68 @@ describe('shadowConversationSupervisor', () => {
     expect(nextSession.interpretation.supervisor?.lastDecision?.traceCodes).toEqual(
       expect.arrayContaining(['premium_error', 'premium_low_signal_cycle']),
     );
+  });
+});
+
+describe('evaluateConversationSupervisorWithPlanner', () => {
+  it('produces the same session shape as the synchronous supervisor', async () => {
+    const session = createSession();
+    session.interpretation.aiDiagnostics!.writer.status = 'error';
+    session.interpretation.aiDiagnostics!.writer.lastError = 'writer unavailable';
+
+    const sync = applyShadowConversationSupervisor(
+      session,
+      'writer_completed',
+      { evaluatedAt: '2026-04-09T12:10:00.000Z' },
+    );
+    const { session: async, plan } = await evaluateConversationSupervisorWithPlanner(
+      session,
+      'writer_completed',
+      { evaluatedAt: '2026-04-09T12:10:00.000Z' },
+    );
+
+    expect(async.interpretation.supervisor).toEqual(sync.interpretation.supervisor);
+    expect(plan.nextStep?.type).toBe('rerun_writer_with_safe_fallback');
+    expect(plan.holdAll).toBe(false);
+    expect(plan.reasonCodes).toContain('supervisor_plan_escalate_writer');
+  });
+
+  it('returns an empty plan when no recommendations are produced', async () => {
+    const session = createSession();
+    const { plan } = await evaluateConversationSupervisorWithPlanner(
+      session,
+      'session_hydrated',
+      { evaluatedAt: '2026-04-09T12:00:00.000Z' },
+    );
+    expect(plan.nextStep).toBeNull();
+    expect(plan.holdAll).toBe(false);
+    expect(plan.reasonCodes).toContain('supervisor_plan_no_actions');
+  });
+
+  it('escalates hold_all when multiple errors race mutation churn', async () => {
+    const session = createSession();
+    session.interpretation.aiDiagnostics!.writer.status = 'error';
+    session.interpretation.aiDiagnostics!.writer.lastError = 'writer unavailable';
+    session.interpretation.aiDiagnostics!.premium.status = 'error';
+    session.interpretation.premium = {
+      status: 'error',
+      lastError: 'premium failed',
+    };
+    session.mutations = {
+      revision: 5,
+      recent: [],
+      lastMutationAt: '2026-04-09T12:30:00.000Z',
+    };
+    session.meta.lastHydratedAt = '2026-04-09T12:00:00.000Z';
+
+    const { plan } = await evaluateConversationSupervisorWithPlanner(
+      session,
+      'writer_completed',
+      { evaluatedAt: '2026-04-09T12:30:05.000Z' },
+    );
+
+    expect(plan.holdAll).toBe(true);
+    expect(plan.nextStep).toBeNull();
+    expect(plan.reasonCodes).toContain('supervisor_plan_hold_all');
   });
 });
