@@ -316,6 +316,10 @@ function hasSignalPrefix(target: string[], prefix: string): boolean {
   return target.some((value) => value.split(':')[0]?.trim().toLowerCase() === normalizedPrefix);
 }
 
+function isClarificationLikeText(value: string): boolean {
+  return /\b(clarif|narrow(?:er|ing)?|walk-?ins?|appointments?\s+(?:still\s+)?open|still\s+available|not\s+a\s+full|rather\s+than\s+all|only\s+mentions?|limited\s+to)\b/i.test(value);
+}
+
 function buildTopicFallbackExcerpt(rootText: string): string {
   return normalizeSignalExcerpt(rootText.replace(/[.!?…]+$/g, ''), 96) || 'the visible thread';
 }
@@ -951,6 +955,25 @@ export function buildThreadStateForWriter(
       pushSignal(whatChangedSignals, 'counterpoint', comment.text);
     });
 
+  // Some corrective replies are tagged as counterpoints even when they function
+  // as laddered clarifications ("narrower than", "walk-ins only", etc.).
+  // Preserve the counterpoint signal while also surfacing an explicit
+  // clarification signal when no clarification signal exists yet.
+  if (!hasSignalPrefix(whatChangedSignals, 'clarification')) {
+    rawComments
+      .filter((comment) => {
+        const score = scores[comment.uri];
+        if (!score) return false;
+        return (score.role === 'clarifying' || score.role === 'useful_counterpoint')
+          && isClarificationLikeText(comment.text);
+      })
+      .sort((left, right) => right.impactScore - left.impactScore)
+      .slice(0, 1)
+      .forEach((comment) => {
+        pushSignal(whatChangedSignals, 'clarification', comment.text);
+      });
+  }
+
   rawComments
     .filter((comment) => {
       const score = scores[comment.uri];
@@ -970,6 +993,21 @@ export function buildThreadStateForWriter(
     state,
     rootText,
   });
+
+  // Delta fallback may emit only a counterpoint signal even when the content is
+  // a narrowing clarification (common when role inference lands on direct_response).
+  // Mirror that corrective signal as an explicit clarification when missing.
+  if (!hasSignalPrefix(whatChangedSignals, 'clarification')) {
+    const clarificationLikeCounterpoint = whatChangedSignals.find((signal) => {
+      const [prefix = '', ...rest] = signal.split(':');
+      if (prefix.trim().toLowerCase() !== 'counterpoint') return false;
+      return isClarificationLikeText(rest.join(':'));
+    });
+    if (clarificationLikeCounterpoint) {
+      const [, ...rest] = clarificationLikeCounterpoint.split(':');
+      pushSignal(whatChangedSignals, 'clarification', rest.join(':'));
+    }
+  }
 
   // ── Root post ─────────────────────────────────────────────────────────────
   const rootPost = {
@@ -994,9 +1032,22 @@ export function buildThreadStateForWriter(
     (s) => s.sourceSupport >= 0.5 || (s.factual?.factualConfidence ?? 0) >= 0.55,
   ).length;
 
+  const clarificationPrefixCount = whatChangedSignals.filter((signal) => (
+    signal.split(':')[0]?.trim().toLowerCase() === 'clarification'
+  )).length;
+  const clarificationLikeCounterpointCount = whatChangedSignals.filter((signal) => {
+    const [prefix = '', ...rest] = signal.split(':');
+    if (prefix.trim().toLowerCase() !== 'counterpoint') return false;
+    return isClarificationLikeText(rest.join(':'));
+  }).length;
+  const clarificationRoleCount = scoreList.filter((score) => (
+    score.role === 'clarifying' || score.role === 'useful_counterpoint'
+  )).length;
   const clarificationSignalCount = Math.max(
     state.clarificationsAdded.length,
-    scoreList.filter((score) => score.role === 'clarifying' || score.role === 'useful_counterpoint').length,
+    clarificationRoleCount,
+    clarificationPrefixCount,
+    clarificationLikeCounterpointCount,
   );
 
   const threadSignalSummary: WriterThreadSignalSummary = {

@@ -526,4 +526,91 @@ describe('buildThreadStateForWriter', () => {
       'The visible thread still lacks direct sourcing or verifiable evidence for the claim.',
     );
   });
+
+  it('adds a clarification signal from counterpoint-like corrective text when clarificationsAdded is empty', () => {
+    const state: InterpolatorState = {
+      rootUri: 'at://root',
+      summaryText: '',
+      salientClaims: [],
+      salientContributors: [],
+      clarificationsAdded: [],
+      newAnglesAdded: [],
+      repetitionLevel: 0,
+      heatLevel: 0,
+      sourceSupportPresent: false,
+      perspectiveGaps: [],
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      replyScores: {},
+      entityLandscape: [],
+      topContributors: [],
+      evidencePresent: true,
+      factualSignalPresent: true,
+      lastTrigger: null,
+      triggerHistory: [],
+    };
+
+    const replies = [
+      makeReply({
+        uri: 'at://reply/counterpoint',
+        text: 'This looks narrower than the post: walk-ins ended, but appointments are still open next week.',
+        authorDid: 'did:plc:hours.one',
+        authorHandle: 'hours.one',
+        likeCount: 4,
+      }),
+    ];
+
+    const output = buildThreadStateForWriter(
+      'thread-clarification-fallback',
+      'Clinic stopped all boosters today.',
+      state,
+      {
+        'at://reply/counterpoint': {
+          uri: 'at://reply/counterpoint',
+          role: 'direct_response',
+          finalInfluenceScore: 0.66,
+          clarificationValue: 0.52,
+          sourceSupport: 0.22,
+          visibleChips: [],
+          factual: null,
+          usefulnessScore: 0.66,
+          abuseScore: 0,
+          evidenceSignals: [],
+          entityImpacts: [],
+          scoredAt: new Date().toISOString(),
+        },
+      },
+      replies,
+      {
+        surfaceConfidence: 0.72,
+        entityConfidence: 0.7,
+        interpretiveConfidence: 0.66,
+      },
+      undefined,
+      'clinic.watch',
+      {
+        summaryMode: 'normal',
+        deltaDecision: {
+          didMeaningfullyChange: true,
+          changeMagnitude: 0.64,
+          changeReasons: ['thread_direction_reversed'],
+          confidence: {
+            surfaceConfidence: 0.72,
+            entityConfidence: 0.7,
+            interpretiveConfidence: 0.66,
+          },
+          summaryMode: 'normal',
+          computedAt: '2026-05-03T22:04:00.000Z',
+        },
+      },
+    );
+
+    expect(output.whatChangedSignals).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('counterpoint:'),
+        expect.stringContaining('clarification:'),
+      ]),
+    );
+    expect(output.threadSignalSummary.clarificationsCount).toBeGreaterThan(0);
+  });
 });
