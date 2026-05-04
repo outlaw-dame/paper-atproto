@@ -9,6 +9,11 @@
 import { paperDB } from './db';
 import { embeddingPipeline, sanitizeForEmbedding } from './intelligence/embeddingPipeline';
 import {
+  buildSessionBrief,
+  intelligenceCoordinator,
+  type IntelligenceAdvice,
+} from './intelligence/coordinator';
+import {
   chooseIntelligenceLane,
   evaluateLocalSearchQuality,
   type DataScope,
@@ -26,6 +31,7 @@ import {
 } from './lib/media/extractMediaSignals';
 import { detectVisualIntent } from './lib/searchIntent';
 import { resolveHybridSearchRuntimeConfig } from './search/runtime';
+import { useRuntimeStore } from './runtime/runtimeStore';
 import { BackoffTimer, SEARCH_BACKOFF_CONFIG } from './lib/backoffStrategy';
 import { CircuitBreaker, DB_CIRCUIT_BREAKER_CONFIG, ConnectionHealthMonitor } from './lib/circuitBreaker';
 
@@ -44,6 +50,7 @@ interface SearchOptions {
   localSmallMlAvailable?: boolean;
   edgeAvailable?: boolean;
   localIndexCoverage?: number | null;
+  coordinatorAdvice?: IntelligenceAdvice | null;
 }
 
 interface CachedVector {
@@ -273,6 +280,47 @@ function buildSearchRoutingInput(input: {
   };
 }
 
+function isSearchCoordinatorAdviceUsable(
+  advice: Pick<IntelligenceAdvice, 'reasonCodes' | 'event'> | null | undefined,
+): boolean {
+  if (!advice) return false;
+  return advice.event.status !== 'stale_discarded'
+    && !advice.reasonCodes.includes('stale_source_token');
+}
+
+function mergeSearchRoutingWithCoordinatorAdvice(
+  localRouting: ReturnType<typeof chooseIntelligenceLane>,
+  coordinatorAdvice: IntelligenceAdvice,
+): ReturnType<typeof chooseIntelligenceLane> {
+  // Preserve local reason codes because search quality confidence and candidate
+  // coverage are only computed after rows are materialized.
+  if (localRouting.lane === coordinatorAdvice.lane) {
+    return localRouting;
+  }
+
+  // Never downgrade a quality-based edge reranker decision. Coordinator briefs
+  // for search do not currently include local quality metrics.
+  if (localRouting.lane === 'edge_reranker') {
+    return localRouting;
+  }
+
+  // Allow coordinator to escalate to edge reranker when local policy selected
+  // a lower lane.
+  if (coordinatorAdvice.lane === 'edge_reranker') {
+    return {
+      ...localRouting,
+      lane: 'edge_reranker',
+      fallbackLane: localRouting.fallbackLane ?? 'browser_small_ml',
+    };
+  }
+
+  return {
+    ...localRouting,
+    lane: coordinatorAdvice.lane,
+    fallbackLane: coordinatorAdvice.fallbackLane ?? localRouting.fallbackLane,
+  };
+}
+
 function finalizeSearchResult(
   result: any,
   rows: any[],
@@ -281,6 +329,7 @@ function finalizeSearchResult(
     task: IntelligenceTask;
     fallbackDataScope: DataScope;
     options: SearchOptions;
+    coordinatorAdvice?: IntelligenceAdvice | null;
   },
 ): any {
   const dataScope = input.options.dataScope ?? input.fallbackDataScope;
@@ -295,12 +344,16 @@ function finalizeSearchResult(
     options: input.options,
     localSearchQuality,
   }));
+  const coordinatorAdvice = input.coordinatorAdvice ?? input.options.coordinatorAdvice ?? null;
+  const resolvedRouting = isSearchCoordinatorAdviceUsable(coordinatorAdvice)
+    ? mergeSearchRoutingWithCoordinatorAdvice(intelligenceRouting, coordinatorAdvice)
+    : intelligenceRouting;
 
   return {
     ...result,
     rows,
     localSearchQuality,
-    intelligenceRouting,
+    intelligenceRouting: resolvedRouting,
   };
 }
 
@@ -351,6 +404,49 @@ export class HybridSearch {
 
   private get feedSemanticCandidateMultiplier(): number {
     return this.resolvedRuntimeConfig.feedSemanticCandidateMultiplier;
+  }
+
+  private async adviseSearchRouting(
+    task: IntelligenceTask,
+    dataScope: DataScope,
+    options: SearchOptions,
+    signal?: AbortSignal,
+  ): Promise<IntelligenceAdvice | null> {
+    if (options.coordinatorAdvice) {
+      return options.coordinatorAdvice;
+    }
+
+    try {
+      const runtime = useRuntimeStore.getState();
+      const privacyMode = options.privacyMode ?? defaultPrivacyModeForSearchScope(dataScope);
+      return await intelligenceCoordinator.adviseOnSearch(
+        buildSessionBrief({
+          surface: 'search',
+          intent: task,
+          scope: dataScope,
+          privacy: privacyMode,
+          capability: runtime.capability ?? undefined,
+          settingsMode: runtime.settingsMode,
+          freshness: { sourceToken: null },
+          textLength: 0,
+          estimatedPromptTokens: 0,
+          explicitUserAction: false,
+          hasSensitiveLocalData: dataScope === 'private_corpus' || dataScope === 'private_draft',
+          attachments: {
+            count: 0,
+            hasImages: false,
+            hasLinks: false,
+            hasCode: false,
+          },
+        }),
+        {
+          silentRouterAudit: true,
+          ...(signal ? { signal } : {}),
+        },
+      );
+    } catch {
+      return null;
+    }
   }
 
   private async withQueryTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
@@ -596,18 +692,33 @@ export class HybridSearch {
       LIMIT $2;
     `;
 
-    const result = await this.executeSemanticQuery(
-      sql,
-      [query, resolvedLimit, vectorStr, k],
-      semanticCandidateLimit,
-      'search',
-    );
+    const [queryResult, adviceResult] = await Promise.allSettled([
+      this.executeSemanticQuery(
+        sql,
+        [query, resolvedLimit, vectorStr, k],
+        semanticCandidateLimit,
+        'search',
+      ),
+      this.adviseSearchRouting(
+        'local_search',
+        resolvedOptions.dataScope ?? 'local_cache',
+        resolvedOptions,
+      ),
+    ]);
+    if (queryResult.status === 'rejected') {
+      throw queryResult.reason;
+    }
+    const result = queryResult.value;
+    const coordinatorAdvice = adviceResult.status === 'fulfilled'
+      ? adviceResult.value
+      : null;
     const rows = postProcessRows(result.rows ?? [], resolvedOptions);
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'local_search',
       fallbackDataScope: 'local_cache',
       options: resolvedOptions,
+      coordinatorAdvice,
     });
   }
 
@@ -708,18 +819,33 @@ export class HybridSearch {
       LIMIT $2;
     `;
 
-    const result = await this.executeSemanticQuery(
-      sql,
-      [query, resolvedLimit, vectorStr, k],
-      semanticCandidateLimit,
-      'searchAll',
-    );
+    const [queryResult, adviceResult] = await Promise.allSettled([
+      this.executeSemanticQuery(
+        sql,
+        [query, resolvedLimit, vectorStr, k],
+        semanticCandidateLimit,
+        'searchAll',
+      ),
+      this.adviseSearchRouting(
+        'public_search',
+        resolvedOptions.dataScope ?? 'public_corpus',
+        resolvedOptions,
+      ),
+    ]);
+    if (queryResult.status === 'rejected') {
+      throw queryResult.reason;
+    }
+    const result = queryResult.value;
+    const coordinatorAdvice = adviceResult.status === 'fulfilled'
+      ? adviceResult.value
+      : null;
     const rows = postProcessRows(result.rows ?? [], resolvedOptions);
     return finalizeSearchResult(result, rows, {
       limit: resolvedLimit,
       task: 'public_search',
       fallbackDataScope: 'public_corpus',
       options: resolvedOptions,
+      coordinatorAdvice,
     });
   }
 

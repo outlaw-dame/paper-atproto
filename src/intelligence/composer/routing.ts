@@ -164,6 +164,16 @@ export function isComposerWriterCoordinatorAuthorized(
   return advice.lane === 'server_writer';
 }
 
+export function isComposerRefineCoordinatorAuthorized(
+  advice: Pick<IntelligenceAdvice, 'lane' | 'reasonCodes' | 'event'> | null | undefined,
+): boolean {
+  if (!advice) return true;
+  if (advice.event.status === 'stale_discarded' || advice.reasonCodes.includes('stale_source_token')) {
+    return false;
+  }
+  return advice.lane === 'edge_classifier' || advice.lane === 'browser_experimental';
+}
+
 export function shouldReuseCachedComposerGuidance(
   mode: ComposerMode,
   draftText: string,

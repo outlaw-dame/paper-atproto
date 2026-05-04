@@ -11,6 +11,7 @@ import {
   getComposerWriterDebounceMs,
   hasComposerModelCoverage,
   hasComposerWriterCoverage,
+  isComposerRefineCoordinatorAuthorized,
   isComposerWriterCoordinatorAuthorized,
   shouldReuseCachedComposerGuidance,
   shouldRunComposerEdgeClassifierStageForDraft,
@@ -133,6 +134,36 @@ export function useComposerGuidance({
       }
 
       if (shouldRunEdgeClassifierStage) {
+        const refineAdvice = await intelligenceCoordinator.adviseOnComposer(
+          buildSessionBrief({
+            surface: 'composer',
+            intent: 'composer_refine',
+            capability: runtimeCapability ?? undefined,
+            settingsMode: runtimeSettingsMode,
+            sessionId: draftId,
+            freshness: {
+              sourceToken: contextFingerprint,
+            },
+            textLength: deferredContext.draftText.length,
+            estimatedPromptTokens: Math.ceil(deferredContext.draftText.length / 4),
+            explicitUserAction: false,
+            hasSensitiveLocalData: true,
+            attachments: {
+              count: 0,
+              hasImages: false,
+              hasLinks: false,
+              hasCode: false,
+            },
+          }),
+          {
+            signal: classifierAbort.signal,
+            silentRouterAudit: true,
+            expectedSourceToken: contextFingerprint,
+          },
+        ).catch(() => null);
+        if (requestIdRef.current !== requestId) return latestGuidance;
+        if (!isComposerRefineCoordinatorAuthorized(refineAdvice)) return latestGuidance;
+
         const result = await analyzeComposerGuidanceWithEdgeClassifier(
           deferredContext,
           latestGuidance,

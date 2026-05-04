@@ -220,6 +220,18 @@ function isCoordinatorAdviceStale(
     || advice.reasonCodes.includes('stale_source_token');
 }
 
+function isSupervisorHoldAllActive(
+  session: ConversationSession,
+  sourceToken: ReturnType<typeof buildConversationModelSourceToken>,
+): boolean {
+  const supervisor = session.interpretation.supervisor;
+  if (!supervisor) return false;
+  return Boolean(
+    supervisor.plannerHoldAll
+    && supervisor.plannerHoldAllSourceToken === sourceToken,
+  );
+}
+
 export function isConversationCoordinatorMediaAuthoritySatisfied(
   advice: Pick<IntelligenceAdvice, 'lane' | 'reasonCodes' | 'event'> | null | undefined,
 ): boolean {
@@ -310,6 +322,26 @@ function scheduleConversationSupervisorPlanning(params: {
           sessionId: params.sessionId,
           trigger: params.trigger,
           reasonCodes: plan.reasonCodes,
+        });
+
+        // Persist holdAll so downstream stage starts can gate synchronously.
+        store.updateSession(params.sessionId, (latest) => {
+          if (buildConversationModelSourceToken(latest) !== params.sourceToken) {
+            return latest;
+          }
+          const supervisor = latest.interpretation.supervisor;
+          if (!supervisor) return latest;
+          return {
+            ...latest,
+            interpretation: {
+              ...latest.interpretation,
+              supervisor: {
+                ...supervisor,
+                plannerHoldAll: true,
+                plannerHoldAllSourceToken: params.sourceToken,
+              },
+            },
+          };
         });
       }
     } catch {
@@ -745,6 +777,7 @@ type ConversationHydrationBaselineOutcome =
       allReplies: ThreadNode[];
       pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
       modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+      sessionCoordinatorAdvice: IntelligenceAdvice | null;
     }
   | { kind: 'thread_not_found' }
   | { kind: 'session_dropped' };
@@ -936,12 +969,12 @@ async function hydrateConversationBaseline(
   }
 
   const modelSourceToken = buildConversationModelSourceToken(nextSession);
-
-  void adviseConversationSessionCoordinator({
+  const sessionCoordinatorAdvice = await adviseConversationSessionCoordinator({
     session: nextSession,
     sourceToken: modelSourceToken,
     ...(signal ? { signal } : {}),
   });
+
   void planConversationSupervisorState(nextSession, {
     ...(signal ? { signal } : {}),
     decisionFeed: {
@@ -958,6 +991,7 @@ async function hydrateConversationBaseline(
     allReplies,
     pipeline,
     modelSourceToken,
+    sessionCoordinatorAdvice,
   };
 }
 
@@ -967,6 +1001,7 @@ interface ConversationWriterPreflightParams {
   pipeline: Awaited<ReturnType<typeof runVerifiedThreadPipeline>>;
   replyCount: number;
   modelSourceToken: ReturnType<typeof buildConversationModelSourceToken>;
+  coordinatorAdvice: IntelligenceAdvice | null;
 }
 
 type ConversationStageOutcome =
@@ -988,8 +1023,26 @@ type ConversationStageOutcome =
 function runConversationWriterPreflight(
   params: ConversationWriterPreflightParams,
 ): ConversationStageOutcome {
-  const { sessionId, session, pipeline, replyCount, modelSourceToken } = params;
+  const {
+    sessionId,
+    session,
+    pipeline,
+    replyCount,
+    modelSourceToken,
+    coordinatorAdvice,
+  } = params;
   const store = useConversationSessionStore.getState();
+
+  // Stale coordinator advice means source token drift between baseline and
+  // preflight; discard all model stages for this cycle.
+  if (coordinatorAdvice && isCoordinatorAdviceStale(coordinatorAdvice)) {
+    store.updateSession(sessionId, (current) => {
+      let next = markConversationModelDiscarded(current, 'writer');
+      next = markConversationModelDiscarded(next, 'multimodal');
+      return markConversationModelDiscarded(next, 'premium');
+    });
+    return { kind: 'short_circuit' };
+  }
 
   const interpolatorEnabled = useInterpolatorSettingsStore.getState().enabled;
   if (!interpolatorEnabled) {
@@ -1511,6 +1564,32 @@ async function runConversationPremiumStage(
       return;
     }
 
+    const sessionForSupervisorCheck = store.getSession(sessionId);
+    if (sessionForSupervisorCheck) {
+      const supervisor = sessionForSupervisorCheck.interpretation.supervisor;
+      const recommendations = supervisor?.currentRecommendations ?? [];
+      const hasSkipForCycle = recommendations.some((rec) => rec.type === 'skip_premium_for_cycle');
+      const hasHoldUntilFresh = recommendations.some((rec) => rec.type === 'hold_premium_until_fresh');
+      const hasMutationChurn = Boolean(supervisor?.lastDecision?.stateSummary?.hasMutationChurn);
+      const plannerHoldActive = isSupervisorHoldAllActive(sessionForSupervisorCheck, modelSourceToken);
+
+      if (hasSkipForCycle || (hasHoldUntilFresh && hasMutationChurn) || plannerHoldActive) {
+        store.updateSession(sessionId, (current) => (
+          applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
+            reason: 'insufficient_signal',
+            sourceToken: modelSourceToken,
+          }), 'premium_completed')
+        ));
+        scheduleConversationSupervisorPlanning({
+          sessionId,
+          sourceToken: modelSourceToken,
+          trigger: 'premium_completed',
+          ...(signal ? { signal } : {}),
+        });
+        return;
+      }
+    }
+
     store.updateSession(sessionId, (current) => ({
       ...current,
       interpretation: {
@@ -1616,6 +1695,12 @@ async function runConversationPremiumStage(
     }
 
     const deepInterpolator = premiumOutcome.result;
+    const sessionBeforePremiumCommit = store.getSession(sessionId);
+    if (!sessionBeforePremiumCommit) return;
+    if (selectCoordinatorSourceApplication(sessionBeforePremiumCommit, modelSourceToken, 'premium').action === 'discard_stale') {
+      store.updateSession(sessionId, (current) => markConversationModelDiscarded(current, 'premium'));
+      return;
+    }
     const sourceComputedAt = currentSession.interpretation.lastComputedAt;
 
     // Address Gemini PR #76 review: drop the unnecessary `{ ...(...) }`
@@ -1735,7 +1820,14 @@ export async function hydrateConversationSession(
     if (baseline.kind === 'session_dropped') {
       return;
     }
-    const { nextSession, rootNode, allReplies, pipeline, modelSourceToken } = baseline;
+    const {
+      nextSession,
+      rootNode,
+      allReplies,
+      pipeline,
+      modelSourceToken,
+      sessionCoordinatorAdvice,
+    } = baseline;
 
     const preflightOutcome = runConversationWriterPreflight({
       sessionId,
@@ -1743,6 +1835,7 @@ export async function hydrateConversationSession(
       pipeline,
       replyCount: allReplies.length,
       modelSourceToken,
+      coordinatorAdvice: sessionCoordinatorAdvice,
     });
     if (preflightOutcome.kind === 'short_circuit') {
       return;
@@ -1870,6 +1963,17 @@ export async function hydrateConversationSession(
           : markConversationModelDiscarded(current, 'writer')
       ));
       console.warn('[conversation] writer step failed', errorMessage);
+      return;
+    }
+
+    const sessionBeforePremium = store.getSession(sessionId);
+    if (sessionBeforePremium && isSupervisorHoldAllActive(sessionBeforePremium, modelSourceToken)) {
+      store.updateSession(sessionId, (current) => (
+        applyShadowConversationSupervisor(markConversationModelSkipped(current, 'premium', {
+          reason: 'insufficient_signal',
+          sourceToken: modelSourceToken,
+        }), 'premium_completed')
+      ));
       return;
     }
 

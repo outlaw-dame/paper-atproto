@@ -71,4 +71,11 @@ export interface ConversationSupervisorState {
   lastEvaluatedAt?: string;
   currentRecommendations: ConversationSupervisorAction[];
   lastDecision: ConversationSupervisorDecision | null;
+  /**
+   * Written by async planner scheduling when holdAll=true is returned.
+   * Allows subsequent stage starts to synchronously honor planner hold signals.
+   */
+  plannerHoldAll?: boolean;
+  /** Source token active when plannerHoldAll was last set. */
+  plannerHoldAllSourceToken?: string;
 }
