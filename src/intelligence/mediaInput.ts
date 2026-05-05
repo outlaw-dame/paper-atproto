@@ -248,8 +248,9 @@ export function selectMediaForAnalysis(
 
   // Overflow images — routed to a premium API vision model, not Qwen3-VL.
   if (overflowLimit > 0) {
+    let overflowAdded = 0;
     for (const reply of repliesWithMedia) {
-      if (requests.length - 2 >= overflowLimit) break; // cap at standard 2 + overflowLimit
+      if (overflowAdded >= overflowLimit) break;
       const media = extractPrimaryMedia(reply);
       const mediaUrl = media?.url ? sanitizeUrlForProcessing(media.url) : null;
       if (!mediaUrl || seenUrls.has(mediaUrl)) continue;
@@ -265,6 +266,7 @@ export function selectMediaForAnalysis(
       if (media?.alt) req.mediaAlt = sanitizeContextText(media.alt, 300);
       requests.push(req);
       seenUrls.add(mediaUrl);
+      overflowAdded += 1;
     }
   }
 

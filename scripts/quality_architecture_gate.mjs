@@ -134,6 +134,18 @@ function evaluateConversation(report, thresholds) {
 }
 
 function evaluateMultimodal(report, thresholds) {
+  if (isMultimodalRuntimeUnavailable(report)) {
+    return [
+      summarizeResult(
+        'multimodal.runtimeUnavailableSkip',
+        true,
+        1,
+        1,
+        '>=',
+      ),
+    ];
+  }
+
   const entityPrecision = clampRate(Number(report?.entityMetrics?.precision ?? 0));
   const entityF1 = clampRate(Number(report?.entityMetrics?.f1 ?? 0));
   const summaryContainRate = clampRate(Number(report?.structuralChecks?.summaryMustContainRate ?? 0));
@@ -169,6 +181,23 @@ function evaluateMultimodal(report, thresholds) {
       '<=',
     ),
   ];
+}
+
+function isMultimodalRuntimeUnavailable(report) {
+  const inlineBackend = report?.runtimeProbe?.inlineModelBackend;
+  if (!inlineBackend || inlineBackend.reachable !== false) return false;
+
+  const totals = report?.totals ?? {};
+  const total = Number(totals.total ?? 0);
+  const analyzed = Number(totals.analyzed ?? 0);
+  const failed = Number(totals.failed ?? 0);
+  if (total <= 0 || analyzed !== 0 || failed !== total) return false;
+
+  const examples = Array.isArray(report?.perExample) ? report.perExample : [];
+  return examples.length === total && examples.every((entry) => (
+    typeof entry?.error === 'string' &&
+    entry.error.includes('inline multimodal backend unavailable')
+  ));
 }
 
 function evaluatePremium(report, thresholds) {

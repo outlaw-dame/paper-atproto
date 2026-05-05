@@ -326,6 +326,79 @@ describe('selectMediaForAnalysis', () => {
     expect(requests[3]?.overflow).toBe(true);
   });
 
+  it('honors the overflow cap when fewer than two base images are selected', () => {
+    const baseReply = (uri: string, score: number) => ({
+      uri,
+      cid: `cid-${uri}`,
+      authorDid: `did:example:${uri}`,
+      authorHandle: `${uri.replace('at://', '')}.test`,
+      text: `Reply ${uri}`,
+      createdAt: new Date().toISOString(),
+      likeCount: 0,
+      replyCount: 0,
+      repostCount: 0,
+      facets: [],
+      embed: { kind: 'images', images: [{ url: `https://cdn.example.com/${uri.replace('at://', '')}.png`, alt: uri }] },
+      labels: [],
+      depth: 1,
+      replies: [],
+      score,
+    } as any);
+
+    const replies = [
+      baseReply('at://reply-overflow-1', 0.9),
+      baseReply('at://reply-overflow-2', 0.8),
+      baseReply('at://reply-overflow-3', 0.7),
+    ];
+    const scores = Object.fromEntries(replies.map((reply) => [reply.uri, {
+      uri: reply.uri,
+      role: 'source_bringer',
+      finalInfluenceScore: reply.score,
+      clarificationValue: 0.1,
+      sourceSupport: 0.7,
+      visibleChips: [],
+      factual: null,
+      usefulnessScore: reply.score,
+      abuseScore: 0.01,
+      evidenceSignals: [],
+      entityImpacts: [],
+      scoredAt: new Date().toISOString(),
+    }]));
+
+    const requests = selectMediaForAnalysis(
+      'thread-overflow-missing-root',
+      {
+        uri: 'at://root-without-safe-media',
+        cid: 'cid-root-without-safe-media',
+        authorDid: 'did:example:root-without-safe-media',
+        authorHandle: 'root-without-safe-media.test',
+        text: 'Root without media.',
+        createdAt: new Date().toISOString(),
+        likeCount: 0,
+        replyCount: 0,
+        repostCount: 0,
+        facets: [],
+        embed: undefined,
+        labels: [],
+        depth: 0,
+        replies: [],
+      } as any,
+      replies,
+      scores as any,
+      {
+        overflowImageLimit: 1,
+      },
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.overflow).toBeUndefined();
+    expect(requests[1]?.overflow).toBe(true);
+    expect(requests.map((entry) => entry.mediaUrl)).toEqual([
+      'https://cdn.example.com/reply-overflow-1.png',
+      'https://cdn.example.com/reply-overflow-2.png',
+    ]);
+  });
+
   it('derives bounded factual hints from source-heavy replies', () => {
     const hints = deriveMediaFactualHints(
       [
