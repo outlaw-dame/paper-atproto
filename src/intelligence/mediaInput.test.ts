@@ -170,7 +170,7 @@ describe('selectMediaForAnalysis', () => {
         },
         'at://reply-b': {
           uri: 'at://reply-b',
-          role: 'context_keeper',
+          role: 'unknown',
           finalInfluenceScore: 0.4,
           clarificationValue: 0.1,
           sourceSupport: 0.2,
@@ -295,7 +295,7 @@ describe('selectMediaForAnalysis', () => {
         },
         'at://reply-3': {
           uri: 'at://reply-3',
-          role: 'context_keeper',
+          role: 'unknown',
           finalInfluenceScore: 0.7,
           clarificationValue: 0.1,
           sourceSupport: 0.6,

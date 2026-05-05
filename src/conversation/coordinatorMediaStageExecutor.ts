@@ -107,7 +107,7 @@ export function planConversationCoordinatorMediaStage(
     {
       nearbyTextByUri: input.nearbyTextByUri,
       factualHints: deriveMediaFactualHints(input.replies, input.scores),
-      overflowImageLimit: input.overflowImageLimit,
+      ...(input.overflowImageLimit !== undefined ? { overflowImageLimit: input.overflowImageLimit } : {}),
     },
   );
 

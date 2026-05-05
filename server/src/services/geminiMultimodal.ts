@@ -217,15 +217,16 @@ function parseMediaResponse(raw: string, request: MediaRequest): MediaResponse {
   const modRaw = data.moderation && typeof data.moderation === 'object'
     ? (data.moderation as Record<string, unknown>)
     : null;
+  type Moderation = NonNullable<MediaResponse['moderation']>;
 
   const modAction = modRaw && typeof modRaw.action === 'string' && ALLOWED_MODERATION_ACTIONS.has(modRaw.action)
-    ? (modRaw.action as MediaResponse['moderation']['action'])
+    ? (modRaw.action as Moderation['action'])
     : 'none';
 
   const modCategories = modRaw && Array.isArray(modRaw.categories)
     ? (modRaw.categories as unknown[])
         .filter((c): c is string => typeof c === 'string' && ALLOWED_MODERATION_CATEGORIES.has(c))
-        .slice(0, 4) as Array<MediaResponse['moderation']['categories'][number]>
+        .slice(0, 4) as Array<Moderation['categories'][number]>
     : [];
 
   const modConfidence = Math.min(1, Math.max(0, Number(modRaw?.confidence) || 0));

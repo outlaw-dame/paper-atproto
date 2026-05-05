@@ -34,7 +34,7 @@ function RecentHandleDropdown({
         right: 0,
         zIndex: 200,
         marginTop: 6,
-        background: 'var(--surface)',
+        background: 'var(--material-raised)',
         border: '0.5px solid var(--sep)',
         borderRadius: 14,
         boxShadow: '0 8px 32px rgba(0,0,0,0.20)',
@@ -75,7 +75,8 @@ function RecentHandleDropdown({
               alignItems: 'center',
               gap: 10,
               width: '100%',
-              padding: '9px 12px',
+              padding: '10px 12px',
+              minHeight: 52,
               background: isSelected ? 'rgba(10,132,255,0.10)' : 'none',
               border: 'none',
               borderBottom: idx < suggestions.length - 1 ? '0.5px solid var(--sep)' : 'none',
@@ -233,11 +234,11 @@ export default function LoginScreen() {
   const canSubmit = identifier.trim().length > 0 && !isSubmitting;
 
   const getFieldStyle = (): React.CSSProperties => ({
-    padding: selectedRecent?.avatar ? '13px 16px 13px 48px' : '13px 16px',
-    minHeight: 52,
-    borderRadius: 14,
-    background: 'var(--surface)',
-    border: `0.5px solid ${focusedField === 'identifier' ? 'var(--sep-opaque)' : 'var(--sep)'}`,
+    padding: selectedRecent?.avatar ? '14px 16px 14px 50px' : '14px 16px',
+    minHeight: 54,
+    borderRadius: 16,
+    background: 'var(--material-raised)',
+    border: `0.5px solid ${focusedField === 'identifier' ? 'color-mix(in srgb, var(--blue) 45%, var(--sep-opaque))' : 'var(--sep)'}`,
     boxShadow: focusedField === 'identifier' ? '0 0 0 3px rgba(10,132,255,0.10)' : 'none',
     fontFamily: 'var(--font-ui)',
     fontSize: 16,
@@ -251,7 +252,7 @@ export default function LoginScreen() {
     appearance: 'none',
     WebkitAppearance: 'none',
     WebkitTextSizeAdjust: '100%',
-    transition: 'border-color 0.15s ease, box-shadow 0.15s ease, padding 0.15s ease',
+    transition: 'border-color 0.15s ease, box-shadow 0.15s ease, padding 0.15s ease, background 0.15s ease',
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -283,35 +284,45 @@ export default function LoginScreen() {
   return (
     <div style={{
       position: 'fixed', inset: 0,
-      background: 'var(--bg)',
+      background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg) 88%, var(--surface) 12%) 0%, var(--bg) 100%)',
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
-      padding: '0 24px',
+      padding: 'calc(var(--safe-top) + 28px) max(20px, var(--safe-right)) calc(var(--safe-bottom) + 28px) max(20px, var(--safe-left))',
       zIndex: 1000,
     }}>
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
-        style={{ width: '100%', maxWidth: 380 }}
+        style={{
+          width: '100%',
+          maxWidth: 430,
+          borderRadius: 30,
+          border: '0.33px solid color-mix(in srgb, var(--sep) 70%, transparent)',
+          background: 'var(--material-glass)',
+          backdropFilter: 'blur(28px) saturate(1.7)',
+          WebkitBackdropFilter: 'blur(28px) saturate(1.7)',
+          boxShadow: 'var(--chrome-shadow)',
+          padding: '28px 22px 22px',
+        }}
       >
         {/* Logo */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 40 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 28 }}>
           <div style={{
-            width: 72, height: 72, borderRadius: 22,
+            width: 76, height: 76, borderRadius: 24,
             background: 'linear-gradient(135deg, var(--blue) 0%, var(--indigo) 100%)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 8px 32px rgba(0,122,255,0.35)',
-            marginBottom: 16,
+            boxShadow: '0 16px 42px rgba(0,122,255,0.26), 0 1px 0 rgba(255,255,255,0.32) inset',
+            marginBottom: 18,
           }}>
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
               <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
             </svg>
           </div>
-          <h1 style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-headline-lg-size)', lineHeight: 'var(--type-ui-headline-lg-line)', fontWeight: 'var(--type-ui-headline-lg-weight)', letterSpacing: 'var(--type-ui-headline-lg-track)', color: 'var(--label-1)', marginBottom: 6 }}>Glimpse</h1>
-          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-sm-size)', lineHeight: 'var(--type-body-sm-line)', fontWeight: 'var(--type-body-sm-weight)', letterSpacing: 'var(--type-body-sm-track)', color: 'var(--label-3)', textAlign: 'center' }}>
-            Sign in with ATProto OAuth
+          <h1 style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-ui-headline-lg-size)', lineHeight: 'var(--type-ui-headline-lg-line)', fontWeight: 'var(--type-ui-headline-lg-weight)', letterSpacing: 'var(--type-ui-headline-lg-track)', color: 'var(--label-1)', marginBottom: 8 }}>Glimpse</h1>
+          <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-body-md-size)', lineHeight: 'var(--type-body-md-line)', fontWeight: 'var(--type-body-md-weight)', letterSpacing: 'var(--type-body-md-track)', color: 'var(--label-2)', textAlign: 'center', maxWidth: 310 }}>
+            Sign in to your open social account with a secure OAuth handoff.
           </p>
         </div>
 
@@ -326,8 +337,8 @@ export default function LoginScreen() {
                 htmlFor="login-identifier"
                 style={{
                   fontFamily: 'var(--font-ui)',
-                  fontSize: 'var(--type-label-lg-size)',
-                  lineHeight: 'var(--type-label-lg-line)',
+                  fontSize: 'var(--type-label-md-size)',
+                  lineHeight: 'var(--type-label-md-line)',
                   fontWeight: 700,
                   color: 'var(--label-2)',
                   letterSpacing: 'var(--type-label-lg-track)',
@@ -461,8 +472,8 @@ export default function LoginScreen() {
                   background: 'none',
                   border: 'none',
                   cursor: 'pointer',
-                  padding: '2px 0',
-                  minHeight: 24,
+                  padding: '0 2px',
+                  minHeight: 44,
                   appearance: 'none',
                   WebkitAppearance: 'none',
                   WebkitTextSizeAdjust: '100%',
@@ -556,11 +567,11 @@ export default function LoginScreen() {
               border: 'none', cursor: canSubmit ? 'pointer' : 'default',
               transition: 'background 0.15s, color 0.15s',
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              alignSelf: 'center',
-              width: 'fit-content',
+              alignSelf: 'stretch',
+              width: '100%',
               minWidth: isSubmitting ? 124 : 104,
               maxWidth: '100%',
-              minHeight: 44,
+              minHeight: 50,
               whiteSpace: 'nowrap',
               appearance: 'none',
               WebkitAppearance: 'none',
@@ -577,7 +588,7 @@ export default function LoginScreen() {
         </form>
 
         {/* Footer */}
-        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-4)', textAlign: 'center', marginTop: 24 }}>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 'var(--type-meta-sm-weight)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)', textAlign: 'center', marginTop: 22 }}>
           Glimpse connects to the open social network via OAuth. Your session stays bound to your device.
         </p>
       </motion.div>

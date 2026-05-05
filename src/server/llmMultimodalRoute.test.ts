@@ -25,7 +25,7 @@ const {
   envMock: {
     LLM_ENABLED: true,
     AI_SAFE_BROWSING_FAIL_CLOSED: false,
-    GEMINI_API_KEY: 'test-gemini-key',
+    GEMINI_API_KEY: 'test-gemini-key' as string | undefined,
   },
   mockRunMediaAnalyzer: vi.fn(),
   mockRunGeminiMediaAnalyzer: vi.fn(),

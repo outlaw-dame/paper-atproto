@@ -1,5 +1,4 @@
 import React from 'react';
-import Twemoji from 'react-twemoji';
 
 interface EmojiProps {
   children: React.ReactNode;
@@ -7,24 +6,19 @@ interface EmojiProps {
 }
 
 /**
- * A reusable component that renders emojis using Twemoji for cross-platform consistency.
- * It wraps the content and automatically replaces native emojis with Twemoji images.
+ * Renders text with the platform emoji font instead of image emoji.
+ *
+ * On Apple platforms this lets Safari/WebKit use Apple Color Emoji, which feels
+ * much closer to Messages, Notes, and other native iOS/macOS surfaces than
+ * Twemoji image replacement. Non-Apple platforms fall through to their native
+ * color emoji fonts.
  */
 export const Emoji: React.FC<EmojiProps> = ({ children, className }) => {
-  const TwemojiComponent =
-    (Twemoji as unknown as { default?: React.ComponentType<any> }).default
-    ?? (Twemoji as unknown as React.ComponentType<any>);
-
-  if (typeof TwemojiComponent !== 'function') {
-    return <>{children}</>;
-  }
-
   return (
-    <TwemojiComponent
-      tag="span"
-      options={{ className: `twemoji inline-block w-[1em] h-[1em] align-[-0.1em] mx-[0.05em] ${className || ''}` }}
+    <span
+      className={['emoji-native', className].filter(Boolean).join(' ')}
     >
       {children}
-    </TwemojiComponent>
+    </span>
   );
 };

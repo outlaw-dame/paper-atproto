@@ -29,7 +29,7 @@ const preprocessDiscordMarkdown = (content: string): string => {
 
 /**
  * A robust Markdown component that supports GFM and Discord-flavored features.
- * It includes security sanitization and integrates with the Twemoji component.
+ * It includes security sanitization and integrates with native emoji rendering.
  */
 export const Markdown: React.FC<MarkdownProps> = ({ content, className, onHashtag }) => {
   const processedContent = preprocessDiscordMarkdown(content);
@@ -40,7 +40,7 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, className, onHashta
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw, rehypeSanitize]}
         components={{
-          // Wrap text-bearing elements so emojis render consistently across platforms.
+          // Wrap text-bearing elements so emoji use the platform-native color font.
           p: ({ children }) => <p><Emoji>{children}</Emoji></p>,
           // Custom renderer for spoilers
           span: ({ node, className, children, ...props }) => {

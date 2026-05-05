@@ -18,7 +18,7 @@ import { atpCall, atpMutate } from '../lib/atproto/client';
 import { qk } from '../lib/atproto/queries';
 import { usePostFilterResults } from '../lib/contentFilters/usePostFilterResults';
 import { warnMatchReasons } from '../lib/contentFilters/presentation';
-import { usePlatform, getIconBtnTokens } from '../hooks/usePlatform';
+import { usePlatform } from '../hooks/usePlatform';
 import { useConversationBatchHydration } from '../conversation/sessionHydration';
 import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
 import { countNewPostsAboveAnchor } from '../lib/feedResume';
@@ -109,9 +109,8 @@ export default function HomeTab({ onOpenStory }: Props) {
   } = useUiStore();
   const translationPolicy = useTranslationStore((state) => state.policy);
   const platform = usePlatform();
-  const iconTokens = getIconBtnTokens(platform);
-  const navIconButtonSize = Math.max(28, iconTokens.size - 2);
-  const navIconGlyphSize = platform.prefersCoarsePointer ? 16 : 15;
+  const navIconButtonSize = 44;
+  const navIconGlyphSize = platform.prefersCoarsePointer ? 18 : 17;
   const qc = useQueryClient();
   const mode = homeFeedMode as Mode;
   const [posts, setPosts] = useState<MockPost[]>([]);
@@ -701,18 +700,20 @@ export default function HomeTab({ onOpenStory }: Props) {
       <div style={{
         flexShrink: 0,
         paddingTop: 'calc(var(--safe-top) + 12px)',
-        background: navScrolled ? 'var(--chrome-bg)' : 'transparent',
-        backdropFilter: navScrolled ? 'blur(24px) saturate(1.8)' : 'none',
-        WebkitBackdropFilter: navScrolled ? 'blur(24px) saturate(1.8)' : 'none',
+        background: navScrolled ? 'var(--chrome-bg)' : 'var(--chrome-bg-strong)',
+        backdropFilter: 'blur(24px) saturate(1.8)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
         borderBottom: navScrolled ? '0.33px solid var(--sep-chrome)' : '0.33px solid transparent',
-        transition: 'background 0.2s ease, border-color 0.2s ease',
-        willChange: 'background',
+        boxShadow: navScrolled ? 'var(--chrome-shadow)' : 'none',
+        transition: 'background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
+        willChange: 'background, box-shadow',
       }}>
-        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 10, minHeight: 48 }}>
           <div style={{
-            width: 32, height: 32, borderRadius: '50%', overflow: 'hidden',
+            width: 36, height: 36, borderRadius: '50%', overflow: 'hidden',
             background: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: '#fff', fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', fontWeight: 700, flexShrink: 0,
+            boxShadow: '0 0 0 0.5px color-mix(in srgb, var(--sep) 55%, transparent)',
           }}>
             {profile?.avatar
               ? <img src={profile.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -730,9 +731,11 @@ export default function HomeTab({ onOpenStory }: Props) {
                 width: navIconButtonSize,
                 height: navIconButtonSize,
                 borderRadius: '50%',
-                background: 'var(--fill-2)',
+                background: 'var(--control-fill)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'var(--label-1)', border: 'none', cursor: 'pointer',
+                color: 'var(--label-1)',
+                border: '0.33px solid color-mix(in srgb, var(--sep) 72%, transparent)',
+                cursor: 'pointer',
               }}
             >
               <svg width={navIconGlyphSize} height={navIconGlyphSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -766,7 +769,7 @@ export default function HomeTab({ onOpenStory }: Props) {
           <div style={{
             display: 'flex',
             overflowX: 'auto',
-            gap: 6,
+            gap: 8,
             padding: '0 16px 10px',
             scrollbarWidth: 'none',
             msOverflowStyle: 'none',
@@ -780,16 +783,17 @@ export default function HomeTab({ onOpenStory }: Props) {
                 }}
                 style={{
                   flexShrink: 0,
-                  minHeight: 30,
-                  padding: '0 14px',
+                  minHeight: 44,
+                  padding: '0 16px',
                   borderRadius: 100,
                   fontFamily: 'var(--font-ui)', fontSize: '14px', lineHeight: '18px',
                   fontWeight: mode === 'Following' ? 700 : 500,
                   color: mode === 'Following' ? '#fff' : 'var(--label-1)',
-                  background: mode === 'Following' ? 'var(--blue)' : 'var(--fill-2)',
-                  border: 'none',
+                  background: mode === 'Following' ? 'var(--blue)' : 'var(--control-fill)',
+                  border: mode === 'Following' ? '0.33px solid var(--blue)' : '0.33px solid color-mix(in srgb, var(--sep) 65%, transparent)',
                   cursor: 'pointer',
                   transition: 'all 0.15s',
+                  boxShadow: mode === 'Following' ? '0 8px 20px rgba(0,122,255,0.18)' : 'none',
                   position: 'relative',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                 }}
@@ -843,12 +847,12 @@ export default function HomeTab({ onOpenStory }: Props) {
                   }}
                   style={{
                     flexShrink: 0,
-                    minHeight: 30,
-                    padding: '0 10px',
+                    minHeight: 44,
+                    padding: '0 14px',
                     borderRadius: 999,
-                    border: 'none',
+                    border: isSelected ? '0.33px solid var(--blue)' : '0.33px solid color-mix(in srgb, var(--sep) 65%, transparent)',
                     cursor: 'pointer',
-                    background: isSelected ? 'var(--blue)' : 'var(--fill-2)',
+                    background: isSelected ? 'var(--blue)' : 'var(--control-fill)',
                     color: isSelected ? '#fff' : 'var(--label-1)',
                     fontFamily: 'var(--font-ui)',
                     fontSize: 12,
@@ -857,6 +861,7 @@ export default function HomeTab({ onOpenStory }: Props) {
                     alignItems: 'center',
                     gap: 6,
                     transition: 'all 0.15s',
+                    boxShadow: isSelected ? '0 8px 20px rgba(0,122,255,0.18)' : 'none',
                     position: 'relative',
                   }}
                 >

@@ -13,6 +13,10 @@ function formatModelId(model: AiModelBinding['id']): string {
       return 'Deterministic policy';
     case 'functiongemma_270m':
       return 'FunctionGemma 270M';
+    case 'cf_llama_3_1_8b_instruct':
+      return 'Cloudflare Llama 3.1 8B';
+    case 'cf_llama_3_3_70b_instruct':
+      return 'Cloudflare Llama 3.3 70B';
     case 'smollm2_1_7b':
       return 'SmolLM2 1.7B';
     case 'gemma4_e2b':
@@ -34,6 +38,8 @@ function formatRuntime(runtime: AiModelBinding['runtime']): string {
       return 'WebLLM';
     case 'litert':
       return 'LiteRT';
+    case 'workers_ai':
+      return 'Workers AI';
   }
 }
 

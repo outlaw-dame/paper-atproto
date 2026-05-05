@@ -552,10 +552,15 @@ llmRouter.post('/analyze/media/premium', async (c) => {
   }
 
   try {
-    const result = await withCircuitProtection(c, 'media', () => runGeminiMediaAnalyzer({
-      ...prepared.data,
+    const geminiRequest = {
+      threadId: prepared.data.threadId,
       mediaUrl: sanitizedMediaUrl,
-    }));
+      nearbyText: prepared.data.nearbyText,
+      candidateEntities: prepared.data.candidateEntities,
+      factualHints: prepared.data.factualHints,
+      ...(prepared.data.mediaAlt !== undefined ? { mediaAlt: prepared.data.mediaAlt } : {}),
+    };
+    const result = await withCircuitProtection(c, 'media', () => runGeminiMediaAnalyzer(geminiRequest));
     const { data: filtered, safetyMetadata } = finalizeLlmOutput(
       MediaResponseSchema,
       result,

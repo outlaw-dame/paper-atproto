@@ -1,7 +1,10 @@
 import React from 'react';
-import { detectAppleEnhancementAvailability } from '../apple/availability';
 import { initializeCloudKit } from '../apple/cloudkit/auth';
 import { hydrateMirroredPreferences } from '../apple/cloudkit/mirror/preferenceMirror';
+import {
+  createPlatformCapabilitySnapshot,
+  shouldEnableAppleEnhancements,
+} from '../platform/capabilities';
 import { useAppleEnhancementStore } from '../store/appleEnhancementStore';
 import { useSessionStore } from '../store/sessionStore';
 
@@ -41,7 +44,13 @@ export default function AppleEnhancementBridge() {
   const retryTimerRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
-    setAvailability(detectAppleEnhancementAvailability());
+    const snapshot = createPlatformCapabilitySnapshot();
+    setAvailability(shouldEnableAppleEnhancements(snapshot)
+      ? snapshot.apple
+      : {
+          ...snapshot.apple,
+          cloudKitJsAvailable: false,
+        });
   }, [setAvailability]);
 
   React.useEffect(() => {
