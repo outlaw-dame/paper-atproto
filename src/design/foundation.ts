@@ -61,20 +61,20 @@ export const blur = {
 // ─── Type scale ───────────────────────────────────────────────────────────
 // Format: [fontSize, lineHeight, fontWeight, letterSpacing]
 export const type = {
-  displayXl: [40, 44, 700, '-0.03em'],
-  displayLg: [34, 38, 700, '-0.025em'],
-  titleXl:   [28, 32, 700, '-0.02em'],
-  titleLg:   [24, 29, 700, '-0.015em'],
-  titleMd:   [20, 24, 600, '-0.01em'],
-  titleSm:   [18, 22, 600, '-0.005em'],
+  displayXl: [40, 44, 700, '0'],
+  displayLg: [34, 38, 700, '0'],
+  titleXl:   [28, 32, 700, '0'],
+  titleLg:   [24, 29, 700, '0'],
+  titleMd:   [20, 24, 600, '0'],
+  titleSm:   [18, 22, 600, '0'],
   bodyLg:    [18, 28, 400, '0'],
   bodyMd:    [17, 27, 400, '0'],
   bodySm:    [15, 22, 400, '0'],
   metaLg:    [13, 18, 500, '0.01em'],
   metaSm:    [12, 16, 500, '0.02em'],
   chip:      [14, 18, 600, '0'],
-  buttonLg:  [18, 22, 600, '-0.01em'],
-  buttonMd:  [16, 20, 600, '-0.005em'],
+  buttonLg:  [18, 22, 600, '0'],
+  buttonMd:  [16, 20, 600, '0'],
 } as const;
 
 // ─── Neutral colors — light ───────────────────────────────────────────────

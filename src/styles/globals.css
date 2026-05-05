@@ -22,13 +22,21 @@ html {
   overscroll-behavior: none;
 }
 
-/* Twemoji inline emoji sizing */
+/* Native emoji rendering: Apple Color Emoji on Apple platforms, system fallbacks elsewhere. */
+.emoji-native {
+  font-family:
+    var(--font-ui),
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Noto Color Emoji",
+    sans-serif;
+  font-variant-emoji: emoji;
+}
+
+.emoji-native img.twemoji,
 img.twemoji {
-  display: inline-block;
-  width: 1em;
-  height: 1em;
-  vertical-align: -0.1em;
-  margin: 0 0.05em;
+  display: none;
 }
 
 body {
@@ -41,6 +49,12 @@ body {
   font-size: var(--type-body-md-size);
   line-height: var(--type-body-md-line);
   letter-spacing: var(--type-body-md-track);
+}
+
+@supports (min-height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
 }
 
 #root {
@@ -96,7 +110,7 @@ a {
 }
 
 /* ─── Android Material Design 3 state layer ─────────────────────────────────
- * Applied only when AndroidEnhancementBridge detects Android Chrome and sets
+ * Applied only when PlatformCapabilityBridge detects Android Chrome and sets
  * data-platform="android" on document.body.
  *
  * Uses a CSS-only centered ripple via ::after to match Material Design's
@@ -142,11 +156,6 @@ a {
 
 /* Replace the generic opacity-fade active state on Android with the ripple.
  * The ripple itself provides sufficient feedback; stacking both looks wrong. */
-[data-platform="android"] button:active {
-  opacity: 1;
-  transition: none;
-}
-
 [data-platform="android"] button:active {
   opacity: 1;
   transition: none;
@@ -252,6 +261,12 @@ a { text-decoration: none; color: inherit; }
   --cyan:            #32ADE6;
 
   --chrome-bg:       rgba(249,249,249,0.92);
+  --chrome-bg-strong: rgba(255,255,255,0.78);
+  --chrome-shadow:   0 1px 0 rgba(255,255,255,0.65) inset, 0 12px 32px rgba(31,35,43,0.08);
+  --material-glass:  color-mix(in srgb, var(--surface) 82%, transparent);
+  --material-raised: color-mix(in srgb, var(--surface) 94%, var(--fill-3) 6%);
+  --control-fill:    color-mix(in srgb, var(--fill-2) 78%, var(--surface) 22%);
+  --hit-target-min:  44px;
 
   /* ── Semantic aliases used by feed/card components ── */
   --surface-card:    var(--surface);
@@ -279,84 +294,84 @@ a { text-decoration: none; color: inherit; }
   --type-editorial-display-xl-size:   44px;
   --type-editorial-display-xl-line:   46px;
   --type-editorial-display-xl-weight: 600;
-  --type-editorial-display-xl-track:  -0.03em;
+  --type-editorial-display-xl-track:  0;
 
   --type-editorial-display-lg-size:   38px;
   --type-editorial-display-lg-line:   42px;
   --type-editorial-display-lg-weight: 600;
-  --type-editorial-display-lg-track:  -0.028em;
+  --type-editorial-display-lg-track:  0;
 
   --type-editorial-display-md-size:   32px;
   --type-editorial-display-md-line:   36px;
   --type-editorial-display-md-weight: 600;
-  --type-editorial-display-md-track:  -0.024em;
+  --type-editorial-display-md-track:  0;
 
   --type-editorial-title-lg-size:     28px;
   --type-editorial-title-lg-line:     32px;
   --type-editorial-title-lg-weight:   600;
-  --type-editorial-title-lg-track:    -0.02em;
+  --type-editorial-title-lg-track:  0;
 
   --type-editorial-title-md-size:     24px;
   --type-editorial-title-md-line:     29px;
   --type-editorial-title-md-weight:   600;
-  --type-editorial-title-md-track:    -0.018em;
+  --type-editorial-title-md-track:  0;
 
   --type-editorial-title-sm-size:     20px;
   --type-editorial-title-sm-line:     25px;
   --type-editorial-title-sm-weight:   600;
-  --type-editorial-title-sm-track:    -0.015em;
+  --type-editorial-title-sm-track:  0;
 
   /* ── UI / product scale (Plus Jakarta Sans) ── */
   --type-ui-headline-xl-size:   34px;
   --type-ui-headline-xl-line:   38px;
   --type-ui-headline-xl-weight: 700;
-  --type-ui-headline-xl-track:  -0.025em;
+  --type-ui-headline-xl-track:  0;
 
   --type-ui-headline-lg-size:   28px;
   --type-ui-headline-lg-line:   32px;
   --type-ui-headline-lg-weight: 700;
-  --type-ui-headline-lg-track:  -0.02em;
+  --type-ui-headline-lg-track:  0;
 
   --type-ui-headline-md-size:   24px;
   --type-ui-headline-md-line:   29px;
   --type-ui-headline-md-weight: 700;
-  --type-ui-headline-md-track:  -0.018em;
+  --type-ui-headline-md-track:  0;
 
   --type-ui-title-lg-size:   20px;
   --type-ui-title-lg-line:   24px;
   --type-ui-title-lg-weight: 700;
-  --type-ui-title-lg-track:  -0.015em;
+  --type-ui-title-lg-track:  0;
 
   --type-ui-title-md-size:   18px;
   --type-ui-title-md-line:   22px;
   --type-ui-title-md-weight: 600;
-  --type-ui-title-md-track:  -0.012em;
+  --type-ui-title-md-track:  0;
 
   --type-ui-title-sm-size:   16px;
   --type-ui-title-sm-line:   20px;
   --type-ui-title-sm-weight: 600;
-  --type-ui-title-sm-track:  -0.01em;
+  --type-ui-title-sm-track:  0;
 
   /* ── Body scale (Plus Jakarta Sans) ── */
   --type-body-xl-size:   20px;
   --type-body-xl-line:   31px;
   --type-body-xl-weight: 400;
-  --type-body-xl-track:  -0.01em;
+  --type-body-xl-track:  0;
 
   --type-body-lg-size:   18px;
   --type-body-lg-line:   29px;
   --type-body-lg-weight: 400;
-  --type-body-lg-track:  -0.008em;
+  --type-body-lg-track:  0;
 
   --type-body-md-size:   17px;
   --type-body-md-line:   27px;
   --type-body-md-weight: 400;
-  --type-body-md-track:  -0.022em;
+  --type-body-md-track:  0;
 
   --type-body-sm-size:   15px;
   --type-body-sm-line:   23px;
   --type-body-sm-weight: 400;
-  --type-body-sm-track:  -0.012em;
+  --type-body-sm-track:  0;
 
   /* ── Label scale (Plus Jakarta Sans) ── */
   --type-label-lg-size:   15px;
@@ -419,6 +434,11 @@ a { text-decoration: none; color: inherit; }
     --cyan:            #5AC8F5;
 
     --chrome-bg:       rgba(28,28,30,0.92);
+    --chrome-bg-strong: rgba(28,28,30,0.78);
+    --chrome-shadow:   0 1px 0 rgba(255,255,255,0.06) inset, 0 16px 44px rgba(0,0,0,0.32);
+    --material-glass:  color-mix(in srgb, var(--surface) 78%, transparent);
+    --material-raised: color-mix(in srgb, var(--surface) 92%, white 4%);
+    --control-fill:    color-mix(in srgb, var(--fill-2) 86%, var(--surface) 14%);
 
     /* ── Semantic aliases — dark overrides ── */
     --surface-card:    var(--surface);
@@ -687,7 +707,7 @@ a { text-decoration: none; color: inherit; }
   margin: 1.25em 0 0.55em;
   font-family: var(--font-editorial);
   line-height: 1.2;
-  letter-spacing: -0.012em;
+  letter-spacing: 0;
 }
 
 .story-article-markdown h1 { font-size: 1.45em; }
@@ -751,7 +771,9 @@ a { text-decoration: none; color: inherit; }
 /* ─── Reduced motion ─── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
   }
 }

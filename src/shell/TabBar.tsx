@@ -56,6 +56,7 @@ const tabBarBaseStyle: React.CSSProperties = {
   WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
   // Hairline separator at 0.33px (= 1px at 3× Retina) per Apple HIG
   borderTop: '0.33px solid var(--sep-chrome)',
+  boxShadow: 'var(--chrome-shadow)',
   paddingBottom: 'var(--safe-bottom)',
   // Landscape safe areas: iPhone notch appears on left/right in landscape
   paddingLeft: 'var(--safe-left, 0px)',
@@ -77,10 +78,10 @@ export default function TabBar({ hidden = false }: TabBarProps) {
   const tabBtnStyle = React.useMemo<React.CSSProperties>(() => ({
     flex: 1, display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
-    paddingTop: platform.prefersCoarsePointer ? 10 : 8,
-    paddingBottom: platform.prefersCoarsePointer ? 8 : 6,
+    paddingTop: platform.prefersCoarsePointer ? 11 : 9,
+    paddingBottom: platform.prefersCoarsePointer ? 9 : 7,
     gap: 3,
-    minHeight: platform.prefersCoarsePointer ? 56 : 50,
+    minHeight: platform.prefersCoarsePointer ? 62 : 54,
     cursor: 'pointer',
     border: 'none', background: 'none',
     WebkitTapHighlightColor: 'transparent',
@@ -122,9 +123,10 @@ export default function TabBar({ hidden = false }: TabBarProps) {
               {active && (
                 <div style={{
                   position: 'absolute',
-                  inset: '-4px -10px',
-                  background: 'rgba(0, 122, 255, 0.11)',
-                  borderRadius: 16,
+                  inset: '-5px -12px',
+                  background: 'color-mix(in srgb, var(--blue) 14%, transparent)',
+                  border: '0.33px solid color-mix(in srgb, var(--blue) 18%, transparent)',
+                  borderRadius: 18,
                   pointerEvents: 'none',
                 }} />
               )}
@@ -155,7 +157,7 @@ export default function TabBar({ hidden = false }: TabBarProps) {
                   </span>
                 )}
               </div>
-              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, lineHeight: '13px', fontWeight: active ? 600 : 500, letterSpacing: '0.002em', color: active ? 'var(--blue)' : 'var(--label-2)', userSelect: 'none', WebkitUserSelect: 'none', position: 'relative' }}>
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11, lineHeight: '14px', fontWeight: active ? 650 : 500, letterSpacing: 0, color: active ? 'var(--blue)' : 'var(--label-2)', userSelect: 'none', WebkitUserSelect: 'none', position: 'relative' }}>
                 {label}
               </span>
             </div>

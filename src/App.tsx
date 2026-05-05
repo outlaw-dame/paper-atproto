@@ -20,6 +20,7 @@ import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge';
 import PlatformBanners from './shell/PlatformBanners';
 import BadgeSyncBridge from './components/BadgeSyncBridge';
 import PushLifecycleBridge from './components/PushLifecycleBridge';
+import PlatformCapabilityBridge from './components/PlatformCapabilityBridge';
 import AppleEnhancementBridge from './components/AppleEnhancementBridge';
 import AndroidEnhancementBridge from './components/AndroidEnhancementBridge';
 import { lazyWithRetry } from './lib/lazyWithRetry';
@@ -214,6 +215,7 @@ export default function App() {
       <PlatformBanners />
       <AppRuntimeBoundary>
         <AtpProvider>
+          <PlatformCapabilityBridge />
           <BadgeSyncBridge />
           <PushLifecycleBridge />
           <AppleEnhancementBridge />
@@ -261,25 +263,25 @@ function FloatingComposeFab({ onCompose, onPromptComposer }: { onCompose: () => 
       aria-label="Compose (hold for Discussion)"
       style={{
         position: 'absolute',
-        bottom: 20,
-        right: 16,
+        bottom: 16,
+        right: 'calc(var(--safe-right) + 16px)',
         zIndex: 50,
         // Pill shape with frosted surface — low visual weight
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        width: 44, height: 44,
+        width: 52, height: 52,
         borderRadius: '50%',
-        background: 'var(--chrome-bg)',
+        background: 'color-mix(in srgb, var(--blue) 94%, white 6%)',
         backdropFilter: 'blur(24px) saturate(1.8)',
         WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-        border: '0.33px solid var(--sep-chrome)',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.16), 0 1px 4px rgba(0,0,0,0.10)',
+        border: '0.33px solid color-mix(in srgb, #fff 28%, var(--blue) 72%)',
+        boxShadow: '0 12px 30px rgba(0,122,255,0.28), 0 4px 12px rgba(0,0,0,0.14)',
         cursor: 'pointer',
         WebkitTapHighlightColor: 'transparent',
-        transition: 'opacity 0.15s',
+        transition: 'opacity 0.15s, transform 0.15s, box-shadow 0.15s',
       }}
     >
       {/* Pencil / compose icon */}
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--label-1)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2.05} strokeLinecap="round" strokeLinejoin="round">
         <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
         <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
       </svg>
@@ -407,7 +409,26 @@ function AppShell() {
   if (!session) return <LoginScreen />;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: 'var(--bg)', overflow: 'hidden' }}>
+    <div style={{
+      width: '100%',
+      height: '100%',
+      background: 'color-mix(in srgb, var(--bg) 92%, var(--surface) 8%)',
+      overflow: 'hidden',
+      display: 'flex',
+      justifyContent: 'center',
+    }}>
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      width: 'min(100%, 720px)',
+      height: '100%',
+      background: 'var(--bg)',
+      overflow: 'hidden',
+      position: 'relative',
+      borderLeft: '0.33px solid color-mix(in srgb, var(--sep) 45%, transparent)',
+      borderRight: '0.33px solid color-mix(in srgb, var(--sep) 45%, transparent)',
+      boxShadow: '0 0 0 1px color-mix(in srgb, var(--sep) 18%, transparent), 0 24px 80px rgba(0,0,0,0.10)',
+    }}>
       {/* Lazily mount ATProto timed mute watcher only after authenticated app shell is visible */}
       <LazyModuleBoundary resetKey={`watcher:${shellRetryKey}`}>
         <Suspense fallback={null}>
@@ -474,6 +495,7 @@ function AppShell() {
           <OverlayHost />
         </Suspense>
       </LazyModuleBoundary>
+    </div>
     </div>
   );
 }
