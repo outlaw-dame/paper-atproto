@@ -35,7 +35,7 @@ function createContract() {
 function snapshot(params: Partial<Parameters<typeof decideEnhancerQualityFallback>[0]['snapshot']> = {}) {
   return {
     status: 'succeeded' as const,
-    routeId: 'model:qwen3_4b' as CoordinationRouteId,
+    routeId: 'model:phi4_mini' as CoordinationRouteId,
     qualityScore: 0.9,
     startedAtEpochMs: 1_000,
     completedAtEpochMs: 1_500,
@@ -56,7 +56,7 @@ describe('decideEnhancerQualityFallback', () => {
     expect(result.action).toBe('accept_current');
     expect(result.reason).toBe('quality_acceptable');
     expect(result.retryAllowed).toBe(false);
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
+    expect(result.selectedRouteId).toBe('model:phi4_mini');
   });
 
   it('retries the same route when quality is low but retryable', () => {
@@ -69,7 +69,7 @@ describe('decideEnhancerQualityFallback', () => {
     expect(result.action).toBe('retry_same_route');
     expect(result.reason).toBe('quality_below_threshold');
     expect(result.retryAllowed).toBe(true);
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
+    expect(result.selectedRouteId).toBe('model:phi4_mini');
   });
 
   it('falls back when quality is too low to retry', () => {

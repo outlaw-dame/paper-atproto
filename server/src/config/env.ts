@@ -5,7 +5,8 @@ const EnvSchema = z.object({
 
   // ── LLM / Ollama ─────────────────────────────────────────────────────────
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
-  QWEN_WRITER_MODEL: z.string().default('qwen3:4b-instruct-2507-q4_K_M'),
+  QWEN_WRITER_MODEL: z.string().default('phi4-mini:latest'),
+  GEMMA_WRITER_MODELS: z.string().default(''),
   QWEN_MULTIMODAL_MODEL: z.string().default('qwen3-vl:4b-instruct-q4_K_M'),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   LLM_MEDIA_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
@@ -29,6 +30,7 @@ const EnvSchema = z.object({
   ),
   LLM_STARTUP_TIMEOUT_MS: z.coerce.number().int().positive().default(6_000),
   QWEN_WRITER_MODEL_DIGEST: z.string().optional(),
+  GEMMA_WRITER_MODEL_DIGESTS: z.string().optional(),
   QWEN_MULTIMODAL_MODEL_DIGEST: z.string().optional(),
   LLM_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
@@ -51,6 +53,7 @@ const EnvSchema = z.object({
   GEMINI_INTERPOLATOR_ENHANCER_MODEL: z.string().default('gemini-3-flash-preview'),
   GEMINI_INTERPOLATOR_ENHANCER_FALLBACK_MODELS: z.string().default('gemini-2.5-flash'),
   OPENAI_INTERPOLATOR_ENHANCER_MODEL: z.string().default('gpt-5.4'),
+  GEMINI_MULTIMODAL_MODEL: z.string().default('gemini-2.0-flash'),
   GEMINI_COMPOSER_ENABLED: z.preprocess(
     (v) => (typeof v === 'boolean' ? String(v) : v),
     z.string().optional().transform((v) => v === 'true').default('false'),

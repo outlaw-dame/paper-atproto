@@ -131,6 +131,52 @@ describe('qwenWriter', () => {
     expect(diagnostics.enhancer?.appliedTakeovers?.total).toBe(0);
   });
 
+  it('can run an explicitly selected local writer model with enhancer disabled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn(async () => ({
+        message: {
+          role: 'assistant',
+          content: '{"collapsedSummary":"Gemma summary cites @author.test.","whatChanged":[],"contributorBlurbs":[],"abstained":false,"mode":"normal"}',
+        },
+        done: true,
+      })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runInterpolatorWriter } = await import('./qwenWriter.js');
+    const result = await runInterpolatorWriter({
+      threadId: 'thread-gemma',
+      summaryMode: 'normal',
+      confidence: {
+        surfaceConfidence: 0.8,
+        entityConfidence: 0.8,
+        interpretiveConfidence: 0.8,
+      },
+      rootPost: {
+        uri: 'at://post/gemma',
+        handle: 'author.test',
+        text: 'A local writer comparison is needed.',
+        createdAt: new Date().toISOString(),
+      },
+      selectedComments: [],
+      topContributors: [],
+      safeEntities: [],
+      factualHighlights: [],
+      whatChangedSignals: [],
+    }, {
+      localModel: { id: 'gemma4:e2b', label: 'gemma-e2b' },
+      enhancer: { enabled: false },
+    });
+
+    expect(result.collapsedSummary).toBe('Gemma summary cites @author.test.');
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(requestInit.body)) as { model: string };
+    expect(body.model).toBe('gemma4:e2b');
+    expect(reviewInterpolatorWriterMock).not.toHaveBeenCalled();
+  });
+
   it('lets the remote enhancer replace a weak but valid Qwen result', async () => {
     const { getWriterDiagnostics, resetWriterDiagnostics } = await import('../llm/writerDiagnostics.js');
     resetWriterDiagnostics();

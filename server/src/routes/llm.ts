@@ -12,6 +12,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { runInterpolatorWriter } from '../services/qwenWriter.js';
 import { runMediaAnalyzer } from '../services/qwenMultimodal.js';
+import { runGeminiMediaAnalyzer } from '../services/geminiMultimodal.js';
 import { runComposerGuidanceWriter } from '../services/qwenComposerGuidanceWriter.js';
 import { env } from '../config/env.js';
 import {
@@ -505,6 +506,98 @@ llmRouter.post('/analyze/media', async (c) => {
   }
 });
 
+// ─── POST /analyze/media/premium ───────────────────────────────────────────
+
+llmRouter.post('/analyze/media/premium', async (c) => {
+  if (!env.LLM_ENABLED) return mediaLlmDisabled(c);
+  if (!env.GEMINI_API_KEY) {
+    return c.json({ error: 'Premium media analysis unavailable' }, 503);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const requestId = requestIdFromContext(c);
+  let prepared: { data: z.infer<typeof MediaRequestSchema> };
+  try {
+    prepared = prepareLlmInput(MediaRequestSchema, body, {
+      task: 'media',
+      requestId,
+    });
+    enforceNoToolsAuthorized({
+      task: 'media',
+      requestId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return c.json({ error: error.message, issues: validationIssues(error) }, 400);
+    }
+    throw error;
+  }
+
+  const sanitizedMediaUrl = sanitizeRemoteProcessingUrl(prepared.data.mediaUrl);
+  if (!sanitizedMediaUrl) {
+    return c.json({ error: 'Unsafe media URL' }, 400);
+  }
+
+  const safeBrowsingVerdict = await checkUrlAgainstSafeBrowsing(sanitizedMediaUrl);
+  if (shouldBlockSafeBrowsingVerdict(safeBrowsingVerdict)) {
+    return c.json({
+      error: safeBrowsingVerdict.reason ?? 'Media URL blocked by Google Safe Browsing.',
+    }, 400);
+  }
+
+  try {
+    const result = await withCircuitProtection(c, 'media', () => runGeminiMediaAnalyzer({
+      ...prepared.data,
+      mediaUrl: sanitizedMediaUrl,
+    }));
+    const { data: filtered, safetyMetadata } = finalizeLlmOutput(
+      MediaResponseSchema,
+      result,
+      {
+        task: 'media',
+        requestId,
+      },
+      {
+        filter: (value) => filterMediaAnalyzerResponse({ ...value }) as any,
+      },
+    );
+    const safety = safetyMetadata ?? {
+      passed: true,
+      flagged: false,
+      categories: [],
+      severity: 'none',
+      filtered: '',
+    };
+    logSafetyFlag('[llm/analyze/media/premium]', safety);
+    if (!safety.passed) {
+      return c.json(degradedMediaAnalyzerPayload());
+    }
+    return c.json(filtered);
+  } catch (err: unknown) {
+    if (err instanceof CircuitOpenError) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+      c.header('Retry-After', String(retryAfterSeconds));
+      return c.json({
+        error: 'Premium media analyzer temporarily unavailable',
+        code: 'CIRCUIT_OPEN',
+        requestId: requestIdFromContext(c),
+      }, 503);
+    }
+    if (err instanceof ValidationError) {
+      return c.json({ error: err.message }, err.status as 400);
+    }
+    const message = err instanceof Error ? err.message : 'Premium media analysis failed';
+    console.error('[llm/analyze/media/premium]', message);
+    return c.json(degradedMediaAnalyzerPayload());
+  }
+});
+
 // ─── POST /write/search-story ──────────────────────────────────────────────
 
 llmRouter.post('/write/search-story', async (c) => {
@@ -741,7 +834,7 @@ llmRouter.onError((error, c) => {
     });
   }
 
-  if (path.endsWith('/analyze/media')) {
+  if (path.endsWith('/analyze/media') || path.endsWith('/analyze/media/premium')) {
     console.error('[llm/onError/analyze-media]', message);
     return c.json(degradedMediaAnalyzerPayload());
   }

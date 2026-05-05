@@ -145,6 +145,20 @@ const BLUR_ELIGIBLE_CATEGORIES = new Set<string>([
   'hate-symbols',
   'child-safety',
 ] as const);
+const LOW_SIGNAL_ENTITY_TERMS = new Set([
+  'city',
+  'buildings',
+  'building',
+  'trend',
+  'growth',
+  'urban',
+  'landscape',
+  'image',
+  'photo',
+  'city lights',
+  'historical',
+  'desktop',
+]);
 
 function sanitizeModelText(value: string, maxChars: number): string {
   return value
@@ -152,6 +166,129 @@ function sanitizeModelText(value: string, maxChars: number): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxChars);
+}
+
+function normalizeEntityKey(value: string): string {
+  return sanitizeModelText(value.toLowerCase(), 80)
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function entityLimitForMediaType(mediaType: MediaResponse['mediaType']): number {
+  switch (mediaType) {
+    case 'chart':
+      return 1;
+    case 'photo':
+    case 'meme':
+      return 2;
+    case 'document':
+    case 'screenshot':
+      return 3;
+    default:
+      return 2;
+  }
+}
+
+function filterCandidateEntities(params: {
+  mediaType: MediaResponse['mediaType'];
+  candidateEntities: string[];
+  mediaSummary: string;
+  extractedText?: string;
+  request: MediaRequest;
+}): string[] {
+  const evidenceText = normalizeEntityKey([
+    params.mediaSummary,
+    params.extractedText ?? '',
+    params.request.nearbyText,
+    params.request.mediaAlt ?? '',
+  ].join(' '));
+
+  const requestEntities = params.request.candidateEntities
+    .map((entity) => sanitizeModelText(entity, 80))
+    .filter(Boolean);
+  const normalizedRequestEntities = requestEntities
+    .map((entity) => normalizeEntityKey(entity))
+    .filter(Boolean);
+
+  const hasSpecificRequestEntity = normalizedRequestEntities.some(
+    (entity) => !LOW_SIGNAL_ENTITY_TERMS.has(entity),
+  );
+
+  const deduped = new Map<string, string>();
+  for (const entity of params.candidateEntities) {
+    const normalized = normalizeEntityKey(entity);
+    if (!normalized) continue;
+    if (!deduped.has(normalized)) {
+      deduped.set(normalized, entity);
+    }
+  }
+
+  const scored = [] as Array<{
+    label: string;
+    normalized: string;
+    inEvidenceText: boolean;
+    requestMatch: boolean;
+  }>;
+  const fallbackScored = [] as Array<{
+    label: string;
+    normalized: string;
+    inEvidenceText: boolean;
+    requestMatch: boolean;
+  }>;
+
+  for (const [normalized, label] of deduped.entries()) {
+    if (normalized.length < 2) continue;
+
+    const requestMatch = normalizedRequestEntities.length === 0
+      ? true
+      : normalizedRequestEntities.some((candidate) => (
+        normalized === candidate
+        || normalized.includes(candidate)
+        || candidate.includes(normalized)
+      ));
+
+    const inEvidenceText = evidenceText.includes(normalized);
+    if (!inEvidenceText && normalized.split(' ').length === 1 && normalized.length <= 5) {
+      continue;
+    }
+
+    if (LOW_SIGNAL_ENTITY_TERMS.has(normalized) && hasSpecificRequestEntity) {
+      continue;
+    }
+
+    const entry = {
+      label,
+      normalized,
+      inEvidenceText,
+      requestMatch,
+    };
+
+    if (!requestMatch && normalizedRequestEntities.length > 0) {
+      fallbackScored.push(entry);
+      continue;
+    }
+
+    scored.push(entry);
+  }
+
+  if (scored.length === 0 && fallbackScored.length > 0) {
+    scored.push(...fallbackScored);
+  }
+
+  scored.sort((left, right) => {
+    if (left.inEvidenceText !== right.inEvidenceText) {
+      return left.inEvidenceText ? -1 : 1;
+    }
+    if (left.requestMatch !== right.requestMatch) {
+      return left.requestMatch ? -1 : 1;
+    }
+    return right.normalized.length - left.normalized.length;
+  });
+
+  return scored
+    .slice(0, entityLimitForMediaType(params.mediaType))
+    .map((entry) => entry.label);
 }
 
 function safeErrorLabel(error: unknown): string {
@@ -361,7 +498,7 @@ async function callOllamaVision(
 
 // ─── Validation ────────────────────────────────────────────────────────────
 
-function validateResponse(raw: unknown): MediaResponse {
+function validateResponse(raw: unknown, request: MediaRequest): MediaResponse {
   if (typeof raw !== 'object' || raw === null) throw new Error('Non-object response from vision model');
   const r = raw as Record<string, unknown>;
 
@@ -375,7 +512,7 @@ function validateResponse(raw: unknown): MediaResponse {
   const mediaSummary = typeof r.mediaSummary === 'string'
     ? sanitizeModelText(r.mediaSummary, 320)
     : '';
-  const candidateEntities = Array.isArray(r.candidateEntities)
+  const rawCandidateEntities = Array.isArray(r.candidateEntities)
     ? (r.candidateEntities as unknown[])
         .filter((e): e is string => typeof e === 'string')
         .map((e) => sanitizeModelText(e, 80))
@@ -469,6 +606,13 @@ function validateResponse(raw: unknown): MediaResponse {
   }
 
   const dedupedFlags = Array.from(new Set(cautionFlags));
+  const candidateEntities = filterCandidateEntities({
+    mediaType,
+    candidateEntities: rawCandidateEntities,
+    mediaSummary: safeMediaSummary,
+    ...(safeExtractedText !== undefined ? { extractedText: safeExtractedText } : {}),
+    request,
+  });
 
   return {
     mediaCentrality,
@@ -561,7 +705,7 @@ async function analyzeEncodedMedia(
     return fallbackResponse(request.mediaAlt, request.nearbyText);
   }
   try {
-    const result = validateResponse(parsed);
+    const result = validateResponse(parsed, request);
     recordMultimodalSuccess({
       mediaType: result.mediaType,
       moderationAction: result.moderation?.action ?? 'none',

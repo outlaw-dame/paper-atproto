@@ -45,6 +45,7 @@ function coordinationKindToLane(kind: CoordinationPathKind): IntelligenceLane {
     case 'local_worker':
     case 'local_generation':
     case 'local_multimodal': return 'browser_small_ml';
+    case 'edge_workers_ai': return 'edge_classifier';
     case 'remote_fallback': return 'server_writer';
     case 'deterministic_only': return 'browser_heuristic';
   }

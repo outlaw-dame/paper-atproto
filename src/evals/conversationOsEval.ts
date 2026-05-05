@@ -127,15 +127,15 @@ export function evaluateConversationOsProjection(
     pipeline: {
       summaryMode: string;
       deltaDecision: {
-        changeReasons: string[];
+        changeReasons: readonly string[];
       };
     };
     writerInput: {
       safeEntities: Array<{ label: string }>;
       topContributors: Array<{ handle: string }>;
-      whatChangedSignals: string[];
-      perspectiveGaps?: string[] | undefined;
-      factualHighlights: string[];
+      whatChangedSignals: readonly string[];
+      perspectiveGaps?: readonly string[] | undefined;
+      factualHighlights: readonly string[];
       threadSignalSummary?: {
         sourceBackedCount: number;
         clarificationsCount: number;

@@ -1,6 +1,6 @@
-// ─── Qwen3-4B Writer Service — Narwhal v3 ────────────────────────────────
+// ─── Local Ollama Writer Service — Narwhal v3 ────────────────────────────
 // Calls the locally-running Ollama instance to produce the Interpolator summary.
-// Model: qwen3:4b-instruct-2507-q4_K_M
+// Default model: phi4-mini:latest
 //
 // The model writes ONLY from structured thread state — it must not invent
 // entities, contributors, or themes. Fallback copies are produced when
@@ -78,7 +78,12 @@ export interface WriterResponse {
 }
 
 type WriterRunOptions = {
+  localModel?: {
+    id: string;
+    label?: string;
+  };
   enhancer?: {
+    enabled?: boolean;
     preferredProvider?: PremiumAiProviderPreference;
   };
 };
@@ -131,11 +136,14 @@ MODE RULES
 - descriptive_fallback:
   collapsedSummary in 2 parts: (1) characterize root post in your own words, (2) describe observable reply patterns.
   Do not copy or closely paraphrase the root opening words.
+  Avoid generic scaffolders such as "visible replies mostly", "replies range from", "reply mix", or "the discussion centers on".
+  When replies are substantial, mention at least one contributor handle if that contributor materially shapes the interpretation.
   Keep collapsedSummary <= 300 chars.
 
 - minimal_fallback:
   Exactly 2 sentences: concrete root-post substance + observable reply activity.
   No interpretation. No vague filler phrases ("replies are active", "people are reacting", "discussion continues").
+  Do not use filler such as "visible replies mostly", "reply mix", or "discussion centers on".
   whatChanged must be []. contributorBlurbs must be []. collapsedSummary <= 240 chars.
 
 DO NOT START collapsedSummary WITH
@@ -312,7 +320,54 @@ function looksGarbled(text: string): boolean {
 
 // ─── Validation ────────────────────────────────────────────────────────────
 
-function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
+function contributorCoverageNote(response: WriterResponse, request: WriterRequest): string | null {
+  if (response.mode === 'minimal_fallback' || request.topContributors.length === 0) return null;
+
+  const combined = `${response.collapsedSummary} ${response.expandedSummary ?? ''}`.toLowerCase();
+  const missing = request.topContributors
+    .map((contributor) => ({
+      handle: normalizeHandle(contributor.handle),
+      stance: normalizePromptText(contributor.stanceSummary || contributor.stanceExcerpt || 'adds context', 120),
+    }))
+    .filter((contributor) => contributor.handle !== 'unknown')
+    .filter((contributor) => !combined.includes(`@${contributor.handle}`))
+    .slice(0, response.mode === 'descriptive_fallback' ? 2 : 3);
+
+  if (missing.length === 0) return null;
+
+  return `Contributor detail: ${missing
+    .map((contributor) => `@${contributor.handle} ${contributor.stance}`)
+    .join('; ')}.`;
+}
+
+function ensureContributorCoverage(response: WriterResponse, request?: WriterRequest): WriterResponse {
+  if (!request || response.abstained) return response;
+  const note = contributorCoverageNote(response, request);
+  if (!note) return response;
+
+  const expandedSummary = response.expandedSummary
+    ? truncateAtWordBoundary(`${response.expandedSummary} ${note}`, 1200)
+    : note;
+
+  const existingHandles = new Set(response.contributorBlurbs.map((entry) => normalizeHandle(entry.handle)));
+  const contributorBlurbs = [
+    ...response.contributorBlurbs,
+    ...request.topContributors
+      .map((contributor) => ({
+        handle: normalizeHandle(contributor.handle),
+        blurb: normalizePromptText(contributor.stanceSummary || contributor.stanceExcerpt || 'Adds context from the replies.', 300),
+      }))
+      .filter((entry) => entry.handle !== 'unknown' && !existingHandles.has(entry.handle) && entry.blurb.length >= 10),
+  ].slice(0, response.mode === 'descriptive_fallback' ? 3 : 5);
+
+  return {
+    ...response,
+    expandedSummary,
+    contributorBlurbs,
+  };
+}
+
+function validateResponse(raw: unknown, mode: SummaryMode, request?: WriterRequest): WriterResponse {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('Writer returned non-object response');
   }
@@ -363,14 +418,14 @@ function validateResponse(raw: unknown, mode: SummaryMode): WriterResponse {
             .slice(0, 5)
         : [];
 
-  return {
+  return ensureContributorCoverage({
     collapsedSummary,
     ...(expandedSummary !== null ? { expandedSummary } : {}),
     whatChanged,
     contributorBlurbs,
     abstained,
     mode: (r.mode as SummaryMode) ?? mode,
-  };
+  }, request);
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────
@@ -389,8 +444,8 @@ const RETRY_OPTIONS: RetryOptions = {
 
 const MODE_CONSTRAINTS: Record<SummaryMode, string> = {
   normal: 'collapsedSummary: 1-3 sentences, max 500 chars. expandedSummary: only include if it adds new information not in collapsedSummary, 3-5 sentences max. contributorBlurbs: up to 5.',
-  descriptive_fallback: 'collapsedSummary: HARD MAX 300 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
-  minimal_fallback: 'collapsedSummary: EXACTLY 2 sentences, HARD MAX 240 chars. Sentence 1: root post substance. Sentence 2: observable reply activity. whatChanged MUST be []. contributorBlurbs MUST be [].',
+  descriptive_fallback: 'collapsedSummary: HARD MAX 300 chars. 2 parts: (1) characterize root post substance in your own words — NO verbatim copying of root post text, (2) describe observable reply patterns. Avoid scaffold phrases like "visible replies mostly", "reply mix", "discussion centers on". If replies materially shape interpretation, include at least one contributor handle. contributorBlurbs: up to 3. whatChanged: up to 3 items.',
+  minimal_fallback: 'collapsedSummary: EXACTLY 2 sentences, HARD MAX 240 chars. Sentence 1: root post substance. Sentence 2: observable reply activity. Do not use filler like "visible replies mostly", "reply mix", "discussion centers on". whatChanged MUST be []. contributorBlurbs MUST be [].',
 };
 
 function buildUserMessage(request: WriterRequest): string {
@@ -506,6 +561,20 @@ function buildUserMessage(request: WriterRequest): string {
   }
 
   return lines.join('\n');
+}
+
+export function buildInterpolatorWriterMessages(request: WriterRequest): OllamaChatMessage[] {
+  return [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: buildUserMessage(request) },
+  ];
+}
+
+export function normalizeInterpolatorWriterResponse(
+  raw: unknown,
+  request: WriterRequest,
+): WriterResponse {
+  return validateResponse(raw, request.summaryMode, request);
 }
 
 type EnhancerFailureMetadata = {
@@ -652,6 +721,8 @@ async function getEnhancerReplacement(
   },
   options?: WriterRunOptions,
 ): Promise<WriterResponse | null> {
+  if (options?.enhancer?.enabled === false) return null;
+
   const source = params.candidate ? 'candidate' : 'qwen_failure';
   const startedAt = Date.now();
   const preferredProvider = options?.enhancer?.preferredProvider;
@@ -683,7 +754,7 @@ async function getEnhancerReplacement(
 
     let replacement: WriterResponse;
     try {
-      replacement = validateResponse(review.decision.response, request.summaryMode);
+      replacement = validateResponse(review.decision.response, request.summaryMode, request);
     } catch {
       recordWriterEnhancerRejectedReplacement('invalid-response');
       return null;
@@ -739,18 +810,13 @@ export async function runInterpolatorWriter(
   request: WriterRequest,
   options?: WriterRunOptions,
 ): Promise<WriterResponse> {
-  const model = env.QWEN_WRITER_MODEL;
-
-  const userMessage = buildUserMessage(request);
+  const model = options?.localModel?.id?.trim() || env.QWEN_WRITER_MODEL;
 
   try {
     const rawContent = await withRetry(
       () => callOllama(
         model,
-        [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
+        buildInterpolatorWriterMessages(request),
         env.LLM_TIMEOUT_MS,
       ),
       RETRY_OPTIONS,
@@ -763,7 +829,7 @@ export async function runInterpolatorWriter(
       throw new Error('Writer returned invalid JSON');
     }
 
-    const candidate = validateResponse(parsed, request.summaryMode);
+    const candidate = validateResponse(parsed, request.summaryMode, request);
     const replacement = await getEnhancerReplacement(request, { candidate }, options);
     return replacement ?? candidate;
   } catch (error) {

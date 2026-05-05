@@ -282,7 +282,7 @@ function buildSearchRoutingInput(input: {
 
 function isSearchCoordinatorAdviceUsable(
   advice: Pick<IntelligenceAdvice, 'reasonCodes' | 'event'> | null | undefined,
-): boolean {
+): advice is IntelligenceAdvice {
   if (!advice) return false;
   return advice.event.status !== 'stale_discarded'
     && !advice.reasonCodes.includes('stale_source_token');

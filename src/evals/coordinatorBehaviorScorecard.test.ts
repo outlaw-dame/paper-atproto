@@ -177,7 +177,7 @@ describe('coordinator behaviour scorecard — premium verification bounded', () 
       {
         actorDid: 'did:plc:tester',
         interpretiveBrief: { summaryMode: 'normal', supports: [], limits: [] },
-      } as Parameters<typeof verifyPremiumDeepInterpolatorResult>[1],
+      } as unknown as Parameters<typeof verifyPremiumDeepInterpolatorResult>[1],
     );
     expect(result.verdict.suggestedConfidenceCap).toBeLessThanOrEqual(0.55);
     expect(Object.isFrozen(result)).toBe(true);
@@ -206,7 +206,7 @@ describe('coordinator behaviour scorecard — premium verification bounded', () 
       {
         actorDid: 'did:plc:tester',
         interpretiveBrief: { summaryMode: 'normal', supports: [], limits: [] },
-      } as Parameters<typeof verifyPremiumDeepInterpolatorResult>[1],
+      } as unknown as Parameters<typeof verifyPremiumDeepInterpolatorResult>[1],
       { signal: controller.signal },
     );
     expect(result.verdict.trust).toBe('unverified');
@@ -258,13 +258,13 @@ describe('coordinator behaviour scorecard — supervisor planner bounded', () =>
         {
           type: 'rerun_writer_with_safe_fallback',
           priority: 'high',
-          reason: 'writer error',
+          rationale: 'writer error',
           target: 'writer',
         },
         {
           type: 'hold_premium_until_fresh',
           priority: 'medium',
-          reason: 'premium error',
+          rationale: 'premium error',
           target: 'premium',
         },
       ],

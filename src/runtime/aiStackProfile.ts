@@ -7,12 +7,14 @@ export type AiStackTier =
   | 'edge_strong'
   | 'edge_premium';
 
-export type AiRuntimeId = 'deterministic' | 'webllm' | 'litert';
+export type AiRuntimeId = 'deterministic' | 'webllm' | 'litert' | 'workers_ai';
 
 export type RouterModelId = 'deterministic_policy' | 'functiongemma_270m';
 
 export type CoordinatorModelId =
   | 'none'
+  | 'cf_llama_3_1_8b_instruct'
+  | 'cf_llama_3_3_70b_instruct'
   | 'smollm2_1_7b'
   | 'gemma4_e2b'
   | 'gemma4_e4b'
@@ -101,8 +103,9 @@ export interface BackgroundUpgradeCandidate {
 }
 
 const SMOLLM2_1_7B_SIZE_GIB = 1.77;
-const GEMMA4_E2B_SIZE_GIB = 2.58;
-const GEMMA4_E4B_SIZE_GIB = 4.24;
+// Hugging Face LiteRT preview `.task` payloads: E2B=3,136,226,711 bytes, E4B=4,405,655,031 bytes.
+const GEMMA4_E2B_SIZE_GIB = 2.92;
+const GEMMA4_E4B_SIZE_GIB = 4.10;
 const PHI4_MINI_SIZE_GIB = 3.91;
 const FUNCTIONGEMMA_270M_SIZE_GIB = 0.35;
 
@@ -158,6 +161,9 @@ function coordinatorBinding(params: {
 }): AiModelBinding {
   const estimatedSizeGiB = (() => {
     switch (params.id) {
+      case 'cf_llama_3_1_8b_instruct':
+      case 'cf_llama_3_3_70b_instruct':
+        return 0;
       case 'smollm2_1_7b':
         return SMOLLM2_1_7B_SIZE_GIB;
       case 'gemma4_e2b':
@@ -328,15 +334,15 @@ export function selectAiStackProfile(
         capability,
         router: functionGemmaRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
-          id: 'gemma4_e4b',
-          runtime: 'litert',
+          id: 'cf_llama_3_3_70b_instruct',
+          runtime: 'workers_ai',
           loadPolicy: 'lazy',
           requiresExplicitConsent: false,
         }),
         fallbackCoordinator: coordinatorBinding({
-          id: 'gemma4_e2b',
-          runtime: 'litert',
-          loadPolicy: 'background',
+          id: 'phi4_mini',
+          runtime: 'webllm',
+          loadPolicy: 'lazy',
           requiresExplicitConsent: false,
         }),
         options,
@@ -352,15 +358,15 @@ export function selectAiStackProfile(
         capability,
         router: functionGemmaRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
-          id: 'gemma4_e2b',
-          runtime: 'litert',
-          loadPolicy: largeModelsAllowed ? 'lazy' : 'background',
-          requiresExplicitConsent: !largeModelsAllowed,
+          id: 'cf_llama_3_1_8b_instruct',
+          runtime: 'workers_ai',
+          loadPolicy: 'lazy',
+          requiresExplicitConsent: false,
         }),
-        fallbackCoordinator: coordinatorBinding({ id: 'smollm2_1_7b', runtime: 'webllm', loadPolicy: 'background' }),
+        fallbackCoordinator: coordinatorBinding({ id: 'phi4_mini', runtime: 'webllm', loadPolicy: 'background', requiresExplicitConsent: false }),
         options,
         reasons: ['litert_available', 'high_capability_device'],
-        degradeReasons: largeModelsAllowed ? healthDegradeReasons : [...healthDegradeReasons, 'large_model_consent_missing'],
+        degradeReasons: healthDegradeReasons,
       });
     }
   }
@@ -376,12 +382,12 @@ export function selectAiStackProfile(
         capability,
         router: functionGemmaRouterBinding('litert', 'eager'),
         coordinator: coordinatorBinding({
-          id: 'gemma4_e2b',
-          runtime: 'litert',
+          id: 'cf_llama_3_1_8b_instruct',
+          runtime: 'workers_ai',
           loadPolicy: 'lazy',
           requiresExplicitConsent: false,
         }),
-        fallbackCoordinator: coordinatorBinding({ id: 'smollm2_1_7b', runtime: 'webllm', loadPolicy: 'background' }),
+        fallbackCoordinator: coordinatorBinding({ id: 'phi4_mini', runtime: 'webllm', loadPolicy: 'background', requiresExplicitConsent: false }),
         options,
         reasons: ['litert_available', 'large_model_consented'],
         degradeReasons: healthDegradeReasons,
@@ -410,7 +416,7 @@ export function selectAiStackProfile(
     runtime: 'webllm',
     capability,
     router: functionGemmaRouterBinding('webllm', 'lazy'),
-    coordinator: coordinatorBinding({ id: 'smollm2_1_7b', runtime: 'webllm', loadPolicy: 'lazy', requiresExplicitConsent: false }),
+    coordinator: coordinatorBinding({ id: 'phi4_mini', runtime: 'webllm', loadPolicy: 'lazy', requiresExplicitConsent: false }),
     fallbackCoordinator: coordinatorBinding({ id: 'none', runtime: 'deterministic', loadPolicy: 'disabled' }),
     options,
     reasons: capability.tier === 'high' ? ['high_capability_device'] : [],
@@ -444,14 +450,14 @@ export function getBackgroundUpgradeCandidate(
       fromTier: current.tier,
       toTier: 'edge_strong',
       coordinator: coordinatorBinding({
-        id: 'gemma4_e2b',
-        runtime: 'litert',
+        id: 'cf_llama_3_1_8b_instruct',
+        runtime: 'workers_ai',
         loadPolicy: 'background',
-        requiresExplicitConsent: options.userConsentedToLargeModels !== true,
+        requiresExplicitConsent: false,
       }),
-      reason: options.userConsentedToLargeModels === true ? 'large_model_consented' : 'litert_available',
-      requiresConsent: options.userConsentedToLargeModels !== true,
-      canStartNow: options.userConsentedToLargeModels === true,
+      reason: 'litert_available',
+      requiresConsent: false,
+      canStartNow: true,
     };
   }
 
@@ -462,14 +468,14 @@ export function getBackgroundUpgradeCandidate(
       fromTier: current.tier,
       toTier: 'edge_premium',
       coordinator: coordinatorBinding({
-        id: 'gemma4_e4b',
-        runtime: 'litert',
+        id: 'cf_llama_3_3_70b_instruct',
+        runtime: 'workers_ai',
         loadPolicy: 'background',
-        requiresExplicitConsent: options.userConsentedToLargeModels !== true,
+        requiresExplicitConsent: false,
       }),
       reason: 'best_quality_mode',
-      requiresConsent: options.userConsentedToLargeModels !== true,
-      canStartNow: options.userConsentedToLargeModels === true && options.settingsMode === 'best_quality',
+      requiresConsent: false,
+      canStartNow: options.settingsMode === 'best_quality',
     };
   }
 

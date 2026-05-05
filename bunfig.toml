@@ -1,0 +1,4 @@
+[test]
+preload = ["./bun.test.setup.ts"]
+maxConcurrency = 1
+pathIgnorePatterns = ["server/dist/**"]

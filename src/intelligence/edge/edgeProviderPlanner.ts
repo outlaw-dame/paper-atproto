@@ -6,7 +6,7 @@ const DEFAULT_PRIVACY_MODE: PrivacyMode = 'balanced';
 const ENDPOINTS = {
   composer: '/api/llm/analyze/composer-classifier',
   search: '/api/llm/rerank/search',
-  media: '/api/llm/analyze/media',
+  media: '/api/edge/media-classify',
 } as const;
 
 type EdgePlannerInput = Omit<IntelligenceRoutingInput, 'edgeAvailable'> & {

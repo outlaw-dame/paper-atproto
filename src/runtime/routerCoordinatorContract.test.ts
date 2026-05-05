@@ -41,13 +41,17 @@ describe('buildCoordinationContract', () => {
   it('derives allowed routes from deterministic model policy', () => {
     const contract = createContract();
 
-    expect(contract.defaultRouteId).toBe('model:qwen3_4b');
+    expect(contract.defaultRouteId).toBe('model:phi4_mini');
     expect(contract.allowedRoutes.map((route) => route.id)).toEqual([
-      'model:qwen3_4b',
-      'model:smollm3_3b',
       'model:phi4_mini',
-      'remote:fallback',
+      'model:smollm3_3b',
+      'edge:workers-ai',
     ]);
+    expect(contract.allowedRoutes.at(-1)).toMatchObject({
+      id: 'edge:workers-ai',
+      kind: 'edge_workers_ai',
+      model: null,
+    });
     expect(contract.constraints).toContain('no_new_routes');
     expect(contract.constraints).toContain('deterministic_policy_is_authority');
     expect(contract.constraints).toContain('shadow_mode_only');
@@ -74,6 +78,35 @@ describe('buildCoordinationContract', () => {
       kind: 'deterministic_only',
       allowed: true,
     });
+  });
+
+  it('exposes Workers AI as the multimodal fallback route when local multimodal is gated', () => {
+    const policyDecision = chooseModelForTask({
+      capability: HIGH_CAPABILITY,
+      settingsMode: 'best_quality',
+      task: 'multimodal_analysis',
+      explicitUserAction: false,
+    });
+    const stackProfile = selectAiStackProfile(HIGH_CAPABILITY, {
+      settingsMode: 'best_quality',
+      allowLiteRt: true,
+      preferLiteRt: true,
+      userConsentedToLargeModels: true,
+      availableStorageGiB: 16,
+    });
+    const contract = buildCoordinationContract({ policyDecision, stackProfile, nowEpochMs: 100 });
+
+    expect(contract.allowedRoutes).toEqual([
+      expect.objectContaining({
+        id: 'worker_local_only',
+        kind: 'local_worker',
+      }),
+      expect.objectContaining({
+        id: 'edge:workers-ai',
+        kind: 'edge_workers_ai',
+      }),
+    ]);
+    expect(contract.fallbackRouteId).toBe('edge:workers-ai');
   });
 });
 
@@ -114,13 +147,13 @@ describe('validateRouterDecision', () => {
   it('rejects malformed, expired, or out-of-range router output', () => {
     const contract = createContract();
 
-    expect(validateRouterDecision(contract, { selectedRouteId: 'model:qwen3_4b' }, 1_500).reasonCodes)
+    expect(validateRouterDecision(contract, { selectedRouteId: 'model:phi4_mini' }, 1_500).reasonCodes)
       .toEqual(['validator_rejected_schema']);
 
     expect(validateRouterDecision(contract, {
       schemaVersion: 1,
       decisionType: 'route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 1.2,
       reasonCodes: [],
       ttlMs: 2_000,
@@ -129,7 +162,7 @@ describe('validateRouterDecision', () => {
     expect(validateRouterDecision(contract, {
       schemaVersion: 1,
       decisionType: 'route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.8,
       reasonCodes: [],
       ttlMs: 2_000,
@@ -141,7 +174,7 @@ describe('validateRouterDecision', () => {
     const result = validateRouterDecision(contract, {
       schemaVersion: 1,
       decisionType: 'route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.8,
       reasonCodes: ['arbitrary_model_text'],
       ttlMs: 2_000,
@@ -156,7 +189,7 @@ describe('validateRouterDecision', () => {
     const result = validateRouterDecision(contract, {
       schemaVersion: 1,
       decisionType: 'route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.8,
       reasonCodes: ['policy_selected_primary', 'policy_selected_primary'],
       ttlMs: 2_000,
@@ -173,7 +206,7 @@ describe('validateCoordinatorRecommendation', () => {
     const recommendation: CoordinatorRecommendationEnvelope = {
       schemaVersion: 1,
       recommendation: 'accept_route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.74,
       reasonCodes: ['policy_selected_primary'],
       monitoringPlan: {
@@ -187,7 +220,7 @@ describe('validateCoordinatorRecommendation', () => {
     const result = validateCoordinatorRecommendation(contract, recommendation, 1_500);
 
     expect(result.accepted).toBe(true);
-    expect(result.selectedRoute.id).toBe('model:qwen3_4b');
+    expect(result.selectedRoute.id).toBe('model:phi4_mini');
   });
 
   it('rejects coordinator recommendations with routes outside the contract', () => {
@@ -195,7 +228,7 @@ describe('validateCoordinatorRecommendation', () => {
     const result = validateCoordinatorRecommendation(contract, {
       schemaVersion: 1,
       recommendation: 'accept_route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.74,
       reasonCodes: [],
       monitoringPlan: {
@@ -215,7 +248,7 @@ describe('validateCoordinatorRecommendation', () => {
     const result = validateCoordinatorRecommendation(contract, {
       schemaVersion: 1,
       recommendation: 'accept_route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.74,
       reasonCodes: [],
       monitoringPlan: {
@@ -235,7 +268,7 @@ describe('validateCoordinatorRecommendation', () => {
     const result = validateCoordinatorRecommendation(contract, {
       schemaVersion: 1,
       recommendation: 'accept_route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.74,
       reasonCodes: [],
       monitoringPlan: {
@@ -254,7 +287,7 @@ describe('validateCoordinatorRecommendation', () => {
     const result = validateCoordinatorRecommendation(contract, {
       schemaVersion: 1,
       recommendation: 'accept_route',
-      selectedRouteId: 'model:qwen3_4b',
+      selectedRouteId: 'model:phi4_mini',
       confidence: 0.74,
       reasonCodes: ['freeform_model_reason'],
       monitoringPlan: {

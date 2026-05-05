@@ -52,6 +52,32 @@ function expectDeterministicAndFunctionGemmaAuthority(profile: ReturnType<typeof
 }
 
 describe('selectAiStackProfile', () => {
+  it('enforces coordinator priority: Workers AI on edge tiers, Phi-4 mini on local browser tier', () => {
+    const edgeProfile = selectAiStackProfile(HIGH_CAPABILITY, {
+      settingsMode: 'best_quality',
+      allowLiteRt: true,
+      preferLiteRt: true,
+      userConsentedToLargeModels: true,
+      availableStorageGiB: 16,
+    });
+    const localProfile = selectAiStackProfile(HIGH_CAPABILITY, {
+      settingsMode: 'balanced',
+      allowLiteRt: false,
+      preferLiteRt: true,
+      userConsentedToLargeModels: false,
+      availableStorageGiB: 8,
+    });
+
+    expect(edgeProfile.tier).toBe('edge_premium');
+    expect(edgeProfile.coordinator.runtime).toBe('workers_ai');
+    expect(edgeProfile.coordinator.id).toBe('cf_llama_3_3_70b_instruct');
+    expect(edgeProfile.fallbackCoordinator.id).toBe('phi4_mini');
+
+    expect(localProfile.tier).toBe('browser_default');
+    expect(localProfile.coordinator.runtime).toBe('webllm');
+    expect(localProfile.coordinator.id).toBe('phi4_mini');
+  });
+
   it('falls back to deterministic baseline when WebGPU or generation is unavailable', () => {
     const profile = selectAiStackProfile(LOW_CAPABILITY, {
       settingsMode: 'balanced',
@@ -68,7 +94,7 @@ describe('selectAiStackProfile', () => {
     expect(profile.diagnostics.degradeReasons).toContain('generation_disabled');
   });
 
-  it('selects the browser default coordinator and joint deterministic + FunctionGemma router authority when LiteRT is unavailable', () => {
+  it('uses Phi-4 mini as the local coordinator when LiteRT is unavailable', () => {
     const profile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'balanced',
       allowLiteRt: false,
@@ -80,11 +106,11 @@ describe('selectAiStackProfile', () => {
     expect(profile.runtime).toBe('webllm');
     expectDeterministicAndFunctionGemmaAuthority(profile);
     expect(profile.router.runtime).toBe('webllm');
-    expect(profile.coordinator.id).toBe('smollm2_1_7b');
+    expect(profile.coordinator.id).toBe('phi4_mini');
     expect(profile.diagnostics.degradeReasons).toContain('litert_unavailable');
   });
 
-  it('selects Gemma 4 E2B and joint deterministic + FunctionGemma router authority on a high-capability LiteRT path without large-model consent', () => {
+  it('selects a Workers AI edge coordinator on high-capability LiteRT path without large-model consent', () => {
     const profile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'balanced',
       allowLiteRt: true,
@@ -97,12 +123,12 @@ describe('selectAiStackProfile', () => {
     expect(profile.runtime).toBe('litert');
     expectDeterministicAndFunctionGemmaAuthority(profile);
     expect(profile.router.runtime).toBe('litert');
-    expect(profile.coordinator.id).toBe('gemma4_e2b');
-    expect(profile.coordinator.requiresExplicitConsent).toBe(true);
-    expect(profile.diagnostics.degradeReasons).toContain('large_model_consent_missing');
+    expect(profile.coordinator.id).toBe('cf_llama_3_1_8b_instruct');
+    expect(profile.coordinator.requiresExplicitConsent).toBe(false);
+    expect(profile.fallbackCoordinator.id).toBe('phi4_mini');
   });
 
-  it('selects Gemma 4 E4B on a consented high-capability LiteRT path', () => {
+  it('selects the stronger Workers AI edge coordinator on a consented high-capability LiteRT path', () => {
     const profile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'best_quality',
       allowLiteRt: true,
@@ -115,13 +141,13 @@ describe('selectAiStackProfile', () => {
     expect(profile.runtime).toBe('litert');
     expectDeterministicAndFunctionGemmaAuthority(profile);
     expect(profile.router.runtime).toBe('litert');
-    expect(profile.coordinator.id).toBe('gemma4_e4b');
+    expect(profile.coordinator.id).toBe('cf_llama_3_3_70b_instruct');
     expect(profile.coordinator.requiresExplicitConsent).toBe(false);
-    expect(profile.fallbackCoordinator.id).toBe('gemma4_e2b');
+    expect(profile.fallbackCoordinator.id).toBe('phi4_mini');
     expect(profile.fallbackCoordinator.requiresExplicitConsent).toBe(false);
   });
 
-  it('uses Gemma 4 E2B on mid-tier LiteRT only after large-model consent', () => {
+  it('uses a Workers AI coordinator on mid-tier LiteRT after large-model consent', () => {
     const profile = selectAiStackProfile(MID_CAPABILITY, {
       settingsMode: 'balanced',
       allowLiteRt: true,
@@ -132,7 +158,7 @@ describe('selectAiStackProfile', () => {
 
     expect(profile.tier).toBe('edge_strong');
     expectDeterministicAndFunctionGemmaAuthority(profile);
-    expect(profile.coordinator.id).toBe('gemma4_e2b');
+    expect(profile.coordinator.id).toBe('cf_llama_3_1_8b_instruct');
     expect(profile.coordinator.requiresExplicitConsent).toBe(false);
   });
 
@@ -166,7 +192,7 @@ describe('selectAiStackProfile', () => {
 });
 
 describe('getBackgroundUpgradeCandidate', () => {
-  it('offers a consent-gated LiteRT E2B upgrade from the browser default', () => {
+  it('offers a non-consent Workers AI upgrade from the browser default', () => {
     const current = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'balanced',
       allowLiteRt: false,
@@ -184,9 +210,9 @@ describe('getBackgroundUpgradeCandidate', () => {
 
     expect(candidate?.fromTier).toBe('browser_default');
     expect(candidate?.toTier).toBe('edge_strong');
-    expect(candidate?.coordinator.id).toBe('gemma4_e2b');
-    expect(candidate?.requiresConsent).toBe(true);
-    expect(candidate?.canStartNow).toBe(false);
+    expect(candidate?.coordinator.id).toBe('cf_llama_3_1_8b_instruct');
+    expect(candidate?.requiresConsent).toBe(false);
+    expect(candidate?.canStartNow).toBe(true);
   });
 
   it('does not offer background upgrades under thermal pressure', () => {

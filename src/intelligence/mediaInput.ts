@@ -12,6 +12,13 @@ interface MediaSelectionOptions {
   nearbyTextByUri?: Record<string, string | undefined>;
   candidateEntities?: string[];
   factualHints?: string[];
+  /**
+   * When set, up to this many additional images beyond the standard 2-image
+   * local cap are returned, each marked with `overflow: true`. These will be
+   * routed to a premium API vision model (Gemini Flash) instead of Qwen3-VL.
+   * Defaults to 0 (no overflow — original behaviour preserved).
+   */
+  overflowImageLimit?: number;
 }
 
 function sanitizeContextText(value: string | undefined, maxLen: number): string {
@@ -169,7 +176,8 @@ export function detectMediaSignals(
 }
 
 // ─── selectMediaForAnalysis ───────────────────────────────────────────────
-// Returns up to 2 media items worth analyzing (root first, then high-impact reply).
+// Returns up to 2 media items worth analyzing (root first, then high-impact reply),
+// plus up to `options.overflowImageLimit` additional items marked `overflow: true`.
 
 export function selectMediaForAnalysis(
   threadId: string,
@@ -206,15 +214,20 @@ export function selectMediaForAnalysis(
   }
 
   // Highest-impact reply with media (if different from root)
-  if (requests.length < 2) {
-    const replyWithMedia = [...replies]
-      .filter((reply) => extractPrimaryMedia(reply)?.url)
-      .sort((a, b) => (
-        (scores[b.uri]?.finalInfluenceScore ?? scores[b.uri]?.usefulnessScore ?? 0)
-        - (scores[a.uri]?.finalInfluenceScore ?? scores[a.uri]?.usefulnessScore ?? 0)
-      ));
+  const overflowLimit = Math.max(0, options.overflowImageLimit ?? 0);
 
-    for (const reply of replyWithMedia) {
+  // Sort all replies by descending influence score — used for both the primary
+  // second pick and any overflow images.
+  const repliesWithMedia = [...replies]
+    .filter((reply) => extractPrimaryMedia(reply)?.url)
+    .sort((a, b) => (
+      (scores[b.uri]?.finalInfluenceScore ?? scores[b.uri]?.usefulnessScore ?? 0)
+      - (scores[a.uri]?.finalInfluenceScore ?? scores[a.uri]?.usefulnessScore ?? 0)
+    ));
+
+  // Primary second image (local Qwen3-VL cap — no overflow flag)
+  if (requests.length < 2) {
+    for (const reply of repliesWithMedia) {
       const media = extractPrimaryMedia(reply);
       const mediaUrl = media?.url ? sanitizeUrlForProcessing(media.url) : null;
       if (!mediaUrl || seenUrls.has(mediaUrl)) continue;
@@ -228,7 +241,30 @@ export function selectMediaForAnalysis(
       };
       if (media?.alt) req.mediaAlt = sanitizeContextText(media.alt, 300);
       requests.push(req);
+      seenUrls.add(mediaUrl);
       break;
+    }
+  }
+
+  // Overflow images — routed to a premium API vision model, not Qwen3-VL.
+  if (overflowLimit > 0) {
+    for (const reply of repliesWithMedia) {
+      if (requests.length - 2 >= overflowLimit) break; // cap at standard 2 + overflowLimit
+      const media = extractPrimaryMedia(reply);
+      const mediaUrl = media?.url ? sanitizeUrlForProcessing(media.url) : null;
+      if (!mediaUrl || seenUrls.has(mediaUrl)) continue;
+
+      const req: MediaAnalysisRequest = {
+        threadId: sanitizeContextText(threadId, 300),
+        mediaUrl,
+        nearbyText: translatedNearbyText(reply, options.nearbyTextByUri),
+        candidateEntities,
+        factualHints,
+        overflow: true,
+      };
+      if (media?.alt) req.mediaAlt = sanitizeContextText(media.alt, 300);
+      requests.push(req);
+      seenUrls.add(mediaUrl);
     }
   }
 

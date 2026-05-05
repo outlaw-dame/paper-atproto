@@ -41,6 +41,7 @@ const {
   callComposerGuidanceWriter,
   callMediaAnalyzer,
   callPremiumDeepInterpolator,
+  __resetModelClientTransientStateForTests,
 } = await import('./modelClient');
 const { useInterpolatorSettingsStore } = await import('../store/interpolatorSettingsStore');
 
@@ -49,6 +50,7 @@ describe('modelClient retry policy', () => {
     sleepWithAbortMock.mockClear();
     mockCaptionImage.mockReset();
     vi.restoreAllMocks();
+    __resetModelClientTransientStateForTests();
     useInterpolatorSettingsStore.setState({
       enabled: true,
       premiumProviderPreference: 'auto',
@@ -56,9 +58,8 @@ describe('modelClient retry policy', () => {
   });
 
   it('does not retry non-retryable 400 responses', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('bad request', { status: 400 }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('bad request', { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(callComposerGuidanceWriter({
       mode: 'reply',
@@ -192,9 +193,8 @@ describe('modelClient retry policy', () => {
   });
 
   it('does not use the local caption worker for non-retryable media-analysis rejections', async () => {
-    vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response('blocked', { status: 400 }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('blocked', { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(callMediaAnalyzer({
       threadId: 'thread-unsafe',
@@ -205,6 +205,43 @@ describe('modelClient retry policy', () => {
     })).rejects.toThrow(/responded 400/i);
 
     expect(mockCaptionImage).not.toHaveBeenCalled();
+  });
+
+  it('enters cooldown after 429 responses and suppresses immediate repeat remote calls', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('rate limited', {
+        status: 429,
+        headers: {
+          'retry-after': '30',
+        },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    mockCaptionImage.mockRejectedValue(new Error('local caption unavailable'));
+
+    const first = await callMediaAnalyzer({
+      threadId: 'thread-429-cooldown-1',
+      mediaUrl: 'https://safe.example/first.png',
+      nearbyText: 'first media',
+      candidateEntities: ['City transit'],
+      factualHints: [],
+    });
+
+    const callsAfterFirst = fetchMock.mock.calls.length;
+
+    const second = await callMediaAnalyzer({
+      threadId: 'thread-429-cooldown-2',
+      mediaUrl: 'https://safe.example/second.png',
+      nearbyText: 'second media',
+      candidateEntities: ['City transit'],
+      factualHints: [],
+    });
+
+    expect(first.analysisStatus).toBe('degraded');
+    expect(first.moderationStatus).toBe('unavailable');
+    expect(first.cautionFlags.join(' ').toLowerCase()).toContain('rate-limited');
+    expect(second.analysisStatus).toBe('degraded');
+    expect(second.moderationStatus).toBe('unavailable');
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
   });
 
   it('falls back when model output echoes a long root-post phrase', async () => {

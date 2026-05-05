@@ -10,6 +10,7 @@ import { buildThreadStateForWriter } from '../intelligence/writerInput';
 import {
   callInterpolatorWriter,
   callMediaAnalyzer,
+  callPremiumMediaAnalyzer,
   callPremiumDeepInterpolator,
   getPremiumAiEntitlements,
 } from '../intelligence/modelClient';
@@ -18,6 +19,7 @@ import {
   executeConversationCoordinatorMediaStage,
   type ConversationCoordinatorMediaPlan,
 } from './coordinatorMediaStageExecutor';
+import { createCoordinatorAwareMediaAnalyzer } from './coordinatorAwareMediaAnalyzer';
 import {
   executeConversationCoordinatorWriterStage,
 } from './coordinatorWriterStageExecutor';
@@ -159,6 +161,7 @@ function buildConversationSessionCoordinatorBrief(
 ) {
   const runtime = useRuntimeStore.getState();
   const summaryText = options?.summaryText ?? session.interpretation.interpolator?.summaryText ?? null;
+  const mediaFindingCount = session.interpretation.mediaFindings?.length ?? 0;
   return buildSessionBrief({
     surface: 'session',
     intent: 'story_summary',
@@ -171,8 +174,8 @@ function buildConversationSessionCoordinatorBrief(
     },
     entitlements: options?.entitlements ?? session.interpretation.premium.entitlements ?? null,
     attachments: {
-      count: session.interpretation.mediaFindings.length,
-      hasImages: session.interpretation.mediaFindings.length > 0,
+      count: mediaFindingCount,
+      hasImages: mediaFindingCount > 0,
       hasLinks: false,
       hasCode: false,
     },
@@ -1182,6 +1185,7 @@ async function runConversationMediaStage(
     replies: allReplies,
     scores: pipeline.scores,
     nearbyTextByUri,
+    overflowImageLimit: 2,
   });
 
   const mediaCoordinatorAdvice = mediaPlan.shouldRun
@@ -1251,10 +1255,18 @@ async function runConversationMediaStage(
   ));
 
   const multimodalStartedAt = nowMs();
+  const analyzeMedia = createCoordinatorAwareMediaAnalyzer({
+    advice: mediaCoordinatorAdvice,
+    fallbackAnalyzeMedia: callMediaAnalyzer,
+    premiumAnalyzeMedia: callPremiumMediaAnalyzer,
+    onEdgeFallback: (error) => {
+      console.warn('[conversation] edge multimodal routing fell back to server analyzer', error);
+    },
+  });
   const mediaOutcome = await executeConversationCoordinatorMediaStage({
     threadId: rootUri,
     requests: mediaPlan.requests,
-    analyzeMedia: callMediaAnalyzer,
+    analyzeMedia,
     logFailure: (ev) => console.warn('[conversation] multimodal analysis degraded', ev),
     ...(signal ? { signal } : {}),
   });

@@ -74,6 +74,13 @@ export interface ConversationCoordinatorMediaPlanInput {
   replies: ThreadNode[];
   scores: Record<string, ContributionScores>;
   nearbyTextByUri: Record<string, string | undefined>;
+  /**
+   * When provided, up to this many additional images beyond the standard
+   * 2-image local cap will be included in the plan, each marked `overflow: true`.
+   * They will be routed to a premium API vision model in the coordinator.
+   * Defaults to 0.
+   */
+  overflowImageLimit?: number;
 }
 
 export interface ConversationCoordinatorMediaExecutionInput {
@@ -100,6 +107,7 @@ export function planConversationCoordinatorMediaStage(
     {
       nearbyTextByUri: input.nearbyTextByUri,
       factualHints: deriveMediaFactualHints(input.replies, input.scores),
+      overflowImageLimit: input.overflowImageLimit,
     },
   );
 

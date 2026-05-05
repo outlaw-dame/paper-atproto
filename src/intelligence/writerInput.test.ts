@@ -611,6 +611,6 @@ describe('buildThreadStateForWriter', () => {
         expect.stringContaining('clarification:'),
       ]),
     );
-    expect(output.threadSignalSummary.clarificationsCount).toBeGreaterThan(0);
+    expect(output.threadSignalSummary?.clarificationsCount).toBeGreaterThan(0);
   });
 });

@@ -271,6 +271,8 @@ function evaluateExample(example, prediction) {
 
   return {
     id: example.id,
+    expectedEntities: Array.from(expectedEntities),
+    predictedEntities: Array.from(predictedEntities),
     tp,
     fp,
     fn,

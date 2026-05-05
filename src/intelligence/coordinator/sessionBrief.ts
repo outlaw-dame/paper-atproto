@@ -52,7 +52,7 @@ export interface SessionBriefInput {
   intent: IntelligenceTask;
   scope?: DataScope;
   privacy?: PrivacyMode;
-  capability?: RuntimeCapability;
+  capability?: RuntimeCapability | undefined;
   settingsMode?: RuntimeMode;
   deviceTier?: DeviceTier;
   freshness?: Partial<SessionBriefFreshness>;

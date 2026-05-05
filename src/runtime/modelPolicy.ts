@@ -84,12 +84,12 @@ function chooseTextGenerationModel(
   if (settingsMode === 'best_quality' && capability.tier === 'high') {
     return {
       task: 'text_generation',
-      choice: 'qwen3_4b',
-      fallbackChoices: ['smollm3_3b', 'phi4_mini'],
+      choice: 'phi4_mini',
+      fallbackChoices: ['smollm3_3b'],
       localAllowed: true,
       remoteFallbackAllowed: true,
       requiresExplicitUserAction: false,
-      reason: 'Best quality mode on a high-tier device prefers Qwen3-4B, then falls back to SmolLM3-3B and Phi-4 mini.',
+      reason: 'Best quality mode on a high-tier device prefers Phi-4 mini after local writer evaluation, then falls back to the executable SmolLM3-3B route. Gemma local writers must be explicitly configured before comparison or promotion.',
     };
   }
 
@@ -103,7 +103,7 @@ function chooseTextGenerationModel(
     reason:
       capability.tier === 'low'
         ? 'A low-tier device passed the probe, so explicit generation can use SmolLM3-3B with Phi-4 mini as a fallback.'
-        : 'Balanced or mid-tier text generation defaults to SmolLM3-3B, with Phi-4 mini reserved as the lighter fallback.',
+        : 'Balanced or mid-tier text generation defaults to SmolLM3-3B, with Phi-4 mini reserved as the lighter executable fallback.',
   };
 }
 

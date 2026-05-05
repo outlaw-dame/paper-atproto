@@ -38,7 +38,7 @@ export interface IntelligenceRoutingInput {
 export interface IntelligenceRoutingDecision {
   task: IntelligenceTask;
   lane: IntelligenceLane;
-  fallbackLane?: IntelligenceLane;
+  fallbackLane?: IntelligenceLane | undefined;
   reasonCode:
     | 'browser_heuristic_instant'
     | 'browser_small_ml_default'

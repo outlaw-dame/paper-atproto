@@ -22,7 +22,7 @@ describe('chooseModelForTask', () => {
     expect(decision.remoteFallbackAllowed).toBe(false);
   });
 
-  it('prefers Qwen3-4B on high-tier best-quality text generation', () => {
+  it('prefers Phi-4 mini on high-tier best-quality text generation', () => {
     const decision = chooseModelForTask({
       capability: HIGH_CAPABILITY,
       settingsMode: 'best_quality',
@@ -30,8 +30,25 @@ describe('chooseModelForTask', () => {
       explicitUserAction: true,
     });
 
-    expect(decision.choice).toBe('qwen3_4b');
-    expect(decision.fallbackChoices).toEqual(['smollm3_3b', 'phi4_mini']);
+    expect(decision.choice).toBe('phi4_mini');
+    expect(decision.fallbackChoices).toEqual(['smollm3_3b']);
+  });
+
+  it('does not advertise planned Gemma writers as executable mid-tier fallback routes', () => {
+    const decision = chooseModelForTask({
+      capability: {
+        webgpu: true,
+        tier: 'mid',
+        generationAllowed: true,
+        multimodalAllowed: true,
+      },
+      settingsMode: 'balanced',
+      task: 'text_generation',
+      explicitUserAction: true,
+    });
+
+    expect(decision.choice).toBe('smollm3_3b');
+    expect(decision.fallbackChoices).toEqual(['phi4_mini']);
   });
 
   it('keeps low-tier text generation off until explicitly requested', () => {

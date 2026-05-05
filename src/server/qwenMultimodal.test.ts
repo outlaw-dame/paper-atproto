@@ -272,7 +272,7 @@ describe('runMediaAnalyzer hardening', () => {
       mediaType: 'screenshot',
       extractedText: 'SETTINGS',
       mediaSummary: 'A desktop settings screenshot with a notifications panel.',
-      candidateEntities: ['Settings', 'Notifications'],
+      candidateEntities: ['Notifications', 'Settings'],
       confidence: 0.81,
       cautionFlags: [],
       analysisStatus: 'complete',

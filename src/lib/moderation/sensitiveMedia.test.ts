@@ -85,7 +85,7 @@ describe('detectSensitiveMedia', () => {
     });
   });
 
-  it('fails closed to a warning when multimodal moderation is unavailable', () => {
+  it('stays neutral when multimodal moderation is unavailable', () => {
     const result = assessmentFromMediaAnalysis({
       analysisStatus: 'degraded',
       moderationStatus: 'unavailable',
@@ -93,11 +93,10 @@ describe('detectSensitiveMedia', () => {
     });
 
     expect(result).toEqual({
-      isSensitive: true,
-      reasons: ['sensitive-content'],
-      action: 'warn',
+      isSensitive: false,
+      reasons: [],
+      action: 'none',
       allowReveal: true,
-      rationale: 'Automatic media moderation is temporarily unavailable.',
       source: 'multimodal',
     });
   });

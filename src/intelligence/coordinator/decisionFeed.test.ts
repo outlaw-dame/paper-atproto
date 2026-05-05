@@ -49,7 +49,7 @@ function fakeSupervisorResult(): SupervisorNextStepPlannerResult {
       nextStep: {
         type: 'rerun_writer_with_safe_fallback',
         priority: 'high',
-        reason: 'writer error',
+        rationale: 'writer error',
         target: 'writer',
       },
       prioritizedActionTypes: ['rerun_writer_with_safe_fallback'],

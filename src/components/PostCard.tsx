@@ -88,6 +88,7 @@ const multimodalCooldownUntil = new Map<string, number>();
 const MULTIMODAL_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const MULTIMODAL_RETRY_BASE_MS = 5_000;
 const MULTIMODAL_RETRY_MAX_MS = 60_000;
+const MULTIMODAL_RETRY_ATTEMPTS = 3;
 
 function multimodalRetryDelayMs(attempt: number): number {
   return Math.min(MULTIMODAL_RETRY_MAX_MS, MULTIMODAL_RETRY_BASE_MS * (2 ** attempt));
@@ -116,7 +117,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   } = useSensitiveMediaStore();
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((state) => state.openExploreSearch);
-  const mediaItems = post.media ?? [];
+  const mediaItems = useMemo(() => post.media ?? [], [post.media]);
   const carouselItems = useMemo<MediaCarouselItem[]>(() => {
     const items: MediaCarouselItem[] = mediaItems.map((img, idx) => ({
       kind: 'image',
@@ -352,6 +353,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   useEffect(() => {
     setMultimodalSensitiveAssessment(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
     setMultimodalRetryAttempt(0);
+    sensitiveImpressionLoggedRef.current = false;
   }, [post.id]);
 
   useEffect(() => {
@@ -375,6 +377,13 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRetry = () => {
       if (cancelled) return;
+      if (multimodalRetryAttempt >= MULTIMODAL_RETRY_ATTEMPTS) {
+        multimodalCooldownUntil.set(
+          primaryVisualTarget.cacheKey,
+          Date.now() + MULTIMODAL_RATE_LIMIT_COOLDOWN_MS,
+        );
+        return;
+      }
       retryTimer = setTimeout(() => {
         if (!cancelled) {
           setMultimodalRetryAttempt((current) => current + 1);
@@ -398,11 +407,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             factualHints: [],
           });
           multimodalInFlight.set(cacheKey, pending);
-          pending.finally(() => {
+          void pending.finally(() => {
             if (multimodalInFlight.get(cacheKey) === pending) {
               multimodalInFlight.delete(cacheKey);
             }
-          });
+          }).catch(() => {});
         }
         const result = await pending;
 
@@ -538,6 +547,19 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     e.stopPropagation();
     hidePost(post.id);
     recordSensitiveMediaRehide(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
+  };
+
+  const toggleSensitiveMediaVisibility = (e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    if (!canRevealSensitiveMedia || !isSensitiveMedia) return false;
+    if (isSensitiveMediaRevealed) {
+      hidePost(post.id);
+      recordSensitiveMediaRehide(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
+    } else {
+      revealPost(post.id);
+      recordSensitiveMediaReveal(sensitiveReasons.length, sensitivePolicy.telemetryOptIn);
+    }
+    return true;
   };
 
   return (
@@ -783,7 +805,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
             overflow: 'hidden',
             filter: shouldBlurSensitiveMedia ? 'blur(22px)' : 'none',
             transition: 'filter 0.18s ease',
-            pointerEvents: shouldBlurSensitiveMedia ? 'none' : 'auto',
+            pointerEvents: 'auto',
             position: 'relative',
           }}>
             <div
@@ -845,6 +867,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       alt={item.alt}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (toggleSensitiveMediaVisibility(e)) return;
                         const imageIndex = carouselToLightboxIndex[i];
                         if (typeof imageIndex !== 'number' || imageIndex < 0) return;
                         setLightboxIndex(imageIndex);
@@ -1027,21 +1050,40 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           </div>
 
           {shouldBlurSensitiveMedia && (
-            <div style={{
-              position: 'absolute',
-              inset: 0,
-              borderRadius: 12,
-              background: 'linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.56))',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              fontSize: 12,
-              fontWeight: 700,
-              textAlign: 'center',
-              padding: 12,
-            }}>
-              Sensitive media hidden
+            <div
+              onClick={toggleSensitiveMediaVisibility}
+              role={canRevealSensitiveMedia ? 'button' : undefined}
+              tabIndex={canRevealSensitiveMedia ? 0 : undefined}
+              onKeyDown={(e) => {
+                if (!canRevealSensitiveMedia) return;
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggleSensitiveMediaVisibility(e);
+              }}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                borderRadius: 12,
+                background: 'linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.56))',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontSize: 12,
+                fontWeight: 700,
+                textAlign: 'center',
+                padding: 12,
+                cursor: canRevealSensitiveMedia ? 'pointer' : 'default',
+              }}
+            >
+              <span
+                style={{
+                  color: '#fff',
+                  font: 'inherit',
+                }}
+              >
+                Sensitive media hidden. Tap to show.
+              </span>
             </div>
           )}
 

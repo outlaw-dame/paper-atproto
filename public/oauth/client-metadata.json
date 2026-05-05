@@ -1,9 +1,9 @@
 {
   "$schema": "https://atproto.com/specs/oauth-client-metadata#",
-  "client_id": "https://operate-xml-embedded-individually.trycloudflare.com/oauth/client-metadata.json",
+  "client_id": "https://crossing-gary-weblogs-puts.trycloudflare.com/oauth/client-metadata.json",
   "client_name": "Glimpse",
-  "client_uri": "https://operate-xml-embedded-individually.trycloudflare.com",
-  "redirect_uris": ["https://operate-xml-embedded-individually.trycloudflare.com/"],
+  "client_uri": "https://crossing-gary-weblogs-puts.trycloudflare.com",
+  "redirect_uris": ["https://crossing-gary-weblogs-puts.trycloudflare.com/"],
   "scope": "atproto transition:generic",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],

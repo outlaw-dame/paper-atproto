@@ -279,18 +279,26 @@ export function scoreReply(
   allCitedUrls: Set<string>,
 ): ContributionScore {
   const text = reply.text ?? '';
-  const words = text.toLowerCase().split(/\s+/).length;
+
+  // Include quoted post text in analysis so quote-posts contribute their
+  // embedded claim/source content to scoring, not just the author's commentary.
+  const quotedText = (
+    reply.embed?.kind === 'record' || reply.embed?.kind === 'recordWithMedia'
+  ) ? (reply.embed.quotedText ?? '') : '';
+  const fullText = quotedText ? `${text}\n\n${quotedText}` : text;
+
+  const words = fullText.toLowerCase().split(/\s+/).length;
   const threadTexts = allReplies
     .filter(r => r.uri !== reply.uri)
     .map(r => r.text ?? '');
 
-  const evidenceSignals = extractEvidenceSignals(text, reply.facets, reply.embed);
-  const entityImpacts = linkAndMatchEntities(text, reply.facets, entityCatalog);
+  const evidenceSignals = extractEvidenceSignals(fullText, reply.facets, reply.embed);
+  const entityImpacts = linkAndMatchEntities(fullText, reply.facets, entityCatalog);
   const factualContribution = computeFactualContribution(evidenceSignals);
-  const role = assignRole(text, threadTexts, evidenceSignals, reply.likeCount, factualContribution);
+  const role = assignRole(fullText, threadTexts, evidenceSignals, reply.likeCount, factualContribution);
   const usefulnessScore = computeUsefulnessScore(role, factualContribution, reply.likeCount, words);
   const { match: knownFactCheckMatch, confidence: factCheckMatchConfidence } =
-    deriveLocalFactCheckMatch(text, rootText, allCitedUrls, evidenceSignals);
+    deriveLocalFactCheckMatch(fullText, rootText, allCitedUrls, evidenceSignals);
 
   return {
     uri: reply.uri,

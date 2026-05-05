@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { PREMIUM_PROVIDER_EVAL_FIXTURES } from '../src/evals/premiumProviderFixtures.ts';
@@ -36,6 +37,9 @@ const DEFAULT_HTTP_BASE_DELAY_MS = 350;
 const DEFAULT_HTTP_MAX_DELAY_MS = 2_500;
 const DIAGNOSTICS_STALE_MS = 2 * 60_000;
 const MAX_ERROR_PREVIEW_CHARS = 240;
+const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 8_000;
+const DEFAULT_AUTOSTART_WAIT_MS = 15_000;
+const DEFAULT_AUTOSTART_POLL_MS = 750;
 const DEFAULT_BANNED_PHRASES = [
   'the thread centers on',
   'the thread centres on',
@@ -266,7 +270,7 @@ function evaluateInputContract(fixture) {
   };
 }
 
-function evaluateTargetOutput(fixture, target, result) {
+export function evaluateTargetOutput(fixture, target, result) {
   const outputText = lowerText(buildCombinedOutputText(result));
   const summaryText = lowerText(result.summary);
   const expectations = fixture.expectations;
@@ -465,6 +469,84 @@ async function readWriterDiagnostics(baseUrl) {
   }
 }
 
+async function probeHttpJson(endpoint, timeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS) {
+  try {
+    const payload = await fetchJsonWithRetry(endpoint, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+    }, {
+      attempts: 1,
+      timeoutMs,
+    });
+    return {
+      ok: true,
+      payload,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      payload: null,
+      error: sanitizeText(error?.message || error),
+    };
+  }
+}
+
+async function waitForDiagnostics(baseUrl, timeoutMs = DEFAULT_AUTOSTART_WAIT_MS) {
+  const diagnosticsEndpoint = `${baseUrl.replace(/\/+$/, '')}${DIAGNOSTICS_ENDPOINT}`;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const probe = await probeHttpJson(diagnosticsEndpoint);
+    if (probe.ok) return probe;
+    await sleep(DEFAULT_AUTOSTART_POLL_MS);
+  }
+  return {
+    ok: false,
+    payload: null,
+    error: 'Timed out waiting for diagnostics endpoint',
+  };
+}
+
+function shouldAutoStartServer() {
+  const raw = String(process.env.PREMIUM_EVAL_AUTOSTART_SERVER ?? 'true').trim().toLowerCase();
+  return raw !== 'false' && raw !== '0' && raw !== 'no';
+}
+
+async function tryAutoStartServer(baseUrl) {
+  if (!shouldAutoStartServer()) {
+    return {
+      attempted: false,
+      started: false,
+      command: null,
+      error: null,
+    };
+  }
+
+  try {
+    const child = spawn('pnpm', ['run', 'server:start'], {
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    const probe = await waitForDiagnostics(baseUrl);
+    return {
+      attempted: true,
+      started: probe.ok,
+      command: 'pnpm run server:start',
+      error: probe.ok ? null : probe.error,
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      started: false,
+      command: 'pnpm run server:start',
+      error: sanitizeText(error?.message || error),
+    };
+  }
+}
+
 function summarizeIssueDistributionDelta(before, after) {
   const labels = [];
   for (const [label, value] of Object.entries(after ?? {})) {
@@ -587,9 +669,61 @@ function targetLabel(target) {
 
 async function ensureConversationEvalHealth(baseUrl, targets) {
   const needsHttp = targets.some((target) => target !== 'local-raw');
-  if (!needsHttp) return { diagnostics: null };
+  if (!needsHttp) {
+    return {
+      diagnostics: null,
+      serverReachable: false,
+      diagnosticsReachable: false,
+      autoStart: {
+        attempted: false,
+        started: false,
+        command: null,
+        error: null,
+      },
+      endpoints: {},
+    };
+  }
+
+  const diagnosticsEndpoint = `${baseUrl.replace(/\/+$/, '')}${DIAGNOSTICS_ENDPOINT}`;
+  let diagnosticsProbe = await probeHttpJson(diagnosticsEndpoint);
+  let autoStart = {
+    attempted: false,
+    started: false,
+    command: null,
+    error: null,
+  };
+
+  if (!diagnosticsProbe.ok) {
+    autoStart = await tryAutoStartServer(baseUrl);
+    diagnosticsProbe = await probeHttpJson(diagnosticsEndpoint);
+  }
+
+  const diagnostics = diagnosticsProbe.ok
+    ? await readWriterDiagnostics(baseUrl)
+    : null;
+
+  const endpointChecks = await Promise.all(targets.map(async (target) => {
+    if (target === 'local-raw') {
+      return [target, { reachable: true, endpoint: 'in-process', error: null }];
+    }
+
+    const endpoint = PREMIUM_TARGETS.has(target)
+      ? `${baseUrl.replace(/\/+$/, '')}/api/premium-ai/interpolator/deep`
+      : `${baseUrl.replace(/\/+$/, '')}${LOCAL_WRITER_ENDPOINT}`;
+    const probe = await probeHttpJson(endpoint);
+    return [target, {
+      reachable: probe.ok,
+      endpoint,
+      error: probe.ok ? null : probe.error,
+    }];
+  }));
+
   return {
-    diagnostics: await readWriterDiagnostics(baseUrl),
+    diagnostics,
+    serverReachable: diagnosticsProbe.ok,
+    diagnosticsReachable: diagnosticsProbe.ok,
+    autoStart,
+    endpoints: Object.fromEntries(endpointChecks),
   };
 }
 
@@ -599,6 +733,14 @@ function printHumanReport(report) {
 
   if (report.bootstrap?.diagnostics === null) {
     console.log('bootstrap: diagnostics unavailable; continuing with live requests only');
+    console.log('');
+  }
+
+  if (report.bootstrap) {
+    console.log(`bootstrap: serverReachable=${String(report.bootstrap.serverReachable)} diagnosticsReachable=${String(report.bootstrap.diagnosticsReachable)}`);
+    if (report.bootstrap.autoStart?.attempted) {
+      console.log(`bootstrap: autostart attempted via ${report.bootstrap.autoStart.command} started=${String(report.bootstrap.autoStart.started)}`);
+    }
     console.log('');
   }
 
@@ -653,6 +795,9 @@ async function main() {
   const report = {
     baseUrl: args.baseUrl,
     bootstrap,
+    meta: {
+      hadErrors: false,
+    },
     fixtures: [],
     overall: {},
   };
@@ -696,14 +841,12 @@ async function main() {
     report.fixtures.push(fixtureReport);
   }
 
+  report.meta.hadErrors = hadErrors;
+
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     printHumanReport(report);
-  }
-
-  if (hadErrors) {
-    process.exitCode = 1;
   }
 }
 

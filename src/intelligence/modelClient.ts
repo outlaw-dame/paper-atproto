@@ -49,6 +49,8 @@ const RETRY_ATTEMPTS = 3;
 const RETRY_JITTER = 0.30;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PREMIUM_ENTITLEMENT_TTL_MS = 5 * 60_000;
+const MEDIA_ANALYZER_RATE_LIMIT_COOLDOWN_MS = 30_000;
+const MEDIA_ANALYZER_MAX_RETRY_AFTER_MS = 5 * 60_000;
 
 const PROHIBITED_PROFANITY_PATTERNS = [
   /\b(fuck|shit|bitch|asshole|bastard|damn|crap)\b/gi,
@@ -150,6 +152,7 @@ type PremiumEntitlementCacheEntry = {
 type ModelClientRequestError = Error & {
   status?: number;
   retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 const premiumEntitlementCache = new Map<string, PremiumEntitlementCacheEntry>();
@@ -160,6 +163,7 @@ const interpolatorTelemetry: InterpolatorTelemetrySnapshot = {
   abstained: 0,
   failed: 0,
 };
+let mediaAnalyzerCooldownUntil = 0;
 
 const WRITER_OUTCOME_TELEMETRY_PATH = '/api/llm/telemetry/writer-outcome';
 const WRITER_OUTCOME_TELEMETRY_MAX_ATTEMPTS = 2;
@@ -169,6 +173,55 @@ function backoffWithJitterMs(attempt: number, baseMs = 200, maxMs = 1_500): numb
   const exp = Math.min(maxMs, baseMs * 2 ** attempt);
   const jitter = exp * 0.25;
   return Math.max(100, Math.floor(exp - jitter + Math.random() * jitter * 2));
+}
+
+function getMediaAnalyzerCooldownRemainingMs(now = Date.now()): number {
+  return Math.max(0, mediaAnalyzerCooldownUntil - now);
+}
+
+function setMediaAnalyzerCooldown(ms: number, now = Date.now()): void {
+  const bounded = Math.max(
+    MEDIA_ANALYZER_RATE_LIMIT_COOLDOWN_MS,
+    Math.min(MEDIA_ANALYZER_MAX_RETRY_AFTER_MS, Math.floor(ms)),
+  );
+  mediaAnalyzerCooldownUntil = Math.max(mediaAnalyzerCooldownUntil, now + bounded);
+}
+
+function parseRetryAfterHeader(value: string | null | undefined): number | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+
+  const numericSeconds = Number(value);
+  if (Number.isFinite(numericSeconds) && numericSeconds >= 0) {
+    return Math.max(0, Math.floor(numericSeconds * 1000));
+  }
+
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) return null;
+  return Math.max(0, retryAt - Date.now());
+}
+
+function buildRateLimitedMediaAnalysis(
+  input: MediaAnalysisRequest,
+  cooldownMs: number,
+): MediaAnalysisResult {
+  const cooldownSeconds = Math.max(1, Math.ceil(cooldownMs / 1000));
+  const defaultEntity = input.candidateEntities[0]
+    ? `${input.candidateEntities[0]} appears central to the image context.`
+    : 'Image context appears central to the thread claim.';
+
+  return {
+    mediaCentrality: 0.5,
+    mediaType: 'unknown',
+    mediaSummary: 'Media appears relevant, but automated analysis is temporarily rate-limited.',
+    candidateEntities: input.candidateEntities.slice(0, 3),
+    confidence: 0.25,
+    cautionFlags: [
+      `Automated media analysis temporarily rate-limited (${cooldownSeconds}s cooldown).`,
+      defaultEntity,
+    ],
+    analysisStatus: 'degraded',
+    moderationStatus: 'unavailable',
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -988,11 +1041,18 @@ async function fetchWithRetry<T>(
         const error = new Error(`LLM endpoint ${path} responded ${res.status}`) as ModelClientRequestError;
         error.status = res.status;
         error.retryable = canRetryStatus;
+        const retryAfterMs = parseRetryAfterHeader(res.headers.get('retry-after'));
+        if (retryAfterMs !== null) {
+          error.retryAfterMs = retryAfterMs;
+        }
         if (!canRetryStatus || attempt === attempts - 1) {
           throw error;
         }
         lastError = error;
-        await sleepWithAbort(backoffMs(attempt), combinedSignal);
+        const retryAfterDelay = retryAfterMs === null
+          ? 0
+          : Math.max(0, Math.min(MEDIA_ANALYZER_MAX_RETRY_AFTER_MS, retryAfterMs));
+        await sleepWithAbort(Math.max(backoffMs(attempt), retryAfterDelay), combinedSignal);
         continue;
       }
 
@@ -1290,6 +1350,15 @@ export async function callMediaAnalyzer(
   signal?: AbortSignal,
 ): Promise<MediaAnalysisResult> {
   const request = sanitizeMediaAnalysisRequest(input);
+  const cooldownRemainingMs = getMediaAnalyzerCooldownRemainingMs();
+
+  if (cooldownRemainingMs > 0) {
+    const localFallback = await tryLocalCaptionMediaFallback(request, signal);
+    if (localFallback) {
+      return localFallback;
+    }
+    return refineMediaAnalysisResult(request, buildRateLimitedMediaAnalysis(request, cooldownRemainingMs));
+  }
 
   try {
     const result = await fetchWithRetry<MediaAnalysisResult>(
@@ -1310,6 +1379,25 @@ export async function callMediaAnalyzer(
       throw error;
     }
 
+    const status = (error as ModelClientRequestError | undefined)?.status;
+    if (status === 429) {
+      const retryAfterMs = (error as ModelClientRequestError | undefined)?.retryAfterMs;
+      setMediaAnalyzerCooldown(retryAfterMs ?? MEDIA_ANALYZER_RATE_LIMIT_COOLDOWN_MS);
+
+      const localFallback = await tryLocalCaptionMediaFallback(request, signal);
+      if (localFallback) {
+        return localFallback;
+      }
+
+      return refineMediaAnalysisResult(
+        request,
+        buildRateLimitedMediaAnalysis(
+          request,
+          retryAfterMs ?? MEDIA_ANALYZER_RATE_LIMIT_COOLDOWN_MS,
+        ),
+      );
+    }
+
     if (shouldAttemptLocalMediaFallback(error)) {
       const localFallback = await tryLocalCaptionMediaFallback(request, signal);
       if (localFallback) {
@@ -1319,6 +1407,32 @@ export async function callMediaAnalyzer(
 
     throw error;
   }
+}
+
+export function __resetModelClientTransientStateForTests(): void {
+  mediaAnalyzerCooldownUntil = 0;
+}
+
+/**
+ * Calls the writer for Explore / Search Story synopsis.
+ */
+/**
+ * Calls the premium (Gemini Flash) multimodal analyzer for overflow images —
+ * i.e. images 3+ in threads that exceed the standard 2-image local cap.
+ * No local caption fallback: if the premium route fails, the error propagates
+ * and the caller should treat it as a non-critical analysis failure.
+ */
+export async function callPremiumMediaAnalyzer(
+  input: MediaAnalysisRequest,
+  signal?: AbortSignal,
+): Promise<MediaAnalysisResult> {
+  const request = sanitizeMediaAnalysisRequest(input);
+  const result = await fetchWithRetry<MediaAnalysisResult>(
+    '/api/llm/analyze/media/premium',
+    request,
+    signal,
+  );
+  return sanitizeMediaAnalysisResult(result);
 }
 
 /**

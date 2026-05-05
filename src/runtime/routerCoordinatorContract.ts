@@ -8,12 +8,14 @@ export type CoordinationPathKind =
   | 'local_worker'
   | 'local_generation'
   | 'local_multimodal'
+  | 'edge_workers_ai'
   | 'remote_fallback';
 
 export type CoordinationRouteId =
   | 'policy_baseline'
   | 'worker_local_only'
   | `model:${ModelChoice}`
+  | 'edge:workers-ai'
   | 'remote:fallback';
 
 export type CoordinationReasonCode =
@@ -148,9 +150,12 @@ function uniqueReasonCodes(codes: CoordinationReasonCode[]): CoordinationReasonC
 }
 
 function fallbackRouteOption(policyDecision: ModelPolicyDecision): CoordinationRouteOption {
+  const workersAiRoute = policyDecision.remoteFallbackAllowed
+    && (policyDecision.task === 'text_generation' || policyDecision.task === 'multimodal_analysis');
+
   return {
-    id: 'remote:fallback',
-    kind: 'remote_fallback',
+    id: workersAiRoute ? 'edge:workers-ai' : 'remote:fallback',
+    kind: workersAiRoute ? 'edge_workers_ai' : 'remote_fallback',
     model: null,
     source: 'model_policy',
     allowed: policyDecision.remoteFallbackAllowed,

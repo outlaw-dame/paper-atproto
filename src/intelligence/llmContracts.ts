@@ -136,6 +136,12 @@ export interface MediaAnalysisRequest {
   nearbyText: string;
   candidateEntities: string[];
   factualHints: string[];
+  /**
+   * When true, this request was selected beyond the standard 2-image local cap.
+   * The coordinator-aware analyzer will route it to a premium API vision model
+   * (Gemini Flash / GPT-4o) rather than the local Qwen3-VL server path.
+   */
+  overflow?: true;
 }
 
 export type MediaModerationAction = 'none' | 'warn' | 'blur' | 'drop';

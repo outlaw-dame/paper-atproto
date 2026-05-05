@@ -59,6 +59,19 @@ describe('intelligenceCoordinator', () => {
     expect(advice.event.task).toBe('composer_refine');
   });
 
+  it('produces a Cloudflare multimodal edge plan for media analysis', async () => {
+    const brief = buildSessionBrief({
+      surface: 'media',
+      intent: 'media_analysis',
+      capability: HIGH_CAPABILITY,
+      attachments: { hasImages: true },
+    });
+    const advice = await intelligenceCoordinator.adviseOnMedia(brief);
+    expect(advice.edgePlan?.capability).toBe('media_classify');
+    expect(advice.edgePlan?.provider).toBe('cloudflare-workers-ai');
+    expect(advice.edgePlan?.endpoint).toBe('/api/edge/media-classify');
+  });
+
   it('skips the router for hot-path scoring (search) and still emits an event', async () => {
     const brief = buildSessionBrief({
       surface: 'search',

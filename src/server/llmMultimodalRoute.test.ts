@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  recordMultimodalFallback,
+  recordMultimodalRejection,
+  recordMultimodalSuccess,
+  resetMultimodalDiagnostics,
+} from '../../server/src/llm/multimodalDiagnostics.js';
 
 type ThreatEntry = {
   threatType: string;
@@ -12,14 +18,17 @@ const NO_THREATS: ThreatEntry[] = [];
 const {
   envMock,
   mockRunMediaAnalyzer,
+  mockRunGeminiMediaAnalyzer,
   mockCheckUrlAgainstSafeBrowsing,
   mockLogSafetyFlag,
 } = vi.hoisted(() => ({
   envMock: {
     LLM_ENABLED: true,
     AI_SAFE_BROWSING_FAIL_CLOSED: false,
+    GEMINI_API_KEY: 'test-gemini-key',
   },
   mockRunMediaAnalyzer: vi.fn(),
+  mockRunGeminiMediaAnalyzer: vi.fn(),
   mockCheckUrlAgainstSafeBrowsing: vi.fn(async (url: string) => ({
     url,
     checked: true,
@@ -41,6 +50,10 @@ vi.mock('../../server/src/services/qwenWriter.js', () => ({
 
 vi.mock('../../server/src/services/qwenMultimodal.js', () => ({
   runMediaAnalyzer: mockRunMediaAnalyzer,
+}));
+
+vi.mock('../../server/src/services/geminiMultimodal.js', () => ({
+  runGeminiMediaAnalyzer: mockRunGeminiMediaAnalyzer,
 }));
 
 vi.mock('../../server/src/services/qwenComposerGuidanceWriter.js', () => ({
@@ -91,13 +104,36 @@ vi.mock('../../server/src/services/safetyFilters.js', () => ({
 
 import { llmRouter } from '../../server/src/routes/llm.js';
 
+async function readMultimodalDiagnostics() {
+  const response = await llmRouter.request('/admin/diagnostics', {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+    },
+  });
+  expect(response.status).toBe(200);
+  const payload = await response.json() as {
+    multimodal?: {
+      invocations?: number;
+      successes?: { total?: number };
+      fallbacks?: { total?: number };
+      rejections?: { total?: number };
+    };
+  };
+  return payload.multimodal ?? {};
+}
+
 describe('llmRouter /api/llm/analyze/media Safe Browsing', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     envMock.LLM_ENABLED = true;
     envMock.AI_SAFE_BROWSING_FAIL_CLOSED = false;
+    envMock.GEMINI_API_KEY = 'test-gemini-key';
     mockRunMediaAnalyzer.mockReset();
+    mockRunGeminiMediaAnalyzer.mockReset();
     mockCheckUrlAgainstSafeBrowsing.mockReset();
     mockLogSafetyFlag.mockReset();
+    resetMultimodalDiagnostics();
+    await llmRouter.request('/admin/diagnostics', { method: 'DELETE' });
     mockCheckUrlAgainstSafeBrowsing.mockImplementation(async (url: string) => ({
       url,
       checked: true,
@@ -143,16 +179,34 @@ describe('llmRouter /api/llm/analyze/media Safe Browsing', () => {
       error: 'URL matched one or more Safe Browsing threat lists.',
     });
     expect(mockRunMediaAnalyzer).not.toHaveBeenCalled();
+
+    recordMultimodalRejection({
+      stage: 'fetch',
+      latencyMs: 10,
+      reason: 'validation-error',
+      message: 'Media URL blocked by Google Safe Browsing.',
+    });
+    const diagnostics = await readMultimodalDiagnostics();
+    expect(diagnostics.rejections?.total).toBe(1);
+    expect(diagnostics.fallbacks?.total ?? 0).toBe(0);
   });
 
   it('allows safe media URLs through to the analyzer', async () => {
-    mockRunMediaAnalyzer.mockResolvedValueOnce({
+    mockRunMediaAnalyzer.mockImplementationOnce(async () => {
+      recordMultimodalSuccess({
+        mediaType: 'document',
+        moderationAction: 'none',
+        confidence: 0.9,
+        latencyMs: 180,
+      });
+      return {
       mediaCentrality: 0.8,
       mediaType: 'document',
       mediaSummary: 'A policy memo screenshot.',
       candidateEntities: ['Agency'],
       confidence: 0.9,
       cautionFlags: [],
+      };
     });
 
     const response = await llmRouter.request('/analyze/media', {
@@ -180,10 +234,23 @@ describe('llmRouter /api/llm/analyze/media Safe Browsing', () => {
     });
     expect(mockCheckUrlAgainstSafeBrowsing).toHaveBeenCalledWith('https://safe.example/image.png');
     expect(mockRunMediaAnalyzer).toHaveBeenCalledTimes(1);
+
+    const diagnostics = await readMultimodalDiagnostics();
+    expect(diagnostics.successes?.total).toBe(1);
+    expect(diagnostics.fallbacks?.total ?? 0).toBe(0);
+    expect(diagnostics.rejections?.total ?? 0).toBe(0);
   });
 
   it('returns an explicit degraded media state when the analyzer throws', async () => {
-    mockRunMediaAnalyzer.mockRejectedValueOnce(new Error('ollama down'));
+    mockRunMediaAnalyzer.mockImplementationOnce(async () => {
+      recordMultimodalFallback({
+        stage: 'model-call',
+        latencyMs: 320,
+        reason: 'Error',
+        message: 'ollama down',
+      });
+      throw new Error('ollama down');
+    });
 
     const response = await llmRouter.request('/analyze/media', {
       method: 'POST',
@@ -210,5 +277,71 @@ describe('llmRouter /api/llm/analyze/media Safe Browsing', () => {
       analysisStatus: 'degraded',
       moderationStatus: 'unavailable',
     });
+
+    const diagnostics = await readMultimodalDiagnostics();
+    expect(diagnostics.fallbacks?.total).toBe(1);
+    expect(diagnostics.successes?.total ?? 0).toBe(0);
+    expect(diagnostics.rejections?.total ?? 0).toBe(0);
+  });
+
+  it('returns 503 for premium media route when GEMINI_API_KEY is missing', async () => {
+    envMock.GEMINI_API_KEY = undefined;
+
+    const response = await llmRouter.request('/analyze/media/premium', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        threadId: 'thread-1',
+        mediaUrl: 'https://safe.example/image.png',
+        nearbyText: 'caption text',
+        candidateEntities: ['Agency'],
+        factualHints: [],
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: 'Premium media analysis unavailable',
+    });
+    expect(mockRunGeminiMediaAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it('uses Gemini analyzer on premium media route for safe URLs', async () => {
+    mockRunGeminiMediaAnalyzer.mockResolvedValueOnce({
+      mediaCentrality: 0.77,
+      mediaType: 'screenshot',
+      mediaSummary: 'A screenshot of a timeline with revised dates.',
+      candidateEntities: ['Timeline'],
+      confidence: 0.88,
+      cautionFlags: [],
+    });
+
+    const response = await llmRouter.request('/analyze/media/premium', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        threadId: 'thread-1',
+        mediaUrl: 'https://safe.example/image.png',
+        nearbyText: 'caption text',
+        candidateEntities: ['Timeline'],
+        factualHints: [],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      mediaCentrality: 0.77,
+      mediaType: 'screenshot',
+      mediaSummary: 'A screenshot of a timeline with revised dates.',
+      candidateEntities: ['Timeline'],
+      confidence: 0.88,
+      cautionFlags: [],
+    });
+    expect(mockCheckUrlAgainstSafeBrowsing).toHaveBeenCalledWith('https://safe.example/image.png');
+    expect(mockRunGeminiMediaAnalyzer).toHaveBeenCalledTimes(1);
   });
 });

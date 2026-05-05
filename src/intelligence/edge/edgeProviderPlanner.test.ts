@@ -92,7 +92,7 @@ describe('edge provider task planning', () => {
       privacyMode: 'balanced',
     })).toMatchObject({
       capability: 'media_classify',
-      endpoint: '/api/llm/analyze/media',
+      endpoint: '/api/edge/media-classify',
     });
 
     expect(planEdgeExecution({

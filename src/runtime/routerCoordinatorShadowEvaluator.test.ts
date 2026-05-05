@@ -53,7 +53,7 @@ describe('evaluateRouterShadowDecision', () => {
 
     expect(result.status).toBe('accepted');
     expect(result.routerRouteId).toBe('model:smollm3_3b');
-    expect(result.deterministicRouteId).toBe('model:qwen3_4b');
+    expect(result.deterministicRouteId).toBe('model:phi4_mini');
     expect(result.selectedRouteId).toBe('model:smollm3_3b');
     expect(result.authorityApplied).toBe(true);
     expect(result.routerMatchedDeterministic).toBe(false);
@@ -77,11 +77,11 @@ describe('evaluateRouterShadowDecision', () => {
 
     expect(rejected.status).toBe('rejected');
     expect(rejected.routerRouteId).toBeNull();
-    expect(rejected.selectedRouteId).toBe('model:qwen3_4b');
+    expect(rejected.selectedRouteId).toBe('model:phi4_mini');
     expect(rejected.authorityApplied).toBe(false);
     expect(missing.status).toBe('not_provided');
     expect(missing.routerRouteId).toBeNull();
-    expect(missing.selectedRouteId).toBe('model:qwen3_4b');
+    expect(missing.selectedRouteId).toBe('model:phi4_mini');
     expect(missing.authorityApplied).toBe(false);
   });
 });
@@ -94,7 +94,7 @@ describe('evaluateCoordinatorShadowRecommendation', () => {
       recommendation: {
         schemaVersion: 1,
         recommendation: 'accept_route',
-        selectedRouteId: 'model:qwen3_4b',
+        selectedRouteId: 'model:phi4_mini',
         confidence: 0.74,
         reasonCodes: ['policy_selected_primary'],
         monitoringPlan: {
@@ -108,8 +108,8 @@ describe('evaluateCoordinatorShadowRecommendation', () => {
 
     expect(result.status).toBe('accepted');
     expect(result.recommendation).toBe('accept_route');
-    expect(result.recommendationRouteId).toBe('model:qwen3_4b');
-    expect(result.selectedRouteId).toBe('model:qwen3_4b');
+    expect(result.recommendationRouteId).toBe('model:phi4_mini');
+    expect(result.selectedRouteId).toBe('model:phi4_mini');
     expect(result.recommendationMatchedDeterministic).toBe(true);
     expect(result.monitoringPlan?.maxRetries).toBe(1);
   });
@@ -131,7 +131,7 @@ describe('evaluateRouterCoordinatorShadow', () => {
       coordinatorRecommendation: {
         schemaVersion: 1,
         recommendation: 'accept_route',
-        selectedRouteId: 'model:qwen3_4b',
+        selectedRouteId: 'model:phi4_mini',
         confidence: 0.74,
         reasonCodes: ['policy_selected_primary'],
         monitoringPlan: {
@@ -143,10 +143,10 @@ describe('evaluateRouterCoordinatorShadow', () => {
       },
     });
 
-    expect(result.deterministicRouteId).toBe('model:qwen3_4b');
+    expect(result.deterministicRouteId).toBe('model:phi4_mini');
     expect(result.selectedRouteId).toBe('model:smollm3_3b');
     expect(result.router.routerRouteId).toBe('model:smollm3_3b');
     expect(result.router.authorityApplied).toBe(true);
-    expect(result.coordinator.recommendationRouteId).toBe('model:qwen3_4b');
+    expect(result.coordinator.recommendationRouteId).toBe('model:phi4_mini');
   });
 });

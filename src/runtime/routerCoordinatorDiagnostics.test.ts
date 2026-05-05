@@ -50,14 +50,17 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
     expect(snapshot.schemaVersion).toBe(1);
     expect(snapshot.readiness).toBe('coordinator_shadow_ready');
     expect(snapshot.blockers).toEqual([]);
-    expect(snapshot.defaultRouteId).toBe('model:qwen3_4b');
-    expect(snapshot.stack.coordinatorModel).toBe('gemma4_e4b');
+    expect(snapshot.defaultRouteId).toBe('model:phi4_mini');
+    expect(snapshot.stack.coordinatorModel).toBe('cf_llama_3_3_70b_instruct');
     expect(snapshot.allowedRoutes.map((route) => route.id)).toEqual([
-      'model:qwen3_4b',
-      'model:smollm3_3b',
       'model:phi4_mini',
-      'remote:fallback',
+      'model:smollm3_3b',
+      'edge:workers-ai',
     ]);
+    expect(snapshot.allowedRoutes.at(-1)).toMatchObject({
+      kind: 'edge_workers_ai',
+      source: 'model_policy',
+    });
     expect(snapshot.allowedRoutes.every((route) => route.allowed)).toBe(true);
   });
 
@@ -108,7 +111,7 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
     expect(snapshot.stack.coordinatorModel).toBe('none');
   });
 
-  it('surfaces consent blockers without granting coordinator shadow readiness', () => {
+  it('does not require local large-model consent for Workers AI coordinator routes', () => {
     const policyDecision = policyFor('text_generation');
     const stackProfile = selectAiStackProfile(HIGH_CAPABILITY, {
       settingsMode: 'best_quality',
@@ -124,9 +127,9 @@ describe('buildRouterCoordinatorDiagnosticsSnapshot', () => {
       nowEpochMs: 1_000,
     });
 
-    expect(snapshot.stack.coordinatorRequiresConsent).toBe(true);
-    expect(snapshot.blockers).toContain('large_model_requires_consent');
-    expect(snapshot.readiness).toBe('router_shadow_ready');
+    expect(snapshot.stack.coordinatorRequiresConsent).toBe(false);
+    expect(snapshot.blockers).not.toContain('large_model_requires_consent');
+    expect(snapshot.readiness).toBe('coordinator_shadow_ready');
   });
 
   it('blocks shadow readiness when deterministic policy requires explicit user action', () => {

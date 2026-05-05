@@ -49,6 +49,25 @@ function modelDigest(tag: OllamaTag): string | null {
   return digest.trim();
 }
 
+function parseOptionalList(value: string | undefined): string[] {
+  return String(value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function parseOptionalDigestMap(value: string | undefined): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const rawEntry of parseOptionalList(value)) {
+    const separatorIndex = rawEntry.indexOf('=');
+    if (separatorIndex <= 0) continue;
+    const model = rawEntry.slice(0, separatorIndex).trim();
+    const digest = rawEntry.slice(separatorIndex + 1).trim();
+    if (model && digest) entries.set(normalizeModelName(model), digest);
+  }
+  return entries;
+}
+
 export function assertOllamaLocalUrlPolicy(baseUrl = env.OLLAMA_BASE_URL): void {
   const localOnly = env.LLM_LOCAL_ONLY !== false;
   if (!localOnly) return;
@@ -117,6 +136,11 @@ export async function runOllamaStartupChecks(
   const requiredModels = [
     { key: 'QWEN_WRITER_MODEL', value: env.QWEN_WRITER_MODEL, digest: env.QWEN_WRITER_MODEL_DIGEST },
     { key: 'QWEN_MULTIMODAL_MODEL', value: env.QWEN_MULTIMODAL_MODEL, digest: env.QWEN_MULTIMODAL_MODEL_DIGEST },
+    ...parseOptionalList(env.GEMMA_WRITER_MODELS).map((model) => ({
+      key: 'GEMMA_WRITER_MODELS',
+      value: model,
+      digest: parseOptionalDigestMap(env.GEMMA_WRITER_MODEL_DIGESTS).get(normalizeModelName(model)),
+    })),
   ] as const;
 
   for (const required of requiredModels) {

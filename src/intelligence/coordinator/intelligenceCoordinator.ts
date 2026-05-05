@@ -51,7 +51,7 @@ export interface IntelligenceAdvice {
   /** Lane the deterministic policy chose (always present). */
   lane: IntelligenceLane;
   /** Optional fallback lane if the primary lane fails. */
-  fallbackLane?: IntelligenceLane;
+  fallbackLane?: IntelligenceLane | undefined;
   /** Stable reason code from the deterministic policy. */
   laneReasonCode: IntelligenceRoutingDecision['reasonCode'];
   /** Edge execution plan when the task is eligible for the edge. */

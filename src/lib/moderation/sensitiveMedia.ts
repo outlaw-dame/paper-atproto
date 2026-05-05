@@ -54,10 +54,9 @@ export const EMPTY_SENSITIVE_MEDIA_ASSESSMENT: SensitiveMediaAssessment = {
 
 export function createUnavailableSensitiveMediaAssessment(): SensitiveMediaAssessment {
   return normalizeAssessment({
-    reasons: [GENERIC_SENSITIVE_REASON],
-    action: 'warn',
+    reasons: [],
+    action: 'none',
     allowReveal: true,
-    rationale: 'Automatic media moderation is temporarily unavailable.',
   }, 'multimodal');
 }
 

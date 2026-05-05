@@ -17,7 +17,7 @@ export interface EdgeExecutionPlan {
   maxPayloadChars: number;
   reasonCode: string;
   fallbackProvider?: EdgeProviderId;
-  fallbackLane?: IntelligenceLane;
+  fallbackLane?: IntelligenceLane | undefined;
 }
 
 export interface ComposerClassifyEdgeRequest {
