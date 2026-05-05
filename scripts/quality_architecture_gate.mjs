@@ -287,19 +287,19 @@ function main() {
 
   const conversation = runJsonCommand(
     'conversation-os',
-    'pnpm',
-    ['run', 'eval:conversation-os', '--', '--json'],
+    process.execPath,
+    ['--import', 'tsx', 'scripts/eval_conversation_os.mjs', '--json'],
   );
   const multimodal = runJsonCommand(
     'multimodal',
-    'pnpm',
-    ['run', 'eval:multimodal', '--', '--dataset', 'scripts/multimodal_eval_set.sample.jsonl'],
+    process.execPath,
+    ['--import', 'tsx', 'scripts/eval_multimodal_accuracy.mjs', '--dataset', 'scripts/multimodal_eval_set.sample.jsonl'],
   );
   const premium = args.strictPremium
     ? runJsonCommand(
         'premium-providers',
-        'pnpm',
-        ['run', 'eval:premium-providers', '--', '--json'],
+        process.execPath,
+        ['--import', 'tsx', 'scripts/eval_premium_providers.mjs', '--json'],
       )
     : null;
 
