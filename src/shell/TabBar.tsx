@@ -51,10 +51,11 @@ const tabBarBaseStyle: React.CSSProperties = {
   flexShrink: 0,
   display: 'flex', flexDirection: 'row', alignItems: 'stretch',
   background: 'var(--chrome-bg)',
-  backdropFilter: 'blur(20px) saturate(180%)',
-  WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-  // Hairline separator — required by Apple HIG for tab bars
-  borderTop: '0.5px solid var(--sep)',
+  // Apple HIG: blur(24px) + saturate(1.8) — the saturate is the vibrancy layer
+  backdropFilter: 'blur(24px) saturate(1.8)',
+  WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
+  // Hairline separator at 0.33px (= 1px at 3× Retina) per Apple HIG
+  borderTop: '0.33px solid var(--sep-chrome)',
   paddingBottom: 'var(--safe-bottom)',
   // Landscape safe areas: iPhone notch appears on left/right in landscape
   paddingLeft: 'var(--safe-left, 0px)',
@@ -115,36 +116,49 @@ export default function TabBar({ hidden = false }: TabBarProps) {
             aria-selected={active}
             aria-label={label}
           >
-            <div style={{ position: 'relative' }}>
-              <div
-                style={{
-                  width: iconTokens.size,
-                  height: iconTokens.size,
-                  borderRadius: iconTokens.borderRadius,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                {icon(active)}
-              </div>
-              {/* Unread badge on Activity */}
-              {id === 'activity' && unreadCount > 0 && (
-                <span style={{
-                  position: 'absolute', top: -3, right: -6,
-                  minWidth: 16, height: 16, borderRadius: 8,
-                  background: 'var(--red)', color: '#fff',
-                  fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-meta-sm-track)', fontVariantNumeric: 'tabular-nums',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  padding: '0 4px',
-                }}>
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
+            {/* Active indicator — tinted capsule behind icon+label (iOS 16+ pattern) */}
+            <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              {/* Capsule background */}
+              {active && (
+                <div style={{
+                  position: 'absolute',
+                  inset: '-4px -10px',
+                  background: 'rgba(0, 122, 255, 0.11)',
+                  borderRadius: 16,
+                  pointerEvents: 'none',
+                }} />
               )}
+              <div style={{ position: 'relative' }}>
+                <div
+                  style={{
+                    width: iconTokens.size,
+                    height: iconTokens.size,
+                    borderRadius: iconTokens.borderRadius,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {icon(active)}
+                </div>
+                {/* Unread badge on Activity */}
+                {id === 'activity' && unreadCount > 0 && (
+                  <span style={{
+                    position: 'absolute', top: -3, right: -6,
+                    minWidth: 16, height: 16, borderRadius: 8,
+                    background: 'var(--red)', color: '#fff',
+                    fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 700, letterSpacing: 'var(--type-meta-sm-track)', fontVariantNumeric: 'tabular-nums',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: '0 4px',
+                  }}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </div>
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, lineHeight: '13px', fontWeight: active ? 600 : 500, letterSpacing: '0.002em', color: active ? 'var(--blue)' : 'var(--label-2)', userSelect: 'none', WebkitUserSelect: 'none', position: 'relative' }}>
+                {label}
+              </span>
             </div>
-            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', fontWeight: 600, letterSpacing: 'var(--type-meta-sm-track)', color: active ? 'var(--blue)' : 'var(--label-2)', userSelect: 'none', WebkitUserSelect: 'none' }}>
-              {label}
-            </span>
           </button>
         );
       })}

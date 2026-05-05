@@ -36,6 +36,8 @@ type Mode = HomeFeedMode;
 const DISCOVER_FEED_URI = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 const PUBLIC_APPVIEW_SERVICE = 'https://public.api.bsky.app';
 const LIMITED_SCOPE_BANNER_COPY = 'This session does not include Following feed access yet. Saved feeds and public author feeds still work here, but Following needs the Bluesky timeline permission from the HTTPS sign-in.';
+const EMPTY_ACCOUNT_FEED_SOURCES: AccountFeedSource[] = [];
+const EMPTY_BOOKMARKED_URIS: string[] = [];
 const TranslationSettingsSheet = lazyWithRetry(
   () => import('../components/TranslationSettingsSheet'),
   'TranslationSettingsSheet',
@@ -119,6 +121,7 @@ export default function HomeTab({ onOpenStory }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showTranslationSettings, setShowTranslationSettings] = useState(false);
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const [navScrolled, setNavScrolled] = useState(false);
   const [feedUnreadByFeedId, setFeedUnreadByFeedId] = useState<Record<string, number>>({});
   const publicReadAgent = useMemo(() => new Agent({ service: PUBLIC_APPVIEW_SERVICE }), []);
   const hasLimitedScopeSession = !hasFollowingFeedScope(session?.scope);
@@ -146,9 +149,16 @@ export default function HomeTab({ onOpenStory }: Props) {
   const saveFeedCache = useFeedCacheStore((state) => state.saveCache);
   const setFeedUnreadCount = useFeedCacheStore((state) => state.setUnreadCount);
   const updateFeedScrollPosition = useFeedCacheStore((state) => state.updateScrollPosition);
-  const accountFeedSources = useAccountFeedsStore((state) => state.getSources(session?.did));
-  const accountFeedsStale = useAccountFeedsStore((state) => state.isStale(session?.did));
-  const selectedAccountFeedId = useAccountFeedsStore((state) => state.getSelectedFeedId(session?.did));
+  const accountFeedSources = useAccountFeedsStore((state) => {
+    const did = session?.did;
+    if (!did) return EMPTY_ACCOUNT_FEED_SOURCES;
+    return state.byDid[did]?.sources ?? EMPTY_ACCOUNT_FEED_SOURCES;
+  });
+  const selectedAccountFeedId = useAccountFeedsStore((state) => {
+    const did = session?.did;
+    if (!did) return null;
+    return state.selectedFeedIdByDid[did] ?? null;
+  });
   const setSelectedAccountFeedId = useAccountFeedsStore((state) => state.setSelectedFeedId);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
 
@@ -488,8 +498,13 @@ export default function HomeTab({ onOpenStory }: Props) {
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
-    if (!el || loadingMore || !cursor) return;
-    
+    if (!el) return;
+
+    // Nav bar blur: transparent at top, material when scrolled ≥ 4px
+    setNavScrolled(el.scrollTop >= 4);
+
+    if (loadingMore || !cursor) return;
+
     // Load more when near bottom
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
       fetchFeed(mode, cursor);
@@ -594,14 +609,10 @@ export default function HomeTab({ onOpenStory }: Props) {
   }, [agent, session]);
 
   const sessionDid = session?.did ?? '';
-  // Create a memoized default empty array to prevent new references on every render
-  const emptyArray = useMemo(() => [], []);
-  // Select bookmarked URIs - use memoized fallback to prevent infinite loops
-  const bookmarkedUris = useBookmarksStore((state) =>
-    sessionDid && state.bookmarksByDid[sessionDid]
-      ? state.bookmarksByDid[sessionDid]
-      : emptyArray
-  );
+  const bookmarkedUris = useBookmarksStore((state) => {
+    if (!sessionDid) return EMPTY_BOOKMARKED_URIS;
+    return state.bookmarksByDid[sessionDid] ?? EMPTY_BOOKMARKED_URIS;
+  });
 
   // Sync bookmark state from store to posts when bookmarks change.
   // Only depends on bookmarkedUris — using setPosts functional form avoids
@@ -686,11 +697,16 @@ export default function HomeTab({ onOpenStory }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)', color: 'var(--label-1)' }}>
-      {/* Nav bar */}
+      {/* Nav bar — transparent at top, gains material blur once content scrolls under it */}
       <div style={{
         flexShrink: 0,
         paddingTop: 'calc(var(--safe-top) + 12px)',
-        background: 'transparent',
+        background: navScrolled ? 'var(--chrome-bg)' : 'transparent',
+        backdropFilter: navScrolled ? 'blur(24px) saturate(1.8)' : 'none',
+        WebkitBackdropFilter: navScrolled ? 'blur(24px) saturate(1.8)' : 'none',
+        borderBottom: navScrolled ? '0.33px solid var(--sep-chrome)' : '0.33px solid transparent',
+        transition: 'background 0.2s ease, border-color 0.2s ease',
+        willChange: 'background',
       }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '0 16px 10px', gap: 10 }}>
           <div style={{

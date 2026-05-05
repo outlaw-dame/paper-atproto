@@ -83,7 +83,8 @@ a {
 @media (pointer: coarse) {
   button:active {
     opacity: 0.72;
-    transition: opacity 0.05s;
+    transform: scale(0.97);
+    transition: opacity 0.05s, transform 0.05s;
   }
 }
 
@@ -235,7 +236,8 @@ a { text-decoration: none; color: inherit; }
   --fill-2:          rgba(120,120,128,0.16);
   --fill-3:          rgba(120,120,128,0.12);
 
-  --sep:             rgba(60,60,67,0.12);
+  --sep:             rgba(60,60,67,0.18);
+  --sep-chrome:      rgba(60,60,67,0.29);
   --sep-opaque:      #C6C6C8;
 
   --blue:            #007AFF;
@@ -249,7 +251,7 @@ a { text-decoration: none; color: inherit; }
   --teal:            #5AC8FA;
   --cyan:            #32ADE6;
 
-  --chrome-bg:       rgba(242,242,247,0.88);
+  --chrome-bg:       rgba(249,249,249,0.92);
 
   /* ── Semantic aliases used by feed/card components ── */
   --surface-card:    var(--surface);
@@ -349,12 +351,12 @@ a { text-decoration: none; color: inherit; }
   --type-body-md-size:   17px;
   --type-body-md-line:   27px;
   --type-body-md-weight: 400;
-  --type-body-md-track:  -0.006em;
+  --type-body-md-track:  -0.022em;
 
   --type-body-sm-size:   15px;
   --type-body-sm-line:   23px;
   --type-body-sm-weight: 400;
-  --type-body-sm-track:  -0.002em;
+  --type-body-sm-track:  -0.012em;
 
   /* ── Label scale (Plus Jakarta Sans) ── */
   --type-label-lg-size:   15px;
@@ -401,7 +403,8 @@ a { text-decoration: none; color: inherit; }
     --fill-2:          rgba(120,120,128,0.32);
     --fill-3:          rgba(120,120,128,0.24);
 
-    --sep:             rgba(84,84,88,0.65);
+    --sep:             rgba(84,84,88,0.50);
+    --sep-chrome:      rgba(84,84,88,0.65);
     --sep-opaque:      #38383A;
 
     --blue:            #0A84FF;
@@ -415,7 +418,7 @@ a { text-decoration: none; color: inherit; }
     --teal:            #64D2FF;
     --cyan:            #5AC8F5;
 
-    --chrome-bg:       rgba(28,28,30,0.88);
+    --chrome-bg:       rgba(28,28,30,0.92);
 
     /* ── Semantic aliases — dark overrides ── */
     --surface-card:    var(--surface);
@@ -718,6 +721,31 @@ a { text-decoration: none; color: inherit; }
 .story-article-markdown a {
   text-decoration-thickness: 0.08em;
   text-underline-offset: 0.12em;
+}
+
+/* ─── Apple material utility classes ────────────────────────────────────────
+ * Approximations of iOS UIVisualEffect material tiers.
+ * The saturate(1.8) is the vibrancy layer that makes blur look native rather
+ * than flat/web-like. Always pair with a semi-transparent background tint.
+ * ─────────────────────────────────────────────────────────────────────────── */
+.material-thin {
+  backdrop-filter: blur(16px) saturate(1.8) brightness(1.02);
+  -webkit-backdrop-filter: blur(16px) saturate(1.8) brightness(1.02);
+}
+.material-regular {
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+}
+.material-thick {
+  backdrop-filter: blur(30px) saturate(1.6);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6);
+}
+
+/* ─── Hairline separator — 0.33px = 1px at 3× retina (Apple spec) ─── */
+.sep-hairline {
+  border-color: var(--sep-chrome);
+  border-style: solid;
+  border-width: 0.33px;
 }
 
 /* ─── Reduced motion ─── */

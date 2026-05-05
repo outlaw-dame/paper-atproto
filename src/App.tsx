@@ -269,10 +269,10 @@ function FloatingComposeFab({ onCompose, onPromptComposer }: { onCompose: () => 
         width: 44, height: 44,
         borderRadius: '50%',
         background: 'var(--chrome-bg)',
-        backdropFilter: 'blur(20px) saturate(160%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(160%)',
-        border: '0.5px solid var(--sep)',
-        boxShadow: '0 2px 12px rgba(0,0,0,0.14), 0 1px 3px rgba(0,0,0,0.10)',
+        backdropFilter: 'blur(24px) saturate(1.8)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
+        border: '0.33px solid var(--sep-chrome)',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.16), 0 1px 4px rgba(0,0,0,0.10)',
         cursor: 'pointer',
         WebkitTapHighlightColor: 'transparent',
         transition: 'opacity 0.15s',
@@ -421,10 +421,10 @@ function AppShell() {
           <motion.div
             key={activeTab}
             style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}
-            initial={{ opacity: 0, x: TAB_ORDER.indexOf(activeTab) > TAB_ORDER.indexOf(prevTab) ? 20 : -20 }}
+            initial={{ opacity: 0, x: TAB_ORDER.indexOf(activeTab) > TAB_ORDER.indexOf(prevTab) ? 18 : -18 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: TAB_ORDER.indexOf(activeTab) > TAB_ORDER.indexOf(prevTab) ? -20 : 20 }}
-            transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+            exit={{ opacity: 0, x: TAB_ORDER.indexOf(activeTab) > TAB_ORDER.indexOf(prevTab) ? -18 : 18 }}
+            transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.85 }}
           >
             <LazyModuleBoundary
               resetKey={`${activeTab}:${shellRetryKey}`}

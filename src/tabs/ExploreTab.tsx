@@ -1403,6 +1403,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
   const [translatingById, setTranslatingById] = useState<Record<string, boolean>>({});
   const [translationErrorById, setTranslationErrorById] = useState<Record<string, boolean>>({});
   const [revealedFilteredPosts, setRevealedFilteredPosts] = useState<Record<string, boolean>>({});
+  const [navScrolled, setNavScrolled] = useState(false);
   const autoTranslatedIdsRef = useRef<Set<string>>(new Set());
   const autoAttemptedIdsRef = useRef<Set<string>>(new Set());
   const carouselIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1415,7 +1416,9 @@ export default function ExploreTab({ onOpenStory }: Props) {
   }, [session?.did]);
 
   const persistViewScroll = useCallback(() => {
-    if (!viewResumeKey || !scrollRef.current) return;
+    if (!scrollRef.current) return;
+    setNavScrolled(scrollRef.current.scrollTop >= 4);
+    if (!viewResumeKey) return;
     writeViewScrollPosition(viewResumeKey, scrollRef.current.scrollTop);
   }, [viewResumeKey]);
 
@@ -1966,6 +1969,11 @@ export default function ExploreTab({ onOpenStory }: Props) {
         padding: 'calc(var(--safe-top) + 8px) 20px 0',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         height: 'calc(var(--safe-top) + 49px)',
+        background: navScrolled ? 'var(--chrome-bg)' : 'transparent',
+        backdropFilter: navScrolled ? 'blur(24px) saturate(1.8)' : 'none',
+        WebkitBackdropFilter: navScrolled ? 'blur(24px) saturate(1.8)' : 'none',
+        borderBottom: navScrolled ? '0.33px solid var(--sep-chrome)' : '0.33px solid transparent',
+        transition: 'background 0.2s ease, border-color 0.2s ease',
       }}>
         {/* Avatar / account switcher */}
         <button
