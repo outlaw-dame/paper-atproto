@@ -867,6 +867,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
                       alt={item.alt}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (toggleSensitiveMediaVisibility(e)) return;
                         const imageIndex = carouselToLightboxIndex[i];
                         if (typeof imageIndex !== 'number' || imageIndex < 0) return;
                         setLightboxIndex(imageIndex);
