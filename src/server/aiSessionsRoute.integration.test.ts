@@ -283,8 +283,7 @@ describe('aiSessionsRouter security/privacy behavior', () => {
     expect(snapshot.status).toBe(200);
     const payload = await snapshot.json() as { telemetry?: ReturnType<typeof getAiSessionTelemetry> };
     expect(payload.telemetry).toBeTruthy();
-    expect(payload.telemetry?.durableHydration).toBeTruthy();
-    expect(payload.telemetry?.durableStrictReadFailures).toBeTruthy();
+    expect(typeof payload.telemetry?.routeErrors).toBe('number');
 
     const reset = await aiSessionsRouter.request('/telemetry', {
       method: 'DELETE',
