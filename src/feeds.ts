@@ -246,30 +246,51 @@ export class FeedService {
     const segments = parseTranscript(fetched.content, format);
     if (segments.length === 0) return;
 
-    for (const seg of segments) {
-      const segId = `${feedItemId}:seg:${seg.startTime.toFixed(3)}`;
-      const embeddingArr = await embeddingPipeline.embed(seg.text, { mode: 'ingest' });
-      if (embeddingArr.length > 0) recordEmbeddingVector('ingest', embeddingArr);
-      const embedding = embeddingArr.length > 0 ? `[${embeddingArr.join(',')}]` : null;
+    const embeddings = await embeddingPipeline.embedBatch(
+      segments.map((seg) => seg.text),
+      { mode: 'ingest', batchSize: 12 },
+    );
 
-      await pg.query(
-        `INSERT INTO transcript_segments (id, feed_item_id, start_time, end_time, text, speaker, embedding)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (id) DO UPDATE SET
-           text = EXCLUDED.text,
-           speaker = EXCLUDED.speaker,
-           embedding = EXCLUDED.embedding`,
-        [
-          segId,
-          feedItemId,
-          seg.startTime,
-          seg.endTime ?? null,
-          seg.text,
-          seg.speaker ?? null,
-          embedding,
-        ],
-      );
-    }
+    const rows = segments.map((seg, index) => {
+      const embeddingArr = embeddings[index] ?? [];
+      if (embeddingArr.length > 0) recordEmbeddingVector('ingest', embeddingArr);
+      return {
+        id: `${feedItemId}:seg:${seg.startTime.toFixed(3)}`,
+        feedItemId,
+        startTime: seg.startTime,
+        endTime: seg.endTime ?? null,
+        text: seg.text,
+        speaker: seg.speaker ?? null,
+        embedding: embeddingArr.length > 0 ? `[${embeddingArr.join(',')}]` : null,
+      };
+    });
+
+    const valuesSql = rows
+      .map((_, rowIndex) => {
+        const offset = rowIndex * 7;
+        return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7})`;
+      })
+      .join(', ');
+
+    const params = rows.flatMap((row) => [
+      row.id,
+      row.feedItemId,
+      row.startTime,
+      row.endTime,
+      row.text,
+      row.speaker,
+      row.embedding,
+    ]);
+
+    await pg.query(
+      `INSERT INTO transcript_segments (id, feed_item_id, start_time, end_time, text, speaker, embedding)
+       VALUES ${valuesSql}
+       ON CONFLICT (id) DO UPDATE SET
+         text = EXCLUDED.text,
+         speaker = EXCLUDED.speaker,
+         embedding = EXCLUDED.embedding`,
+      params,
+    );
   }
 
   /**

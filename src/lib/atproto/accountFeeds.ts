@@ -18,6 +18,7 @@ const MAX_FEED_VALUE_LENGTH = 1024;
 const MAX_FEED_TITLE_LENGTH = 160;
 const MAX_FEED_DESCRIPTION_LENGTH = 280;
 const FEED_GENERATOR_BATCH_SIZE = 25;
+const LIST_METADATA_BATCH_SIZE = 10;
 
 function sanitizeBoundedString(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null;
@@ -121,26 +122,29 @@ async function loadListMetadata(
   }
 
   const metadata = new Map<string, ListMetadata>();
-  await Promise.all(
-    dedupedUris.map(async (uri) => {
-      try {
-        const response = await atpCall(
-          () => agent.app.bsky.graph.getList({ list: uri, limit: 1 }),
-          { maxAttempts: 3, baseDelayMs: 200, capDelayMs: 4_000 },
-        );
-        const list = response.data.list;
-        if (list?.name) {
-          metadata.set(uri, {
-            title: list.name,
-            ...(list.avatar ? { avatar: list.avatar } : {}),
-            ...(list.description ? { description: list.description } : {}),
-          });
+  const batches = chunk(dedupedUris, LIST_METADATA_BATCH_SIZE);
+  for (const batch of batches) {
+    await Promise.all(
+      batch.map(async (uri) => {
+        try {
+          const response = await atpCall(
+            () => agent.app.bsky.graph.getList({ list: uri, limit: 1 }),
+            { maxAttempts: 3, baseDelayMs: 200, capDelayMs: 4_000 },
+          );
+          const list = response.data.list;
+          if (list?.name) {
+            metadata.set(uri, {
+              title: list.name,
+              ...(list.avatar ? { avatar: list.avatar } : {}),
+              ...(list.description ? { description: list.description } : {}),
+            });
+          }
+        } catch {
+          // Silently fall back to default title for lists that can't be resolved.
         }
-      } catch {
-        // Silently fall back to default title for lists that can't be resolved.
-      }
-    }),
-  );
+      }),
+    );
+  }
 
   return metadata;
 }
