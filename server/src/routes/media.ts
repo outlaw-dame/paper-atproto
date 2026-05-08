@@ -5,7 +5,7 @@ import { basename, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { AppError, UpstreamError, ValidationError } from '../lib/errors.js';
@@ -206,7 +206,7 @@ function enforceProxyResponseLengthLimit(response: Response): void {
   }
 }
 
-function enforceMultipartUploadContentLength(c: Parameters<typeof mediaRouter.post>[1] extends never ? never : any): void {
+function enforceMultipartUploadContentLength(c: Context): void {
   const rawLength = c.req.header('content-length');
   if (!rawLength) return;
   const contentLength = Number.parseInt(rawLength, 10);

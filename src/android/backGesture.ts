@@ -79,6 +79,7 @@ function installPopstateListener(): void {
     // the overlay entry lands on base state (null), and event.state would
     // never carry our overlay key.
     const id = _stack[_stack.length - 1];
+    if (!id) return;
     const handler = _registry.get(id);
     if (!handler) {
       // Entry was already cleaned up (e.g. programmatic close racing with back).
