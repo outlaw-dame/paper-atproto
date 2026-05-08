@@ -403,16 +403,30 @@ export class FeedService {
         throw new Error('Feed insert did not return an id');
       }
 
-      // 2. Save feed items
+      // 2. Save feed items (F-06: sanitize all external URLs at ingestion to prevent injection/redirect)
       for (const item of parsed.items) {
-        const itemId = item.id || item.link;
-        const content = item.content || item.description || '';
         const podcast20 = this.getPodcast20ForItem(item, podcast20ByKey);
+
+        const sanitizedLink = item.link ? sanitizeUrlForProcessing(item.link) : null;
+        const sanitizedEnclosureUrl = item.enclosure?.url ? sanitizeUrlForProcessing(item.enclosure.url) : null;
+        const sanitizedTranscriptUrl = podcast20.transcriptUrl ? sanitizeUrlForProcessing(podcast20.transcriptUrl) : undefined;
+        const sanitizedChaptersUrl = podcast20.chaptersUrl ? sanitizeUrlForProcessing(podcast20.chaptersUrl) : undefined;
+
+        const itemId = sanitizedLink || item.id || item.link || `item-${Date.now()}-${Math.random()}`;
+        const content = item.content || item.description || '';
 
         // Generate embedding for hybrid search — format as pgvector string [x,y,...]
         const embeddingArr = await embeddingPipeline.embed(item.title + ' ' + content, { mode: 'ingest' });
         if (embeddingArr.length > 0) recordEmbeddingVector('ingest', embeddingArr);
         const embedding = embeddingArr.length ? `[${embeddingArr.join(',')}]` : null;
+
+        // Skip items with no sanitizable link (prevents injection vectors like javascript: or data: URIs)
+        if (!sanitizedLink) {
+          if (import.meta.env.DEV) {
+            console.warn('Skipping feed item with unsafe URL:', item.link);
+          }
+          continue;
+        }
 
         await pg.query(
           `INSERT INTO feed_items (
@@ -437,29 +451,33 @@ export class FeedService {
             feedId,
             item.title,
             content,
-            item.link,
+            sanitizedLink,
             item.pubDate,
             item.author,
-            item.enclosure?.url,
+            sanitizedEnclosureUrl,
             item.enclosure?.type,
-            podcast20.transcriptUrl,
-            podcast20.chaptersUrl,
+            sanitizedTranscriptUrl,
+            sanitizedChaptersUrl,
             podcast20.valueConfig ? JSON.stringify(podcast20.valueConfig) : null,
             embedding,
           ]
         );
       }
 
-      // Collect podcast items with transcript/chapter URLs for async enrichment
+      // Collect podcast items with transcript/chapter URLs for async enrichment (use sanitized URLs)
       const podcastItemsToIndex: Array<{ itemId: string; transcriptUrl?: string; chaptersUrl?: string }> = [];
       for (const item of parsed.items) {
-        const itemId = item.id || item.link;
+        const sanitizedLink = item.link ? sanitizeUrlForProcessing(item.link) : null;
+        const itemId = sanitizedLink || item.id || item.link;
         const podcast20 = this.getPodcast20ForItem(item, podcast20ByKey);
-        if (podcast20.transcriptUrl || podcast20.chaptersUrl) {
+        const sanitizedTranscriptUrl = podcast20.transcriptUrl ? sanitizeUrlForProcessing(podcast20.transcriptUrl) : undefined;
+        const sanitizedChaptersUrl = podcast20.chaptersUrl ? sanitizeUrlForProcessing(podcast20.chaptersUrl) : undefined;
+
+        if (sanitizedTranscriptUrl || sanitizedChaptersUrl) {
           podcastItemsToIndex.push({
             itemId,
-            ...(podcast20.transcriptUrl ? { transcriptUrl: podcast20.transcriptUrl } : {}),
-            ...(podcast20.chaptersUrl ? { chaptersUrl: podcast20.chaptersUrl } : {}),
+            ...(sanitizedTranscriptUrl ? { transcriptUrl: sanitizedTranscriptUrl } : {}),
+            ...(sanitizedChaptersUrl ? { chaptersUrl: sanitizedChaptersUrl } : {}),
           });
         }
       }

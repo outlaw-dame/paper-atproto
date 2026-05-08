@@ -126,16 +126,22 @@ export default function InstallPromptBanner() {
   const [installing, setInstalling] = React.useState(false);
 
   React.useEffect(() => {
-    if (readDismissed()) return;
-    const state = getInstallState();
-    if (state.standalone) return; // already running as installed app
-    if (state.isIosSafariInstallCandidate) {
-      setType('ios');
-      setVisible(true);
-    } else if (state.deferredPromptAvailable) {
-      setType('chromium');
-      setVisible(true);
+    function checkState() {
+      if (readDismissed()) return;
+      const state = getInstallState();
+      if (state.standalone) return; // already running as installed app
+      if (state.isIosSafariInstallCandidate) {
+        setType('ios');
+        setVisible(true);
+      } else if (state.deferredPromptAvailable) {
+        setType('chromium');
+        setVisible(true);
+      }
     }
+    checkState();
+    // beforeinstallprompt may fire after this component mounts; re-check when it does.
+    window.addEventListener('paper:install-prompt-available', checkState);
+    return () => window.removeEventListener('paper:install-prompt-available', checkState);
   }, []);
 
   const handleDismiss = React.useCallback(() => {

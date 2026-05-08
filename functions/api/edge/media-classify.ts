@@ -7,6 +7,7 @@ interface Env {
     run(model: string, input: unknown): Promise<unknown>;
   };
   WORKERS_AI_MULTIMODAL_MODEL?: string;
+  WORKERS_AI_ROUTE_TOKEN?: string;
 }
 
 interface MediaAnalysisRequest {
@@ -45,6 +46,28 @@ function json(body: unknown, status = 200): Response {
       'x-content-type-options': 'nosniff',
     },
   });
+}
+
+function extractBearerToken(request: Request): string | null {
+  const header = request.headers.get('authorization');
+  if (!header) return null;
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match?.[1]) return null;
+  return match[1].trim() || null;
+}
+
+function assertAuthorized(request: Request, env: Env): Response | null {
+  const requiredToken = env.WORKERS_AI_ROUTE_TOKEN?.trim() ?? '';
+  if (!requiredToken) {
+    return json({ error: 'Workers AI route token is not configured' }, 503);
+  }
+
+  const presented = extractBearerToken(request);
+  if (!presented || presented !== requiredToken) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -230,6 +253,8 @@ export async function runWorkersAiMediaClassifier(
 
 export const onRequest: PagesFunction<Env> = async (context): Promise<Response> => {
   if (context.request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+  const unauthorized = assertAuthorized(context.request, context.env);
+  if (unauthorized) return unauthorized;
   if (!context.env.AI) return json({ error: 'Workers AI unavailable', code: 'WORKERS_AI_UNAVAILABLE' }, 503);
 
   let body: unknown;

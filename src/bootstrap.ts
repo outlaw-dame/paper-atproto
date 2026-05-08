@@ -12,9 +12,12 @@ import { preConfigureOnnxRuntime } from './runtime/generationSession';
 
 function shouldSkipVectorIndexBuild(): boolean {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') return false;
-  const { isIOS, isAndroid, isStandalone, deviceMemory } = getStaticPlatformInfo();
+  const { isIOS, isAndroid, deviceMemory } = getStaticPlatformInfo();
   const isLowMemoryDevice = deviceMemory > 0 && deviceMemory <= 4;
-  return isIOS || isAndroid || isStandalone || isLowMemoryDevice;
+  // Skip on mobile (memory-constrained) or genuinely low-memory devices.
+  // Do NOT skip solely because the app is in standalone mode — a desktop installed
+  // PWA has sufficient resources and should build the vector index normally.
+  return isIOS || isAndroid || isLowMemoryDevice;
 }
 
 function isEnabledEnvFlag(value: string | undefined): boolean {

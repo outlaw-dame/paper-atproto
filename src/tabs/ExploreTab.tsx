@@ -48,6 +48,7 @@ import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
 import { normalizeExternalFeedUrl } from '../lib/feedUrls';
 import { readViewScrollPosition, writeViewScrollPosition } from '../lib/viewResume';
 import { isAtUri } from '../lib/resolver/atproto';
+import { openExternalUrl } from '../lib/safety/externalUrl';
 import {
   searchHeroField as shfTokens,
   quickFilterChip as qfcTokens,
@@ -2486,14 +2487,17 @@ export default function ExploreTab({ onOpenStory }: Props) {
                               )}
                               <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <a
-                                  href={item.link}
-                                  target="_blank"
-                                  rel="noreferrer"
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    void openExternalUrl(item.link);
+                                  }}
                                   style={{
                                     color: accent.primary,
                                     fontSize: typeScale.metaSm[0],
                                     fontWeight: 700,
                                     textDecoration: 'none',
+                                    cursor: 'pointer',
                                   }}
                                 >
                                   Open feed
@@ -2648,11 +2652,9 @@ export default function ExploreTab({ onOpenStory }: Props) {
                         {recentFeedItems.slice(0, 6).map((item) => {
                           const isPodcast = (item.enclosureType || '').startsWith('audio/');
                           return (
-                            <a
+                            <div
                               key={item.id}
-                              href={item.link}
-                              target="_blank"
-                              rel="noreferrer"
+                              onClick={() => void openExternalUrl(item.link)}
                               style={{
                                 display: 'block',
                                 background: disc.surfaceCard,
@@ -2660,6 +2662,14 @@ export default function ExploreTab({ onOpenStory }: Props) {
                                 padding: `${space[8]}px ${space[10]}px`,
                                 border: `0.5px solid ${disc.lineSubtle}`,
                                 textDecoration: 'none',
+                                cursor: 'pointer',
+                                transition: 'background 200ms ease',
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = `rgba(91,124,255,0.1)`;
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = disc.surfaceCard;
                               }}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -2673,7 +2683,7 @@ export default function ExploreTab({ onOpenStory }: Props) {
                               <p style={{ margin: '4px 0 0', fontSize: typeScale.metaSm[0], color: disc.textSecondary }}>
                                 {(item.feedTitle || 'Feed')} • {(item.feedCategory || 'General')}
                               </p>
-                            </a>
+                            </div>
                           );
                         })}
                       </div>

@@ -44,6 +44,8 @@ import {
   prepareLlmInput,
 } from '../llm/policyGateway.js';
 import { assertTrustedBrowserOrigin, appendVaryHeader } from '../lib/originPolicy.js';
+import { assertSensitiveRouteAuthorized } from '../lib/requestAuth.js';
+import { assertSafeResolvedRemoteUrl } from '../lib/remoteNetworkGuard.js';
 import {
   PREMIUM_AI_PROVIDER_HEADER,
   parsePremiumAiProviderPreferenceHeader,
@@ -265,6 +267,14 @@ llmRouter.use('*', async (c, next) => {
   }
 });
 
+llmRouter.use('*', async (c, next) => {
+  if (c.req.method === 'POST') {
+    assertSensitiveRouteAuthorized(c, 'LLM route access');
+    assertTrustedBrowserOrigin(c, 'LLM route access');
+  }
+  await next();
+});
+
 // ─── POST /telemetry/writer-outcome ───────────────────────────────────────
 
 llmRouter.post('/telemetry/writer-outcome', async (c) => {
@@ -451,6 +461,7 @@ llmRouter.post('/analyze/media', async (c) => {
     return c.json({ error: 'Unsafe media URL' }, 400);
   }
 
+  await assertSafeResolvedRemoteUrl(sanitizedMediaUrl);
   const safeBrowsingVerdict = await checkUrlAgainstSafeBrowsing(sanitizedMediaUrl);
   if (shouldBlockSafeBrowsingVerdict(safeBrowsingVerdict)) {
     return c.json({
@@ -544,6 +555,7 @@ llmRouter.post('/analyze/media/premium', async (c) => {
     return c.json({ error: 'Unsafe media URL' }, 400);
   }
 
+  await assertSafeResolvedRemoteUrl(sanitizedMediaUrl);
   const safeBrowsingVerdict = await checkUrlAgainstSafeBrowsing(sanitizedMediaUrl);
   if (shouldBlockSafeBrowsingVerdict(safeBrowsingVerdict)) {
     return c.json({

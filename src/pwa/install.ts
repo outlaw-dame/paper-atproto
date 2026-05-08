@@ -22,6 +22,8 @@ if (typeof window !== 'undefined') {
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     _deferredPrompt = e as BeforeInstallPromptEvent;
+    // Notify any mounted components that missed the initial snapshot.
+    window.dispatchEvent(new CustomEvent('paper:install-prompt-available'));
   });
 }
 

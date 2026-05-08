@@ -9,6 +9,8 @@ import {
 import { translateBatchWithRouter, translateWithRouter } from '../services/translation/runtime.js';
 import { resolveDynamicTranslationMode } from '../services/translation/policy.js';
 import { AppError } from '../lib/errors.js';
+import { assertTrustedBrowserOrigin } from '../lib/originPolicy.js';
+import { assertSensitiveRouteAuthorized } from '../lib/requestAuth.js';
 import type {
   BatchTranslateRequest,
   DetectLanguageRequest,
@@ -92,6 +94,12 @@ async function performInlineTranslationWithFallback(req: InlineTranslateRequest)
 }
 
 export const translateRouter = new Hono();
+
+translateRouter.use('*', async (c, next) => {
+  assertSensitiveRouteAuthorized(c, 'translation route access');
+  assertTrustedBrowserOrigin(c, 'translation route access');
+  await next();
+});
 
 translateRouter.post('/inline', async (c) => {
   const body = await c.req.json().catch(() => null);

@@ -10,6 +10,9 @@ import { z } from 'zod';
 import { env } from '../config/env.js';
 import { AppError, UpstreamError, ValidationError } from '../lib/errors.js';
 import { sanitizeRemoteProcessingUrl } from '../lib/sanitize.js';
+import { assertTrustedBrowserOrigin } from '../lib/originPolicy.js';
+import { assertSensitiveRouteAuthorized } from '../lib/requestAuth.js';
+import { assertSafeResolvedRemoteUrl } from '../lib/remoteNetworkGuard.js';
 import { transcriptionWorkerBridge } from '../services/media/transcriptionWorkerBridge.js';
 import {
   checkUrlAgainstSafeBrowsing,
@@ -57,6 +60,7 @@ const PROXY_RESPONSE_HEADERS = [
 ] as const;
 
 const safeMediaHostCache = new Map<string, { safe: boolean; reason?: string; expiresAt: number }>();
+let activeTranscriptions = 0;
 
 const RemoteTranscriptionSchema = z.object({
   url: z.string().url().max(2_000),
@@ -145,6 +149,7 @@ async function fetchWithRedirects(
   headers: Record<string, string>,
   redirectCount = 0,
 ): Promise<{ response: Response; finalUrl: URL }> {
+  await assertSafeResolvedRemoteUrl(url.toString());
   const response = await fetch(url, {
     redirect: 'manual',
     headers,
@@ -170,6 +175,7 @@ async function fetchWithRedirects(
   }
 
   const nextParsed = ensureHttpUrl(sanitizedNextUrl);
+  await assertSafeResolvedRemoteUrl(nextParsed.toString());
   await assertSafeRemoteMediaHost(nextParsed);
   return fetchWithRedirects(nextParsed, headers, redirectCount + 1);
 }
@@ -187,6 +193,39 @@ function ensureSupportedRemoteMediaHeaders(response: Response): void {
   if (!Number.isFinite(contentLength)) return;
   if (contentLength > env.TRANSCRIPTION_MAX_FILE_BYTES) {
     throw new ValidationError(`Remote media exceeds the ${Math.round(env.TRANSCRIPTION_MAX_FILE_BYTES / (1024 * 1024))}MB limit.`);
+  }
+}
+
+function enforceProxyResponseLengthLimit(response: Response): void {
+  const contentLength = Number.parseInt(response.headers.get('content-length') || '', 10);
+  if (!Number.isFinite(contentLength)) return;
+  if (contentLength > env.MEDIA_PROXY_MAX_RESPONSE_BYTES) {
+    throw new ValidationError(
+      `Remote media proxy response exceeds the ${Math.round(env.MEDIA_PROXY_MAX_RESPONSE_BYTES / (1024 * 1024))}MB limit.`,
+    );
+  }
+}
+
+function enforceMultipartUploadContentLength(c: Parameters<typeof mediaRouter.post>[1] extends never ? never : any): void {
+  const rawLength = c.req.header('content-length');
+  if (!rawLength) return;
+  const contentLength = Number.parseInt(rawLength, 10);
+  if (!Number.isFinite(contentLength)) return;
+  if (contentLength > env.TRANSCRIPTION_MAX_FILE_BYTES) {
+    throw new ValidationError(`Uploaded media exceeds the ${Math.round(env.TRANSCRIPTION_MAX_FILE_BYTES / (1024 * 1024))}MB limit.`);
+  }
+}
+
+async function withTranscriptionSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeTranscriptions >= env.TRANSCRIPTION_MAX_CONCURRENT) {
+    throw new AppError(429, 'TRANSCRIPTION_BUSY', 'Transcription capacity is temporarily saturated. Please retry shortly.');
+  }
+
+  activeTranscriptions += 1;
+  try {
+    return await work();
+  } finally {
+    activeTranscriptions = Math.max(0, activeTranscriptions - 1);
   }
 }
 
@@ -250,6 +289,7 @@ async function downloadRemoteFile(
   }
 
   const url = ensureHttpUrl(sanitizedUrl);
+  await assertSafeResolvedRemoteUrl(url.toString());
   await assertSafeRemoteMediaUrl(url.toString());
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), env.TRANSCRIPTION_REMOTE_FETCH_TIMEOUT_MS);
@@ -278,6 +318,7 @@ async function downloadRemoteFile(
       if (!sanitizedNextUrl) {
         throw new ValidationError('Remote media redirect target is unsafe.');
       }
+      await assertSafeResolvedRemoteUrl(sanitizedNextUrl);
 
       return downloadRemoteFile(dirPath, sanitizedNextUrl, redirectCount + 1);
     }
@@ -308,6 +349,12 @@ async function downloadRemoteFile(
 
 export const mediaRouter = new Hono();
 
+mediaRouter.use('*', async (c, next) => {
+  assertSensitiveRouteAuthorized(c, 'media route access');
+  assertTrustedBrowserOrigin(c, 'media route access');
+  await next();
+});
+
 mediaRouter.get('/proxy', async (c) => {
   const rawUrl = c.req.query('url');
   if (!rawUrl) {
@@ -333,6 +380,8 @@ mediaRouter.get('/proxy', async (c) => {
   if (!response.ok && response.status !== 206) {
     throw new UpstreamError(`Unable to fetch remote media (${response.status}).`, { url: finalUrl.toString() }, 502);
   }
+
+  enforceProxyResponseLengthLimit(response);
 
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
   if (looksLikeHlsManifest(contentType, finalUrl)) {
@@ -367,6 +416,7 @@ mediaRouter.post('/transcribe', async (c) => {
   const contentType = c.req.header('content-type') || '';
 
   if (contentType.includes('multipart/form-data')) {
+    enforceMultipartUploadContentLength(c);
     const form = await c.req.formData();
     const fileValue = form.get('file');
     const languageValue = form.get('language');
@@ -382,7 +432,7 @@ mediaRouter.post('/transcribe', async (c) => {
       ? profileValue as 'fast' | 'quality' | 'long_form'
       : undefined;
 
-    const result = await withTempDir(async (dirPath) => {
+    const result = await withTranscriptionSlot(() => withTempDir(async (dirPath) => {
       const filePath = await writeUploadedFile(dirPath, fileValue);
       return transcriptionWorkerBridge.transcribe({
         filePath,
@@ -390,7 +440,7 @@ mediaRouter.post('/transcribe', async (c) => {
         ...(profile ? { profile } : {}),
         maxVttBytes: MAX_VTT_BYTES,
       });
-    });
+    }));
 
     console.info('[media/transcribe][telemetry]', {
       source: 'upload',
@@ -410,7 +460,7 @@ mediaRouter.post('/transcribe', async (c) => {
     return c.json({ ok: false, error: 'Invalid transcription request', issues: parsed.error.issues }, 400);
   }
 
-  const result = await withTempDir(async (dirPath) => {
+  const result = await withTranscriptionSlot(() => withTempDir(async (dirPath) => {
     const filePath = await downloadRemoteFile(dirPath, parsed.data.url);
     return transcriptionWorkerBridge.transcribe({
       filePath,
@@ -418,7 +468,7 @@ mediaRouter.post('/transcribe', async (c) => {
       ...(parsed.data.profile ? { profile: parsed.data.profile } : {}),
       maxVttBytes: MAX_VTT_BYTES,
     });
-  });
+  }));
 
   console.info('[media/transcribe][telemetry]', {
     source: 'remote',

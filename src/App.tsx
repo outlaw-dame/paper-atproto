@@ -139,7 +139,7 @@ const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab'), 'ActivityT
 const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab'), 'ProfileTab');
 const OverlayHost = lazyWithRetry(() => import('./shell/OverlayHost'), 'OverlayHost');
 
-export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
+export type TabId = 'home' | 'explore' | 'activity' | 'profile';
 export interface StoryEntry { type: 'post' | 'topic'; id: string; title: string }
 export interface EntityEntry { type: 'person' | 'topic' | 'feed'; id: string; name: string; reason: string }
 

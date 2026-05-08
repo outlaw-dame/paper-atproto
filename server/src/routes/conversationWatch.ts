@@ -5,6 +5,7 @@ import {
   appendVaryHeader,
   assertTrustedBrowserOrigin,
 } from '../lib/originPolicy.js';
+import { assertSensitiveRouteAuthorized } from '../lib/requestAuth.js';
 import {
   classifyConversationWatchError,
   computeConversationWatchBackoffMs,
@@ -51,8 +52,7 @@ function encodeSseEvent(params: {
 }
 
 function safeOriginCheck(c: Parameters<typeof assertTrustedBrowserOrigin>[0]): void {
-  const rawOrigin = c.req.header('Origin');
-  if (!rawOrigin || !rawOrigin.trim()) return;
+  assertSensitiveRouteAuthorized(c, 'Conversation watch');
   assertTrustedBrowserOrigin(c, 'Conversation watch');
 }
 

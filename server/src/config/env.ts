@@ -92,6 +92,17 @@ const EnvSchema = z.object({
     z.string().optional().transform((v) => v === 'true').default('false'),
   ),
   AI_SESSION_TELEMETRY_ADMIN_SECRET: z.string().min(1).optional(),
+  AUTH_REQUIRE_SENSITIVE_ROUTE_AUTH: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v !== 'false').default('true'),
+  ),
+  AUTH_SERVICE_TOKENS: z.string().optional().default(''),
+  AUTH_DID_HMAC_SECRET: z.string().min(1).optional(),
+  AUTH_DID_SIGNATURE_TTL_MS: z.coerce.number().int().positive().default(300_000),
+  AUTH_ALLOW_LEGACY_DID_HEADER: z.preprocess(
+    (v) => (typeof v === 'boolean' ? String(v) : v),
+    z.string().optional().transform((v) => v === 'true').default('false'),
+  ),
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
   RATE_LIMIT_REDIS_PREFIX: z.string().default('paper:ratelimit'),
     RATE_LIMIT_REDIS_FAIL_CLOSED: z.preprocess(
@@ -148,7 +159,9 @@ const EnvSchema = z.object({
   TRANSCRIPTION_DEVICE: z.enum(['auto', 'cpu', 'cuda']).default('cpu'),
   TRANSCRIPTION_COMPUTE_TYPE: z.string().default('int8'),
   TRANSCRIPTION_MAX_FILE_BYTES: z.coerce.number().int().positive().default(150_000_000),
+  TRANSCRIPTION_MAX_CONCURRENT: z.coerce.number().int().positive().default(4),
   TRANSCRIPTION_REMOTE_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  MEDIA_PROXY_MAX_RESPONSE_BYTES: z.coerce.number().int().positive().default(25_000_000),
   TRANSCRIPTION_WORKER_PATH: z.string().optional(),
   PODCASTINDEX_API_KEY: z.string().min(1).optional(),
   PODCASTINDEX_API_SECRET: z.string().min(1).optional(),

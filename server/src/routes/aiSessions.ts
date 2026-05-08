@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { ValidationError, UnauthorizedError, AppError } from '../lib/errors.js';
+import { ValidationError, AppError } from '../lib/errors.js';
 import { env } from '../config/env.js';
 import {
   appendVaryHeader,
@@ -12,6 +12,10 @@ import {
   recordRouteError,
   resetAiSessionTelemetry,
 } from '../ai/sessions/telemetry.js';
+import {
+  assertSensitiveRouteAuthorized,
+  getAuthorizedActorDid,
+} from '../lib/requestAuth.js';
 import {
   PresenceWriteRequestSchema,
   ResolveThreadSummarySessionRequestSchema,
@@ -59,14 +63,8 @@ function applySecurityHeaders(c: Context): void {
   appendVaryHeader(c, 'X-Glympse-User-Did');
 }
 
-function parseDidHeader(c: Context): string {
-  const value = c.req.header('X-Glympse-User-Did');
-  if (!value) throw new UnauthorizedError('Missing X-Glympse-User-Did header');
-  const did = value.trim();
-  if (!/^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/.test(did)) {
-    throw new UnauthorizedError('Invalid DID header format');
-  }
-  return did;
+function getCallerDid(c: Context): string {
+  return getAuthorizedActorDid(c, 'AI session access');
 }
 
 function parseJsonBody<T extends z.ZodTypeAny>(c: Context, schema: T): Promise<z.infer<T>> {
@@ -97,7 +95,7 @@ export const aiSessionsRouter = new Hono();
 
 aiSessionsRouter.use('*', async (c, next) => {
   try {
-    parseDidHeader(c);
+    assertSensitiveRouteAuthorized(c, 'AI session access');
     assertTrustedBrowserOrigin(c, 'AI session access');
     await next();
   } finally {
@@ -106,7 +104,7 @@ aiSessionsRouter.use('*', async (c, next) => {
 });
 
 aiSessionsRouter.post('/thread-summary/resolve', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const payload = await parseJsonBody(c, ResolveThreadSummarySessionRequestSchema);
   const session = await resolveThreadSummarySession(payload.rootUri, callerDid, payload.privacyMode);
   return c.json({ sessionId: session.id, session });
@@ -124,14 +122,14 @@ aiSessionsRouter.delete('/telemetry', (c) => {
 });
 
 aiSessionsRouter.get('/:sessionId/bootstrap', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const sessionId = parseSessionId(c);
   const bootstrap = await bootstrapSession(sessionId, callerDid);
   return c.json(bootstrap);
 });
 
 aiSessionsRouter.get('/:sessionId/events', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const sessionId = parseSessionId(c);
   await assertSessionAccess(sessionId, callerDid);
 
@@ -156,7 +154,7 @@ aiSessionsRouter.get('/:sessionId/events', async (c) => {
 });
 
 aiSessionsRouter.get('/:sessionId/state', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const sessionId = parseSessionId(c);
   await assertSessionAccess(sessionId, callerDid);
 
@@ -181,7 +179,7 @@ aiSessionsRouter.get('/:sessionId/state', async (c) => {
 });
 
 aiSessionsRouter.get('/:sessionId/presence', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const sessionId = parseSessionId(c);
   await assertSessionAccess(sessionId, callerDid);
 
@@ -206,7 +204,7 @@ aiSessionsRouter.get('/:sessionId/presence', async (c) => {
 });
 
 aiSessionsRouter.post('/:sessionId/messages', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const sessionId = parseSessionId(c);
   const payload = await parseJsonBody(c, SendMessageRequestSchema);
 
@@ -224,7 +222,7 @@ aiSessionsRouter.post('/:sessionId/messages', async (c) => {
 });
 
 aiSessionsRouter.post('/:sessionId/presence', async (c) => {
-  const callerDid = parseDidHeader(c);
+  const callerDid = getCallerDid(c);
   const sessionId = parseSessionId(c);
   const payload = await parseJsonBody(c, PresenceWriteRequestSchema);
   const event = await writePresence(sessionId, callerDid, payload.isTyping, payload.expiresInMs);

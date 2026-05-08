@@ -7,7 +7,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import type { MockPost } from '../data/mockData';
 import { isAtUri } from '../lib/resolver/atproto';
 
-export type TabId = 'home' | 'explore' | 'compose' | 'activity' | 'profile';
+export type TabId = 'home' | 'explore' | 'activity' | 'profile';
 export type HomeFeedMode = 'Following' | 'Feeds';
 
 export interface StoryEntry {
@@ -16,7 +16,7 @@ export interface StoryEntry {
   title: string;
 }
 
-const TAB_IDS: readonly TabId[] = ['home', 'explore', 'compose', 'activity', 'profile'] as const;
+const TAB_IDS: readonly TabId[] = ['home', 'explore', 'activity', 'profile'] as const;
 const HOME_FEED_MODES: readonly HomeFeedMode[] = ['Following', 'Feeds'] as const;
 const MAX_QUERY_LENGTH = 200;
 const MAX_STORY_ID_LENGTH = 512;

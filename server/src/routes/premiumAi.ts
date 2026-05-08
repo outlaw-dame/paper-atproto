@@ -7,7 +7,7 @@ import {
 import { writePremiumDeepInterpolator } from '../ai/providerRouter.js';
 import { ensurePremiumAiProviderReady } from '../ai/premiumProviderReadiness.js';
 import type { PremiumInterpolatorRequest } from '../ai/providers/geminiConversation.provider.js';
-import { AppError, UnauthorizedError, ValidationError } from '../lib/errors.js';
+import { AppError, ValidationError } from '../lib/errors.js';
 import { extractRetryAfterMs } from '../lib/retry.js';
 import {
   PREMIUM_AI_PROVIDER_HEADER,
@@ -21,6 +21,11 @@ import {
   filterPremiumDeepInterpolatorResponse,
   logSafetyFlag,
 } from '../services/safetyFilters.js';
+import {
+  assertSensitiveRouteAuthorized,
+  getAuthorizedActorDid,
+  getOptionalAuthorizedActorDid,
+} from '../lib/requestAuth.js';
 import {
   recordPremiumRouteFailure,
   recordPremiumRouteInvocation,
@@ -72,16 +77,8 @@ function applySecurityHeaders(c: any): void {
 function actorDidFromRequest(c: any, required: true): string;
 function actorDidFromRequest(c: any, required?: false): string | undefined;
 function actorDidFromRequest(c: any, required = false): string | undefined {
-  const value = c.req.header('X-Glympse-User-Did');
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized) {
-    if (required) throw new UnauthorizedError('Missing X-Glympse-User-Did header');
-    return undefined;
-  }
-  if (!/^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/.test(normalized)) {
-    throw new UnauthorizedError('Invalid DID header format');
-  }
-  return normalized;
+  if (required) return getAuthorizedActorDid(c, 'premium AI');
+  return getOptionalAuthorizedActorDid(c);
 }
 
 function validationIssues(error: ValidationError): unknown {
@@ -94,6 +91,7 @@ function requestedProviderFromRequest(c: any): PremiumAiProviderPreference | und
 
 premiumAiRouter.use('*', async (c, next) => {
   try {
+    assertSensitiveRouteAuthorized(c, 'premium AI');
     await next();
   } finally {
     applySecurityHeaders(c);

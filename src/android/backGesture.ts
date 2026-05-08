@@ -36,12 +36,21 @@ let _listenerInstalled = false;
  * Set to true immediately before calling history.back() from popOverlayEntry.
  * The resulting popstate may land on an underlying overlay's history entry —
  * we must NOT close that overlay just because we navigated past it during cleanup.
- * Reset on every overlay-keyed popstate (whether suppressed or not).
+ * Reset on the very next popstate regardless of content.
  */
 let _suppressNextOverlayPop = false;
 
 /** ID → close-callback. Entries are present only while the overlay is open. */
 const _registry = new Map<string, () => void>();
+
+/**
+ * LIFO stack of open overlay IDs in push order.
+ * Last element is the topmost (most recently opened) overlay.
+ * Required because popstate's event.state is the DESTINATION entry's state
+ * (the entry you land on), not the source entry you left — so we cannot rely
+ * on event.state to identify which overlay to close.
+ */
+const _stack: string[] = [];
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -54,34 +63,32 @@ function installPopstateListener(): void {
   if (_listenerInstalled || typeof window === 'undefined') return;
   _listenerInstalled = true;
 
-  window.addEventListener('popstate', (event: PopStateEvent) => {
-    const state = event.state;
+  window.addEventListener('popstate', (_event: PopStateEvent) => {
+    // Always consume the suppress flag first, regardless of stack state.
+    if (_suppressNextOverlayPop) {
+      _suppressNextOverlayPop = false;
+      return; // programmatic cleanup nav — do not close any overlay
+    }
 
-    // Ignore entries that don't carry our overlay marker.
-    if (
-      state === null ||
-      typeof state !== 'object' ||
-      typeof (state as Record<string, unknown>)[OVERLAY_STATE_KEY] !== 'string'
-    ) {
+    if (_stack.length === 0) return;
+
+    // Close the topmost (most recently opened) overlay.
+    // We use the stack rather than event.state because event.state reflects
+    // the DESTINATION history entry (the one you just landed on), not the
+    // source entry you left — so for a single overlay, pressing back from
+    // the overlay entry lands on base state (null), and event.state would
+    // never carry our overlay key.
+    const id = _stack[_stack.length - 1];
+    const handler = _registry.get(id);
+    if (!handler) {
+      // Entry was already cleaned up (e.g. programmatic close racing with back).
+      _stack.pop();
       return;
     }
 
-    const id = (state as Record<string, unknown>)[OVERLAY_STATE_KEY] as string;
-
-    // Always reset the suppress flag when we land on any overlay-keyed entry.
-    // This prevents the flag from leaking across multiple navigation events.
-    if (_suppressNextOverlayPop) {
-      _suppressNextOverlayPop = false;
-      return; // programmatic cleanup nav — do not close the overlay we landed on
-    }
-
-    if (!_registry.has(id)) return;
-
-    // Retrieve and remove before calling — prevents double-fire if the handler
-    // itself triggers another popstate synchronously.
-    const handler = _registry.get(id);
+    _stack.pop();
     _registry.delete(id);
-    handler?.();
+    handler();
   });
 }
 
@@ -104,6 +111,7 @@ export function pushOverlayEntry(onClose: () => void): string {
 
   try {
     history.pushState(state, '');
+    _stack.push(id);
     _registry.set(id, onClose);
     return id;
   } catch {
@@ -126,9 +134,11 @@ export function pushOverlayEntry(onClose: () => void): string {
 export function popOverlayEntry(id: string): void {
   if (!id || typeof window === 'undefined' || typeof history === 'undefined') return;
 
-  // Remove from registry first — the popstate handler checks this Map and
-  // must not re-fire the handler for an entry we are cleaning up.
+  // Remove from registry and stack first — the popstate handler checks both
+  // and must not re-fire the handler for an entry we are cleaning up.
   _registry.delete(id);
+  const stackIdx = _stack.indexOf(id);
+  if (stackIdx !== -1) _stack.splice(stackIdx, 1);
 
   try {
     const currentState = history.state;

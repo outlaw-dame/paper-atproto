@@ -8,6 +8,9 @@ export const API_CORS_ALLOW_HEADERS = [
   'Content-Type',
   'Authorization',
   'X-Glympse-User-Did',
+  'X-Authenticated-User-Did',
+  'X-Authenticated-User-Did-Ts',
+  'X-Authenticated-User-Did-Signature',
   'x-verify-shared-secret',
 ] as const;
 

@@ -48,6 +48,19 @@ const MAX_TRACKED_KEYS = 20_000;
 const TOKEN_BUCKET_STALE_MS = 15 * 60_000;
 const MAX_RAW_RATE_LIMIT_KEY_BYTES = 1024;
 const GLOBAL_RATE_LIMIT_KEY = 'global';
+
+function resolveDefaultRateLimitKey(c: Context): string {
+  const trustedIp = resolveTrustedClientIp(c);
+  if (trustedIp) return trustedIp;
+
+  // Avoid a single global fallback key when client IP is unavailable.
+  // This degrades to a coarse fingerprint, preventing one client from
+  // trivially exhausting quota for all callers sharing the global bucket.
+  const ua = c.req.header('user-agent')?.trim() ?? 'ua:unknown';
+  const acceptLanguage = c.req.header('accept-language')?.trim() ?? 'lang:unknown';
+  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'xff:unknown';
+  return `fp:${ua}|${acceptLanguage}|${forwarded}`;
+}
 let redisBackendCooldownUntil = 0;
 let redisBackendInitFailed = false;
 
@@ -408,7 +421,7 @@ export function simpleRateLimit(options?: {
   const max = options?.max ?? 60;
   const keyFn =
     options?.keyFn ??
-      ((c: Context) => resolveTrustedClientIp(c) ?? GLOBAL_RATE_LIMIT_KEY);
+      ((c: Context) => resolveDefaultRateLimitKey(c));
 
   return async (c, next) => {
       const key = getLimiterKey(c, keyFn);
@@ -450,7 +463,7 @@ export function tokenBucketRateLimit(options?: {
   const burstCapacity = options?.burstCapacity ?? refillTokens;
   const keyFn =
     options?.keyFn
-      ?? ((c: Context) => resolveTrustedClientIp(c) ?? GLOBAL_RATE_LIMIT_KEY);
+      ?? ((c: Context) => resolveDefaultRateLimitKey(c));
 
   const tokensPerMs = refillTokens / refillWindowMs;
 

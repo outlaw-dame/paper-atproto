@@ -9,6 +9,7 @@ import { useMediaSettingsStore } from '../store/mediaSettingsStore';
 import type { Feed, FeedItem } from '../schema';
 import { extractFirstYouTubeReference } from '../lib/youtube';
 import { subscribeToExternalFeed } from '../lib/feedSubscriptions';
+import { openExternalUrl } from '../lib/safety/externalUrl';
 
 interface PodcastValueRecipient {
   name?: string;
@@ -181,7 +182,14 @@ export const FeedList: React.FC = () => {
                       </span>
                     </div>
                     <h3 className="text-lg font-bold mb-2 leading-tight">
-                      <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                      <a
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void openExternalUrl(item.link);
+                        }}
+                        className="hover:underline cursor-pointer"
+                      >
                         {item.title}
                       </a>
                     </h3>
