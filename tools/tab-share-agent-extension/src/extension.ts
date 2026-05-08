@@ -1,8 +1,39 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 const DEFAULT_MAX_CONTENT_CHARS = 12000;
 
+// Sensitive file patterns that should trigger a warning before sharing (F-08)
+const SENSITIVE_FILE_PATTERNS = [
+  /\.env$/i,
+  /\.env\.\w+$/i,
+  /\.pem$/i,
+  /\.key$/i,
+  /\.p8$/i,
+  /\.p12$/i,
+  /\.pfx$/i,
+  /\.jks$/i,
+  /\.keystore$/i,
+  /\.secrets?$/i,
+  /\.credentials?$/i,
+  /aws.?credentials/i,
+  /\.aws\/credentials$/i,
+  /\.aws\/config$/i,
+  /ssh\/id_/i,
+  /\.ssh\/authorized_keys$/i,
+  /docker\.json$/i,
+  /kubeconfig$/i,
+  /\.terraform\/terraform\.tfvars$/i,
+  /\.sql$/i,
+  /backup\.(sql|db|bak)$/i,
+];
+
 type ShareMode = 'full-file' | 'selection-only';
+
+function isSensitiveFile(filePath: string): boolean {
+  const fileName = path.basename(filePath);
+  return SENSITIVE_FILE_PATTERNS.some(pattern => pattern.test(fileName));
+}
 
 function getMaxContentChars(): number {
   const configured = vscode.workspace.getConfiguration('tabShareWithAgent').get<number>('maxContentChars');
@@ -94,6 +125,19 @@ async function shareFromEditor(resource: vscode.Uri | undefined, mode: ShareMode
   if (mode === 'selection-only' && editor.selection.isEmpty) {
     vscode.window.showWarningMessage('No selection found. Select text first, then try again.');
     return;
+  }
+
+  // F-08: Warn before sharing sensitive files
+  if (isSensitiveFile(editor.document.fileName)) {
+    const proceed = await vscode.window.showWarningMessage(
+      `⚠️ This file appears to contain sensitive credentials or secrets (${path.basename(editor.document.fileName)}). Sharing this could expose your credentials.`,
+      { modal: true },
+      'Share Anyway',
+      'Cancel'
+    );
+    if (proceed !== 'Share Anyway') {
+      return;
+    }
   }
 
   const prompt = buildSharePrompt(editor.document, editor.selection, mode, getMaxContentChars());
