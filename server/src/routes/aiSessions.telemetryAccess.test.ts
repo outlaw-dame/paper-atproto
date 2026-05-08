@@ -5,6 +5,8 @@ const envMock = {
   AI_SESSION_TELEMETRY_ADMIN_SECRET: 'super-secret',
   CORS_ALLOW_PRIVATE_NETWORK_IN_DEV: true,
   CORS_ALLOWED_ORIGINS: 'http://localhost:5173',
+  AUTH_REQUIRE_SENSITIVE_ROUTE_AUTH: false,
+  AUTH_ALLOW_LEGACY_DID_HEADER: true,
 };
 
 const getAiSessionTelemetryMock = vi.fn(() => ({ routeErrors: 0 }));

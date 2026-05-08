@@ -58,8 +58,8 @@ function resolveDefaultRateLimitKey(c: Context): string {
   // trivially exhausting quota for all callers sharing the global bucket.
   const ua = c.req.header('user-agent')?.trim() ?? 'ua:unknown';
   const acceptLanguage = c.req.header('accept-language')?.trim() ?? 'lang:unknown';
-  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'xff:unknown';
-  return `fp:${ua}|${acceptLanguage}|${forwarded}`;
+  const path = c.req.path?.trim() || 'path:unknown';
+  return `fp:${ua}|${acceptLanguage}|${path}`;
 }
 let redisBackendCooldownUntil = 0;
 let redisBackendInitFailed = false;

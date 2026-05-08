@@ -96,7 +96,7 @@ function allowLegacyDidHeader(): boolean {
 
 export function shouldEnforceSensitiveRouteAuth(): boolean {
   if (env.NODE_ENV === 'test') return false;
-  if (env.NODE_ENV === 'production') return true;
+  if (env.NODE_ENV === 'production') return env.AUTH_REQUIRE_SENSITIVE_ROUTE_AUTH !== false;
   return env.AUTH_REQUIRE_SENSITIVE_ROUTE_AUTH;
 }
 

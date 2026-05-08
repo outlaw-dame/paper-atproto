@@ -48,6 +48,10 @@ vi.mock('../../server/src/services/media/transcriptionWorkerBridge.js', () => ({
   },
 }));
 
+vi.mock('../../server/src/lib/remoteNetworkGuard.js', () => ({
+  assertSafeResolvedRemoteUrl: vi.fn(async () => undefined),
+}));
+
 import { mediaRouter } from '../../server/src/routes/media.js';
 
 describe('mediaRouter /api/media/transcribe', () => {

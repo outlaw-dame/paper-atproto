@@ -28,6 +28,8 @@ const {
     AI_SESSION_TELEMETRY_ADMIN_SECRET: 'super-secret',
     CORS_ALLOWED_ORIGINS: 'https://app.glympse.example',
     CORS_ALLOW_PRIVATE_NETWORK_IN_DEV: true,
+    AUTH_REQUIRE_SENSITIVE_ROUTE_AUTH: false,
+    AUTH_ALLOW_LEGACY_DID_HEADER: true,
   },
 }));
 
@@ -165,7 +167,7 @@ describe('aiSessionsRouter security/privacy behavior', () => {
     expect(response.status).toBe(401);
     const payload = (await response.json()) as { error?: string; code?: string };
     expect(payload.code).toBe('UNAUTHORIZED');
-    expect(payload.error).toContain('Invalid DID header format');
+    expect(payload.error).toContain('Missing authenticated DID');
   });
 
   it('rejects missing origin headers in production for DID-keyed routes', async () => {

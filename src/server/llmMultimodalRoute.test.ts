@@ -68,6 +68,10 @@ vi.mock('../../server/src/services/safeBrowsing.js', () => ({
   }) => verdict.blocked || (envMock.AI_SAFE_BROWSING_FAIL_CLOSED && verdict.status === 'unknown'),
 }));
 
+vi.mock('../../server/src/lib/remoteNetworkGuard.js', () => ({
+  assertSafeResolvedRemoteUrl: vi.fn(async () => undefined),
+}));
+
 vi.mock('../../server/src/services/safetyFilters.js', () => ({
   filterWriterResponse: (response: unknown) => ({
     filtered: response,
