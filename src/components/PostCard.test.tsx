@@ -112,7 +112,7 @@ afterEach(() => {
 });
 
 describe('PostCard media interactions', () => {
-  it('reveals and re-hides blurred sensitive media without opening the story card', () => {
+  it('reveals blurred sensitive media and opens lightbox without opening the story card', () => {
     const onOpenStory = vi.fn();
     const post = createPost({
       sensitiveMedia: {
@@ -131,7 +131,8 @@ describe('PostCard media interactions', () => {
 
     fireEvent.click(screen.getByAltText('Sensitive test image'));
     expect(onOpenStory).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /sensitive media hidden/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /hide sensitive media/i })).toBeTruthy();
+    expect(screen.getByText('1/1')).toBeTruthy();
   });
 
   it('opens the image lightbox without also opening the story card', () => {
