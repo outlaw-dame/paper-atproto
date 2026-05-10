@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion, useMotionValue, useTransform } from 'framer-motion';
 import { useDrag } from '@use-gesture/react';
+import { getMotionTransition, usePlatformUX } from '../hooks/usePlatformUX';
 
 interface GestureViewProps {
   children: React.ReactNode;
@@ -12,6 +13,7 @@ interface GestureViewProps {
  * Inspired by the fluid navigation of Facebook Paper.
  */
 export const GestureView: React.FC<GestureViewProps> = ({ children, onDismiss }) => {
+  const ux = usePlatformUX();
   const y = useMotionValue(0);
   const opacity = useTransform(y, [0, 300], [1, 0]);
   const scale = useTransform(y, [0, 300], [1, 0.9]);
@@ -45,7 +47,7 @@ export const GestureView: React.FC<GestureViewProps> = ({ children, onDismiss })
     <motion.div
       {...(bind() as any)}
       style={{ y, opacity, scale, touchAction: 'none' }}
-      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      transition={getMotionTransition(ux.motionPreset)}
       className="fixed inset-0 z-50 bg-white dark:bg-black overflow-hidden"
     >
       {children}

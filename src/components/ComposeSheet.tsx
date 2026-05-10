@@ -32,6 +32,7 @@ import { extractRecordDisplayText } from '../lib/atproto/recordContent';
 import { mediaTranscriptionClient } from '../lib/media/transcriptionClient';
 import { getCaptionButtonState } from '../lib/media/captionButtonState';
 import { useMediaSettingsStore } from '../store/mediaSettingsStore';
+import { haptic } from '../android/haptics';
 import {
   MAX_FAVORITE_HASHTAGS,
   MAX_RECENT_HASHTAGS,
@@ -1866,6 +1867,7 @@ export default function ComposeSheet({ onClose }: Props) {
         setSelectedAudio(null);
       }
 
+      haptic('success');
       onClose();
     } catch (err: unknown) {
       if (optimisticUri) {
@@ -1875,6 +1877,7 @@ export default function ComposeSheet({ onClose }: Props) {
       if (isVideoFormatCompatibilityError(rawMessage)) {
         setMediaHint('This video format is not supported yet. Convert it to MP4, then try again.');
       }
+      haptic('error');
       setPostError(toUserFacingPostError(err));
     } finally {
       setPosting(false);

@@ -8,9 +8,11 @@
 // Android back: dispatches 'paper:sheet-close' so AndroidEnhancementBridge
 // can intercept the back gesture and call onDismiss instead of navigating.
 
-import React, { useEffect, useRef, useId } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import React, { useEffect, useRef, useId, useState } from 'react';
+import { AnimatePresence, animate, motion, useMotionValue } from 'framer-motion';
+import { useDrag } from '@use-gesture/react';
 import { usePlatformRuntime, nativeRecipes } from '../../platform/PlatformRuntimeContext';
+import { haptic } from '../../android/haptics';
 
 export type SheetDetent = 'medium' | 'large' | 'full';
 
@@ -46,6 +48,9 @@ export function NativeSheet({
   const contentRef = useRef<HTMLDivElement>(null);
   const maxDetent = detents[detents.length - 1] ?? 'large';
   const maxHeight = DETENT_MAX_HEIGHT[maxDetent];
+  const dragY = useMotionValue(0);
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false);
+  const canSwipeDismiss = dismissible && !isDesktop;
 
   // Focus trap: move focus into the sheet when it opens.
   useEffect(() => {
@@ -76,6 +81,54 @@ export function NativeSheet({
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [open, dismissible, onDismiss]);
+
+  useEffect(() => {
+    if (!open) {
+      dragY.set(0);
+      setIsDraggingSheet(false);
+    }
+  }, [dragY, open]);
+
+  const bindDismissDrag = useDrag(({ active, movement: [, my], velocity: [, vy], direction: [, dy] }) => {
+    if (!canSwipeDismiss) return;
+
+    if (my < 0) {
+      dragY.set(0);
+      if (!active) {
+        setIsDraggingSheet(false);
+      }
+      return;
+    }
+
+    if (active) {
+      if (!isDraggingSheet) {
+        setIsDraggingSheet(true);
+      }
+      dragY.set(my);
+      return;
+    }
+
+    const shouldDismiss = my > 100 || (vy > 0.5 && dy > 0);
+    if (shouldDismiss) {
+      dragY.set(0);
+      setIsDraggingSheet(false);
+      haptic('light');
+      onDismiss();
+      return;
+    }
+
+    animate(dragY, 0, {
+      type: 'spring',
+      stiffness: 420,
+      damping: 38,
+      mass: 0.85,
+      onComplete: () => setIsDraggingSheet(false),
+    });
+  }, {
+    axis: 'y',
+    filterTaps: true,
+    rubberband: true,
+  });
 
   const motionProps = isDesktop
     ? {
@@ -157,6 +210,7 @@ export function NativeSheet({
                     overflow: 'hidden',
                     display: 'flex',
                     flexDirection: 'column',
+                    ...(isDraggingSheet ? { y: dragY } : {}),
                   }
             }
           >
@@ -164,12 +218,14 @@ export function NativeSheet({
             {!isDesktop && (
               <div
                 aria-hidden="true"
+                {...(canSwipeDismiss ? (bindDismissDrag() as any) : {})}
                 style={{
                   flexShrink: 0,
                   display: 'flex',
                   justifyContent: 'center',
                   paddingTop: 10,
                   paddingBottom: 4,
+                  touchAction: 'none',
                 }}
               >
                 <div

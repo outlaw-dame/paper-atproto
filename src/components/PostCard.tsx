@@ -37,6 +37,7 @@ import ProfileCardTrigger from './ProfileCardTrigger';
 import { buildStandardProfileCardData } from '../lib/profileCardData';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 import { postLabelChips } from '../lib/atproto/labelPresentation';
+import { useHaptics } from '../hooks/useHaptics';
 
 interface PostCardProps {
   post: MockPost;
@@ -117,6 +118,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   } = useSensitiveMediaStore();
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((state) => state.openExploreSearch);
+  const { trigger: triggerHaptic } = useHaptics();
   const mediaItems = useMemo(() => post.media ?? [], [post.media]);
   const carouselItems = useMemo<MediaCarouselItem[]>(() => {
     const items: MediaCarouselItem[] = mediaItems.map((img, idx) => ({
@@ -1634,30 +1636,45 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
         <ActionButton 
           icon="reply" 
           count={post.replyCount} 
-          onClick={() => onReply?.(post)}
+          onClick={() => {
+            triggerHaptic('light');
+            onReply?.(post);
+          }}
         />
         <ActionButton 
           icon="repost" 
           count={post.repostCount} 
           active={!!post.viewer?.repost}
-          onClick={() => onToggleRepost?.(post)}
+          onClick={() => {
+            triggerHaptic(post.viewer?.repost ? 'light' : 'medium');
+            onToggleRepost?.(post);
+          }}
         />
         <ActionButton 
           icon="like" 
           count={post.likeCount} 
           active={!!post.viewer?.like}
-          onClick={() => onToggleLike?.(post)}
+          onClick={() => {
+            triggerHaptic(post.viewer?.like ? 'light' : 'medium');
+            onToggleLike?.(post);
+          }}
         />
         <ActionButton 
           icon="bookmark" 
           count={post.bookmarkCount || 0} 
           active={!!post.viewer?.bookmark}
-          onClick={() => onBookmark?.(post)}
+          onClick={() => {
+            triggerHaptic('light');
+            onBookmark?.(post);
+          }}
         />
         <ActionButton 
           icon="more" 
           count={0}
-          onClick={() => onMore?.(post)}
+          onClick={() => {
+            triggerHaptic('light');
+            onMore?.(post);
+          }}
         />
       </div>
     </motion.div>
