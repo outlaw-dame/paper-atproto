@@ -46,6 +46,38 @@
       "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     }
   ],
+  "share_target": {
+    "action": "/paper-atproto/share-target",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "screenshots": [
+    {
+      "src": "screenshots/iphone-home.png",
+      "sizes": "1179x2556",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Home feed"
+    },
+    {
+      "src": "screenshots/desktop-reader.png",
+      "sizes": "2880x1800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Desktop reader"
+    }
+  ],
+  "protocol_handlers": [
+    {
+      "protocol": "web+at",
+      "url": "/paper-atproto/open?uri=%s"
+    }
+  ],
   "categories": ["social", "news"],
   "lang": "en",
   "prefer_related_applications": false

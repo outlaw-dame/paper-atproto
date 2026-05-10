@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { precompressPlugin } from './scripts/vite/precompressPlugin';
+import { manifestPlugin } from './scripts/vite/manifestPlugin';
 
 function parseOptionalPort(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -151,6 +152,7 @@ export default defineConfig(({ command, mode }) => {
     base: command === 'serve' ? '/' : prodBase,
     plugins: [
       react(),
+      manifestPlugin(prodBase),
       precompressPlugin({
         minSizeBytes: 1024,
         gzipLevel: 6,

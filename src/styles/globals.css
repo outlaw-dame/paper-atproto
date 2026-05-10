@@ -65,8 +65,19 @@ body {
   flex-direction: column;
 }
 
-::-webkit-scrollbar { display: none; }
-* { scrollbar-width: none; }
+/* Scrollbar visibility: hidden on touch/coarse-pointer devices (native-app feel),
+   visible on fine-pointer/desktop so trackpad users get scroll affordances. */
+@media (pointer: coarse) {
+  ::-webkit-scrollbar { display: none; }
+  * { scrollbar-width: none; }
+}
+
+/* Always hide on explicit scroll containers regardless of pointer type —
+   these are controlled surfaces that manage their own scroll affordance. */
+.scroll-y::-webkit-scrollbar,
+.scroll-x::-webkit-scrollbar { display: none; }
+.scroll-y,
+.scroll-x { scrollbar-width: none; }
 
 button {
   border: none;

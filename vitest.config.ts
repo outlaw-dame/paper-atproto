@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'server/src/**/*.test.ts'],
-    environment: 'node',
+    environment: 'jsdom',
     restoreMocks: true,
     clearMocks: true,
   },

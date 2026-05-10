@@ -15,7 +15,6 @@ import TabBar from './shell/TabBar';
 import LoginScreen from './components/LoginScreen';
 import { MiniPlayerProvider } from './context/MiniPlayerContext';
 import MiniPlayer from './components/MiniPlayer';
-import HomeTab from './tabs/HomeTab';
 import TimedMuteWatcherBridge from './components/TimedMuteWatcherBridge';
 import PlatformBanners from './shell/PlatformBanners';
 import BadgeSyncBridge from './components/BadgeSyncBridge';
@@ -24,6 +23,7 @@ import PlatformCapabilityBridge from './components/PlatformCapabilityBridge';
 import AppleEnhancementBridge from './components/AppleEnhancementBridge';
 import AndroidEnhancementBridge from './components/AndroidEnhancementBridge';
 import { lazyWithRetry } from './lib/lazyWithRetry';
+import { PlatformRuntimeProvider } from './platform/PlatformRuntimeContext';
 
 type RuntimeBoundaryProps = {
   children: React.ReactNode;
@@ -137,6 +137,7 @@ function ShellModuleRecovery({
 const ExploreTab = lazyWithRetry(() => import('./tabs/ExploreTab'), 'ExploreTab');
 const ActivityTab = lazyWithRetry(() => import('./tabs/ActivityTab'), 'ActivityTab');
 const ProfileTab = lazyWithRetry(() => import('./tabs/ProfileTab'), 'ProfileTab');
+const HomeTab = lazyWithRetry(() => import('./tabs/HomeTab'), 'HomeTab');
 const OverlayHost = lazyWithRetry(() => import('./shell/OverlayHost'), 'OverlayHost');
 
 export type TabId = 'home' | 'explore' | 'activity' | 'profile';
@@ -210,7 +211,7 @@ function BootstrapErrorBanner() {
 // ─── Root wrapper ──────────────────────────────────────────────────────────
 export default function App() {
   return (
-    <>
+    <PlatformRuntimeProvider>
       <BootstrapErrorBanner />
       <PlatformBanners />
       <AppRuntimeBoundary>
@@ -228,7 +229,7 @@ export default function App() {
           </MiniPlayerProvider>
         </AtpProvider>
       </AppRuntimeBoundary>
-    </>
+    </PlatformRuntimeProvider>
   );
 }
 

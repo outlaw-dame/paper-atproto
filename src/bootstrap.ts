@@ -6,8 +6,10 @@ import {
 } from './perf/bootstrapTelemetry';
 import { initPlatformBootstrap } from './pwa/bootstrap';
 import { installExternalLinkGuard } from './lib/safety/externalLinkGuard';
+import { handleShareTargetIfPresent } from './pwa/shareTarget';
 import { getStaticPlatformInfo } from './lib/platformDetect';
 import { preConfigureOnnxRuntime } from './runtime/generationSession';
+import { initializeThemeSync } from './hooks/useTheme';
 // import { inferenceClient } from './workers/InferenceClient';
 
 function shouldSkipVectorIndexBuild(): boolean {
@@ -36,8 +38,15 @@ function shouldRunBrowserMlSmoke(): boolean {
 export async function initApp() {
   console.log('[Bootstrap] Initializing...');
 
+  // Initialize theme sync from localStorage to DOM before anything else renders.
+  // This prevents theme flash on page reload.
+  initializeThemeSync();
+
   // Apply a global guard so all target=_blank outbound links pass through URL safety checks.
   installExternalLinkGuard();
+
+  // Handle incoming OS share (Web Share Target API). Non-blocking and non-fatal.
+  handleShareTargetIfPresent();
 
   // Pre-configure ONNX Runtime to prevent registerBackend errors from transformers.js
   await preConfigureOnnxRuntime();

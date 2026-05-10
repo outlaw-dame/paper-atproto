@@ -3,6 +3,10 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import './styles/globals.css';
+import { initializeThemeSync } from './hooks/useTheme';
+// Side-effect import: registers the beforeinstallprompt listener at page load,
+// before any lazy chunks load, so the Chromium install prompt is never missed.
+import './pwa/install';
 
 const PRELOAD_RETRY_KEY = 'paper:preload-retry';
 const PRELOAD_RETRY_WINDOW_MS = 30_000;
@@ -88,32 +92,9 @@ const queryClient = new QueryClient({
   },
 });
 
-// ─── Dark mode ────────────────────────────────────────────────────────────
-const applyDark = (dark: boolean) => document.documentElement.classList.toggle('dark', dark);
-const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-applyDark(darkModeQuery.matches);
-const DARK_MODE_LISTENER_KEY = '__paperDarkModeChangeListener__';
-
-const handleDarkModeChange = (event: MediaQueryListEvent | MediaQueryList) => {
-  applyDark(event.matches);
-};
-
-const globalScope = globalThis as Record<string, unknown>;
-const previousDarkModeListener = globalScope[DARK_MODE_LISTENER_KEY];
-if (typeof previousDarkModeListener === 'function') {
-  if (typeof darkModeQuery.removeEventListener === 'function') {
-    darkModeQuery.removeEventListener('change', previousDarkModeListener as EventListener);
-  } else if (typeof darkModeQuery.removeListener === 'function') {
-    darkModeQuery.removeListener(previousDarkModeListener as (event: MediaQueryListEvent) => void);
-  }
-}
-
-if (typeof darkModeQuery.addEventListener === 'function') {
-  darkModeQuery.addEventListener('change', handleDarkModeChange);
-} else if (typeof darkModeQuery.addListener === 'function') {
-  darkModeQuery.addListener(handleDarkModeChange);
-}
-globalScope[DARK_MODE_LISTENER_KEY] = handleDarkModeChange;
+// ─── Theme initialization ──────────────────────────────────────────────────
+// Initialize theme from localStorage before rendering to prevent flash.
+initializeThemeSync();
 
 // Render immediately, then initialize DB/bootstrap in the background.
 ReactDOM.createRoot(document.getElementById('root')!).render(

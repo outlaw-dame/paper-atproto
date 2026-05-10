@@ -115,7 +115,16 @@ export function getStaticPlatformInfo(): StaticPlatformInfo {
   const ua = safeUa();
   const nav = safeNav();
 
-  const isIOS = /iphone|ipad|ipod/i.test(ua);
+  // iPadOS 13+ in "Request Desktop Website" mode reports a macOS UA while
+  // still exposing maxTouchPoints > 1. This is the only reliable heuristic
+  // because Apple deliberately hides the iPad UA in desktop mode.
+  const isLikelyIpadOSDesktopMode =
+    /macintosh/i.test(ua) &&
+    nav !== null &&
+    typeof nav.maxTouchPoints === 'number' &&
+    nav.maxTouchPoints > 1;
+
+  const isIOS = /iphone|ipad|ipod/i.test(ua) || isLikelyIpadOSDesktopMode;
   const isAndroid = /android/i.test(ua);
 
   const prefersCoarsePointer = safeMatchMedia('(pointer: coarse)');
