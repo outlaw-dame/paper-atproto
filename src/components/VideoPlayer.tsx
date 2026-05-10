@@ -132,7 +132,7 @@ export default function VideoPlayer({ url, thumb, aspectRatio = 16 / 9, autoplay
     let cancelled = false;
     setHlsMode('pending');
 
-    void import('hls.js/light')
+    void import('hls.js')
       .then((module) => {
         if (cancelled) return;
         const Hls = module.default;
