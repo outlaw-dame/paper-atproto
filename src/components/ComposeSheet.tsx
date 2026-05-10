@@ -1212,8 +1212,10 @@ export default function ComposeSheet({ onClose }: Props) {
   const { preferredCaptionLanguage } = useMediaSettingsStore();
   const navigateToProfile = useProfileNavigation();
   const openExploreSearch = useUiStore((s) => s.openExploreSearch);
+  const composeDraft = useUiStore((s) => s.composeDraft);
+  const setComposeDraft = useUiStore((s) => s.setComposeDraft);
   const replyTarget = useUiStore(s => s.replyTarget);
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => composeDraft);
   const replySessionId = replyTarget?.threadRoot?.id ?? replyTarget?.id ?? '';
   const conversationActions = useConversationActions(replySessionId);
   const projectedComposerContext = useComposerProjection({
@@ -1275,6 +1277,16 @@ export default function ComposeSheet({ onClose }: Props) {
     });
     return () => { cancelled = true; };
   }, [agent]);
+
+  useEffect(() => {
+    if (!composeDraft) return;
+    setText((previous) => {
+      if (!previous.trim()) return composeDraft;
+      if (previous.includes(composeDraft)) return previous;
+      return `${previous}\n\n${composeDraft}`.slice(0, MAX);
+    });
+    setComposeDraft('');
+  }, [composeDraft, setComposeDraft]);
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   const altTaRef = useRef<HTMLTextAreaElement>(null);

@@ -18,6 +18,9 @@ export interface SharedPayload {
 }
 
 const SHARE_PATH_SUFFIXES = ['/share-target', '/share-target/'];
+const SHARE_DISPATCH_EVENT = 'paper:share-target';
+const SHARE_RETRY_DELAYS_MS = [75, 200, 500] as const;
+let pendingSharedPayload: SharedPayload | null = null;
 
 function sanitizeSharedString(value: string | null, maxLen = 2000): string {
   if (!value) return '';
@@ -32,6 +35,32 @@ function isShareTargetPath(pathname: string): boolean {
   return SHARE_PATH_SUFFIXES.some(
     (suffix) => pathname === suffix || pathname.endsWith(suffix),
   );
+}
+
+function queueShareDispatch(payload: SharedPayload): void {
+  pendingSharedPayload = payload;
+
+  const dispatch = () => {
+    window.dispatchEvent(
+      new CustomEvent<SharedPayload>(SHARE_DISPATCH_EVENT, { detail: payload }),
+    );
+  };
+
+  // Dispatch immediately and retry with bounded backoff so listeners that mount
+  // after bootstrap still receive the payload at least once.
+  dispatch();
+  for (const delayMs of SHARE_RETRY_DELAYS_MS) {
+    setTimeout(dispatch, delayMs);
+  }
+}
+
+/**
+ * Returns the latest unconsumed share payload (if any) and clears it.
+ */
+export function consumePendingSharedPayload(): SharedPayload | null {
+  const payload = pendingSharedPayload;
+  pendingSharedPayload = null;
+  return payload;
 }
 
 /**
@@ -63,12 +92,7 @@ export function handleShareTargetIfPresent(): SharedPayload | null {
       .replace(/\/share-target\/?$/, '/');
     history.replaceState(null, '', cleanUrl);
 
-    // Defer the event slightly so the React tree has time to mount and subscribe.
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent<SharedPayload>('paper:share-target', { detail: payload }),
-      );
-    }, 300);
+    queueShareDispatch(payload);
 
     return payload;
   } catch (err) {

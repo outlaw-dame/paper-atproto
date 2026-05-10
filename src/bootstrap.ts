@@ -7,6 +7,7 @@ import {
 import { initPlatformBootstrap } from './pwa/bootstrap';
 import { installExternalLinkGuard } from './lib/safety/externalLinkGuard';
 import { handleShareTargetIfPresent } from './pwa/shareTarget';
+import { handleProtocolHandlerIfPresent } from './pwa/protocolHandler';
 import { getStaticPlatformInfo } from './lib/platformDetect';
 import { preConfigureOnnxRuntime } from './runtime/generationSession';
 import { initializeThemeSync } from './hooks/useTheme';
@@ -47,6 +48,9 @@ export async function initApp() {
 
   // Handle incoming OS share (Web Share Target API). Non-blocking and non-fatal.
   handleShareTargetIfPresent();
+
+  // Handle incoming protocol handler launches (web+at://). Non-blocking and non-fatal.
+  handleProtocolHandlerIfPresent();
 
   // Pre-configure ONNX Runtime to prevent registerBackend errors from transformers.js
   await preConfigureOnnxRuntime();

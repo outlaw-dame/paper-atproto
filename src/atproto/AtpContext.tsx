@@ -467,6 +467,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     const bootstrap = async () => {
+      let hadCallbackParams = false;
       const hardStopTimer = setTimeout(() => {
         if (cancelled) return;
         clearOAuthCallbackParams();
@@ -480,7 +481,7 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
 
       setLoading(true);
       try {
-        const hadCallbackParams = hasOAuthCallbackParams(window.location.search);
+        hadCallbackParams = hasOAuthCallbackParams(window.location.search);
         const callbackError = getOAuthCallbackError(window.location.search);
         if (callbackError) {
           recordOAuthBootstrapDebug('callback_error', {
@@ -698,14 +699,23 @@ export function AtpProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (err: unknown) {
         if (!cancelled) {
+          const normalized = normalizeError(err);
+          const shouldSuppressBootstrapAuthError =
+            !hadCallbackParams && (normalized.kind === 'network' || normalized.kind === 'server');
+
           recordOAuthBootstrapDebug('bootstrap_error', {
-            kind: normalizeError(err).kind,
-            status: normalizeError(err).status,
+            kind: normalized.kind,
+            status: normalized.status,
             ...toSafeLoginErrorShape(err),
+            ...(shouldSuppressBootstrapAuthError ? { suppressed: true } : {}),
           });
           clearOAuthCallbackParams();
           resetAgent();
-          setError(toSafeAuthMessage(err, 'We could not restore your session. Please sign in again.'));
+          setError(
+            shouldSuppressBootstrapAuthError
+              ? null
+              : toSafeAuthMessage(err, 'We could not restore your session. Please sign in again.'),
+          );
           setSession(null);
           setProfile(null);
           setSessionReady(false);

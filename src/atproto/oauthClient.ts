@@ -67,6 +67,17 @@ function isClosedOAuthDatabaseMessage(message: string): boolean {
   return normalized.includes('database closed') || normalized.includes('database has been disposed');
 }
 
+function isLikelyOAuthMetadataNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('failed to fetch')
+    || message.includes('network')
+    || message.includes('err_name_not_resolved')
+    || message.includes('dns')
+  );
+}
+
 export function isRecoverableOAuthClientError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (!isClosedOAuthDatabaseMessage(error.message)) return false;
@@ -163,18 +174,31 @@ function parseConfiguredScope(rawValue: string | undefined): string {
 async function buildOAuthClient(): Promise<BrowserOAuthClient> {
   const resolvedClientId = resolveOAuthClientId();
   if (resolvedClientId) {
-    return withRetry(
-      () => BrowserOAuthClient.load({
-        clientId: resolvedClientId,
-        handleResolver: OAUTH_HANDLE_RESOLVER,
-        responseMode: 'query',
-      }),
-      {
-        maxAttempts: 3,
-        baseDelayMs: 400,
-        capDelayMs: 1_500,
-      },
-    );
+    try {
+      return await withRetry(
+        () => BrowserOAuthClient.load({
+          clientId: resolvedClientId,
+          handleResolver: OAUTH_HANDLE_RESOLVER,
+          responseMode: 'query',
+        }),
+        {
+          maxAttempts: 3,
+          baseDelayMs: 400,
+          capDelayMs: 1_500,
+        },
+      );
+    } catch (error) {
+      // Self-heal local development when stale tunnel metadata URLs are no longer
+      // reachable. Production/non-loopback origins still fail closed.
+      if (isLoopbackOAuthOrigin() && isLikelyOAuthMetadataNetworkError(error)) {
+        console.warn('[OAuth] Hosted client metadata is unreachable on loopback; falling back to local loopback OAuth mode.');
+        return new BrowserOAuthClient({
+          handleResolver: OAUTH_HANDLE_RESOLVER,
+          responseMode: 'query',
+        });
+      }
+      throw error;
+    }
   }
 
   return new BrowserOAuthClient({

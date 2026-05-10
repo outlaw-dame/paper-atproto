@@ -22,6 +22,8 @@ import PushLifecycleBridge from './components/PushLifecycleBridge';
 import PlatformCapabilityBridge from './components/PlatformCapabilityBridge';
 import AppleEnhancementBridge from './components/AppleEnhancementBridge';
 import AndroidEnhancementBridge from './components/AndroidEnhancementBridge';
+import ShareTargetBridge from './components/ShareTargetBridge';
+import ProtocolHandlerBridge from './components/ProtocolHandlerBridge';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import { PlatformRuntimeProvider } from './platform/PlatformRuntimeContext';
 
@@ -219,6 +221,8 @@ export default function App() {
           <PlatformCapabilityBridge />
           <BadgeSyncBridge />
           <PushLifecycleBridge />
+          <ShareTargetBridge />
+          <ProtocolHandlerBridge />
           <AppleEnhancementBridge />
           <AndroidEnhancementBridge />
           <MiniPlayerProvider>
