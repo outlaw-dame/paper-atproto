@@ -16,13 +16,9 @@ import { sportsFeedService } from '../services/sportsFeed';
 import { useSensitiveMediaStore } from '../store/sensitiveMediaStore';
 import {
   EMPTY_SENSITIVE_MEDIA_ASSESSMENT,
-  assessmentFromMediaAnalysis,
-  createUnavailableSensitiveMediaAssessment,
   detectSensitiveMedia,
   mergeSensitiveMediaAssessments,
-  type SensitiveMediaAssessment,
 } from '../lib/moderation/sensitiveMedia';
-import { callMediaAnalyzer } from '../intelligence/modelClient';
 import { useProfileNavigation } from '../hooks/useProfileNavigation';
 import { useUiStore } from '../store/uiStore';
 import { useAppearanceStore } from '../store/appearanceStore';
@@ -38,6 +34,7 @@ import { buildStandardProfileCardData } from '../lib/profileCardData';
 import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 import { postLabelChips } from '../lib/atproto/labelPresentation';
 import { useHaptics } from '../hooks/useHaptics';
+import { usePostMultimodalSensitiveAssessment } from '../hooks/usePostMultimodalSensitiveAssessment';
 
 interface PostCardProps {
   post: MockPost;
@@ -79,22 +76,6 @@ type MediaCarouselItem =
       }>;
     };
 
-const multimodalSensitiveCache = new Map<string, SensitiveMediaAssessment>();
-// Dedup in-flight analyzer calls so multiple PostCards mounting at once for
-// the same media don't all hit /api/llm/analyze/media simultaneously.
-const multimodalInFlight = new Map<string, Promise<unknown>>();
-// Per-media cooldown after a 429 (or other hard failure) so we don't hammer
-// the server while the rate-limit window resets.
-const multimodalCooldownUntil = new Map<string, number>();
-const MULTIMODAL_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
-const MULTIMODAL_RETRY_BASE_MS = 5_000;
-const MULTIMODAL_RETRY_MAX_MS = 60_000;
-const MULTIMODAL_RETRY_ATTEMPTS = 3;
-
-function multimodalRetryDelayMs(attempt: number): number {
-  return Math.min(MULTIMODAL_RETRY_MAX_MS, MULTIMODAL_RETRY_BASE_MS * (2 ** attempt));
-}
-
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
@@ -104,8 +85,6 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxViewportWidth, setLightboxViewportWidth] = useState(0);
   const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
-  const [multimodalSensitiveAssessment, setMultimodalSensitiveAssessment] = useState<SensitiveMediaAssessment>(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
-  const [multimodalRetryAttempt, setMultimodalRetryAttempt] = useState(0);
   const mediaScrollRef = useRef<HTMLDivElement | null>(null);
   const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation } = useTranslationStore();
@@ -287,6 +266,11 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
     return null;
   }, [mediaItems, post.embed]);
+  const multimodalSensitiveAssessment = usePostMultimodalSensitiveAssessment({
+    postId: post.id,
+    postContent: post.content,
+    target: primaryVisualTarget,
+  });
   const resolvedSensitiveMedia = useMemo(
     () => mergeSensitiveMediaAssessments(sensitiveMedia, multimodalSensitiveAssessment),
     [multimodalSensitiveAssessment, sensitiveMedia],
@@ -353,108 +337,8 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
   }, [sensitiveReasons.length, shouldBlurSensitiveMedia, shouldHideSensitiveMedia, sensitivePolicy.telemetryOptIn]);
 
   useEffect(() => {
-    setMultimodalSensitiveAssessment(EMPTY_SENSITIVE_MEDIA_ASSESSMENT);
-    setMultimodalRetryAttempt(0);
     sensitiveImpressionLoggedRef.current = false;
   }, [post.id]);
-
-  useEffect(() => {
-    if (!primaryVisualTarget) return;
-
-    const cached = multimodalSensitiveCache.get(primaryVisualTarget.cacheKey);
-    if (cached) {
-      setMultimodalSensitiveAssessment(cached);
-      return;
-    }
-
-    const cooldownUntil = multimodalCooldownUntil.get(primaryVisualTarget.cacheKey) ?? 0;
-    if (cooldownUntil > Date.now()) {
-      // Honor server-imposed cooldown — don't refire while the rate limit window
-      // is still active. A future remount after the cooldown expires will retry.
-      setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
-      return;
-    }
-
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleRetry = () => {
-      if (cancelled) return;
-      if (multimodalRetryAttempt >= MULTIMODAL_RETRY_ATTEMPTS) {
-        multimodalCooldownUntil.set(
-          primaryVisualTarget.cacheKey,
-          Date.now() + MULTIMODAL_RATE_LIMIT_COOLDOWN_MS,
-        );
-        return;
-      }
-      retryTimer = setTimeout(() => {
-        if (!cancelled) {
-          setMultimodalRetryAttempt((current) => current + 1);
-        }
-      }, multimodalRetryDelayMs(multimodalRetryAttempt));
-    };
-
-    (async () => {
-      try {
-        const cacheKey = primaryVisualTarget.cacheKey;
-        let pending = multimodalInFlight.get(cacheKey) as
-          | Promise<Awaited<ReturnType<typeof callMediaAnalyzer>>>
-          | undefined;
-        if (!pending) {
-          pending = callMediaAnalyzer({
-            threadId: post.id,
-            mediaUrl: primaryVisualTarget.url,
-            ...(primaryVisualTarget.alt ? { mediaAlt: primaryVisualTarget.alt } : {}),
-            nearbyText: post.content,
-            candidateEntities: [],
-            factualHints: [],
-          });
-          multimodalInFlight.set(cacheKey, pending);
-          void pending.finally(() => {
-            if (multimodalInFlight.get(cacheKey) === pending) {
-              multimodalInFlight.delete(cacheKey);
-            }
-          }).catch(() => {});
-        }
-        const result = await pending;
-
-        const assessment = assessmentFromMediaAnalysis(result);
-        const authoritative = result.analysisStatus !== 'degraded'
-          && result.moderationStatus !== 'unavailable';
-        if (authoritative) {
-          multimodalSensitiveCache.set(primaryVisualTarget.cacheKey, assessment);
-        } else {
-          scheduleRetry();
-        }
-        if (!cancelled) setMultimodalSensitiveAssessment(assessment);
-      } catch (err) {
-        // Detect 429 and other rate-limit-like failures and apply a long
-        // cooldown so this card (and siblings sharing the same media URL) stop
-        // re-hitting the analyzer endpoint.
-        const status = (err as { status?: number } | undefined)?.status;
-        if (status === 429 || status === 503) {
-          multimodalCooldownUntil.set(
-            primaryVisualTarget.cacheKey,
-            Date.now() + MULTIMODAL_RATE_LIMIT_COOLDOWN_MS,
-          );
-          if (!cancelled) {
-            setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
-          }
-          return;
-        }
-        if (!cancelled) {
-          setMultimodalSensitiveAssessment(createUnavailableSensitiveMediaAssessment());
-        }
-        scheduleRetry();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-      }
-    };
-  }, [multimodalRetryAttempt, post.content, post.id, primaryVisualTarget]);
 
   useEffect(() => {
     setExpandedAltIndex(null);
