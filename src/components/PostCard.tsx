@@ -35,6 +35,7 @@ import { extractFirstYouTubeReference, parseYouTubeUrl } from '../lib/youtube';
 import { postLabelChips } from '../lib/atproto/labelPresentation';
 import { useHaptics } from '../hooks/useHaptics';
 import { usePostMultimodalSensitiveAssessment } from '../hooks/usePostMultimodalSensitiveAssessment';
+import { usePostMediaViewer } from '../hooks/usePostMediaViewer';
 
 interface PostCardProps {
   post: MockPost;
@@ -79,14 +80,6 @@ type MediaCarouselItem =
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
-  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
-  const [mediaViewportWidth, setMediaViewportWidth] = useState(0);
-  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
-  const [lightboxIndex, setLightboxIndex] = useState(0);
-  const [lightboxViewportWidth, setLightboxViewportWidth] = useState(0);
-  const [isLightboxZoomed, setIsLightboxZoomed] = useState(false);
-  const mediaScrollRef = useRef<HTMLDivElement | null>(null);
-  const lightboxScrollRef = useRef<HTMLDivElement | null>(null);
   const { policy, byId, upsertTranslation } = useTranslationStore();
   const showAtprotoLabelChips = useAppearanceStore((state) => state.showAtprotoLabelChips);
   const {
@@ -139,6 +132,24 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
     }
     return map;
   }, [carouselItems]);
+  const {
+    activeMediaIndex,
+    setActiveMediaIndex,
+    mediaViewportWidth,
+    mediaScrollRef,
+    isLightboxOpen,
+    setIsLightboxOpen,
+    lightboxIndex,
+    setLightboxIndex,
+    lightboxViewportWidth,
+    lightboxScrollRef,
+    isLightboxZoomed,
+    setIsLightboxZoomed,
+  } = usePostMediaViewer({
+    postId: post.id,
+    carouselLength: carouselItems.length,
+    lightboxLength: lightboxItems.length,
+  });
   const detectedPostLanguage = useMemo(() => heuristicDetectLanguage(post.content), [post.content]);
   const sensitiveImpressionLoggedRef = useRef(false);
   const externalEmbedYouTubeRef = useMemo(
@@ -342,75 +353,7 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
 
   useEffect(() => {
     setExpandedAltIndex(null);
-    setActiveMediaIndex(0);
-    if (mediaScrollRef.current) {
-      mediaScrollRef.current.scrollTo({ left: 0, behavior: 'auto' });
-    }
   }, [post.id, carouselItems.length]);
-
-  useEffect(() => {
-    const node = mediaScrollRef.current;
-    if (!node) return;
-
-    const updateViewportWidth = () => setMediaViewportWidth(node.clientWidth);
-    updateViewportWidth();
-
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(updateViewportWidth);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [post.id, carouselItems.length]);
-
-  useEffect(() => {
-    if (!isLightboxOpen || typeof document === 'undefined') return;
-    const priorOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = priorOverflow;
-    };
-  }, [isLightboxOpen]);
-
-  useEffect(() => {
-    if (!isLightboxOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!lightboxItems.length) return;
-      if (event.key === 'Escape') {
-        setIsLightboxOpen(false);
-      } else if (event.key === 'ArrowRight') {
-        setIsLightboxZoomed(false);
-        setLightboxIndex((prev) => Math.min(lightboxItems.length - 1, prev + 1));
-      } else if (event.key === 'ArrowLeft') {
-        setIsLightboxZoomed(false);
-        setLightboxIndex((prev) => Math.max(0, prev - 1));
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isLightboxOpen, lightboxItems.length]);
-
-  useEffect(() => {
-    if (!isLightboxOpen) return;
-    const node = lightboxScrollRef.current;
-    if (!node) return;
-    const width = lightboxViewportWidth || node.clientWidth;
-    if (!width) return;
-    node.scrollTo({ left: lightboxIndex * width, behavior: 'smooth' });
-  }, [isLightboxOpen, lightboxIndex, lightboxViewportWidth]);
-
-  useEffect(() => {
-    if (!isLightboxOpen) return;
-    const node = lightboxScrollRef.current;
-    if (!node) return;
-
-    const updateViewportWidth = () => setLightboxViewportWidth(node.clientWidth);
-    updateViewportWidth();
-
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(updateViewportWidth);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [isLightboxOpen]);
 
   useEffect(() => {
     if (shouldBlurSensitiveMedia || shouldHideSensitiveMedia) return;
