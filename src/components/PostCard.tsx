@@ -77,6 +77,8 @@ type MediaCarouselItem =
       }>;
     };
 
+  type ExternalEmbed = Extract<NonNullable<MockPost['embed']>, { type: 'external' }>;
+
 export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRepost, onToggleLike, onQuote, onReply, onBookmark, onMore, index, replyingTo, hasContextAbove }: PostCardProps) {
   const [showRepostMenu, setShowRepostMenu] = useState(false);
   const [expandedAltIndex, setExpandedAltIndex] = useState<number | null>(null);
@@ -1132,98 +1134,14 @@ export default function PostCard({ post, onOpenStory, onViewProfile, onToggleRep
           );
         }
         return (
-        <div
-          role="link"
-          tabIndex={0}
-          onClick={(e) => {
-            e.stopPropagation();
-            openExternalUrl(externalUrl);
-          }}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            e.preventDefault();
-            e.stopPropagation();
-            openExternalUrl(externalUrl);
-          }}
-          style={{
-            display: 'block', textDecoration: 'none',
-            border: '1px solid var(--stroke-dim)', borderRadius: 12,
-            overflow: 'hidden', marginTop: 8, cursor: 'pointer'
-          }}
-        >
-          {post.embed.thumb && (
-            <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
-              <img src={post.embed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }} />
-            </div>
-          )}
-          <div style={{ padding: '10px 12px', background: 'var(--fill-1)' }}>
-            <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)', marginBottom: 3 }}>{post.embed.domain}</div>
-            <div style={{ fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', letterSpacing: 'var(--type-label-lg-track)', fontWeight: 600, color: 'var(--label-1)', marginBottom: 4 }}>{post.embed.title}</div>
-            {(() => {
-              // Merge API-provided author (rare) with lazily fetched meta-tag author
-              const authorName = post.embed.authorName ?? fetchedAuthor?.name;
-              // authorHandle is a fediverse handle e.g. "@user@mastodon.social"
-              const authorHandle = fetchedAuthor?.handle;
-              const authorProfileUrl = fetchedAuthor?.profileUrl;
-              const publisher = post.embed.publisher;
-              const hasAuthor = !!(authorName || authorHandle || publisher);
-              return (
-                <>
-                  {post.embed.description && cardTranslationId && (
-                    <InlineTranslation
-                      postId={cardTranslationId}
-                      sourceText={post.embed.description}
-                      sourceLang={detectedCardLanguage.language}
-                      targetLang={policy.userLanguage}
-                      localOnlyMode={policy.localOnlyMode}
-                      showTrigger={
-                        hasTranslatableLanguageSignal(post.embed.description)
-                        && (detectedCardLanguage.language === 'und'
-                          || !isLikelySameLanguage(detectedCardLanguage.language, policy.userLanguage))
-                      }
-                      renderText={(displayText) => (
-                        <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
-                          {displayText}
-                        </div>
-                      )}
-                    />
-                  )}
-                  {hasAuthor && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, paddingTop: 6, borderTop: '0.5px solid var(--stroke-dim)' }}>
-                      {authorName && (
-                        <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-2)' }}>
-                          By <span style={{ fontWeight: 600, color: 'var(--label-1)' }}>{authorName}</span>
-                        </span>
-                      )}
-                      {authorHandle && (
-                        authorProfileUrl ? (
-                          <a
-                            href={authorProfileUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--blue)', textDecoration: 'none' }}
-                          >
-                            {authorHandle}
-                          </a>
-                        ) : (
-                          <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--blue)' }}>
-                            {authorHandle}
-                          </span>
-                        )
-                      )}
-                      {publisher && (
-                        <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)' }}>
-                          {(authorName || authorHandle) ? `· ${publisher}` : publisher}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-          </div>
-        </div>
+          <ExternalLinkCard
+            embed={post.embed}
+            fetchedAuthor={fetchedAuthor}
+            cardTranslationId={cardTranslationId}
+            detectedCardLanguage={detectedCardLanguage.language}
+            policyUserLanguage={policy.userLanguage}
+            policyLocalOnlyMode={policy.localOnlyMode}
+          />
         );
       })()}
 
@@ -1558,5 +1476,117 @@ function ActionButton({ icon, count, active, onClick }: { icon: 'reply' | 'repos
       )}
       {icon !== 'more' && <span style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', fontWeight: 500, color: active ? color : 'var(--label-3)' }}>{formatCount(count)}</span>}
     </button>
+  );
+}
+
+function ExternalLinkCard({
+  embed,
+  fetchedAuthor,
+  cardTranslationId,
+  detectedCardLanguage,
+  policyUserLanguage,
+  policyLocalOnlyMode,
+}: {
+  embed: ExternalEmbed;
+  fetchedAuthor: { name?: string; handle?: string; profileUrl?: string } | null;
+  cardTranslationId: string | null;
+  detectedCardLanguage: string;
+  policyUserLanguage: string;
+  policyLocalOnlyMode: boolean;
+}) {
+  // Merge API-provided author (rare) with lazily fetched meta-tag author.
+  const authorName = embed.authorName ?? fetchedAuthor?.name;
+  // authorHandle is a fediverse handle e.g. "@user@mastodon.social".
+  const authorHandle = fetchedAuthor?.handle;
+  const authorProfileUrl = fetchedAuthor?.profileUrl;
+  const publisher = embed.publisher;
+  const hasAuthor = !!(authorName || authorHandle || publisher);
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={(e) => {
+        e.stopPropagation();
+        openExternalUrl(embed.url);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        e.stopPropagation();
+        openExternalUrl(embed.url);
+      }}
+      style={{
+        display: 'block',
+        textDecoration: 'none',
+        border: '1px solid var(--stroke-dim)',
+        borderRadius: 12,
+        overflow: 'hidden',
+        marginTop: 8,
+        cursor: 'pointer',
+      }}
+    >
+      {embed.thumb && (
+        <div style={{ aspectRatio: '1.91 / 1', width: '100%', background: 'var(--fill-2)', overflow: 'hidden' }}>
+          <img src={embed.thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }} />
+        </div>
+      )}
+      <div style={{ padding: '10px 12px', background: 'var(--fill-1)' }}>
+        <div style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', letterSpacing: 'var(--type-meta-sm-track)', color: 'var(--label-3)', marginBottom: 3 }}>{embed.domain}</div>
+        <div style={{ fontSize: 'var(--type-label-lg-size)', lineHeight: 'var(--type-label-lg-line)', letterSpacing: 'var(--type-label-lg-track)', fontWeight: 600, color: 'var(--label-1)', marginBottom: 4 }}>{embed.title}</div>
+        <>
+          {embed.description && cardTranslationId && (
+            <InlineTranslation
+              postId={cardTranslationId}
+              sourceText={embed.description}
+              sourceLang={detectedCardLanguage}
+              targetLang={policyUserLanguage}
+              localOnlyMode={policyLocalOnlyMode}
+              showTrigger={
+                hasTranslatableLanguageSignal(embed.description)
+                && (detectedCardLanguage === 'und'
+                  || !isLikelySameLanguage(detectedCardLanguage, policyUserLanguage))
+              }
+              renderText={(displayText) => (
+                <div style={{ fontSize: 'var(--type-meta-md-size)', lineHeight: 'var(--type-meta-md-line)', letterSpacing: 'var(--type-meta-md-track)', color: 'var(--label-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: hasAuthor ? 6 : 0 }}>
+                  {displayText}
+                </div>
+              )}
+            />
+          )}
+          {hasAuthor && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, paddingTop: 6, borderTop: '0.5px solid var(--stroke-dim)' }}>
+              {authorName && (
+                <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-2)' }}>
+                  By <span style={{ fontWeight: 600, color: 'var(--label-1)' }}>{authorName}</span>
+                </span>
+              )}
+              {authorHandle && (
+                authorProfileUrl ? (
+                  <a
+                    href={authorProfileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--blue)', textDecoration: 'none' }}
+                  >
+                    {authorHandle}
+                  </a>
+                ) : (
+                  <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--blue)' }}>
+                    {authorHandle}
+                  </span>
+                )
+              )}
+              {publisher && (
+                <span style={{ fontSize: 'var(--type-meta-sm-size)', lineHeight: 'var(--type-meta-sm-line)', color: 'var(--label-3)' }}>
+                  {(authorName || authorHandle) ? `· ${publisher}` : publisher}
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      </div>
+    </div>
   );
 }
