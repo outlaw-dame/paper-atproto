@@ -67,6 +67,18 @@ vi.mock('../hooks/useProfileNavigation', () => ({
   useProfileNavigation: () => vi.fn(),
 }));
 
+vi.mock('../hooks/useHaptics', () => ({
+  useHaptics: () => ({ trigger: vi.fn() }),
+}));
+
+const openExternalUrlMock = vi.fn();
+vi.mock('../lib/safety/externalUrl', () => ({
+  sanitizeExternalUrl: (url: string) => url,
+  sanitizeUrlForProcessing: (url: string) => url,
+  getSafeExternalHostname: () => 'example.test',
+  openExternalUrl: (...args: unknown[]) => openExternalUrlMock(...args),
+}));
+
 const { default: PostCard } = await import('./PostCard');
 const { useSensitiveMediaStore } = await import('../store/sensitiveMediaStore');
 
@@ -101,6 +113,7 @@ function createPost(overrides: Partial<MockPost> = {}): MockPost {
 
 afterEach(() => {
   cleanup();
+  openExternalUrlMock.mockReset();
   useSensitiveMediaStore.setState({
     policy: {
       blurSensitiveMedia: true,
@@ -144,5 +157,29 @@ describe('PostCard media interactions', () => {
 
     expect(onOpenStory).not.toHaveBeenCalled();
     expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('opens external embeds without opening the story card', () => {
+    const onOpenStory = vi.fn();
+    const post = createPost({
+      embed: {
+        type: 'external',
+        url: 'https://example.test/story',
+        title: 'External Story',
+        description: 'A linked article',
+        domain: 'example.test',
+      },
+    });
+
+    render(<PostCard post={post} onOpenStory={onOpenStory} index={0} />);
+
+    fireEvent.click(screen.getByRole('link'));
+    expect(openExternalUrlMock).toHaveBeenCalledWith('https://example.test/story');
+    expect(onOpenStory).not.toHaveBeenCalled();
+
+    const linkCard = screen.getByRole('link');
+    fireEvent.keyDown(linkCard, { key: 'Enter' });
+    expect(openExternalUrlMock).toHaveBeenCalledTimes(2);
+    expect(onOpenStory).not.toHaveBeenCalled();
   });
 });
