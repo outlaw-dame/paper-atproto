@@ -292,6 +292,14 @@ a { text-decoration: none; color: inherit; }
   --safe-left:       env(safe-area-inset-left, 0px);
   --safe-right:      env(safe-area-inset-right, 0px);
 
+  /* ─── Native keyboard integration ───
+     Set by src/native/nativeKeyboard.ts on Capacitor builds.
+     On web these stay at their initial values (0px / 0).
+     Use --native-keyboard-height for bottom padding on composers/inputs.
+     Use --keyboard-visible for conditional show/hide of bottom chrome. */
+  --native-keyboard-height: 0px;
+  --keyboard-visible: 0;
+
   /* ─── Glympse type system ─── */
 
   /* Font families */
@@ -787,4 +795,38 @@ a { text-decoration: none; color: inherit; }
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+
+/* ─── Native keyboard-aware surfaces ───────────────────────────────────────
+ * Use these on bottom-anchored surfaces (composer, reply bar, action sheets)
+ * to avoid the native keyboard covering input fields.
+ *
+ * --native-keyboard-height: set by Capacitor keyboard bridge (0px on web)
+ * --keyboard-visible: 1 when keyboard is open, 0 when closed
+ *
+ * Example:
+ *   <div class="keyboard-aware-bottom">
+ *     <textarea ... />
+ *   </div>
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+.keyboard-aware-bottom {
+  padding-bottom: calc(var(--native-keyboard-height, 0px) + var(--safe-bottom, 0px));
+  transition: padding-bottom 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* Hide tab bar / bottom chrome when keyboard is open (native only).
+ * Uses the --keyboard-visible custom property (0 or 1) for conditional display. */
+.keyboard-hide-when-open {
+  transform: translateY(calc(var(--keyboard-visible, 0) * 100%));
+  opacity: calc(1 - var(--keyboard-visible, 0));
+  pointer-events: auto;
+  transition: transform 0.2s ease, opacity 0.15s ease;
+}
+
+/* Bottom-fixed input surfaces that need to float above the keyboard. */
+.keyboard-float-above {
+  bottom: var(--native-keyboard-height, 0px);
+  transition: bottom 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
 }

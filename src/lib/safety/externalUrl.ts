@@ -1,4 +1,5 @@
 import { checkUrlSafety } from './urlSafety';
+import { openExternalUrl as openExternalUrlNative } from '../../native/nativeBrowser';
 import {
   recordExternalUrlAttempt,
   recordExternalUrlBlockedError,
@@ -116,9 +117,13 @@ export async function openExternalUrl(rawUrl: string, options: OpenExternalUrlOp
       return false;
     }
 
-    window.open(sanitized, '_blank', 'noopener,noreferrer');
-    recordExternalUrlOpened(hostname);
-    return true;
+    // Use the platform-aware opener: Capacitor Browser plugin on native,
+    // window.open on web. This ensures in-app browser sheets on iOS/Android.
+    const opened = await openExternalUrlNative(sanitized);
+    if (opened) {
+      recordExternalUrlOpened(hostname);
+    }
+    return opened;
   } catch (error) {
     recordExternalUrlBlockedError(error);
     return false;
