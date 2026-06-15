@@ -19,23 +19,29 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
  *
  * On web: uses window.open with security attributes.
  *
- * @throws {Error} If the URL uses an unsupported protocol.
+ * Returns true if the URL was opened successfully, false on failure.
+ * Never throws — safe to call directly from UI event handlers.
  */
-export async function openExternalUrl(url: string): Promise<void> {
-  const parsed = parseAndValidateUrl(url);
+export async function openExternalUrl(url: string): Promise<boolean> {
+  try {
+    const parsed = parseAndValidateUrl(url);
 
-  if (isNativePlatform()) {
-    await Browser.open({
-      url: parsed.toString(),
-      // windowName defaults let the system choose presentation.
-      // presentationStyle is iOS-only — sheet is more native-feeling.
-      presentationStyle: 'popover',
-    });
-    return;
+    if (isNativePlatform()) {
+      await Browser.open({
+        url: parsed.toString(),
+        // presentationStyle is iOS-only — sheet is more native-feeling.
+        presentationStyle: 'popover',
+      });
+      return true;
+    }
+
+    // Web fallback: open in new tab with security attributes.
+    window.open(parsed.toString(), '_blank', 'noopener,noreferrer');
+    return true;
+  } catch (err: unknown) {
+    console.warn('[NativeBrowser] Failed to open URL:', (err as Error)?.message ?? 'unknown');
+    return false;
   }
-
-  // Web fallback: open in new tab with security attributes.
-  window.open(parsed.toString(), '_blank', 'noopener,noreferrer');
 }
 
 /**

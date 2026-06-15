@@ -9,7 +9,7 @@
 // On web, this module is a no-op — browser viewport handling remains unchanged.
 
 import { Keyboard, type KeyboardInfo } from '@capacitor/keyboard';
-import { isNativePlatform } from './capacitorRuntime';
+import { isNativePlatform, isNativeIOS } from './capacitorRuntime';
 
 let initialized = false;
 
@@ -38,15 +38,29 @@ export async function initNativeKeyboardBridge(): Promise<void> {
   if (initialized || !isNativePlatform()) return;
   initialized = true;
 
-  await Keyboard.addListener('keyboardWillShow', (info: KeyboardInfo) => {
-    currentKeyboardHeight = info.keyboardHeight;
-    setKeyboardCssVar(info.keyboardHeight);
-  });
+  // iOS supports keyboardWillShow/Hide (fires before animation).
+  // Android only supports keyboardDidShow/Hide (fires after animation).
+  if (isNativeIOS()) {
+    await Keyboard.addListener('keyboardWillShow', (info: KeyboardInfo) => {
+      currentKeyboardHeight = info.keyboardHeight;
+      setKeyboardCssVar(info.keyboardHeight);
+    });
 
-  await Keyboard.addListener('keyboardWillHide', () => {
-    currentKeyboardHeight = 0;
-    setKeyboardCssVar(0);
-  });
+    await Keyboard.addListener('keyboardWillHide', () => {
+      currentKeyboardHeight = 0;
+      setKeyboardCssVar(0);
+    });
+  } else {
+    await Keyboard.addListener('keyboardDidShow', (info: KeyboardInfo) => {
+      currentKeyboardHeight = info.keyboardHeight;
+      setKeyboardCssVar(info.keyboardHeight);
+    });
+
+    await Keyboard.addListener('keyboardDidHide', () => {
+      currentKeyboardHeight = 0;
+      setKeyboardCssVar(0);
+    });
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -1,10 +1,10 @@
 import type { CapacitorConfig } from '@capacitor/cli';
+import { KeyboardResize } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
   appId: 'social.glympse.app',
   appName: 'Glympse',
   webDir: 'dist',
-  bundledWebRuntime: false,
   server: {
     // Use https scheme on Android to match browser behavior for cookies,
     // localStorage, and CORS. Without this, Android WebView uses http://
@@ -32,7 +32,7 @@ const config: CapacitorConfig = {
       // Resize the web view when the keyboard appears rather than pushing
       // the viewport. This avoids layout thrash on iOS when the composer
       // is open and the user scrolls.
-      resize: 'body',
+      resize: KeyboardResize.Body,
       resizeOnFullScreen: true,
     },
   },

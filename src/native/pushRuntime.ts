@@ -11,7 +11,7 @@
 // - Registration flows are different
 // - The backend needs to know which delivery channel to use
 
-import { isNativePlatform } from './capacitorRuntime';
+import { isNativePlatform, getNativeRuntime } from './capacitorRuntime';
 
 export type PushChannel = 'native-apns' | 'native-fcm' | 'web-push' | 'none';
 
@@ -20,10 +20,7 @@ export type PushChannel = 'native-apns' | 'native-fcm' | 'web-push' | 'none';
  */
 export function getPushChannel(): PushChannel {
   if (isNativePlatform()) {
-    const w = globalThis as typeof globalThis & {
-      Capacitor?: { getPlatform?: () => string };
-    };
-    const platform = w.Capacitor?.getPlatform?.();
+    const { platform } = getNativeRuntime();
     if (platform === 'ios') return 'native-apns';
     if (platform === 'android') return 'native-fcm';
     return 'none';

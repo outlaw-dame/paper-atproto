@@ -20,12 +20,23 @@ export interface NativeAppLifecycleHandlers {
 
 let registeredHandlers: NativeAppLifecycleHandlers = {};
 
+/** Queued deep link from cold-start before handler is registered. */
+let pendingDeepLink: string | null = null;
+
 /**
- * Register lifecycle handlers. Must be called before initNativeAppBridge()
- * or they will be attached on next init call.
+ * Register lifecycle handlers.
+ *
+ * If a deep link arrived during cold-start before handlers were registered,
+ * it is delivered immediately upon registration (prevents silent loss).
  */
 export function setNativeAppLifecycleHandlers(handlers: NativeAppLifecycleHandlers): void {
   registeredHandlers = { ...handlers };
+
+  // Flush any deep link that arrived before handlers were ready.
+  if (pendingDeepLink && registeredHandlers.onDeepLink) {
+    registeredHandlers.onDeepLink(pendingDeepLink);
+    pendingDeepLink = null;
+  }
 }
 
 /**
@@ -50,7 +61,12 @@ export async function initNativeAppBridge(): Promise<void> {
   await App.addListener('appUrlOpen', (event: URLOpenListenerEvent) => {
     const url = event.url;
     if (isValidDeepLink(url)) {
-      registeredHandlers.onDeepLink?.(url);
+      if (registeredHandlers.onDeepLink) {
+        registeredHandlers.onDeepLink(url);
+      } else {
+        // Queue for delivery when handlers are registered (cold-start race).
+        pendingDeepLink = url;
+      }
     }
   });
 

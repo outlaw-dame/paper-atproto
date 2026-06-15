@@ -17,24 +17,34 @@ export interface NativeRuntime {
   readonly platform: CapacitorPlatform;
 }
 
+// Cache the runtime result — platform/native status never changes during
+// the app lifecycle. Avoids redundant calls to Capacitor.getPlatform() and
+// Capacitor.isNativePlatform() from every bridge module.
+let cachedRuntime: NativeRuntime | null = null;
+
 /**
  * Returns the current native runtime state.
  *
  * Safe to call at any point — never throws. When Capacitor is not present
  * (browser/PWA), returns { isNative: false, platform: 'web' }.
+ *
+ * Result is cached after first call — the platform cannot change at runtime.
  */
 export function getNativeRuntime(): NativeRuntime {
+  if (cachedRuntime) return cachedRuntime;
   try {
     const raw = Capacitor.getPlatform();
     const platform: CapacitorPlatform =
       raw === 'ios' || raw === 'android' ? raw : 'web';
-    return {
+    cachedRuntime = Object.freeze({
       isNative: Capacitor.isNativePlatform(),
       platform,
-    };
+    });
+    return cachedRuntime;
   } catch {
     // Capacitor global not available — pure web environment.
-    return { isNative: false, platform: 'web' };
+    cachedRuntime = Object.freeze({ isNative: false, platform: 'web' as const });
+    return cachedRuntime;
   }
 }
 

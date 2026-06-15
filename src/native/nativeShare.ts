@@ -7,7 +7,7 @@
 // Never throws — returns a result indicating what happened.
 
 import { Share } from '@capacitor/share';
-import { isNativePlatform } from './capacitorRuntime';
+import { isNativePlatform, isNativeIOS } from './capacitorRuntime';
 
 export interface ShareInput {
   title?: string;
@@ -41,8 +41,10 @@ export async function shareUrl(input: ShareInput): Promise<ShareResult> {
         dialogTitle: input.title ?? 'Share',
       });
       // activityType is set on iOS when the user completes the share.
-      // On Android, the share sheet doesn't report back reliably.
-      return { method: 'native', shared: result.activityType != null };
+      // On Android, the share sheet doesn't report back reliably — assume
+      // success if the promise resolved without throwing.
+      const shared = isNativeIOS() ? result.activityType != null : true;
+      return { method: 'native', shared };
     } catch {
       // User cancelled or share failed — fall through to web share.
     }

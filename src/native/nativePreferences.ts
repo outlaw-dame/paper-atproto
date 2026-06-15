@@ -71,11 +71,23 @@ export async function removePreference(key: string): Promise<void> {
 
 /**
  * Clear all preferences under the app's prefix.
- * Use with caution — this removes all stored preferences.
+ * Use with caution — this removes all stored preferences with STORAGE_PREFIX.
+ *
+ * Only removes keys under our prefix — does not affect other plugins or
+ * system preferences stored in the same native storage backend.
  */
 export async function clearAllPreferences(): Promise<void> {
   if (isNativePlatform()) {
-    await Preferences.clear();
+    try {
+      const { keys } = await Preferences.keys();
+      for (const key of keys) {
+        if (key.startsWith(STORAGE_PREFIX)) {
+          await Preferences.remove({ key });
+        }
+      }
+    } catch {
+      // Non-critical.
+    }
     return;
   }
 

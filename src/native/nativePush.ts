@@ -15,7 +15,7 @@ import {
   type ActionPerformed,
   type PushNotificationSchema,
 } from '@capacitor/push-notifications';
-import { isNativePlatform } from './capacitorRuntime';
+import { isNativePlatform, getNativeRuntime } from './capacitorRuntime';
 
 export interface NativePushToken {
   /** The push token value (APNs device token or FCM registration token). */
@@ -144,14 +144,6 @@ export async function clearNativeNotifications(): Promise<void> {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function detectTokenPlatform(): 'ios' | 'android' {
-  try {
-    // Import is already at the top of the file via capacitorRuntime.
-    // Use the global Capacitor object directly.
-    const w = globalThis as typeof globalThis & {
-      Capacitor?: { getPlatform?: () => string };
-    };
-    return w.Capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android';
-  } catch {
-    return 'android';
-  }
+  const { platform } = getNativeRuntime();
+  return platform === 'ios' ? 'ios' : 'android';
 }
