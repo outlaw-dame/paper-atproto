@@ -37,3 +37,18 @@ public/models/
 
 # Local research/benchmark config variants
 vite.config.research*.ts
+
+# Capacitor native projects
+# These are generated/managed by Capacitor CLI and should be rebuilt
+# from the web bundle via `pnpm cap sync`. Keeping them out of git avoids
+# large binary diffs and platform-specific build artifacts.
+ios/
+android/
+# Capacitor auto-generated files that reference local paths
+capacitor.config.js
+# Native build artifacts
+*.ipa
+*.apk
+*.aab
+*.dSYM/
+*.xcarchive

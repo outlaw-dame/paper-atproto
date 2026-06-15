@@ -35,6 +35,9 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Capacitor doctor (native smoke check)
+        run: pnpm exec cap doctor || true
+
       - name: Job summary
         if: always()
         run: |
