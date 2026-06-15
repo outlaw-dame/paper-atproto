@@ -43,33 +43,38 @@ export async function initNativeKeyboardBridge(): Promise<void> {
   if (isNativeIOS()) {
     await Keyboard.addListener('keyboardWillShow', (info: KeyboardInfo) => {
       currentKeyboardHeight = info.keyboardHeight;
-      setKeyboardCssVar(info.keyboardHeight);
+      setKeyboardCssVars(info.keyboardHeight);
     });
 
     await Keyboard.addListener('keyboardWillHide', () => {
       currentKeyboardHeight = 0;
-      setKeyboardCssVar(0);
+      setKeyboardCssVars(0);
     });
   } else {
     await Keyboard.addListener('keyboardDidShow', (info: KeyboardInfo) => {
       currentKeyboardHeight = info.keyboardHeight;
-      setKeyboardCssVar(info.keyboardHeight);
+      setKeyboardCssVars(info.keyboardHeight);
     });
 
     await Keyboard.addListener('keyboardDidHide', () => {
       currentKeyboardHeight = 0;
-      setKeyboardCssVar(0);
+      setKeyboardCssVars(0);
     });
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function setKeyboardCssVar(heightPx: number): void {
+function setKeyboardCssVars(heightPx: number): void {
   try {
-    document.documentElement.style.setProperty(
+    const el = document.documentElement;
+    el.style.setProperty(
       '--native-keyboard-height',
       `${Math.max(0, Math.round(heightPx))}px`,
+    );
+    el.style.setProperty(
+      '--keyboard-visible',
+      heightPx > 0 ? '1' : '0',
     );
   } catch {
     // DOM manipulation should never crash the app.

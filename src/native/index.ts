@@ -35,7 +35,12 @@ export { initNativeKeyboardBridge, getKeyboardHeight } from './nativeKeyboard';
 export { configureNativeStatusBar, showStatusBar, hideStatusBar } from './nativeStatusBar';
 export type { StatusBarTheme } from './nativeStatusBar';
 
+export { hideNativeSplash, showNativeSplash } from './nativeSplash';
+
 export { setPreference, getPreference, removePreference, clearAllPreferences } from './nativePreferences';
+
+export { initNativeNetworkBridge, getNetworkState, onNetworkChange } from './nativeNetwork';
+export type { NetworkState, NetworkChangeHandler } from './nativeNetwork';
 
 export {
   initNativePushListeners,
@@ -58,6 +63,7 @@ import { initNativeBackButton } from './nativeBackButton';
 import { initNativeKeyboardBridge } from './nativeKeyboard';
 import { configureNativeStatusBar } from './nativeStatusBar';
 import { initNativePushListeners } from './nativePush';
+import { initNativeNetworkBridge } from './nativeNetwork';
 
 /**
  * Initialize all native bridges.
@@ -69,17 +75,23 @@ import { initNativePushListeners } from './nativePush';
  * Order matters:
  *   1. Status bar (visual — user sees this immediately)
  *   2. Keyboard (layout — affects rendering)
- *   3. App lifecycle (events — needs to be ready for deep links)
- *   4. Back button (Android navigation)
- *   5. Push listeners (notification handling)
+ *   3. Network (connectivity — affects data decisions)
+ *   4. App lifecycle (events — needs to be ready for deep links)
+ *   5. Back button (Android navigation)
+ *   6. Push listeners (notification handling)
  */
 export async function initNativeBridges(): Promise<void> {
-  if (!isNativePlatform()) return;
+  if (!isNativePlatform()) {
+    // Even on web, initialize network bridge for online/offline events.
+    try { await initNativeNetworkBridge(); } catch { /* non-critical */ }
+    return;
+  }
 
   // Each init is wrapped individually so one failure doesn't block the rest.
   const inits = [
     configureNativeStatusBar,
     initNativeKeyboardBridge,
+    initNativeNetworkBridge,
     initNativeAppBridge,
     initNativeBackButton,
     initNativePushListeners,
