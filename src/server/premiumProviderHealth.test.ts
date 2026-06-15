@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let healthModule: typeof import('../../server/src/ai/premiumProviderHealth.js');
