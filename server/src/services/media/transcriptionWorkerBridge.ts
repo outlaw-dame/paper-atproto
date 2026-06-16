@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { resolve as pathResolve } from 'node:path';
 import { env } from '../../config/env.js';
 import { UpstreamError } from '../../lib/errors.js';
 
@@ -48,7 +49,20 @@ type PendingRequest = {
   timeoutId: NodeJS.Timeout;
 };
 
-const DEFAULT_WORKER_PATH = fileURLToPath(new URL('../../../scripts/transcription_worker.py', import.meta.url));
+const DEFAULT_WORKER_PATH = resolveFromModule('../../../scripts/transcription_worker.py');
+
+/**
+ * Resolve a relative path from this module's URL.
+ * Falls back to process.cwd()-based resolution in test environments
+ * where import.meta.url is not a file:// URL.
+ */
+function resolveFromModule(relativePath: string): string {
+  try {
+    return fileURLToPath(new URL(relativePath, import.meta.url));
+  } catch {
+    return pathResolve(process.cwd(), 'server', relativePath.replace(/^(\.\.\/)+/, ''));
+  }
+}
 
 function maybeUnref(handle: unknown): void {
   if (!handle || typeof handle !== 'object') return;

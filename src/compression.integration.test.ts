@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import app from '../server/src/app';

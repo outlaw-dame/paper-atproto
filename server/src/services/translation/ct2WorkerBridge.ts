@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolve as pathResolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { env } from '../../config/env.js';
 import { UpstreamError } from '../../lib/errors.js';
@@ -38,8 +39,22 @@ type PendingRequest = {
   timeoutId: NodeJS.Timeout;
 };
 
-const DEFAULT_MODELS_DIR = fileURLToPath(new URL('../../../models/translation', import.meta.url));
-const DEFAULT_WORKER_PATH = fileURLToPath(new URL('../../../scripts/translation_worker.py', import.meta.url));
+/**
+ * Resolve a relative path from this module's URL.
+ * Returns a best-effort fallback if import.meta.url is not a file:// URL
+ * (e.g., when running under vitest's module transform pipeline).
+ */
+function resolveFromModule(relativePath: string): string {
+  try {
+    return fileURLToPath(new URL(relativePath, import.meta.url));
+  } catch {
+    // Fallback for test environments where import.meta.url isn't file://
+    return pathResolve(process.cwd(), 'server', relativePath.replace(/^(\.\.\/)+/, ''));
+  }
+}
+
+const DEFAULT_MODELS_DIR = resolveFromModule('../../../models/translation');
+const DEFAULT_WORKER_PATH = resolveFromModule('../../../scripts/translation_worker.py');
 
 function createWorkerError(message: string, details?: unknown): UpstreamError {
   return new UpstreamError(message, details, 502);

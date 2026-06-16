@@ -96,6 +96,20 @@ const queryClient = new QueryClient({
 // Initialize theme from localStorage before rendering to prevent flash.
 initializeThemeSync();
 
+// ─── Native bridge initialization ──────────────────────────────────────────
+// Initialize Capacitor native bridges before React renders so the runtime
+// detection is ready for the first component paint. On web/PWA this is a
+// fast no-op (< 1ms). On native it configures status bar, keyboard, network,
+// lifecycle, and back button handlers.
+import { initNativeBridges } from './native';
+import { hydrateNativeCapabilities } from './store/nativeCapabilityStore';
+import { hideNativeSplash } from './native/nativeSplash';
+
+// Fire-and-forget — bridges init in parallel with React render.
+// Each bridge is independently guarded so partial failures don't block.
+void initNativeBridges();
+hydrateNativeCapabilities();
+
 // Render immediately, then initialize DB/bootstrap in the background.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -104,6 +118,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+// Hide the native splash screen after React has mounted the shell.
+// requestAnimationFrame ensures we're past the first paint.
+if (typeof requestAnimationFrame !== 'undefined') {
+  requestAnimationFrame(() => {
+    void hideNativeSplash();
+  });
+}
 
 void import('./bootstrap')
   .then(({ initApp }) => initApp())

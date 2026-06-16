@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Glympse</string>
+    <string name="title_activity_main">Glympse</string>
+    <string name="package_name">social.glympse.app</string>
+    <string name="custom_url_scheme">social.glympse.app</string>
+</resources>

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy Manifest for Glympse (social.glympse.app)
+
+  Apple requires this file for App Store submission. It declares:
+  1. Privacy Nutrition Label data types collected
+  2. Required Reason APIs used (if any)
+  3. Tracking domains (none — we do not track users)
+
+  IMPORTANT: Update this file if you add:
+  - Location services
+  - Camera/photo library access
+  - Contact access
+  - Health data
+  - Advertising identifiers (IDFA)
+  - Third-party analytics SDKs that collect user data
+-->
+<plist version="1.0">
+<dict>
+    <!-- No tracking domains — we do not track users across apps/sites. -->
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <!-- We do NOT use the App Tracking Transparency framework. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <!-- Required Reason APIs used by the app or its dependencies. -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!-- UserDefaults — used by @capacitor/preferences for non-sensitive settings. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- CA92.1: Access info from same app, same developer. -->
+                <string>CA92.1</string>
+            </array>
+        </dict>
+        <!-- System boot time — used by @capacitor/core for timing. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- 35F9.1: Measure time elapsed between events in the app. -->
+                <string>35F9.1</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- Privacy Nutrition Label: data types collected. -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <!-- No data is collected for tracking or advertising purposes. -->
+    </array>
+</dict>
+</plist>

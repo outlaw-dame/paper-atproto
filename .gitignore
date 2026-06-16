@@ -37,3 +37,24 @@ public/models/
 
 # Local research/benchmark config variants
 vite.config.research*.ts
+
+# Capacitor native projects — tracked for config hardening
+# Exclude only generated/ephemeral content within them.
+ios/App/App/public/
+ios/App/Pods/
+ios/App/output/
+ios/App/DerivedData/
+ios/App/build/
+android/app/src/main/assets/public/
+android/app/build/
+android/.gradle/
+android/build/
+android/local.properties
+# Capacitor auto-generated files that reference local paths
+capacitor.config.js
+# Native build artifacts
+*.ipa
+*.apk
+*.aab
+*.dSYM/
+*.xcarchive

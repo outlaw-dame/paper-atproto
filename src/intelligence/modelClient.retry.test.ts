@@ -306,7 +306,11 @@ describe('modelClient retry policy', () => {
 
     const result = await callInterpolatorWriter(writerInput);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The writer endpoint is called once; a second fire-and-forget call is the
+    // outcome-telemetry POST (best-effort, non-blocking). Verify the first
+    // call targeted the writer endpoint — not a retry.
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/api/llm/write/interpolator');
+    expect(fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/api/llm/write/interpolator'))).toHaveLength(1);
     expect(result.abstained).toBe(false);
     expect(result.collapsedSummary.toLowerCase()).toContain('@author.test');
     expect(result.collapsedSummary.toLowerCase()).not.toContain('quietly rewrote the emergency housing policy overnight without public notice');

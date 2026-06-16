@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../../server/src/lib/errors.js';
 import { getAiSessionTelemetry, resetAiSessionTelemetry } from '../../server/src/ai/sessions/telemetry.js';
