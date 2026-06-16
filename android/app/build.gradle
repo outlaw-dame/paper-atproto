@@ -13,7 +13,11 @@ android {
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
-            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+             // !*.gz:!*.zst — exclude pre-compressed variants produced by Vite's
+             // precompress plugin. AAPT2 treats foo.js and foo.js.gz as duplicate
+             // resources with the same key. The WebView serves originals directly;
+             // .gz/.zst are only useful for HTTP servers (Cloudflare, nginx).
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!*.gz:!*.zst'
         }
     }
     buildTypes {
