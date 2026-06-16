@@ -33,7 +33,11 @@ export async function configureNativeStatusBar(
   if (!isNativePlatform()) return;
 
   try {
-    const capStyle = theme.style === 'light' ? Style.Light : Style.Dark;
+    // Capacitor StatusBar.Style naming convention:
+    //   Style.Light = dark text/icons (designed for light backgrounds)
+    //   Style.Dark  = light text/icons (designed for dark backgrounds)
+    // Our wrapper: style 'dark' = dark icons, style 'light' = light icons
+    const capStyle = theme.style === 'dark' ? Style.Light : Style.Dark;
     await StatusBar.setStyle({ style: capStyle });
 
     // setBackgroundColor only works on Android.
