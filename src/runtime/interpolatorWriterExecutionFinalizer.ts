@@ -9,6 +9,7 @@ import type {
 } from './interpolatorWriterOutputAdapter';
 import { adaptInterpolatorWriterOutput } from './interpolatorWriterOutputAdapter';
 import type { InterpolatorWriterRouteCandidate } from './interpolatorWriterRoutingPolicy';
+import { unique } from './interpolatorWriterRoutingPolicy';
 
 export const INTERPOLATOR_WRITER_EXECUTION_FINALIZER_VERSION = 1 as const;
 
@@ -91,8 +92,4 @@ function buildAdapterOptions(
     maxTextChars: options.maxTextChars,
     maxReferenceIds: options.maxReferenceIds,
   };
-}
-
-function unique<T>(values: readonly T[]): T[] {
-  return Array.from(new Set(values));
 }
