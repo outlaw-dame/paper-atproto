@@ -1,0 +1,71 @@
+# ─── Cloudflare Pages – HTTP Response Headers ─────────────────────────────────
+# Applied declaratively to every matching path on Cloudflare Pages.
+# Rules are evaluated top-to-bottom; later matching rules override earlier ones
+# for the same header name.
+#
+# The Pages catch-all Function (functions/[[path]].ts) provides dynamic
+# complement: precompression negotiation and per-route Cache-Control.
+# This file is the static safety net for anything the Function passes through.
+#
+# Docs: https://developers.cloudflare.com/pages/platform/headers/
+
+# ── Global security baseline ─────────────────────────────────────────────────
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  X-XSS-Protection: 0
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), browsing-topics=()
+  Cross-Origin-Opener-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'self' https://www.youtube-nocookie.com; form-action 'self'; script-src 'self' 'sha256-H0wB0z85Hxa5DWBSsUbTFX//Jn0YFQKsoqGqVunONqM='; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+
+# ── HSTS ─────────────────────────────────────────────────────────────────────
+# Enable after confirming your domain has a valid TLS cert and you will not
+# revert to HTTP. Start without preload; submit to the HSTS Preload List only
+# after months of stability. https://hstspreload.org
+#
+# Uncomment the line below when ready:
+#   Strict-Transport-Security: max-age=31536000; includeSubDomains
+
+# ── Service worker – must never be cached ────────────────────────────────────
+/sw.js
+  Cache-Control: no-store, no-cache, must-revalidate
+
+# ── OAuth metadata + auth routes – never cache, no transform ─────────────────
+/oauth/*
+  Cache-Control: no-store, no-cache
+  Pragma: no-cache
+
+# ── App shell HTML – always revalidate so updates reach users immediately ─────
+/*.html
+  Cache-Control: no-cache, must-revalidate
+
+# ── PWA manifest – always revalidate ─────────────────────────────────────────
+/manifest.json
+  Cache-Control: no-cache, must-revalidate
+  Content-Type: application/manifest+json; charset=utf-8
+
+# ── Static icons and favicons – 24 h cache ───────────────────────────────────
+/favicon.svg
+  Cache-Control: public, max-age=86400
+/apple-touch-icon.png
+  Cache-Control: public, max-age=86400
+/icon-192.png
+  Cache-Control: public, max-age=86400
+/icon-512.png
+  Cache-Control: public, max-age=86400
+
+# ── ML model weights – 7-day cache with stale-while-revalidate ───────────────
+# Model files are large (10 MB – 200 MB) and do not change between deploys
+# unless the filename changes. SWR lets the browser serve a slightly stale
+# model while revalidating in the background.
+/models/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+# ── Content-hashed Vite bundles – immutable for 1 year ───────────────────────
+# Vite appends a content hash to every bundle filename (e.g. app.Bx4k9KdA.js).
+# Any content change produces a new URL, so these files are safe to cache
+# indefinitely. The Pages Function adds Vary: Accept-Encoding when serving
+# precompressed variants.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

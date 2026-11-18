@@ -1,0 +1,1 @@
+import"./rolldown-runtime-BYbx6iT9.js";import{t as e}from"./vendor-konsta-BUipTigm.js";import{r as t}from"./vendor-motion-DasKlgjm.js";e();var n=t(),r=({children:e,className:t})=>(0,n.jsx)(`span`,{className:[`emoji-native`,t].filter(Boolean).join(` `),children:e});export{r as t};

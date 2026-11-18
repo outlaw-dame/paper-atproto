@@ -1,0 +1,1 @@
+function e(e){let t=e.trim();return t?t.replace(/^#/,``).trim()||t:``}export{e as t};
