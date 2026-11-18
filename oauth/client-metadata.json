@@ -4,7 +4,7 @@
   "client_name": "Glimpse",
   "client_uri": "https://outlaw-dame.github.io/paper-atproto/",
   "redirect_uris": ["https://outlaw-dame.github.io/paper-atproto/"],
-  "scope": "atproto transition:generic rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app#bsky_appview rpc:app.bsky.actor.getProfile?aud=did:web:api.bsky.app#bsky_appview",
+  "scope": "atproto transition:generic rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app rpc:app.bsky.actor.getProfile?aud=did:web:api.bsky.app",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "token_endpoint_auth_method": "none",
